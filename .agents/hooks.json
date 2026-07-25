@@ -1,0 +1,13 @@
+{
+    "hooks": [
+        {
+            "phase": "PreToolUse",
+            "tools": [
+                "replace_file_content",
+                "multi_replace_file_content"
+            ],
+            "validatorScript": "node .agents/scripts/ast_validator.js",
+            "description": "Intercepts file writes to strictly block Rust thread panics (.unwrap, .expect), @ts-ignore, and mock order-book data."
+        }
+    ]
+}

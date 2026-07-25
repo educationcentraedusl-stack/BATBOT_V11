@@ -1,0 +1,33 @@
+# BATBOT_V11 LOKI SWARM CONFIGURATION
+
+agents:
+  # The Architect generates plans and requires high reasoning.
+  # Upgraded to a 'Thinking' model for maximum context compression and planning accuracy.
+  architect:
+    model: "claude-opus-4.6-thinking"
+    temperature: 0.1
+    
+  # The Engineer only executes the plan, requiring speed over deep reasoning.
+  # Upgraded to the latest, fastest Flash model for zero-latency generation.
+  engineer:
+    model: "gemini-3.6-flash-high"
+    temperature: 0.2
+    # Engineer ට කේත ලියන්න පුළුවන් src/ ෆෝල්ඩර වල විතරයි.
+    write_access: ["src/trading_engine/", "src/api_gateway/"]
+    
+  # The Reviewer critiques the code and verifies artifacts.
+  # Upgraded to a 'Thinking' model for deep semantic critique without token burning.
+  reviewer:
+    model: "claude-sonnet-4.6-thinking"
+    temperature: 0.0
+    
+  # The QA agent generates unit tests and runs headless browser checks.
+  # Downgraded to a cost-effective, fast model. 
+  qa:
+    model: "gemini-3.5-flash-low"
+    # Explicit Separation of Concerns: QA ට කේත වෙනස් කරන්න බෑ, tests/ වල විතරයි ලියන්න පුළුවන්.
+    write_access: ["tests/"] 
+    
+orchestration:
+  budget_circuit_breaker: 15.00 # Halts execution if token cost exceeds $15 per session
+  execution_mode: "heartbeat" # Uses batched checks instead of Cron to reduce idle polling costs

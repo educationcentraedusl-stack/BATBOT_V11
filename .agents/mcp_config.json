@@ -1,0 +1,43 @@
+{
+    "mcpServers": {
+        "ast-semantic-indexer": {
+            "command": "goatlas",
+            "args": [
+                "serve"
+            ],
+            "env": {}
+        },
+        "postgresql-database": {
+            "serverUrl": "https://db.internal.batbot.net/mcp",
+            "headers": {
+                "Authorization": "Bearer ENV_VAR_DO_NOT_HARDCODE"
+            },
+            "env": {}
+        },
+        "chrome-devtools": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "chrome-devtools-mcp@latest",
+                "--browser-url=http://127.0.0.1:9222",
+                "--no-usage-statistics",
+                "--no-performance-crux"
+            ],
+            "env": {}
+        },
+        "sonarqube-mcp": {
+            "command": "node",
+            "args": [
+                "/absolute/path/to/sonarqube-mcp/dist/index.js"
+            ],
+            "env": {}
+        },
+        "sonatype-guide-mcp": {
+            "command": "node",
+            "args": [
+                "/absolute/path/to/sonatype-mcp/dist/index.js"
+            ],
+            "env": {}
+        }
+    }
+}

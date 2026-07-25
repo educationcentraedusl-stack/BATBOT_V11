@@ -1,0 +1,42 @@
+{
+    "schemaVersion": "1.20.6",
+    "project": {
+        "name": "BATBOT_V11_HFT_PRO",
+        "strictMode": true,
+        "frameworks": [
+            "rust",
+            "node",
+            "typescript",
+            "n-api"
+        ],
+        "packageManager": "pnpm"
+    },
+    "agentConfiguration": {
+        "defaultMode": "planning",
+        "artifacts": {
+            "requireImplementationPlan": true,
+            "requireWalkthrough": true,
+            "requireVisualVerification": true,
+            "preventDirectEditorWrites": true
+        },
+        "autonomy": {
+            "terminalExecution": "auto",
+            "forbiddenCommands": [
+                "rm -rf /",
+                "drop table",
+                "npm publish"
+            ]
+        }
+    },
+    "rulePriorityMap": [
+        "00_identity_master.md",
+        "01_tech_stack_constraints.md",
+        "08_anti_laziness.md"
+    ],
+    "mcpDependencies": [
+        "chrome-devtools-mcp",
+        "sonarqube-mcp",
+        "ast-semantic-parser-mcp",
+        "postgresql-mcp"
+    ]
+}

@@ -1,0 +1,16 @@
+{
+    "name": "hft-latency-monitor",
+    "type": "cron-sidecar",
+    "trigger": {
+        "builtin": "schedule",
+        "cron": "*/5 * * * *"
+    },
+    "action": {
+        "command": "agentapi",
+        "args": [
+            "new-conversation",
+            "--prompt",
+            "Execute HFT latency benchmark suite. If latency exceeds 1.5 microseconds, autonomously refactor the logic for enhanced memory contiguousness."
+        ]
+    }
+}
