@@ -10,6 +10,20 @@ pub enum ExchangeType {
     Bybit,
 }
 
+enum ActiveStream {
+    Binance(Arc<BinanceWsStream>),
+    Bybit(Arc<BybitWsStream>),
+}
+
+impl ActiveStream {
+    fn stop(&self) {
+        match self {
+            ActiveStream::Binance(s) => s.stop(),
+            ActiveStream::Bybit(s) => s.stop(),
+        }
+    }
+}
+
 pub struct ConnectionManager {
     symbol: String,
     exchange: ExchangeType,
@@ -33,76 +47,66 @@ impl ConnectionManager {
         self.is_active.store(false, Ordering::Relaxed);
     }
 
+    fn spawn_stream(&self, queue: LockFreeSpscQueue) -> ActiveStream {
+        match self.exchange {
+            ExchangeType::Binance => {
+                let stream = Arc::new(BinanceWsStream::new(&self.symbol));
+                let s_clone = stream.clone();
+                tokio::spawn(async move {
+                    let _ = s_clone.connect_and_listen(queue).await;
+                });
+                ActiveStream::Binance(stream)
+            }
+            ExchangeType::Bybit => {
+                let stream = Arc::new(BybitWsStream::new(&self.symbol));
+                let s_clone = stream.clone();
+                tokio::spawn(async move {
+                    let _ = s_clone.connect_and_listen(queue).await;
+                });
+                ActiveStream::Bybit(stream)
+            }
+        }
+    }
+
     pub async fn run_rotation_loop(&self, queue: LockFreeSpscQueue) -> Result<(), String> {
         self.is_active.store(true, Ordering::Relaxed);
+
+        // Spawn initial primary stream
+        let mut primary_stream = self.spawn_stream(queue.clone());
 
         while self.is_active.load(Ordering::Relaxed) {
             let start_time = Instant::now();
 
-            // Spawn primary socket listener
-            let primary_active = Arc::new(AtomicBool::new(true));
-            let primary_active_clone = primary_active.clone();
-            let symbol_clone = self.symbol.clone();
-            match self.exchange {
-                ExchangeType::Binance => {
-                    let binance_stream = Arc::new(BinanceWsStream::new(&symbol_clone));
-                    let bs_clone = binance_stream.clone();
-                    let q_clone = queue.clone();
-
-                    tokio::spawn(async move {
-                        let _ = bs_clone.connect_and_listen(q_clone).await;
-                    });
-                }
-                ExchangeType::Bybit => {
-                    let bybit_stream = Arc::new(BybitWsStream::new(&symbol_clone));
-                    let bs_clone = bybit_stream.clone();
-                    let q_clone = queue.clone();
-
-                    tokio::spawn(async move {
-                        let _ = bs_clone.connect_and_listen(q_clone).await;
-                    });
-                }
-            }
-
             // Sleep until 23.5 hours mark
             let rotation_duration = Duration::from_secs(self.rotation_interval_secs);
-            let mut elapsed = Duration::from_secs(0);
-
-            while elapsed < rotation_duration && self.is_active.load(Ordering::Relaxed) {
+            while start_time.elapsed() < rotation_duration && self.is_active.load(Ordering::Relaxed) {
                 sleep(Duration::from_secs(10)).await;
-                elapsed = start_time.elapsed();
             }
 
             if !self.is_active.load(Ordering::Relaxed) {
+                primary_stream.stop();
                 break;
             }
 
-            // 23.5-hour threshold reached: Initiate secondary connection overlap
-            let secondary_queue = LockFreeSpscQueue::new(10000);
-            match self.exchange {
-                ExchangeType::Binance => {
-                    let sec_stream = Arc::new(BinanceWsStream::new(&self.symbol));
-                    let sec_clone = sec_stream.clone();
-
-                    tokio::spawn(async move {
-                        let _ = sec_clone.connect_and_listen(secondary_queue).await;
-                    });
-                }
-                ExchangeType::Bybit => {
-                    let sec_stream = Arc::new(BybitWsStream::new(&self.symbol));
-                    let sec_clone = sec_stream.clone();
-
-                    tokio::spawn(async move {
-                        let _ = sec_clone.connect_and_listen(secondary_queue).await;
-                    });
-                }
-            }
+            // 23.5-hour threshold reached: Initiate secondary connection overlap using main queue
+            let secondary_stream = self.spawn_stream(queue.clone());
 
             // Maintain overlap for 30 minutes before shutting down legacy primary socket
-            sleep(Duration::from_secs(self.overlap_duration_secs)).await;
-            primary_active_clone.store(false, Ordering::Relaxed);
+            let overlap_start = Instant::now();
+            let overlap_duration = Duration::from_secs(self.overlap_duration_secs);
+            while overlap_start.elapsed() < overlap_duration && self.is_active.load(Ordering::Relaxed) {
+                sleep(Duration::from_secs(5)).await;
+            }
+
+            // Cleanly shut down legacy primary socket
+            primary_stream.stop();
+
+            // Promote secondary stream to primary for next rotation cycle
+            primary_stream = secondary_stream;
         }
 
+        primary_stream.stop();
         Ok(())
     }
 }
+

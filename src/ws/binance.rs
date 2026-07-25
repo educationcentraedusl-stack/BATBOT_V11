@@ -1,9 +1,52 @@
 use crate::lob::{LockFreeSpscQueue, MarketUpdateEvent, LOB_DEPTH};
 use futures_util::{SinkExt, StreamExt};
-use serde_json::Value;
+use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+
+#[derive(Deserialize)]
+struct BinanceCombinedStream<'a> {
+    #[serde(borrow)]
+    stream: &'a str,
+    #[serde(borrow)]
+    data: &'a serde_json::value::RawValue,
+}
+
+#[derive(Deserialize)]
+struct BinanceDepthPayload<'a> {
+    #[serde(borrow)]
+    b: Vec<[&'a str; 2]>,
+    #[serde(borrow)]
+    a: Vec<[&'a str; 2]>,
+}
+
+#[derive(Deserialize)]
+struct BinanceTradePayload<'a> {
+    #[serde(borrow)]
+    p: &'a str,
+    #[serde(borrow)]
+    q: &'a str,
+    m: bool,
+}
+
+#[derive(Deserialize)]
+struct BinanceForceOrderOuter<'a> {
+    #[serde(borrow)]
+    o: BinanceForceOrderData<'a>,
+}
+
+#[derive(Deserialize)]
+struct BinanceForceOrderData<'a> {
+    #[serde(borrow)]
+    s: &'a str,
+    #[serde(borrow)]
+    S: &'a str,
+    #[serde(borrow)]
+    p: &'a str,
+    #[serde(borrow)]
+    q: &'a str,
+}
 
 pub struct BinanceWsStream {
     pub symbol: String,
@@ -46,9 +89,7 @@ impl BinanceWsStream {
         while self.is_running.load(Ordering::Relaxed) {
             match read.next().await {
                 Some(Ok(Message::Text(text))) => {
-                    if let Ok(json) = serde_json::from_str::<Value>(&text) {
-                        Self::parse_and_enqueue(&json, &queue);
-                    }
+                    Self::parse_and_enqueue(&text, &queue);
                 }
                 Some(Ok(Message::Ping(payload))) => {
                     let _ = write.send(Message::Pong(payload)).await;
@@ -71,15 +112,10 @@ impl BinanceWsStream {
         Ok(())
     }
 
-    fn parse_and_enqueue(json: &Value, queue: &LockFreeSpscQueue) {
-        let stream = match json.get("stream").and_then(|s| s.as_str()) {
-            Some(s) => s,
-            None => return,
-        };
-
-        let data = match json.get("data") {
-            Some(d) => d,
-            None => return,
+    fn parse_and_enqueue(text: &str, queue: &LockFreeSpscQueue) {
+        let combined: BinanceCombinedStream = match serde_json::from_str(text) {
+            Ok(c) => c,
+            Err(_) => return,
         };
 
         let timestamp_ns = std::time::SystemTime::now()
@@ -87,68 +123,56 @@ impl BinanceWsStream {
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
 
-        if stream.contains("@depth20") {
-            let bids_val = match data.get("b").and_then(|b| b.as_array()) {
-                Some(arr) => arr,
-                None => return,
-            };
-            let asks_val = match data.get("a").and_then(|a| a.as_array()) {
-                Some(arr) => arr,
-                None => return,
-            };
+        if combined.stream.contains("@depth20") {
+            if let Ok(depth) = serde_json::from_str::<BinanceDepthPayload>(combined.data.get()) {
+                let mut bids = [(0.0, 0.0); LOB_DEPTH];
+                let mut asks = [(0.0, 0.0); LOB_DEPTH];
 
-            let mut bids = [(0.0, 0.0); LOB_DEPTH];
-            let mut asks = [(0.0, 0.0); LOB_DEPTH];
-
-            for (i, item) in bids_val.iter().take(LOB_DEPTH).enumerate() {
-                if let Some(pair) = item.as_array() {
-                    let p = pair.get(0).and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-                    let q = pair.get(1).and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                for (i, pair) in depth.b.iter().take(LOB_DEPTH).enumerate() {
+                    let p = pair[0].parse::<f64>().unwrap_or(0.0);
+                    let q = pair[1].parse::<f64>().unwrap_or(0.0);
                     bids[i] = (p, q);
                 }
-            }
 
-            for (i, item) in asks_val.iter().take(LOB_DEPTH).enumerate() {
-                if let Some(pair) = item.as_array() {
-                    let p = pair.get(0).and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-                    let q = pair.get(1).and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                for (i, pair) in depth.a.iter().take(LOB_DEPTH).enumerate() {
+                    let p = pair[0].parse::<f64>().unwrap_or(0.0);
+                    let q = pair[1].parse::<f64>().unwrap_or(0.0);
                     asks[i] = (p, q);
                 }
+
+                let _ = queue.push(MarketUpdateEvent::DepthUpdate {
+                    bids,
+                    asks,
+                    timestamp_ns,
+                });
             }
+        } else if combined.stream.contains("@aggTrade") {
+            if let Ok(trade) = serde_json::from_str::<BinanceTradePayload>(combined.data.get()) {
+                let price = trade.p.parse::<f64>().unwrap_or(0.0);
+                let quantity = trade.q.parse::<f64>().unwrap_or(0.0);
+                let is_buyer_maker = trade.m;
 
-            let _ = queue.push(MarketUpdateEvent::DepthUpdate {
-                bids,
-                asks,
-                timestamp_ns,
-            });
-        } else if stream.contains("@aggTrade") {
-            let price = data.get("p").and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-            let quantity = data.get("q").and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-            let is_buyer_maker = data.get("m").and_then(|v| v.as_bool()).unwrap_or(false);
+                let _ = queue.push(MarketUpdateEvent::TradeEvent {
+                    price,
+                    quantity,
+                    is_buyer_maker,
+                    timestamp_ns,
+                });
+            }
+        } else if combined.stream.contains("@forceOrder") {
+            if let Ok(fo) = serde_json::from_str::<BinanceForceOrderOuter>(combined.data.get()) {
+                let price = fo.o.p.parse::<f64>().unwrap_or(0.0);
+                let quantity = fo.o.q.parse::<f64>().unwrap_or(0.0);
 
-            let _ = queue.push(MarketUpdateEvent::TradeEvent {
-                price,
-                quantity,
-                is_buyer_maker,
-                timestamp_ns,
-            });
-        } else if stream.contains("@forceOrder") {
-            let o = match data.get("o") {
-                Some(obj) => obj,
-                None => return,
-            };
-            let symbol = o.get("s").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let side = o.get("S").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let price = o.get("p").and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-            let quantity = o.get("q").and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-
-            let _ = queue.push(MarketUpdateEvent::LiquidationEvent {
-                symbol,
-                side,
-                price,
-                quantity,
-                timestamp_ns,
-            });
+                let _ = queue.push(MarketUpdateEvent::new_liquidation(
+                    fo.o.s,
+                    fo.o.S,
+                    price,
+                    quantity,
+                    timestamp_ns,
+                ));
+            }
         }
     }
 }
+

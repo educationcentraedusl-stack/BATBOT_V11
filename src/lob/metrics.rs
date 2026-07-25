@@ -5,6 +5,9 @@ pub struct MicrostructureMetrics {
     pub spread_velocity: f64,
     pub last_spread: f64,
     pub last_timestamp_ns: u64,
+    pub total_liquidation_vol: f64,
+    pub buy_liquidation_vol: f64,
+    pub sell_liquidation_vol: f64,
 }
 
 impl Default for MicrostructureMetrics {
@@ -15,6 +18,9 @@ impl Default for MicrostructureMetrics {
             spread_velocity: 0.0,
             last_spread: 0.0,
             last_timestamp_ns: 0,
+            total_liquidation_vol: 0.0,
+            buy_liquidation_vol: 0.0,
+            sell_liquidation_vol: 0.0,
         }
     }
 }
@@ -59,3 +65,19 @@ pub fn calculate_spread_velocity(
         (current_spread - previous_spread) / elapsed_seconds
     }
 }
+
+pub fn update_liquidation(
+    metrics: &mut MicrostructureMetrics,
+    price: f64,
+    quantity: f64,
+    is_buy: bool,
+) {
+    let vol = price * quantity;
+    metrics.total_liquidation_vol += vol;
+    if is_buy {
+        metrics.buy_liquidation_vol += vol;
+    } else {
+        metrics.sell_liquidation_vol += vol;
+    }
+}
+

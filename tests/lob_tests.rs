@@ -69,4 +69,36 @@ mod tests {
         assert_eq!(lob.asks[0].0, 50001.0);
         assert!(lob.metrics.obi < 0.0); // Asks vol 2.5 > Bids vol 1.5 -> Negative OBI
     }
+
+    #[test]
+    fn test_liquidation_event_processing() {
+        let mut lob = LimitOrderBook::new();
+        let liq_evt = MarketUpdateEvent::new_liquidation("BTCUSDT", "BUY", 60000.0, 2.0, 1_000_000);
+        lob.process_event(liq_evt);
+
+        assert_eq!(lob.metrics.total_liquidation_vol, 120000.0);
+        assert_eq!(lob.metrics.buy_liquidation_vol, 120000.0);
+        assert_eq!(lob.metrics.sell_liquidation_vol, 0.0);
+
+        let liq_sell = MarketUpdateEvent::new_liquidation("BTCUSDT", "SELL", 50000.0, 1.0, 2_000_000);
+        lob.process_event(liq_sell);
+
+        assert_eq!(lob.metrics.total_liquidation_vol, 170000.0);
+        assert_eq!(lob.metrics.sell_liquidation_vol, 50000.0);
+    }
+
+    #[test]
+    fn test_queue_overflow_drop_counter() {
+        let small_queue = LockFreeSpscQueue::new(2);
+        let evt1 = MarketUpdateEvent::TradeEvent { price: 100.0, quantity: 1.0, is_buyer_maker: false, timestamp_ns: 1 };
+        let evt2 = MarketUpdateEvent::TradeEvent { price: 101.0, quantity: 1.0, is_buyer_maker: false, timestamp_ns: 2 };
+        let evt3 = MarketUpdateEvent::TradeEvent { price: 102.0, quantity: 1.0, is_buyer_maker: false, timestamp_ns: 3 };
+
+        assert!(small_queue.push(evt1).is_ok());
+        assert!(small_queue.push(evt2).is_ok());
+        assert!(small_queue.push(evt3).is_err());
+
+        assert!(LockFreeSpscQueue::dropped_count() > 0);
+    }
 }
+

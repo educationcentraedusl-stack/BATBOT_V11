@@ -1,9 +1,14 @@
 use crossbeam_queue::ArrayQueue;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use super::metrics::{calculate_obi, calculate_spread_velocity, update_cvd, MicrostructureMetrics};
+use super::metrics::{
+    calculate_obi, calculate_spread_velocity, update_cvd, update_liquidation, MicrostructureMetrics,
+};
 
 pub const LOB_DEPTH: usize = 20;
+
+pub static DROPPED_EVENTS_COUNT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PriceLevel {
@@ -34,12 +39,44 @@ pub enum MarketUpdateEvent {
         timestamp_ns: u64,
     },
     LiquidationEvent {
-        symbol: String,
-        side: String,
+        symbol: [u8; 16],
+        symbol_len: usize,
+        side: [u8; 8],
+        side_len: usize,
         price: f64,
         quantity: f64,
         timestamp_ns: u64,
     },
+}
+
+impl MarketUpdateEvent {
+    pub fn new_liquidation(
+        sym: &str,
+        side_str: &str,
+        price: f64,
+        quantity: f64,
+        timestamp_ns: u64,
+    ) -> Self {
+        let mut symbol = [0u8; 16];
+        let sym_bytes = sym.as_bytes();
+        let sym_len = sym_bytes.len().min(16);
+        symbol[..sym_len].copy_from_slice(&sym_bytes[..sym_len]);
+
+        let mut side = [0u8; 8];
+        let side_bytes = side_str.as_bytes();
+        let side_len = side_bytes.len().min(8);
+        side[..side_len].copy_from_slice(&side_bytes[..side_len]);
+
+        MarketUpdateEvent::LiquidationEvent {
+            symbol,
+            symbol_len: sym_len,
+            side,
+            side_len,
+            price,
+            quantity,
+            timestamp_ns,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -55,7 +92,14 @@ impl LockFreeSpscQueue {
     }
 
     pub fn push(&self, event: MarketUpdateEvent) -> Result<(), MarketUpdateEvent> {
-        self.queue.push(event)
+        match self.queue.push(event) {
+            Ok(()) => Ok(()),
+            Err(evt) => {
+                let drops = DROPPED_EVENTS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                eprintln!("[SPSC Queue Warning] Buffer full! Dropped market event. Total dropped: {}", drops);
+                Err(evt)
+            }
+        }
     }
 
     pub fn pop(&self) -> Option<MarketUpdateEvent> {
@@ -64,6 +108,10 @@ impl LockFreeSpscQueue {
 
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
+    }
+
+    pub fn dropped_count() -> u64 {
+        DROPPED_EVENTS_COUNT.load(Ordering::Relaxed)
     }
 }
 
@@ -137,9 +185,18 @@ impl LimitOrderBook {
             } => {
                 self.process_trade(price, quantity, is_buyer_maker);
             }
-            MarketUpdateEvent::LiquidationEvent { .. } => {
-                // Liquidation events tracked for order flow analytics
+            MarketUpdateEvent::LiquidationEvent {
+                side,
+                side_len,
+                price,
+                quantity,
+                ..
+            } => {
+                let side_str = std::str::from_utf8(&side[..side_len]).unwrap_or("");
+                let is_buy = side_str.eq_ignore_ascii_case("BUY");
+                update_liquidation(&mut self.metrics, price, quantity, is_buy);
             }
         }
     }
 }
+
