@@ -1,0 +1,20 @@
+{
+  "name": "batbot-v11-hft",
+  "version": "1.0.0",
+  "description": "BATBOT_V11 High-Frequency Trading System",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "private": true,
+  "scripts": {
+    "build:rust": "napi build --platform --release",
+    "build:ts": "tsc",
+    "build": "npm run build:rust && npm run build:ts",
+    "check": "cargo check",
+    "test": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.4",
+    "@types/node": "^22.13.0",
+    "typescript": "^5.7.3"
+  }
+}
