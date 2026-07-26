@@ -58,11 +58,22 @@ pub struct BinanceWsStream {
 impl BinanceWsStream {
     pub fn new(symbol: &str) -> Self {
         let sym_lower = symbol.to_lowercase();
+        let use_testnet = std::env::var("USE_TESTNET").map(|v| v == "true" || v == "1").unwrap_or(false)
+            || std::env::var("BINANCE_TESTNET").map(|v| v == "true").unwrap_or(false);
+
+        let host = if use_testnet {
+            "stream.binancefuture.com"
+        } else {
+            "fstream.binance.com"
+        };
+
         // Combined stream URL for depth20@100ms, aggTrade, forceOrder
         let url_str = format!(
-            "wss://fstream.binance.com/stream?streams={}@depth20@100ms/{}@aggTrade/{}@forceOrder",
-            sym_lower, sym_lower, sym_lower
+            "wss://{}/stream?streams={}@depth20@100ms/{}@aggTrade/{}@forceOrder",
+            host, sym_lower, sym_lower, sym_lower
         );
+        println!("[Binance WS] Initialized WebSocket URL: {}", url_str);
+
         Self {
             symbol: symbol.to_uppercase(),
             stream_url: url_str,
@@ -81,9 +92,16 @@ impl BinanceWsStream {
     }
 
     pub async fn connect_and_listen(&self, queue: LockFreeSpscQueue) -> Result<(), String> {
+        println!("[Binance WS] Connecting to Binance WebSocket stream ({}) ...", self.stream_url);
         let (ws_stream, _) = match connect_async(self.stream_url.as_str()).await {
-            Ok(res) => res,
-            Err(e) => return Err(format!("Failed to connect to Binance WS: {}", e)),
+            Ok(res) => {
+                println!("[Binance WS] ✅ Connected to Binance WebSocket successfully!");
+                res
+            }
+            Err(e) => {
+                eprintln!("[Binance WS Error] ❌ Failed to connect to Binance WS (URL: {}): {}", self.stream_url, e);
+                return Err(format!("Failed to connect to Binance WS: {}", e));
+            }
         };
 
         self.is_running.store(true, Ordering::Relaxed);
@@ -92,6 +110,7 @@ impl BinanceWsStream {
         while self.is_running.load(Ordering::Relaxed) {
             tokio::select! {
                 _ = self.shutdown_notify.notified() => {
+                    println!("[Binance WS] Received shutdown notification.");
                     self.is_running.store(false, Ordering::Relaxed);
                     break;
                 }
@@ -104,6 +123,7 @@ impl BinanceWsStream {
                             let _ = write.send(Message::Pong(payload)).await;
                         }
                         Some(Ok(Message::Close(_))) => {
+                            println!("[Binance WS] Connection closed by remote server.");
                             self.is_running.store(false, Ordering::Relaxed);
                             break;
                         }
@@ -113,7 +133,7 @@ impl BinanceWsStream {
                             break;
                         }
                         None => {
-                            eprintln!("[Binance WS Error] Stream closed unexpectedly");
+                            eprintln!("[Binance WS Error] Stream closed unexpectedly (EOF)");
                             self.is_running.store(false, Ordering::Relaxed);
                             break;
                         }
@@ -124,6 +144,7 @@ impl BinanceWsStream {
         }
         Ok(())
     }
+
 
     fn parse_and_enqueue(text: &str, queue: &LockFreeSpscQueue) {
         let combined: BinanceCombinedStream = match serde_json::from_str(text) {
