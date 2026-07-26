@@ -45,6 +45,8 @@ class BinanceExecutionClient {
     baseUrl;
     wsUrl;
     testnet;
+    cachedUsdtAvailableBalance = 0;
+    balancePollTimer = null;
     constructor(options) {
         this.testnet = options?.useTestnet ?? (process.env.USE_TESTNET === "true" || process.env.USE_TESTNET === "1" || process.env.BINANCE_TESTNET === "true");
         const envApiKey = this.testnet
@@ -78,6 +80,46 @@ class BinanceExecutionClient {
     }
     isConfigured() {
         return this.apiKey.length > 0 && this.apiSecret.length > 0;
+    }
+    getUsdtAvailableBalance() {
+        return this.cachedUsdtAvailableBalance;
+    }
+    async fetchUsdtBalanceAsync() {
+        if (!this.isConfigured())
+            return 0;
+        try {
+            const balances = await this.request("GET", "/fapi/v2/balance", {}, true);
+            if (Array.isArray(balances)) {
+                const usdtItem = balances.find((b) => b.asset === "USDT");
+                if (usdtItem) {
+                    const val = parseFloat(usdtItem.availableBalance || usdtItem.balance || "0");
+                    if (!isNaN(val)) {
+                        this.cachedUsdtAvailableBalance = val;
+                        return val;
+                    }
+                }
+            }
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            // Log failure silently to background telemetry log without interrupting HFT loops
+        }
+        return this.cachedUsdtAvailableBalance;
+    }
+    startBalancePolling(intervalMs = 5000) {
+        if (this.balancePollTimer)
+            return;
+        // Trigger initial fetch asynchronously
+        this.fetchUsdtBalanceAsync().catch(() => { });
+        this.balancePollTimer = setInterval(() => {
+            this.fetchUsdtBalanceAsync().catch(() => { });
+        }, intervalMs);
+    }
+    stopBalancePolling() {
+        if (this.balancePollTimer) {
+            clearInterval(this.balancePollTimer);
+            this.balancePollTimer = null;
+        }
     }
     signQuery(params) {
         const timestamp = Date.now();

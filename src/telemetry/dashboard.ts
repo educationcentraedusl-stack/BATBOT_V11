@@ -13,6 +13,7 @@ export interface TelemetryFrame {
   stats: TradeLoggerStats;
   riskStatus: string;
   isEngineActive: boolean;
+  usdtBalance: number;
 }
 
 export class CLIDashboard {
@@ -45,6 +46,7 @@ export class CLIDashboard {
     const cyan = "\x1b[36m";
     const yellow = "\x1b[33m";
     const bold = "\x1b[1m";
+    const green = "\x1b[32m";
 
     let output = "";
     output += "\x1b[2J\x1b[3J\x1b[H"; // Clear screen viewport, clear scrollback, move cursor to top-left (0,0)
@@ -65,9 +67,10 @@ export class CLIDashboard {
     output += ` Logged Signals: ${frame.stats.totalSignalsLogged}  |  Executions Logged: ${frame.stats.totalExecutionsLogged}\n`;
     output += `--------------------------------------------------------------------------------\n`;
     output += `${bold}--- TRADING PERFORMANCE & PnL ---${reset}\n`;
-    output += ` Realized PnL: ${pnlColor}${bold}$${frame.stats.realizedPnl.toFixed(2)}${reset}  |  Cumulative Fees: $${frame.stats.totalFees.toFixed(2)}\n`;
+    output += ` Available Balance: ${green}${bold}$${frame.usdtBalance.toFixed(2)}${reset}  |  Realized PnL: ${pnlColor}${bold}$${frame.stats.realizedPnl.toFixed(2)}${reset}  |  Fees: $${frame.stats.totalFees.toFixed(2)}\n`;
     output += ` Win Rate: ${yellow}${frame.stats.winRatePercent.toFixed(2)}%${reset}  |  Total Trades: ${frame.stats.totalTrades} (W: ${frame.stats.winningTrades} / L: ${frame.stats.losingTrades})\n`;
     output += `${cyan}${bold}================================================================================${reset}\n`;
+
 
     process.stdout.write(output);
   }

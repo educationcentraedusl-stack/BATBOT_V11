@@ -87,7 +87,9 @@ async function runPhase5Tests() {
     stats,
     riskStatus: "PASSED (0 Rejections)",
     isEngineActive: true,
+    usdtBalance: 10000.0,
   };
+
 
   dashboard.render(sampleFrame);
   console.log("[TEST 2 PASSED] CLI Dashboard frame rendered cleanly.");

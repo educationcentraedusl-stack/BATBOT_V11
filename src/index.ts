@@ -61,8 +61,11 @@ export function initializeSystem(): SystemControlPlane {
     process.stdout.write(`[BATBOT_V11] Ingestion binding notice: ${msg}\n`);
   }
 
-  // Start Telemetry WebSocket Server
+  // Start Telemetry WebSocket Server & Async Binance Balance Polling (every 5s)
   telemetryServer.start();
+  if (executionClient.isConfigured()) {
+    executionClient.startBalancePolling(5000);
+  }
 
   // Active HFT tick evaluation & UI refresh loop (10ms tick polling rate)
   tickInterval = setInterval(() => {
@@ -87,13 +90,20 @@ export function initializeSystem(): SystemControlPlane {
     if (tickResult.executionPromise) {
       tickResult.executionPromise.then((orderRes) => {
         if (orderRes) {
+          const execQty = parseFloat(orderRes.executedQty || "0");
+          const origQty = parseFloat(orderRes.origQty || "0");
+          const finalQty = execQty > 0 ? execQty : (origQty > 0 ? origQty : strategyEngine.getConfig().orderQuantity);
+          const px = parseFloat(orderRes.price || orderRes.avgPrice || "0") || (tickResult.signalType === "BUY" ? tickResult.askPrice : tickResult.bidPrice);
+          const fee = (px * finalQty) * 0.0004;
+          const pnl = tickResult.signalType === "SELL" ? (px - tickResult.bidPrice) * finalQty : 0;
+
           logger.logExecution(
-            orderRes.symbol,
-            orderRes.side as "BUY" | "SELL",
-            parseFloat(orderRes.price || "0"),
-            parseFloat(orderRes.executedQty || "0"),
-            0,
-            0,
+            orderRes.symbol || strategyEngine.getConfig().symbol,
+            (orderRes.side as "BUY" | "SELL") || tickResult.signalType,
+            px,
+            finalQty,
+            pnl,
+            fee,
             0
           );
         }
@@ -117,6 +127,7 @@ export function initializeSystem(): SystemControlPlane {
           : `REJECTED (${tickResult.riskResult.reasonCode})`
         : "IDLE_ACTIVE",
       isEngineActive: isRunning,
+      usdtBalance: executionClient.getUsdtAvailableBalance(),
     };
 
     dashboard.render(frame);
@@ -130,11 +141,13 @@ export function initializeSystem(): SystemControlPlane {
       clearInterval(tickInterval);
       tickInterval = null;
     }
+    executionClient.stopBalancePolling();
     await logger.close();
     await telemetryServer.stop();
     dashboard.clear();
     process.stdout.write("[BATBOT_V11] System shutdown cleanly.\n");
   };
+
 
   return {
     status: "BATBOT_V11_CONTROL_PLANE_READY",

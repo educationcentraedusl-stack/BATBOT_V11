@@ -88,6 +88,8 @@ export class BinanceExecutionClient {
   private baseUrl: string;
   private wsUrl: string;
   private testnet: boolean;
+  private cachedUsdtAvailableBalance: number = 0;
+  private balancePollTimer: NodeJS.Timeout | null = null;
 
   constructor(options?: BinanceClientOptions) {
     this.testnet = options?.useTestnet ?? (process.env.USE_TESTNET === "true" || process.env.USE_TESTNET === "1" || process.env.BINANCE_TESTNET === "true");
@@ -136,6 +138,48 @@ export class BinanceExecutionClient {
   public isConfigured(): boolean {
     return this.apiKey.length > 0 && this.apiSecret.length > 0;
   }
+
+  public getUsdtAvailableBalance(): number {
+    return this.cachedUsdtAvailableBalance;
+  }
+
+  public async fetchUsdtBalanceAsync(): Promise<number> {
+    if (!this.isConfigured()) return 0;
+    try {
+      const balances = await this.request<BinanceAccountBalance[]>("GET", "/fapi/v2/balance", {}, true);
+      if (Array.isArray(balances)) {
+        const usdtItem = balances.find((b) => b.asset === "USDT");
+        if (usdtItem) {
+          const val = parseFloat(usdtItem.availableBalance || usdtItem.balance || "0");
+          if (!isNaN(val)) {
+            this.cachedUsdtAvailableBalance = val;
+            return val;
+          }
+        }
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Log failure silently to background telemetry log without interrupting HFT loops
+    }
+    return this.cachedUsdtAvailableBalance;
+  }
+
+  public startBalancePolling(intervalMs: number = 5000): void {
+    if (this.balancePollTimer) return;
+    // Trigger initial fetch asynchronously
+    this.fetchUsdtBalanceAsync().catch(() => {});
+    this.balancePollTimer = setInterval(() => {
+      this.fetchUsdtBalanceAsync().catch(() => {});
+    }, intervalMs);
+  }
+
+  public stopBalancePolling(): void {
+    if (this.balancePollTimer) {
+      clearInterval(this.balancePollTimer);
+      this.balancePollTimer = null;
+    }
+  }
+
 
   public signQuery(params: Record<string, string | number | boolean>): string {
     const timestamp = Date.now();
