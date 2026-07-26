@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  batbot-hft:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: batbot_v11_hft_engine
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - USE_TESTNET=true
+    ports:
+      - "8080:8080" # Telemetry WebSocket Monitoring
+      - "5000:5000" # System REST API (if enabled)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+        reservations:
+          cpus: '0.5'
+          memory: 512M

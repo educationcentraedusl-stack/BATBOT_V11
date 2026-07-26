@@ -1,0 +1,16 @@
+node_modules
+target
+target_build
+build_target
+dist
+.git
+.gitignore
+*.log
+logs
+.env
+.antigravity
+.loki
+coverage
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

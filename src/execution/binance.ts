@@ -72,21 +72,63 @@ export interface BinanceAccountBalance {
   updateTime: number;
 }
 
+export interface BinanceClientOptions {
+  apiKey?: string;
+  apiSecret?: string;
+  baseUrl?: string;
+  wsUrl?: string;
+  useTestnet?: boolean;
+}
+
 export class BinanceExecutionClient {
   private apiKey: string;
   private apiSecret: string;
   private baseUrl: string;
+  private wsUrl: string;
+  private testnet: boolean;
 
-  constructor(options?: { apiKey?: string; apiSecret?: string; baseUrl?: string }) {
-    this.apiKey = options?.apiKey ?? process.env.BINANCE_API_KEY ?? "";
-    this.apiSecret = options?.apiSecret ?? process.env.BINANCE_API_SECRET ?? "";
-    this.baseUrl = options?.baseUrl ?? "https://fapi.binance.com";
+  constructor(options?: BinanceClientOptions) {
+    this.testnet = options?.useTestnet ?? (process.env.USE_TESTNET === "true" || process.env.USE_TESTNET === "1" || process.env.BINANCE_TESTNET === "true");
+    
+    const envApiKey = this.testnet
+      ? (process.env.BINANCE_TESTNET_API_KEY || process.env.BINANCE_API_KEY || "")
+      : (process.env.BINANCE_API_KEY || "");
+    const envApiSecret = this.testnet
+      ? (process.env.BINANCE_TESTNET_SECRET_KEY || process.env.BINANCE_API_SECRET || process.env.BINANCE_SECRET_KEY || "")
+      : (process.env.BINANCE_API_SECRET || process.env.BINANCE_SECRET_KEY || "");
+
+    this.apiKey = options?.apiKey ?? envApiKey;
+    this.apiSecret = options?.apiSecret ?? envApiSecret;
+
+    const defaultRestBase = this.testnet
+      ? "https://testnet.binancefuture.com"
+      : "https://fapi.binance.com";
+    const defaultWsBase = this.testnet
+      ? "wss://stream.binancefuture.com"
+      : "wss://fstream.binance.com";
+
+    this.baseUrl = options?.baseUrl ?? defaultRestBase;
+    this.wsUrl = options?.wsUrl ?? defaultWsBase;
 
     if (!this.apiKey || !this.apiSecret) {
       console.error(
-        "[CRITICAL][BinanceExecutionClient] Missing BINANCE_API_KEY or BINANCE_API_SECRET in environment variables. Live trading execution disabled."
+        `[CRITICAL][BinanceExecutionClient] Missing BINANCE_API_KEY or BINANCE_API_SECRET in environment variables. Execution mode: ${
+          this.testnet ? "BINANCE FUTURES TESTNET" : "LIVE PRODUCTION"
+        }`
       );
     }
+  }
+
+  public isTestnet(): boolean {
+    return this.testnet;
+  }
+
+  public getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
+  public getWsUrl(): string {
+    return this.wsUrl;
   }
 
   public isConfigured(): boolean {
