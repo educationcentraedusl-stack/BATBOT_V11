@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { MarketDataClient } from "./marketDataClient";
 import { StrategyEngine } from "./strategy/engine";
 import { RiskGuard } from "./strategy/risk";

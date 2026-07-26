@@ -34,6 +34,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.BinanceExecutionClient = void 0;
+require("dotenv/config");
 const crypto = __importStar(require("node:crypto"));
 const https = __importStar(require("node:https"));
 const http = __importStar(require("node:http"));

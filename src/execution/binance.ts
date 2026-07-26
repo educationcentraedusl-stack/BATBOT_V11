@@ -1,7 +1,9 @@
+import "dotenv/config";
 import * as crypto from "node:crypto";
 import * as https from "node:https";
 import * as http from "node:http";
 import { URL } from "node:url";
+
 
 export interface BinanceOrderParams {
   symbol: string;

@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.BinanceExecutionClient = exports.RiskGuard = exports.StrategyEngine = exports.MarketDataClient = void 0;
 exports.initializeSystem = initializeSystem;
+require("dotenv/config");
 const marketDataClient_1 = require("./marketDataClient");
 Object.defineProperty(exports, "MarketDataClient", { enumerable: true, get: function () { return marketDataClient_1.MarketDataClient; } });
 const engine_1 = require("./strategy/engine");
