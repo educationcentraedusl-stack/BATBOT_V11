@@ -54,6 +54,7 @@ class TradeLogger {
     bufferCapacity;
     flushTimer = null;
     isFlushing = false;
+    processedTickCount = 0;
     // Performance & PnL Aggregators
     totalSignalsLogged = 0;
     totalExecutionsLogged = 0;
@@ -113,8 +114,9 @@ class TradeLogger {
      * Modifies pre-allocated ring buffer slot in O(1) time without GC allocations.
      */
     logSignal(sequenceNum, signalType, obi, cvd, spreadVelocity, bidPrice, askPrice, latencyUs) {
+        this.processedTickCount++;
         // Only log actionable signals or periodic metric samples to keep buffer clean
-        if (signalType === "NONE" && this.totalSignalsLogged % 100 !== 0) {
+        if (signalType === "NONE" && this.processedTickCount % 100 !== 0) {
             this.cumulativeTickLatencyUs += latencyUs;
             this.tickCountForLatency++;
             return;
@@ -182,9 +184,10 @@ class TradeLogger {
         }
         this.isFlushing = true;
         try {
-            // Batch drain signal ring buffer
+            let signalLines = "";
+            let execLines = "";
+            // Batch drain signal ring buffer synchronously before async I/O yield
             if (this.signalCount > 0) {
-                let signalLines = "";
                 const drainCount = this.signalCount;
                 for (let i = 0; i < drainCount; i++) {
                     const idx = (this.signalTail + i) % this.bufferCapacity;
@@ -203,11 +206,9 @@ class TradeLogger {
                 }
                 this.signalTail = (this.signalTail + drainCount) % this.bufferCapacity;
                 this.signalCount -= drainCount;
-                await fs.promises.appendFile(this.signalLogPath, signalLines, "utf8");
             }
-            // Batch drain execution ring buffer
+            // Batch drain execution ring buffer synchronously before async I/O yield
             if (this.executionCount > 0) {
-                let execLines = "";
                 const drainCount = this.executionCount;
                 for (let i = 0; i < drainCount; i++) {
                     const idx = (this.executionTail + i) % this.bufferCapacity;
@@ -216,6 +217,11 @@ class TradeLogger {
                 }
                 this.executionTail = (this.executionTail + drainCount) % this.bufferCapacity;
                 this.executionCount -= drainCount;
+            }
+            if (signalLines.length > 0) {
+                await fs.promises.appendFile(this.signalLogPath, signalLines, "utf8");
+            }
+            if (execLines.length > 0) {
                 await fs.promises.appendFile(this.executionLogPath, execLines, "utf8");
             }
         }

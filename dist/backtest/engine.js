@@ -89,7 +89,7 @@ class BacktestEngine {
             if (result.signalType !== "NONE") {
                 totalSignalsGenerated++;
                 const slippage = this.config.slippageTicks * this.config.tickSize;
-                // Position Management & Execution Logic
+                // Position Management & Execution Logic (Bidirectional Long & Short Support)
                 if (result.signalType === "BUY" && position === "NONE") {
                     const fillPrice = tick.askPrice + slippage;
                     const notional = fillPrice * this.config.orderQuantity;
@@ -109,6 +109,41 @@ class BacktestEngine {
                     currentCapital += pnl;
                     totalFeesPaid += fee;
                     totalTradesExecuted++;
+                    riskGuard.recordRealizedPnl(pnl);
+                    riskGuard.updatePositionNotional(0);
+                    const tradeReturnPercent = (pnl / (entryPrice * entryQuantity)) * 100;
+                    tradeReturns.push(tradeReturnPercent);
+                    if (pnl > 0) {
+                        grossProfit += pnl;
+                        winningTrades++;
+                    }
+                    else {
+                        grossLoss += Math.abs(pnl);
+                        losingTrades++;
+                    }
+                    position = "NONE";
+                }
+                else if (result.signalType === "SELL" && position === "NONE") {
+                    const fillPrice = tick.bidPrice - slippage;
+                    const notional = fillPrice * this.config.orderQuantity;
+                    const fee = notional * this.config.takerFeeRate;
+                    position = "SHORT";
+                    entryPrice = fillPrice;
+                    entryQuantity = this.config.orderQuantity;
+                    currentCapital -= fee;
+                    totalFeesPaid += fee;
+                    totalTradesExecuted++;
+                }
+                else if (result.signalType === "BUY" && position === "SHORT") {
+                    const fillPrice = tick.askPrice + slippage;
+                    const notional = fillPrice * entryQuantity;
+                    const fee = notional * this.config.takerFeeRate;
+                    const pnl = (entryPrice - fillPrice) * entryQuantity - fee;
+                    currentCapital += pnl;
+                    totalFeesPaid += fee;
+                    totalTradesExecuted++;
+                    riskGuard.recordRealizedPnl(pnl);
+                    riskGuard.updatePositionNotional(0);
                     const tradeReturnPercent = (pnl / (entryPrice * entryQuantity)) * 100;
                     tradeReturns.push(tradeReturnPercent);
                     if (pnl > 0) {
