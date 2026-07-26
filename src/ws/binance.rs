@@ -40,8 +40,8 @@ struct BinanceForceOrderOuter<'a> {
 struct BinanceForceOrderData<'a> {
     #[serde(borrow)]
     s: &'a str,
-    #[serde(borrow)]
-    S: &'a str,
+    #[serde(rename = "S", borrow)]
+    side: &'a str,
     #[serde(borrow)]
     p: &'a str,
     #[serde(borrow)]
@@ -52,6 +52,7 @@ pub struct BinanceWsStream {
     pub symbol: String,
     stream_url: String,
     is_running: Arc<AtomicBool>,
+    shutdown_notify: Arc<tokio::sync::Notify>,
 }
 
 impl BinanceWsStream {
@@ -66,6 +67,7 @@ impl BinanceWsStream {
             symbol: symbol.to_uppercase(),
             stream_url: url_str,
             is_running: Arc::new(AtomicBool::new(false)),
+            shutdown_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -75,6 +77,7 @@ impl BinanceWsStream {
 
     pub fn stop(&self) {
         self.is_running.store(false, Ordering::Relaxed);
+        self.shutdown_notify.notify_one();
     }
 
     pub async fn connect_and_listen(&self, queue: LockFreeSpscQueue) -> Result<(), String> {
@@ -87,26 +90,36 @@ impl BinanceWsStream {
         let (mut write, mut read) = ws_stream.split();
 
         while self.is_running.load(Ordering::Relaxed) {
-            match read.next().await {
-                Some(Ok(Message::Text(text))) => {
-                    Self::parse_and_enqueue(&text, &queue);
-                }
-                Some(Ok(Message::Ping(payload))) => {
-                    let _ = write.send(Message::Pong(payload)).await;
-                }
-                Some(Ok(Message::Close(_))) => {
+            tokio::select! {
+                _ = self.shutdown_notify.notified() => {
                     self.is_running.store(false, Ordering::Relaxed);
                     break;
                 }
-                Some(Err(_)) => {
-                    self.is_running.store(false, Ordering::Relaxed);
-                    break;
+                msg = read.next() => {
+                    match msg {
+                        Some(Ok(Message::Text(text))) => {
+                            Self::parse_and_enqueue(&text, &queue);
+                        }
+                        Some(Ok(Message::Ping(payload))) => {
+                            let _ = write.send(Message::Pong(payload)).await;
+                        }
+                        Some(Ok(Message::Close(_))) => {
+                            self.is_running.store(false, Ordering::Relaxed);
+                            break;
+                        }
+                        Some(Err(e)) => {
+                            eprintln!("[Binance WS Error] Stream error: {}", e);
+                            self.is_running.store(false, Ordering::Relaxed);
+                            break;
+                        }
+                        None => {
+                            eprintln!("[Binance WS Error] Stream closed unexpectedly");
+                            self.is_running.store(false, Ordering::Relaxed);
+                            break;
+                        }
+                        _ => {}
+                    }
                 }
-                None => {
-                    self.is_running.store(false, Ordering::Relaxed);
-                    break;
-                }
-                _ => {}
             }
         }
         Ok(())
@@ -115,7 +128,10 @@ impl BinanceWsStream {
     fn parse_and_enqueue(text: &str, queue: &LockFreeSpscQueue) {
         let combined: BinanceCombinedStream = match serde_json::from_str(text) {
             Ok(c) => c,
-            Err(_) => return,
+            Err(e) => {
+                eprintln!("[Binance WS Error] Failed to deserialize combined stream payload: {}", e);
+                return;
+            }
         };
 
         let timestamp_ns = std::time::SystemTime::now()
@@ -124,53 +140,79 @@ impl BinanceWsStream {
             .unwrap_or(0);
 
         if combined.stream.contains("@depth20") {
-            if let Ok(depth) = serde_json::from_str::<BinanceDepthPayload>(combined.data.get()) {
-                let mut bids = [(0.0, 0.0); LOB_DEPTH];
-                let mut asks = [(0.0, 0.0); LOB_DEPTH];
+            match serde_json::from_str::<BinanceDepthPayload>(combined.data.get()) {
+                Ok(depth) => {
+                    let mut bids = [(0.0, 0.0); LOB_DEPTH];
+                    let mut asks = [(0.0, 0.0); LOB_DEPTH];
+                    let mut valid = true;
 
-                for (i, pair) in depth.b.iter().take(LOB_DEPTH).enumerate() {
-                    let p = pair[0].parse::<f64>().unwrap_or(0.0);
-                    let q = pair[1].parse::<f64>().unwrap_or(0.0);
-                    bids[i] = (p, q);
+                    for (i, pair) in depth.b.iter().take(LOB_DEPTH).enumerate() {
+                        let Ok(p) = pair[0].parse::<f64>() else { valid = false; break; };
+                        let Ok(q) = pair[1].parse::<f64>() else { valid = false; break; };
+                        bids[i] = (p, q);
+                    }
+
+                    for (i, pair) in depth.a.iter().take(LOB_DEPTH).enumerate() {
+                        let Ok(p) = pair[0].parse::<f64>() else { valid = false; break; };
+                        let Ok(q) = pair[1].parse::<f64>() else { valid = false; break; };
+                        asks[i] = (p, q);
+                    }
+
+                    if valid {
+                        let _ = queue.push(MarketUpdateEvent::DepthUpdate {
+                            bids,
+                            asks,
+                            timestamp_ns,
+                        });
+                    } else {
+                        eprintln!("[Binance WS Error] Failed to parse depth price/quantity float");
+                    }
                 }
-
-                for (i, pair) in depth.a.iter().take(LOB_DEPTH).enumerate() {
-                    let p = pair[0].parse::<f64>().unwrap_or(0.0);
-                    let q = pair[1].parse::<f64>().unwrap_or(0.0);
-                    asks[i] = (p, q);
-                }
-
-                let _ = queue.push(MarketUpdateEvent::DepthUpdate {
-                    bids,
-                    asks,
-                    timestamp_ns,
-                });
+                Err(e) => eprintln!("[Binance WS Error] Failed to deserialize depth payload: {}", e),
             }
         } else if combined.stream.contains("@aggTrade") {
-            if let Ok(trade) = serde_json::from_str::<BinanceTradePayload>(combined.data.get()) {
-                let price = trade.p.parse::<f64>().unwrap_or(0.0);
-                let quantity = trade.q.parse::<f64>().unwrap_or(0.0);
-                let is_buyer_maker = trade.m;
+            match serde_json::from_str::<BinanceTradePayload>(combined.data.get()) {
+                Ok(trade) => {
+                    let Ok(price) = trade.p.parse::<f64>() else {
+                        eprintln!("[Binance WS Error] Failed to parse trade price float");
+                        return;
+                    };
+                    let Ok(quantity) = trade.q.parse::<f64>() else {
+                        eprintln!("[Binance WS Error] Failed to parse trade quantity float");
+                        return;
+                    };
+                    let is_buyer_maker = trade.m;
 
-                let _ = queue.push(MarketUpdateEvent::TradeEvent {
-                    price,
-                    quantity,
-                    is_buyer_maker,
-                    timestamp_ns,
-                });
+                    let _ = queue.push(MarketUpdateEvent::TradeEvent {
+                        price,
+                        quantity,
+                        is_buyer_maker,
+                        timestamp_ns,
+                    });
+                }
+                Err(e) => eprintln!("[Binance WS Error] Failed to deserialize trade payload: {}", e),
             }
         } else if combined.stream.contains("@forceOrder") {
-            if let Ok(fo) = serde_json::from_str::<BinanceForceOrderOuter>(combined.data.get()) {
-                let price = fo.o.p.parse::<f64>().unwrap_or(0.0);
-                let quantity = fo.o.q.parse::<f64>().unwrap_or(0.0);
+            match serde_json::from_str::<BinanceForceOrderOuter>(combined.data.get()) {
+                Ok(fo) => {
+                    let Ok(price) = fo.o.p.parse::<f64>() else {
+                        eprintln!("[Binance WS Error] Failed to parse liquidation price float");
+                        return;
+                    };
+                    let Ok(quantity) = fo.o.q.parse::<f64>() else {
+                        eprintln!("[Binance WS Error] Failed to parse liquidation quantity float");
+                        return;
+                    };
 
-                let _ = queue.push(MarketUpdateEvent::new_liquidation(
-                    fo.o.s,
-                    fo.o.S,
-                    price,
-                    quantity,
-                    timestamp_ns,
-                ));
+                    let _ = queue.push(MarketUpdateEvent::new_liquidation(
+                        fo.o.s,
+                        fo.o.side,
+                        price,
+                        quantity,
+                        timestamp_ns,
+                    ));
+                }
+                Err(e) => eprintln!("[Binance WS Error] Failed to deserialize liquidation payload: {}", e),
             }
         }
     }

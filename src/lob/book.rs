@@ -95,8 +95,7 @@ impl LockFreeSpscQueue {
         match self.queue.push(event) {
             Ok(()) => Ok(()),
             Err(evt) => {
-                let drops = DROPPED_EVENTS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-                eprintln!("[SPSC Queue Warning] Buffer full! Dropped market event. Total dropped: {}", drops);
+                DROPPED_EVENTS_COUNT.fetch_add(1, Ordering::Relaxed);
                 Err(evt)
             }
         }
