@@ -76,4 +76,11 @@
 - **HFT/Performance Compliance:** Refactored `src/index.ts` to instantiate and wire `MarketDataClient` (Rust zero-copy IPC), `StrategyEngine`, `RiskGuard`, `BinanceExecutionClient`, `TradeLogger`, `CLIDashboard`, and `TelemetryWSServer`. Started 10ms high-frequency tick polling interval loop and 10Hz WebSocket telemetry server to maintain Node.js event loop persistence. Added graceful shutdown signal handlers (`SIGINT`, `SIGTERM`) for resource cleanup. Verified live terminal execution (`node dist/index.js`) rendering the ANSI CLI dashboard continuously.
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-26
+- **Feature/Task:** Phase 6: CLI Dashboard Screen Glitch & Rust WebSocket Ingestion Remediation
+- **Artifacts Created/Modified:** `src/telemetry/dashboard.ts`, `src/ws/binance.rs`, `src/lib.rs`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Resolved terminal screen glitching in `CLIDashboard` by upgrading ANSI clear sequence to `\x1b[2J\x1b[3J\x1b[H` (clears viewport, scrollback, and resets cursor to top-left). Fixed zero market data ingestion in Rust native layer by initializing `GLOBAL_RUNTIME` Tokio multi-thread runtime in `src/lib.rs` and spawning `ConnectionManager` (Binance Futures WS stream) alongside `IngestionBridge` consumer loop inside `start_ingestion()`. Dynamically routed WebSocket stream hosts (`stream.binancefuture.com` vs `fstream.binance.com`). Rebuilt native `.node` binary and verified live market data streaming (`Sequence: #51`, `Best Bid: 64649.50`, `Best Ask: 64663.80`, `CVD: +19952.34`) in real-time.
+- **Status:** ✅ Completed & QA Verified
+
+
 

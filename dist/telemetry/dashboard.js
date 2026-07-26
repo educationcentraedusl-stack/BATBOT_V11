@@ -29,7 +29,7 @@ class CLIDashboard {
         const yellow = "\x1b[33m";
         const bold = "\x1b[1m";
         let output = "";
-        output += "\x1b[2J\x1b[H"; // Clear screen and move cursor to top-left
+        output += "\x1b[2J\x1b[3J\x1b[H"; // Clear screen viewport, clear scrollback, move cursor to top-left (0,0)
         output += `${cyan}${bold}================================================================================${reset}\n`;
         output += `${cyan}${bold}            BATBOT_V11 HFT ENGINE TELEMETRY & COMMAND MONITOR                   ${reset}\n`;
         output += `${cyan}${bold}================================================================================${reset}\n`;
