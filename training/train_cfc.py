@@ -82,23 +82,87 @@ def main():
     try:
         import torch
         import torch.nn as nn
+        from torch.utils.data import Dataset, DataLoader
         from safetensors.torch import save_file
 
-        print("[train_cfc] Using PyTorch backend for CfC optimization...")
-        w_alpha = (torch.randn(16, 32) * 0.1).detach()
-        b_alpha = torch.zeros(32).detach()
-        w_beta = (torch.randn(16, 32) * 0.1).detach()
-        b_beta = torch.zeros(32).detach()
-        w_output = (torch.randn(32, 3) * 0.1).detach()
-        b_output = torch.zeros(3).detach()
+        print("[train_cfc] Using PyTorch backend for CfC neural optimization...")
+
+        class CfCModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.w_alpha = nn.Parameter(torch.randn(16, 32) * 0.1)
+                self.b_alpha = nn.Parameter(torch.zeros(32))
+                self.w_beta = nn.Parameter(torch.randn(16, 32) * 0.1)
+                self.b_beta = nn.Parameter(torch.zeros(32))
+                self.w_output = nn.Parameter(torch.randn(32, 3) * 0.1)
+                self.b_output = nn.Parameter(torch.zeros(3))
+
+            def forward(self, x):
+                # x: [batch, 16]
+                alpha = torch.tanh(torch.matmul(x, self.w_alpha) + self.b_alpha)
+                beta = torch.sigmoid(torch.matmul(x, self.w_beta) + self.b_beta)
+                h = alpha * beta
+                out = torch.matmul(h, self.w_output) + self.b_output
+                return out
+
+        class SignalDataset(Dataset):
+            def __init__(self, signals, executions):
+                self.inputs = []
+                self.targets = []
+                if len(signals) > 0:
+                    for s in signals:
+                        # Extract features if present or synthesize 16-dim latent vector
+                        feat = s.get("features", [0.0] * 16)
+                        if len(feat) < 16:
+                            feat = feat + [0.0] * (16 - len(feat))
+                        target = [s.get("direction", 0.0), s.get("confidence", 1.0), s.get("horizon_ms", 500.0)]
+                        self.inputs.append(feat[:16])
+                        self.targets.append(target)
+                else:
+                    # Synthesize training batches for dry-run verification
+                    torch.manual_seed(42)
+                    for _ in range(128):
+                        self.inputs.append(torch.randn(16).tolist())
+                        self.targets.append([torch.randn(1).item(), 0.95, 500.0])
+
+                self.inputs = torch.tensor(self.inputs, dtype=torch.float32)
+                self.targets = torch.tensor(self.targets, dtype=torch.float32)
+
+            def __len__(self):
+                return len(self.inputs)
+
+            def __getitem__(self, idx):
+                return self.inputs[idx], self.targets[idx]
+
+        dataset = SignalDataset(signals, executions)
+        dataloader = DataLoader(dataset, batch_size=16, shuffle=True)
+
+        model = CfCModel()
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+        criterion = nn.MSELoss()
+
+        epochs = 5
+        print(f"[train_cfc] Starting gradient descent optimization ({epochs} epochs over {len(dataset)} samples)...")
+        for epoch in range(1, epochs + 1):
+            total_loss = 0.0
+            for batch_x, batch_y in dataloader:
+                optimizer.zero_grad()
+                pred = model(batch_x)
+                loss = criterion(pred, batch_y)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item() * len(batch_x)
+
+            avg_loss = total_loss / len(dataset)
+            print(f"  Epoch {epoch}/{epochs} | Loss: {avg_loss:.6f}")
 
         state_dict = {
-            "w_alpha": w_alpha,
-            "b_alpha": b_alpha,
-            "w_beta": w_beta,
-            "b_beta": b_beta,
-            "w_output": w_output,
-            "b_output": b_output,
+            "w_alpha": model.w_alpha.detach(),
+            "b_alpha": model.b_alpha.detach(),
+            "w_beta": model.w_beta.detach(),
+            "b_beta": model.b_beta.detach(),
+            "w_output": model.w_output.detach(),
+            "b_output": model.b_output.detach(),
         }
         save_file(state_dict, weights_path)
         print(f"[train_cfc] Successfully exported PyTorch trained weights to '{weights_path}'.")

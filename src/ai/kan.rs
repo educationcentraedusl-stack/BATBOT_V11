@@ -1,3 +1,7 @@
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
+
 pub const LUT_SIZE: usize = 4096;
 
 #[derive(Debug, Clone)]
@@ -82,6 +86,68 @@ impl TKANLayer {
         Self::new(edges, input_dim, output_dim)
     }
 
+    pub fn load_from_binary<P: AsRef<Path>>(path: P) -> Result<Self, String> {
+        let path_ref = path.as_ref();
+        let mut file = File::open(path_ref).map_err(|e| format!("Failed to open LUT binary file {}: {}", path_ref.display(), e))?;
+
+        let mut header_buf = [0u8; 24];
+        file.read_exact(&mut header_buf).map_err(|e| format!("Failed to read LUT header from {}: {}", path_ref.display(), e))?;
+
+        let num_edges = u32::from_le_bytes(header_buf[0..4].try_into().unwrap()) as usize;
+        let lut_size = u32::from_le_bytes(header_buf[4..8].try_into().unwrap()) as usize;
+        let min_val = f64::from_le_bytes(header_buf[8..16].try_into().unwrap());
+        let max_val = f64::from_le_bytes(header_buf[16..24].try_into().unwrap());
+
+        if num_edges != 640 || lut_size < 2 {
+            return Err(format!(
+                "Invalid LUT dimensions in {}: num_edges={}, lut_size={}",
+                path_ref.display(),
+                num_edges,
+                lut_size
+            ));
+        }
+
+        let input_dim = 40;
+        let output_dim = 16;
+
+        let total_floats = num_edges * lut_size;
+        let mut data_buf = vec![0u8; total_floats * 8];
+        file.read_exact(&mut data_buf).map_err(|e| format!("Failed to read LUT payload data from {}: {}", path_ref.display(), e))?;
+
+        let mut edges = Vec::with_capacity(num_edges);
+        for edge_idx in 0..num_edges {
+            let start = edge_idx * lut_size * 8;
+            let mut lut = Vec::with_capacity(lut_size);
+            for i in 0..lut_size {
+                let offset = start + i * 8;
+                let val = f64::from_le_bytes(data_buf[offset..offset + 8].try_into().unwrap());
+                lut.push(val);
+            }
+            edges.push(BSplineLUT::new(lut, min_val, max_val));
+        }
+
+        println!(
+            "[BATBOT_V11][T-KAN] Successfully loaded {} edge B-spline LUTs from {}.",
+            num_edges,
+            path_ref.display()
+        );
+        Ok(Self::new(edges, input_dim, output_dim))
+    }
+
+    pub fn load_from_binary_or_default<P: AsRef<Path>>(path: P) -> Self {
+        let path_ref = path.as_ref();
+        match Self::load_from_binary(path_ref) {
+            Ok(layer) => layer,
+            Err(e) => {
+                println!(
+                    "[BATBOT_V11][T-KAN WARNING] {}. Falling back to default identity TKANLayer.",
+                    e
+                );
+                Self::default_40_to_16()
+            }
+        }
+    }
+
     #[inline]
     pub fn forward(&self, input: &[f64; 40]) -> [f64; 16] {
         let mut output = [0.0f64; 16];
@@ -122,4 +188,14 @@ mod tests {
             assert!(val.is_finite());
         }
     }
+
+    #[test]
+    fn test_tkan_binary_missing_file_fallback() {
+        let tkan = TKANLayer::load_from_binary_or_default("./models/non_existent_luts.bin");
+        assert_eq!(tkan.edges.len(), 640);
+        let input = [0.1f64; 40];
+        let out = tkan.forward(&input);
+        assert_eq!(out.len(), 16);
+    }
 }
+

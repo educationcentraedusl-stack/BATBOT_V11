@@ -129,3 +129,11 @@
 - **Artifacts Created/Modified:** `src/ai/ic_tracker.rs`, `src/ai/mod.rs`, `src/ai/engine.rs`, `src/lib.rs`, `src/ipc/bridge.rs`, `training/train_cfc.py`, `training/train_tkan.py`, `models/cfc_weights.safetensors`, `models/tkan_luts.bin`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Engineered `ICTracker` executing rolling Spearman rank correlation over 1000 pairs with atomic bitcasted SAB slot 101 updates and `MODEL_DRIFT` alerts (<0.03 threshold). Created Python offline training scripts `train_cfc.py` (generating `cfc_weights.safetensors` from 5770 signal records) and `train_tkan.py` (generating 640 B-spline LUT tables in `tkan_luts.bin`). Exposed `#[napi] pub fn load_ai_model(weights_path: String) -> bool` with thread-safe `GLOBAL_AI_ENGINE` (`RwLock<AIEngine>`) state management for hot-reloading weights without restarting Node.js. 100% verified via `cargo check`, `cargo test` (6 passed), `npx napi build --platform --release`, and `npm run build:ts`.
 - **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-07-27
+- **Feature/Task:** Phase 5 Remediation: T-KAN Binary LUT Loader & PyTorch Training Pipeline
+- **Artifacts Created/Modified:** `src/ai/kan.rs`, `src/ai/engine.rs`, `training/train_cfc.py`, `models/tkan_luts.bin`, `models/cfc_weights.safetensors`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Implemented `TKANLayer::load_from_binary` & `load_from_binary_or_default` in Rust to parse `models/tkan_luts.bin` (24-byte header + 640 edge lookup tables with 4096 points per LUT) with zero-panic fallback to default identity LUTs. Updated `AIEngine::load_from_file` and `reload_weights` to auto-load binary LUTs alongside safetensors. Refactored `train_cfc.py` into a PyTorch `Dataset`, `DataLoader`, and multi-epoch Adam training loop exporting fitted weights to `models/cfc_weights.safetensors`. 100% verified via `train_tkan.py`, `train_cfc.py`, `cargo test --lib` (11 passed), `npx napi build --platform --release`, and `npm run build:ts`.
+- **Status:** ✅ Completed & QA Verified
+
+

@@ -26,7 +26,7 @@ impl AIEngine {
 
     pub fn load_from_file(path: &str) -> Self {
         let device = Device::Cpu;
-        let tkan = TKANLayer::default_40_to_16();
+        let tkan = TKANLayer::load_from_binary_or_default("./models/tkan_luts.bin");
         let hidden_state = Tensor::zeros((1, 32), DType::F32, &device)
             .unwrap_or_else(|_| Tensor::zeros((1, 32), DType::F32, &Device::Cpu).unwrap());
 
@@ -47,6 +47,7 @@ impl AIEngine {
 
     pub fn reload_weights(&mut self, path: &str) -> bool {
         let weights_engine = AiEngine::load_from_file(path);
+        self.tkan = TKANLayer::load_from_binary_or_default("./models/tkan_luts.bin");
         self.status = weights_engine.status;
         self.cell = weights_engine.cell;
         if self.cell.is_some() {
