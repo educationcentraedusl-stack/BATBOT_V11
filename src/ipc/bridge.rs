@@ -1,3 +1,4 @@
+use crate::ai::AIEngine;
 use crate::ipc::shared_memory::AtomicSharedMemoryBridge;
 use crate::lob::{LimitOrderBook, LockFreeSpscQueue};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,6 +33,7 @@ impl IngestionBridge {
 
         tokio::spawn(async move {
             let mut lob = LimitOrderBook::new();
+            let mut ai_engine = AIEngine::new();
             let mut seq = 0u64;
 
             while is_running.load(Ordering::Relaxed) {
@@ -64,6 +66,13 @@ impl IngestionBridge {
                         LockFreeSpscQueue::dropped_count(),
                         seq,
                     );
+
+                    // Execute AI inference pipeline on every 10th LOB snapshot
+                    if seq % 10 == 0 {
+                        if let Err(e) = ai_engine.run_inference(&bridge) {
+                            eprintln!("[BATBOT_V11][AI Engine Error] Inference error: {}", e);
+                        }
+                    }
                 } else {
                     sleep(Duration::from_micros(100)).await;
                 }
