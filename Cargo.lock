@@ -38,6 +38,7 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "safetensors",
  "serde",
  "serde_json",
  "tokio",

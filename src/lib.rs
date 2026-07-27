@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate napi_derive;
 
+pub mod ai;
 pub mod ipc;
 pub mod lob;
 pub mod ws;

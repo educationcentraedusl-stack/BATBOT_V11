@@ -11,6 +11,7 @@ napi = { version = "2.16.14", default-features = false, features = ["async", "na
 napi-derive = "2.16.11"
 candle-core = "0.8.2"
 candle-nn = "0.8.2"
+safetensors = "0.4"
 tokio = { version = "1.43.0", features = ["full"] }
 tokio-tungstenite = { version = "0.26.1", features = ["native-tls"] }
 serde = { version = "1.0", features = ["derive"] }
