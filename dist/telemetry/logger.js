@@ -235,23 +235,28 @@ class TradeLogger {
         }
     }
     /**
-     * Returns current real-time telemetry and PnL metrics.
+     * Returns current real-time telemetry and PnL metrics using PositionLedger as Single Source of Truth.
      */
     getStats(positionInfo) {
-        const winRatePercent = this.totalTrades > 0 ? (this.winningTrades / this.totalTrades) * 100 : 0;
+        const totalTrades = positionInfo?.totalTrades ?? this.totalTrades;
+        const winningTrades = positionInfo?.winningTrades ?? this.winningTrades;
+        const losingTrades = positionInfo?.losingTrades ?? this.losingTrades;
+        const realizedPnl = positionInfo?.cumulativeRealizedPnl ?? this.cumulativeRealizedPnl;
+        const totalFees = positionInfo?.cumulativeFees ?? this.cumulativeFees;
+        const winRatePercent = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
         const avgTickLatencyUs = this.tickCountForLatency > 0 ? this.cumulativeTickLatencyUs / this.tickCountForLatency : 0;
         return {
             totalSignalsLogged: this.totalSignalsLogged,
             totalExecutionsLogged: this.totalExecutionsLogged,
-            totalTrades: this.totalTrades,
-            winningTrades: this.winningTrades,
-            losingTrades: this.losingTrades,
-            realizedPnl: Number(this.cumulativeRealizedPnl.toFixed(4)),
+            totalTrades,
+            winningTrades,
+            losingTrades,
+            realizedPnl: Number(realizedPnl.toFixed(4)),
             unrealizedPnl: Number((positionInfo?.unrealizedPnl ?? 0).toFixed(4)),
             positionSide: positionInfo?.positionSide ?? "FLAT",
             netQuantity: Number((positionInfo?.netQuantity ?? 0).toFixed(6)),
             averageEntryPrice: Number((positionInfo?.averageEntryPrice ?? 0).toFixed(4)),
-            totalFees: Number(this.cumulativeFees.toFixed(4)),
+            totalFees: Number(totalFees.toFixed(4)),
             winRatePercent: Number(winRatePercent.toFixed(2)),
             avgTickLatencyUs: Number(avgTickLatencyUs.toFixed(3)),
             bufferQueueDepth: this.signalCount + this.executionCount,

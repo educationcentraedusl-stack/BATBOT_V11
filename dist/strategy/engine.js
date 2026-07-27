@@ -96,9 +96,10 @@ class StrategyEngine {
         this.reusableOrderIntent.side = signalType;
         this.reusableOrderIntent.quantity = this.config.orderQuantity;
         this.reusableOrderIntent.price = signalType === "BUY" ? askPrice : bidPrice;
-        // Pass through Risk Management Guard
+        this.reusableOrderIntent.currentPositionSide = this.positionLedger.getSummary().side;
+        // Pass through Risk Management Guard with current position side
         const isConfigured = this.executionClient.isConfigured();
-        const riskResult = this.riskGuard.validateOrder(this.reusableOrderIntent, isConfigured);
+        const riskResult = this.riskGuard.validateOrder(this.reusableOrderIntent, isConfigured, this.reusableOrderIntent.currentPositionSide);
         let executionPromise = undefined;
         if (riskResult.passed) {
             const notional = this.reusableOrderIntent.price * this.reusableOrderIntent.quantity;

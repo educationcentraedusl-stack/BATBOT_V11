@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TelemetryWSServer = exports.CLIDashboard = exports.TradeLogger = exports.BinanceExecutionClient = exports.RiskGuard = exports.StrategyEngine = exports.MarketDataClient = void 0;
+exports.TelemetryWSServer = exports.CLIDashboard = exports.TradeLogger = exports.BinanceExecutionClient = exports.RiskGuard = exports.StrategyEngine = exports.MarketDataClient = exports.DEFAULT_TAKER_FEE_RATE = void 0;
 exports.initializeSystem = initializeSystem;
 require("dotenv/config");
 const path = __importStar(require("path"));
@@ -51,6 +51,7 @@ const dashboard_1 = require("./telemetry/dashboard");
 Object.defineProperty(exports, "CLIDashboard", { enumerable: true, get: function () { return dashboard_1.CLIDashboard; } });
 const server_1 = require("./telemetry/server");
 Object.defineProperty(exports, "TelemetryWSServer", { enumerable: true, get: function () { return server_1.TelemetryWSServer; } });
+exports.DEFAULT_TAKER_FEE_RATE = 0.0004;
 function initializeSystem() {
     const sab = new SharedArrayBuffer(1024);
     const client = new marketDataClient_1.MarketDataClient(sab);
@@ -100,7 +101,7 @@ function initializeSystem() {
                     const origQty = parseFloat(orderRes.origQty || "0");
                     const finalQty = execQty > 0 ? execQty : (origQty > 0 ? origQty : strategyEngine.getConfig().orderQuantity);
                     const px = parseFloat(orderRes.price || orderRes.avgPrice || "0") || (tickResult.signalType === "BUY" ? tickResult.askPrice : tickResult.bidPrice);
-                    const fee = (px * finalQty) * 0.0004;
+                    const fee = (px * finalQty) * exports.DEFAULT_TAKER_FEE_RATE;
                     const fillSide = orderRes.side || tickResult.signalType;
                     const symbol = orderRes.symbol || strategyEngine.getConfig().symbol;
                     // Route fill execution through zero-GC PositionLedger FIFO engine
@@ -128,6 +129,11 @@ function initializeSystem() {
                 positionSide: posSummary.side,
                 netQuantity: posSummary.netQuantity,
                 averageEntryPrice: posSummary.averageEntryPrice,
+                cumulativeRealizedPnl: posSummary.cumulativeRealizedPnl,
+                cumulativeFees: posSummary.cumulativeFees,
+                totalTrades: posSummary.totalTrades,
+                winningTrades: posSummary.winningTrades,
+                losingTrades: posSummary.losingTrades,
             }),
             riskStatus: tickResult.riskResult
                 ? tickResult.riskResult.passed

@@ -37,7 +37,7 @@ class RiskGuard {
     getConfig() {
         return this.config;
     }
-    validateOrder(intent, isClientConfigured) {
+    validateOrder(intent, isClientConfigured, currentPositionSide = "FLAT") {
         if (!isClientConfigured) {
             return exports.RISK_REJECTED_UNCONFIGURED;
         }
@@ -58,13 +58,34 @@ class RiskGuard {
                 message: `Invalid order price (${intent.price}) or quantity (${intent.quantity}).`,
             };
         }
-        // 4. Max Position Size Limit
+        // 4. Max Position Size Limit (Evaluated on net resulting position size)
         const proposedOrderNotional = intent.price * intent.quantity;
-        if (this.currentPositionNotionalUsdt + proposedOrderNotional > this.config.maxPositionSizeUsdt) {
+        const posSide = intent.currentPositionSide ?? currentPositionSide;
+        let netResultingNotional = proposedOrderNotional;
+        if (posSide === "LONG") {
+            if (intent.side === "BUY") {
+                netResultingNotional = this.currentPositionNotionalUsdt + proposedOrderNotional;
+            }
+            else {
+                netResultingNotional = Math.max(0, this.currentPositionNotionalUsdt - proposedOrderNotional);
+            }
+        }
+        else if (posSide === "SHORT") {
+            if (intent.side === "SELL") {
+                netResultingNotional = this.currentPositionNotionalUsdt + proposedOrderNotional;
+            }
+            else {
+                netResultingNotional = Math.max(0, this.currentPositionNotionalUsdt - proposedOrderNotional);
+            }
+        }
+        else {
+            netResultingNotional = proposedOrderNotional;
+        }
+        if (netResultingNotional > this.config.maxPositionSizeUsdt) {
             return {
                 passed: false,
                 reasonCode: "EXCEEDS_MAX_POSITION",
-                message: `Proposed order value ($${proposedOrderNotional.toFixed(2)}) exceeds max position size limit ($${this.config.maxPositionSizeUsdt.toFixed(2)}).`,
+                message: `Proposed net position value ($${netResultingNotional.toFixed(2)}) exceeds max position size limit ($${this.config.maxPositionSizeUsdt.toFixed(2)}).`,
             };
         }
         // 5. Stop Loss Sanity Check

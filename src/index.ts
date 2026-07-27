@@ -8,6 +8,8 @@ import { TradeLogger } from "./telemetry/logger";
 import { CLIDashboard, TelemetryFrame } from "./telemetry/dashboard";
 import { TelemetryWSServer } from "./telemetry/server";
 
+export const DEFAULT_TAKER_FEE_RATE = 0.0004;
+
 export {
   MarketDataClient,
   StrategyEngine,
@@ -96,7 +98,7 @@ export function initializeSystem(): SystemControlPlane {
           const origQty = parseFloat(orderRes.origQty || "0");
           const finalQty = execQty > 0 ? execQty : (origQty > 0 ? origQty : strategyEngine.getConfig().orderQuantity);
           const px = parseFloat(orderRes.price || orderRes.avgPrice || "0") || (tickResult.signalType === "BUY" ? tickResult.askPrice : tickResult.bidPrice);
-          const fee = (px * finalQty) * 0.0004;
+          const fee = (px * finalQty) * DEFAULT_TAKER_FEE_RATE;
           const fillSide = (orderRes.side as "BUY" | "SELL") || tickResult.signalType;
           const symbol = orderRes.symbol || strategyEngine.getConfig().symbol;
 
@@ -136,6 +138,11 @@ export function initializeSystem(): SystemControlPlane {
         positionSide: posSummary.side,
         netQuantity: posSummary.netQuantity,
         averageEntryPrice: posSummary.averageEntryPrice,
+        cumulativeRealizedPnl: posSummary.cumulativeRealizedPnl,
+        cumulativeFees: posSummary.cumulativeFees,
+        totalTrades: posSummary.totalTrades,
+        winningTrades: posSummary.winningTrades,
+        losingTrades: posSummary.losingTrades,
       }),
       riskStatus: tickResult.riskResult
         ? tickResult.riskResult.passed

@@ -49,6 +49,9 @@ export class PositionLedger {
   private winningTrades = 0;
   private losingTrades = 0;
 
+  // Pre-allocated summary object for zero-GC per-tick telemetry
+  private cachedSummary: PositionSummary;
+
   // Pre-allocated result object for zero-GC hot path return
   private reconciliationResult: FillReconciliationResult = {
     symbol: "",
@@ -71,6 +74,19 @@ export class PositionLedger {
       this.lots[i] = { price: 0, quantity: 0, timestamp: 0 };
     }
     this.reconciliationResult.symbol = symbol;
+
+    this.cachedSummary = {
+      symbol: this.symbol,
+      side: "FLAT",
+      netQuantity: 0,
+      averageEntryPrice: 0,
+      unrealizedPnl: 0,
+      cumulativeRealizedPnl: 0,
+      cumulativeFees: 0,
+      totalTrades: 0,
+      winningTrades: 0,
+      losingTrades: 0,
+    };
   }
 
   /**
@@ -151,8 +167,9 @@ export class PositionLedger {
         }
       }
 
-      // Deduct fee proportion from closed PnL delta
-      const netRealizedTradePnl = realizedPnlDelta - fee;
+      // Pro-rate fee for closed lot portion to maintain precise PnL accounting during lot flips
+      const closedFee = fillQuantity > 0 ? fee * (totalClosedQty / fillQuantity) : 0;
+      const netRealizedTradePnl = realizedPnlDelta - closedFee;
       this.cumulativeRealizedPnl += netRealizedTradePnl;
       this.totalTrades++;
 
@@ -164,13 +181,14 @@ export class PositionLedger {
     }
 
     // Populate static result structure
+    const fillClosedFee = fillQuantity > 0 ? fee * (totalClosedQty / fillQuantity) : 0;
     this.reconciliationResult.symbol = symbol;
     this.reconciliationResult.fillSide = fillSide;
     this.reconciliationResult.fillPrice = fillPrice;
     this.reconciliationResult.fillQuantity = fillQuantity;
     this.reconciliationResult.fee = fee;
     this.reconciliationResult.closedQuantity = totalClosedQty;
-    this.reconciliationResult.realizedPnl = totalClosedQty > 0 ? realizedPnlDelta - fee : 0;
+    this.reconciliationResult.realizedPnl = totalClosedQty > 0 ? realizedPnlDelta - fillClosedFee : 0;
     this.reconciliationResult.positionSideAfterFill = this.side;
     this.reconciliationResult.netQuantityAfterFill = this.netQuantity;
     this.reconciliationResult.averageEntryPriceAfterFill = this.averageEntryPrice;
@@ -208,18 +226,18 @@ export class PositionLedger {
   }
 
   public getSummary(currentMarkPrice: number = 0): PositionSummary {
-    return {
-      symbol: this.symbol,
-      side: this.side,
-      netQuantity: Number(this.netQuantity.toFixed(6)),
-      averageEntryPrice: Number(this.averageEntryPrice.toFixed(4)),
-      unrealizedPnl: Number(this.getUnrealizedPnl(currentMarkPrice).toFixed(4)),
-      cumulativeRealizedPnl: Number(this.cumulativeRealizedPnl.toFixed(4)),
-      cumulativeFees: Number(this.cumulativeFees.toFixed(4)),
-      totalTrades: this.totalTrades,
-      winningTrades: this.winningTrades,
-      losingTrades: this.losingTrades,
-    };
+    this.cachedSummary.symbol = this.symbol;
+    this.cachedSummary.side = this.side;
+    this.cachedSummary.netQuantity = Number(this.netQuantity.toFixed(6));
+    this.cachedSummary.averageEntryPrice = Number(this.averageEntryPrice.toFixed(4));
+    this.cachedSummary.unrealizedPnl = Number(this.getUnrealizedPnl(currentMarkPrice).toFixed(4));
+    this.cachedSummary.cumulativeRealizedPnl = Number(this.cumulativeRealizedPnl.toFixed(4));
+    this.cachedSummary.cumulativeFees = Number(this.cumulativeFees.toFixed(4));
+    this.cachedSummary.totalTrades = this.totalTrades;
+    this.cachedSummary.winningTrades = this.winningTrades;
+    this.cachedSummary.losingTrades = this.losingTrades;
+
+    return this.cachedSummary;
   }
 
   public reset(): void {
