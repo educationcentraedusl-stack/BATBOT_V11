@@ -93,10 +93,26 @@ impl TKANLayer {
         let mut header_buf = [0u8; 24];
         file.read_exact(&mut header_buf).map_err(|e| format!("Failed to read LUT header from {}: {}", path_ref.display(), e))?;
 
-        let num_edges = u32::from_le_bytes(header_buf[0..4].try_into().unwrap()) as usize;
-        let lut_size = u32::from_le_bytes(header_buf[4..8].try_into().unwrap()) as usize;
-        let min_val = f64::from_le_bytes(header_buf[8..16].try_into().unwrap());
-        let max_val = f64::from_le_bytes(header_buf[16..24].try_into().unwrap());
+        let num_edges = u32::from_le_bytes(
+            header_buf[0..4]
+                .try_into()
+                .map_err(|_| format!("Failed to parse num_edges slice from {}", path_ref.display()))?,
+        ) as usize;
+        let lut_size = u32::from_le_bytes(
+            header_buf[4..8]
+                .try_into()
+                .map_err(|_| format!("Failed to parse lut_size slice from {}", path_ref.display()))?,
+        ) as usize;
+        let min_val = f64::from_le_bytes(
+            header_buf[8..16]
+                .try_into()
+                .map_err(|_| format!("Failed to parse min_val slice from {}", path_ref.display()))?,
+        );
+        let max_val = f64::from_le_bytes(
+            header_buf[16..24]
+                .try_into()
+                .map_err(|_| format!("Failed to parse max_val slice from {}", path_ref.display()))?,
+        );
 
         if num_edges != 640 || lut_size < 2 {
             return Err(format!(
@@ -104,6 +120,15 @@ impl TKANLayer {
                 path_ref.display(),
                 num_edges,
                 lut_size
+            ));
+        }
+
+        if max_val <= min_val {
+            return Err(format!(
+                "Invalid LUT range in {}: max_val ({}) must be strictly greater than min_val ({})",
+                path_ref.display(),
+                max_val,
+                min_val
             ));
         }
 
@@ -120,7 +145,13 @@ impl TKANLayer {
             let mut lut = Vec::with_capacity(lut_size);
             for i in 0..lut_size {
                 let offset = start + i * 8;
-                let val = f64::from_le_bytes(data_buf[offset..offset + 8].try_into().unwrap());
+                let slice = data_buf
+                    .get(offset..offset + 8)
+                    .ok_or_else(|| format!("LUT data buffer index out of bounds at offset {} in {}", offset, path_ref.display()))?;
+                let val_bytes: [u8; 8] = slice
+                    .try_into()
+                    .map_err(|_| format!("Failed to parse f64 slice at offset {} in {}", offset, path_ref.display()))?;
+                let val = f64::from_le_bytes(val_bytes);
                 lut.push(val);
             }
             edges.push(BSplineLUT::new(lut, min_val, max_val));
@@ -196,6 +227,27 @@ mod tests {
         let input = [0.1f64; 40];
         let out = tkan.forward(&input);
         assert_eq!(out.len(), 16);
+    }
+
+    #[test]
+    fn test_tkan_binary_invalid_range_validation() {
+        let temp_dir = std::env::temp_dir();
+        let test_path = temp_dir.join("invalid_range_lut.bin");
+
+        // Write header with num_edges=640, lut_size=4096, min_val=10.0, max_val=-10.0
+        let mut header = Vec::new();
+        header.extend_from_slice(&640u32.to_le_bytes());
+        header.extend_from_slice(&4096u32.to_le_bytes());
+        header.extend_from_slice(&10.0f64.to_le_bytes());
+        header.extend_from_slice(&(-10.0f64).to_le_bytes());
+        let _ = std::fs::write(&test_path, header);
+
+        let res = TKANLayer::load_from_binary(&test_path);
+        assert!(res.is_err());
+        let err_msg = res.unwrap_err();
+        assert!(err_msg.contains("must be strictly greater than"));
+
+        let _ = std::fs::remove_file(test_path);
     }
 }
 

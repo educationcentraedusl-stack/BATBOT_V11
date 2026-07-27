@@ -136,4 +136,11 @@
 - **HFT/Performance Compliance:** Implemented `TKANLayer::load_from_binary` & `load_from_binary_or_default` in Rust to parse `models/tkan_luts.bin` (24-byte header + 640 edge lookup tables with 4096 points per LUT) with zero-panic fallback to default identity LUTs. Updated `AIEngine::load_from_file` and `reload_weights` to auto-load binary LUTs alongside safetensors. Refactored `train_cfc.py` into a PyTorch `Dataset`, `DataLoader`, and multi-epoch Adam training loop exporting fitted weights to `models/cfc_weights.safetensors`. 100% verified via `train_tkan.py`, `train_cfc.py`, `cargo test --lib` (11 passed), `npx napi build --platform --release`, and `npm run build:ts`.
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-27
+- **Feature/Task:** Phase 5 Hardening: Zero-Unwrap & Strict Range Validation Hardening in Rust AI Engine
+- **Artifacts Created/Modified:** `src/ai/kan.rs`, `src/ai/engine.rs`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Added explicit `max_val > min_val` header validation in `TKANLayer::load_from_binary` to prevent assertion panic triggers on corrupt binary files. Replaced all slice `try_into().unwrap()` conversions with `.map_err()` error propagation. Refactored `AIEngine::run_inference` to use pattern matching (`if let Some(cell) = &self.cell`) eliminating residual `.unwrap()` calls. Added unit test `test_tkan_binary_invalid_range_validation`. 100% verified via `cargo check`, `cargo test --lib` (12 passed clean), `npx napi build --platform --release`, and `npm run build:ts`.
+- **Status:** ✅ Completed & QA Verified
+
+
 

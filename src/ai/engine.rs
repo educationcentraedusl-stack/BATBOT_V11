@@ -115,8 +115,11 @@ impl AIEngine {
         self.last_inference_ns = start_ns;
 
         // 4. Execute CfC cell forward pass
-        let cell = self.cell.as_ref().unwrap();
-        let (output_tensor, next_hidden) = cell.forward(&tkan_tensor, &self.hidden_state, delta_t)?;
+        let (output_tensor, next_hidden) = if let Some(cell) = &self.cell {
+            cell.forward(&tkan_tensor, &self.hidden_state, delta_t)?
+        } else {
+            return Ok(());
+        };
         self.hidden_state = next_hidden;
 
         // Extract predictions
