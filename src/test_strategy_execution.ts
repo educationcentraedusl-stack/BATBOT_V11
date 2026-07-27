@@ -113,6 +113,10 @@ async function runVerificationTests() {
   storeAtomicFloat64(bigIntView, 5, 5.0); // Best Bid Qty
   storeAtomicFloat64(bigIntView, 6, 65001.0); // Best Ask Price
   storeAtomicFloat64(bigIntView, 7, 3.0); // Best Ask Qty
+  storeAtomicFloat64(bigIntView, 93, 0.8); // AI Direction (+0.8 Bullish)
+  storeAtomicFloat64(bigIntView, 94, 0.9); // AI Confidence (90% > 60% threshold)
+  storeAtomicFloat64(bigIntView, 99, 1.0); // Latency penalty = 1.0
+  storeAtomicFloat64(bigIntView, 100, 3.0); // Slippage ticks = 3
   Atomics.store(bigIntView, 92, 1n); // Sequence Num = 1
 
   // Evaluate tick 1: Should trigger BUY signal
@@ -120,7 +124,7 @@ async function runVerificationTests() {
   if (eval1.signalType !== "BUY" || !eval1.riskResult?.passed) {
     throw new Error(`FAIL: Strategy Engine failed to generate BUY signal on high OBI/CVD (got ${eval1.signalType}).`);
   }
-  console.log("  ✓ BUY signal generation on high OBI/CVD verified.");
+  console.log("  ✓ BUY signal generation on high OBI/CVD + AI Bullish prediction verified.");
   if (eval1.executionPromise) {
     await eval1.executionPromise; // await promise to avoid unhandled rejection in test output
   }
@@ -135,13 +139,15 @@ async function runVerificationTests() {
   // Setup SELL signal parameters
   storeAtomicFloat64(bigIntView, 1, -0.45); // OBI < -0.25
   storeAtomicFloat64(bigIntView, 2, -75.0); // CVD < -50
+  storeAtomicFloat64(bigIntView, 93, -0.8); // AI Direction (-0.8 Bearish)
+  storeAtomicFloat64(bigIntView, 94, 0.9); // AI Confidence (90%)
   Atomics.store(bigIntView, 92, 2n); // Sequence Num = 2
 
   const eval3 = engine.evaluateTick();
   if (eval3.signalType !== "SELL" || !eval3.riskResult?.passed) {
     throw new Error(`FAIL: Strategy Engine failed to generate SELL signal on negative OBI/CVD (got ${eval3.signalType}).`);
   }
-  console.log("  ✓ SELL signal generation on negative OBI/CVD verified.");
+  console.log("  ✓ SELL signal generation on negative OBI/CVD + AI Bearish prediction verified.");
   if (eval3.executionPromise) {
     await eval3.executionPromise;
   }

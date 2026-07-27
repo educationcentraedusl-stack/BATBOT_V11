@@ -38,6 +38,9 @@ class StrategyEngine {
             cvdBuyThreshold: config?.cvdBuyThreshold ?? 50.0,
             cvdSellThreshold: config?.cvdSellThreshold ?? -50.0,
             maxSpreadVelocity: config?.maxSpreadVelocity ?? 0.1,
+            minAiConfidence: config?.minAiConfidence ?? 0.6,
+            aggressiveConfidenceThreshold: config?.aggressiveConfidenceThreshold ?? 0.85,
+            tickSize: config?.tickSize ?? 0.1,
         };
         this.positionLedger = positionLedger ?? new positionLedger_1.PositionLedger(this.config.symbol);
         this.reusableOrderIntent.symbol = this.config.symbol;
@@ -65,18 +68,28 @@ class StrategyEngine {
         const spreadVelocity = this.client.getSpreadVelocity();
         const bidPrice = this.client.getBestBidPrice();
         const askPrice = this.client.getBestAskPrice();
+        // Read AI predictions & latency metrics from SAB
+        const aiDirection = this.client.getAIPredictionDirection();
+        const aiConfidence = this.client.getAIPredictionConfidence();
+        const latencyPenalty = this.client.getLatencyPenaltyCoefficient();
+        const penaltyCoeff = latencyPenalty > 0 ? latencyPenalty : 1.0;
+        const slippageTicks = this.client.getDynamicSlippageTicks();
         let signalType = "NONE";
-        // Signal Evaluation Logic
+        // Enhanced Signal Evaluation Logic: OBI/CVD combined with AI direction and AI confidence gating
         if (obi > this.config.obiBuyThreshold &&
             cvd > this.config.cvdBuyThreshold &&
             spreadVelocity < this.config.maxSpreadVelocity &&
-            askPrice > 0) {
+            askPrice > 0 &&
+            aiDirection > 0 &&
+            aiConfidence >= this.config.minAiConfidence) {
             signalType = "BUY";
         }
         else if (obi < this.config.obiSellThreshold &&
             cvd < this.config.cvdSellThreshold &&
             spreadVelocity < this.config.maxSpreadVelocity &&
-            bidPrice > 0) {
+            bidPrice > 0 &&
+            aiDirection < 0 &&
+            aiConfidence >= this.config.minAiConfidence) {
             signalType = "SELL";
         }
         if (signalType === "NONE") {
@@ -91,11 +104,19 @@ class StrategyEngine {
             this.staticResult.executionPromise = undefined;
             return this.staticResult;
         }
+        // TASK 4.3: Apply latency penalty coefficient to orderQuantity BEFORE RiskGuard check
+        const scaledQuantity = Number((this.config.orderQuantity * penaltyCoeff).toFixed(4));
+        const finalQuantity = Math.max(0.0001, scaledQuantity);
+        // TASK 4.3: Apply dynamic slippageTicks to adjust orderIntent price
+        const effectiveSlippage = Math.max(2, slippageTicks);
+        const priceAdjustment = effectiveSlippage * this.config.tickSize;
+        const basePrice = signalType === "BUY" ? askPrice : bidPrice;
+        const adjustedPrice = signalType === "BUY" ? basePrice + priceAdjustment : basePrice - priceAdjustment;
         // Populate pre-allocated intent
         this.reusableOrderIntent.symbol = this.config.symbol;
         this.reusableOrderIntent.side = signalType;
-        this.reusableOrderIntent.quantity = this.config.orderQuantity;
-        this.reusableOrderIntent.price = signalType === "BUY" ? askPrice : bidPrice;
+        this.reusableOrderIntent.quantity = finalQuantity;
+        this.reusableOrderIntent.price = Number(adjustedPrice.toFixed(2));
         this.reusableOrderIntent.currentPositionSide = this.positionLedger.getSummary().side;
         // Pass through Risk Management Guard with current position side
         const isConfigured = this.executionClient.isConfigured();
@@ -104,15 +125,19 @@ class StrategyEngine {
         if (riskResult.passed) {
             const notional = this.reusableOrderIntent.price * this.reusableOrderIntent.quantity;
             this.riskGuard.recordExecutionSuccess(notional);
+            // TASK 4.4: Aggressive vs. Passive Order Routing
+            const isAggressive = aiConfidence >= this.config.aggressiveConfidenceThreshold;
+            const orderType = isAggressive ? "MARKET" : "LIMIT";
+            const timeInForce = isAggressive ? "IOC" : "GTX";
             // Execute order with safe exception handler to prevent unhandled promise rejections
             executionPromise = this.executionClient
                 .placeOrder({
                 symbol: this.reusableOrderIntent.symbol,
                 side: this.reusableOrderIntent.side,
-                type: "LIMIT",
+                type: orderType,
                 quantity: this.reusableOrderIntent.quantity,
-                price: this.reusableOrderIntent.price,
-                timeInForce: "IOC",
+                price: orderType === "LIMIT" ? this.reusableOrderIntent.price : undefined,
+                timeInForce: timeInForce,
             })
                 .catch((err) => {
                 console.error(`[CRITICAL_EXECUTION_ERROR] Order placement failed: ${err.message}`);

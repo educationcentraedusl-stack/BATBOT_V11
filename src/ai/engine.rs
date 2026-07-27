@@ -100,12 +100,17 @@ impl AIEngine {
             .to_scalar::<f32>()?
             .sqrt() as f64;
 
+        // Compute dynamic slippage buffer: 2 + floor(spread_velocity / 0.5)
+        let spread_vel = sab.load_f64(3);
+        let slippage_ticks = 2.0 + (spread_vel.abs() / 0.5).floor();
+
         // 5. Write predictions to SAB slots 93..103
         sab.store_f64(93, direction);
         sab.store_f64(94, confidence);
         sab.store_f64(95, horizon_ms);
         sab.store_u64(96, start_ns);
         sab.store_f64(97, hidden_norm);
+        sab.store_f64(100, slippage_ticks);
         sab.store_u64(102, latency_ns);
         sab.store_u64(103, self.inference_seq);
 

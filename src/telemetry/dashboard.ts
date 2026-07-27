@@ -14,6 +14,13 @@ export interface TelemetryFrame {
   riskStatus: string;
   isEngineActive: boolean;
   usdtBalance: number;
+  aiDirection?: number;
+  aiConfidence?: number;
+  rollingIc?: number;
+  aiInferenceLatencyNs?: bigint;
+  rttMs?: number;
+  latencyPenalty?: number;
+  slippageTicks?: number;
 }
 
 export class CLIDashboard {
@@ -51,6 +58,15 @@ export class CLIDashboard {
     const green = "\x1b[32m";
     const clearLine = "\x1b[K";
 
+    const aiDir = frame.aiDirection ?? 0;
+    const aiConf = (frame.aiConfidence ?? 0) * 100;
+    const icVal = frame.rollingIc ?? 0;
+    const infLatUs = frame.aiInferenceLatencyNs ? Number(frame.aiInferenceLatencyNs) / 1000 : 0;
+    const rtt = frame.rttMs ?? 0;
+    const penalty = frame.latencyPenalty ?? 1.0;
+    const slippage = frame.slippageTicks ?? 2;
+    const aiDirStr = aiDir >= 0 ? `+${aiDir.toFixed(4)}` : aiDir.toFixed(4);
+
     let output = "";
     output += "\x1b[H"; // Move cursor to top-left (0,0) without full screen erase to eliminate flicker
 
@@ -64,6 +80,10 @@ export class CLIDashboard {
     output += ` Best Bid: ${frame.bidPrice.toFixed(2)}  |  Best Ask: ${frame.askPrice.toFixed(2)}  |  Spread: ${spread}${clearLine}\n`;
     output += ` OBI (-1..+1): [${obiBar}]  Val: ${frame.obi >= 0 ? "+" : ""}${frame.obi.toFixed(4)}${clearLine}\n`;
     output += ` CVD: ${frame.cvd >= 0 ? "+" : ""}${frame.cvd.toFixed(2)}  |  Spread Velocity: ${frame.spreadVelocity.toFixed(4)}${clearLine}\n`;
+    output += `--------------------------------------------------------------------------------${clearLine}\n`;
+    output += `${bold}--- AI PREDICTION & DYNAMIC EXECUTION METRICS ---${reset}${clearLine}\n`;
+    output += ` Direction: ${aiDir >= 0 ? "\x1b[32m" : "\x1b[31m"}${aiDirStr}${reset}  |  Confidence: ${yellow}${aiConf.toFixed(1)}%${reset}  |  IC: ${icVal.toFixed(4)}  |  Inference: ${infLatUs.toFixed(1)} µs${clearLine}\n`;
+    output += ` REST RTT: ${yellow}${rtt.toFixed(1)} ms${reset}  |  Latency Penalty: ${penalty.toFixed(3)}  |  Slippage Buffer: +${slippage} Ticks${clearLine}\n`;
     output += `--------------------------------------------------------------------------------${clearLine}\n`;
     output += `${bold}--- STRATEGY & RISK STATUS ---${reset}${clearLine}\n`;
     output += ` Active Signal: ${signalColor}${bold}${frame.lastSignal}${reset}  |  Risk Gate: ${frame.riskStatus}${clearLine}\n`;

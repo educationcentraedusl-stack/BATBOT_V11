@@ -20,6 +20,7 @@ futures-util = "0.3"
 crossbeam-queue = "0.3"
 url = "2.5"
 lazy_static = "1.5"
+reqwest = { version = "0.11", default-features = false, features = ["default-tls"] }
 
 [build-dependencies]
 napi-build = "2.1.3"

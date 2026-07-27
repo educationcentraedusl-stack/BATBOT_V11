@@ -66,6 +66,9 @@ pub fn start_ingestion(sab_buffer: Buffer) -> napi::Result<bool> {
         }
     });
 
+    // Spawn Latency Monitor background task on Tokio runtime
+    ai::spawn_latency_monitor(atomic_bridge);
+
     Ok(true)
 }
 
