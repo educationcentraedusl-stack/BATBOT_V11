@@ -31,6 +31,10 @@ export interface TradeLoggerStats {
   winningTrades: number;
   losingTrades: number;
   realizedPnl: number;
+  unrealizedPnl: number;
+  positionSide: "FLAT" | "LONG" | "SHORT";
+  netQuantity: number;
+  averageEntryPrice: number;
   totalFees: number;
   winRatePercent: number;
   avgTickLatencyUs: number;
@@ -199,13 +203,14 @@ export class TradeLogger {
     }
 
     this.totalExecutionsLogged++;
-    this.totalTrades++;
     this.cumulativeRealizedPnl += realizedPnl;
     this.cumulativeFees += fee;
 
     if (realizedPnl > 0) {
+      this.totalTrades++;
       this.winningTrades++;
     } else if (realizedPnl < 0) {
+      this.totalTrades++;
       this.losingTrades++;
     }
   }
@@ -274,7 +279,12 @@ export class TradeLogger {
   /**
    * Returns current real-time telemetry and PnL metrics.
    */
-  public getStats(): TradeLoggerStats {
+  public getStats(positionInfo?: {
+    unrealizedPnl?: number;
+    positionSide?: "FLAT" | "LONG" | "SHORT";
+    netQuantity?: number;
+    averageEntryPrice?: number;
+  }): TradeLoggerStats {
     const winRatePercent = this.totalTrades > 0 ? (this.winningTrades / this.totalTrades) * 100 : 0;
     const avgTickLatencyUs = this.tickCountForLatency > 0 ? this.cumulativeTickLatencyUs / this.tickCountForLatency : 0;
 
@@ -285,6 +295,10 @@ export class TradeLogger {
       winningTrades: this.winningTrades,
       losingTrades: this.losingTrades,
       realizedPnl: Number(this.cumulativeRealizedPnl.toFixed(4)),
+      unrealizedPnl: Number((positionInfo?.unrealizedPnl ?? 0).toFixed(4)),
+      positionSide: positionInfo?.positionSide ?? "FLAT",
+      netQuantity: Number((positionInfo?.netQuantity ?? 0).toFixed(6)),
+      averageEntryPrice: Number((positionInfo?.averageEntryPrice ?? 0).toFixed(4)),
       totalFees: Number(this.cumulativeFees.toFixed(4)),
       winRatePercent: Number(winRatePercent.toFixed(2)),
       avgTickLatencyUs: Number(avgTickLatencyUs.toFixed(3)),

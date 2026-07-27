@@ -1,6 +1,7 @@
 import { MarketDataClient } from "../marketDataClient";
 import { RiskGuard, OrderIntent, RiskCheckResult } from "./risk";
 import { BinanceExecutionClient, BinanceOrderResponse } from "../execution/binance";
+import { PositionLedger } from "./positionLedger";
 
 export interface StrategyConfig {
   symbol: string;
@@ -28,6 +29,7 @@ export class StrategyEngine {
   private client: MarketDataClient;
   private riskGuard: RiskGuard;
   private executionClient: BinanceExecutionClient;
+  private positionLedger: PositionLedger;
   private config: StrategyConfig;
   private lastProcessedSequence: bigint = -1n;
 
@@ -54,7 +56,8 @@ export class StrategyEngine {
     client: MarketDataClient,
     riskGuard: RiskGuard,
     executionClient: BinanceExecutionClient,
-    config?: Partial<StrategyConfig>
+    config?: Partial<StrategyConfig>,
+    positionLedger?: PositionLedger
   ) {
     this.client = client;
     this.riskGuard = riskGuard;
@@ -68,8 +71,13 @@ export class StrategyEngine {
       cvdSellThreshold: config?.cvdSellThreshold ?? -50.0,
       maxSpreadVelocity: config?.maxSpreadVelocity ?? 0.1,
     };
+    this.positionLedger = positionLedger ?? new PositionLedger(this.config.symbol);
     this.reusableOrderIntent.symbol = this.config.symbol;
     this.reusableOrderIntent.quantity = this.config.orderQuantity;
+  }
+
+  public getPositionLedger(): PositionLedger {
+    return this.positionLedger;
   }
 
   /**

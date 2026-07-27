@@ -120,9 +120,8 @@ export class RiskGuard {
     return RISK_PASSED;
   }
 
-  public recordExecutionSuccess(notionalUsdt: number): void {
+  public recordExecutionSuccess(notionalUsdt: number, side: "BUY" | "SELL" = "BUY"): void {
     this.lastExecutionTimestampMs = Date.now();
-    this.currentPositionNotionalUsdt += notionalUsdt;
   }
 
   public recordRealizedPnl(pnlUsdt: number): void {

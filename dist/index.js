@@ -92,6 +92,7 @@ function initializeSystem() {
         const endHr = process.hrtime.bigint();
         const latencyUs = Number(endHr - startHr) / 1000;
         logger.logSignal(tickResult.sequenceNum, tickResult.signalType, tickResult.obi, tickResult.cvd, tickResult.spreadVelocity, tickResult.bidPrice, tickResult.askPrice, latencyUs);
+        const positionLedger = strategyEngine.getPositionLedger();
         if (tickResult.executionPromise) {
             tickResult.executionPromise.then((orderRes) => {
                 if (orderRes) {
@@ -100,11 +101,18 @@ function initializeSystem() {
                     const finalQty = execQty > 0 ? execQty : (origQty > 0 ? origQty : strategyEngine.getConfig().orderQuantity);
                     const px = parseFloat(orderRes.price || orderRes.avgPrice || "0") || (tickResult.signalType === "BUY" ? tickResult.askPrice : tickResult.bidPrice);
                     const fee = (px * finalQty) * 0.0004;
-                    const pnl = tickResult.signalType === "SELL" ? (px - tickResult.bidPrice) * finalQty : 0;
-                    logger.logExecution(orderRes.symbol || strategyEngine.getConfig().symbol, orderRes.side || tickResult.signalType, px, finalQty, pnl, fee, 0);
+                    const fillSide = orderRes.side || tickResult.signalType;
+                    const symbol = orderRes.symbol || strategyEngine.getConfig().symbol;
+                    // Route fill execution through zero-GC PositionLedger FIFO engine
+                    const ledgerResult = positionLedger.processFill(symbol, fillSide, px, finalQty, fee);
+                    // Update RiskGuard position state & record realized PnL
+                    riskGuard.recordRealizedPnl(ledgerResult.realizedPnl);
+                    riskGuard.updatePositionNotional(ledgerResult.netQuantityAfterFill * ledgerResult.averageEntryPriceAfterFill);
+                    logger.logExecution(symbol, fillSide, px, finalQty, ledgerResult.realizedPnl, fee, 0);
                 }
             });
         }
+        const posSummary = positionLedger.getSummary(tickResult.askPrice || tickResult.bidPrice);
         const frame = {
             symbol: strategyEngine.getConfig().symbol,
             sequenceNum: tickResult.sequenceNum,
@@ -115,7 +123,12 @@ function initializeSystem() {
             spreadVelocity: tickResult.spreadVelocity,
             lastSignal: tickResult.signalType,
             tickEvaluationLatencyUs: latencyUs,
-            stats: logger.getStats(),
+            stats: logger.getStats({
+                unrealizedPnl: posSummary.unrealizedPnl,
+                positionSide: posSummary.side,
+                netQuantity: posSummary.netQuantity,
+                averageEntryPrice: posSummary.averageEntryPrice,
+            }),
             riskStatus: tickResult.riskResult
                 ? tickResult.riskResult.passed
                     ? "PASSED"

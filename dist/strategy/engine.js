@@ -1,10 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.StrategyEngine = void 0;
+const positionLedger_1 = require("./positionLedger");
 class StrategyEngine {
     client;
     riskGuard;
     executionClient;
+    positionLedger;
     config;
     lastProcessedSequence = -1n;
     // Pre-allocated order intent structure to avoid GC-thrashing on signal triggers
@@ -24,7 +26,7 @@ class StrategyEngine {
         bidPrice: 0,
         askPrice: 0,
     };
-    constructor(client, riskGuard, executionClient, config) {
+    constructor(client, riskGuard, executionClient, config, positionLedger) {
         this.client = client;
         this.riskGuard = riskGuard;
         this.executionClient = executionClient;
@@ -37,8 +39,12 @@ class StrategyEngine {
             cvdSellThreshold: config?.cvdSellThreshold ?? -50.0,
             maxSpreadVelocity: config?.maxSpreadVelocity ?? 0.1,
         };
+        this.positionLedger = positionLedger ?? new positionLedger_1.PositionLedger(this.config.symbol);
         this.reusableOrderIntent.symbol = this.config.symbol;
         this.reusableOrderIntent.quantity = this.config.orderQuantity;
+    }
+    getPositionLedger() {
+        return this.positionLedger;
     }
     /**
      * High-frequency tick evaluation loop.

@@ -86,9 +86,8 @@ class RiskGuard {
         }
         return exports.RISK_PASSED;
     }
-    recordExecutionSuccess(notionalUsdt) {
+    recordExecutionSuccess(notionalUsdt, side = "BUY") {
         this.lastExecutionTimestampMs = Date.now();
-        this.currentPositionNotionalUsdt += notionalUsdt;
     }
     recordRealizedPnl(pnlUsdt) {
         if (pnlUsdt < 0) {

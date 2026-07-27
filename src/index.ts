@@ -87,6 +87,8 @@ export function initializeSystem(): SystemControlPlane {
       latencyUs
     );
 
+    const positionLedger = strategyEngine.getPositionLedger();
+
     if (tickResult.executionPromise) {
       tickResult.executionPromise.then((orderRes) => {
         if (orderRes) {
@@ -95,14 +97,22 @@ export function initializeSystem(): SystemControlPlane {
           const finalQty = execQty > 0 ? execQty : (origQty > 0 ? origQty : strategyEngine.getConfig().orderQuantity);
           const px = parseFloat(orderRes.price || orderRes.avgPrice || "0") || (tickResult.signalType === "BUY" ? tickResult.askPrice : tickResult.bidPrice);
           const fee = (px * finalQty) * 0.0004;
-          const pnl = tickResult.signalType === "SELL" ? (px - tickResult.bidPrice) * finalQty : 0;
+          const fillSide = (orderRes.side as "BUY" | "SELL") || tickResult.signalType;
+          const symbol = orderRes.symbol || strategyEngine.getConfig().symbol;
+
+          // Route fill execution through zero-GC PositionLedger FIFO engine
+          const ledgerResult = positionLedger.processFill(symbol, fillSide, px, finalQty, fee);
+
+          // Update RiskGuard position state & record realized PnL
+          riskGuard.recordRealizedPnl(ledgerResult.realizedPnl);
+          riskGuard.updatePositionNotional(ledgerResult.netQuantityAfterFill * ledgerResult.averageEntryPriceAfterFill);
 
           logger.logExecution(
-            orderRes.symbol || strategyEngine.getConfig().symbol,
-            (orderRes.side as "BUY" | "SELL") || tickResult.signalType,
+            symbol,
+            fillSide,
             px,
             finalQty,
-            pnl,
+            ledgerResult.realizedPnl,
             fee,
             0
           );
@@ -110,6 +120,7 @@ export function initializeSystem(): SystemControlPlane {
       });
     }
 
+    const posSummary = positionLedger.getSummary(tickResult.askPrice || tickResult.bidPrice);
     const frame: TelemetryFrame = {
       symbol: strategyEngine.getConfig().symbol,
       sequenceNum: tickResult.sequenceNum,
@@ -120,7 +131,12 @@ export function initializeSystem(): SystemControlPlane {
       spreadVelocity: tickResult.spreadVelocity,
       lastSignal: tickResult.signalType,
       tickEvaluationLatencyUs: latencyUs,
-      stats: logger.getStats(),
+      stats: logger.getStats({
+        unrealizedPnl: posSummary.unrealizedPnl,
+        positionSide: posSummary.side,
+        netQuantity: posSummary.netQuantity,
+        averageEntryPrice: posSummary.averageEntryPrice,
+      }),
       riskStatus: tickResult.riskResult
         ? tickResult.riskResult.passed
           ? "PASSED"
