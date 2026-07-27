@@ -1,0 +1,20 @@
+[project]
+name = "batbot-v11-training"
+version = "1.0.0"
+description = "BATBOT_V11 HFT Engine Offline AI Training Pipeline"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "torch>=2.4.0",
+    "ncps>=0.1.8",
+    "pykan>=0.2.1",
+    "safetensors>=0.4.3",
+    "numpy>=1.26.0",
+    "scipy>=1.11.0",
+    "sympy>=1.12",
+    "scikit-learn>=1.4.0",
+    "matplotlib>=3.8.0",
+    "tqdm>=4.66.0",
+    "pyyaml>=6.0",
+    "pandas>=2.0.0",
+]
