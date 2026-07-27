@@ -310,8 +310,9 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { initCore, createLobEngine, startIngestion } = nativeBinding
+const { initCore, createLobEngine, loadAiModel, startIngestion } = nativeBinding
 
 module.exports.initCore = initCore
 module.exports.createLobEngine = createLobEngine
+module.exports.loadAiModel = loadAiModel
 module.exports.startIngestion = startIngestion

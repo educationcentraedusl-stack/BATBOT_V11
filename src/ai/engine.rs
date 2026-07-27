@@ -2,6 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use candle_core::{DType, Device, Result, Tensor};
 
 use crate::ai::cfc::CfCCell;
+use crate::ai::ic_tracker::ICTracker;
 use crate::ai::kan::TKANLayer;
 use crate::ai::weights::{AiEngine, AiEngineStatus};
 use crate::ipc::shared_memory::AtomicSharedMemoryBridge;
@@ -13,6 +14,9 @@ pub struct AIEngine {
     pub status: AiEngineStatus,
     pub last_inference_ns: u64,
     pub inference_seq: u64,
+    pub ic_tracker: ICTracker,
+    pub last_mid_price: f64,
+    pub last_prediction_dir: f64,
 }
 
 impl AIEngine {
@@ -35,7 +39,24 @@ impl AIEngine {
             status: weights_engine.status,
             last_inference_ns: 0,
             inference_seq: 0,
+            ic_tracker: ICTracker::default_1000(),
+            last_mid_price: 0.0,
+            last_prediction_dir: 0.0,
         }
+    }
+
+    pub fn reload_weights(&mut self, path: &str) -> bool {
+        let weights_engine = AiEngine::load_from_file(path);
+        self.status = weights_engine.status;
+        self.cell = weights_engine.cell;
+        if self.cell.is_some() {
+            // Reset hidden state on new model load
+            let device = Device::Cpu;
+            if let Ok(hs) = Tensor::zeros((1, 32), DType::F32, &device) {
+                self.hidden_state = hs;
+            }
+        }
+        self.is_calibrated()
     }
 
     pub fn is_calibrated(&self) -> bool {
@@ -59,6 +80,24 @@ impl AIEngine {
         for i in 0..20 {
             lob_features[i] = sab.load_f64(11 + i);
             lob_features[20 + i] = sab.load_f64(51 + i);
+        }
+
+        // Calculate current mid price for IC tracking realized return calculation
+        let best_bid = sab.load_f64(4);
+        let best_ask = sab.load_f64(6);
+        let current_mid = if best_bid > 0.0 && best_ask > 0.0 {
+            (best_bid + best_ask) / 2.0
+        } else {
+            0.0
+        };
+
+        if self.last_mid_price > 0.0 && current_mid > 0.0 && self.last_prediction_dir != 0.0 {
+            let realized_return = (current_mid - self.last_mid_price) / self.last_mid_price;
+            self.ic_tracker.add_observation(
+                self.last_prediction_dir,
+                realized_return,
+                Some(sab),
+            );
         }
 
         // 2. Execute T-KAN forward pass (40 -> 16 spatial encoding)
@@ -104,6 +143,10 @@ impl AIEngine {
         let spread_vel = sab.load_f64(3);
         let slippage_ticks = 2.0 + (spread_vel.abs() / 0.5).floor();
 
+        // Save last state for IC tracker step
+        self.last_mid_price = current_mid;
+        self.last_prediction_dir = direction;
+
         // 5. Write predictions to SAB slots 93..103
         sab.store_f64(93, direction);
         sab.store_f64(94, confidence);
@@ -139,5 +182,11 @@ mod tests {
         let res = engine.run_inference(&bridge);
         assert!(res.is_ok());
         assert!(!engine.is_calibrated());
+    }
+
+    #[test]
+    fn test_reload_weights() {
+        let mut engine = AIEngine::new();
+        assert!(!engine.reload_weights("./models/non_existent_weights.safetensors"));
     }
 }

@@ -9,6 +9,7 @@ pub mod ws;
 use std::sync::{Arc, RwLock};
 use lazy_static::lazy_static;
 
+use ai::AIEngine;
 use ipc::bridge::IngestionBridge;
 use ipc::shared_memory::AtomicSharedMemoryBridge;
 use lob::{LimitOrderBook, LockFreeSpscQueue};
@@ -18,6 +19,7 @@ use napi::Error;
 
 lazy_static! {
     static ref GLOBAL_LOB: RwLock<LimitOrderBook> = RwLock::new(LimitOrderBook::new());
+    pub static ref GLOBAL_AI_ENGINE: RwLock<AIEngine> = RwLock::new(AIEngine::new());
     static ref GLOBAL_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -34,6 +36,18 @@ pub fn create_lob_engine() -> bool {
     let mut lob_guard = GLOBAL_LOB.write().unwrap_or_else(|e| e.into_inner());
     *lob_guard = LimitOrderBook::new();
     true
+}
+
+#[napi]
+pub fn load_ai_model(weights_path: String) -> bool {
+    let mut engine_guard = GLOBAL_AI_ENGINE.write().unwrap_or_else(|e| e.into_inner());
+    let success = engine_guard.reload_weights(&weights_path);
+    println!(
+        "[BATBOT_V11][N-API] Dynamic load_ai_model trigger for path '{}'. Status: {}.",
+        weights_path,
+        if success { "CALIBRATED" } else { "UNCALIBRATED" }
+    );
+    success
 }
 
 #[napi]
@@ -71,4 +85,3 @@ pub fn start_ingestion(sab_buffer: Buffer) -> napi::Result<bool> {
 
     Ok(true)
 }
-
