@@ -53,7 +53,7 @@ export class MockMarketDataClient extends MarketDataClient {
 
   constructor() {
     // Pass empty buffer to base constructor
-    super(new SharedArrayBuffer(1024));
+    super(new SharedArrayBuffer(2048));
   }
 
   public updateState(tick: BacktestTick): void {

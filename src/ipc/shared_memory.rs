@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-pub const SHARED_MEMORY_SLOTS: usize = 128;
-pub const SHARED_MEMORY_BYTES: usize = SHARED_MEMORY_SLOTS * 8; // 1024 bytes
+pub const SHARED_MEMORY_SLOTS: usize = 256;
+pub const SHARED_MEMORY_BYTES: usize = SHARED_MEMORY_SLOTS * 8; // 2048 bytes
 
 #[derive(Clone, Copy)]
 pub struct AtomicSharedMemoryBridge {
@@ -14,7 +14,7 @@ unsafe impl Sync for AtomicSharedMemoryBridge {}
 impl AtomicSharedMemoryBridge {
     pub fn new(ptr: *mut u8, len: usize) -> Result<Self, &'static str> {
         if len < SHARED_MEMORY_BYTES {
-            return Err("Buffer is smaller than required 1024 bytes");
+            return Err("Buffer is smaller than required 2048 bytes");
         }
         if ptr.is_null() {
             return Err("Buffer pointer is null");

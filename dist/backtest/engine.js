@@ -14,7 +14,7 @@ class MockMarketDataClient extends marketDataClient_1.MarketDataClient {
     currentVel = 0;
     constructor() {
         // Pass empty buffer to base constructor
-        super(new SharedArrayBuffer(1024));
+        super(new SharedArrayBuffer(2048));
     }
     updateState(tick) {
         this.currentSeq = tick.sequenceNum;

@@ -8,8 +8,8 @@ const BITCAST_FLOAT = new Float64Array(BITCAST_BUF);
 class MarketDataClient {
     bigIntView;
     constructor(sab) {
-        if (sab.byteLength < 1024) {
-            throw new Error("SharedArrayBuffer must be at least 1024 bytes");
+        if (sab.byteLength < 2048) {
+            throw new Error("SharedArrayBuffer must be at least 2048 bytes");
         }
         this.bigIntView = new BigInt64Array(sab);
     }
@@ -84,6 +84,34 @@ class MarketDataClient {
     }
     getSequenceNum() {
         return Atomics.load(this.bigIntView, 92);
+    }
+    // --- Slots 93 to 102: AI Prediction & Latency Metrics ---
+    getAIPredictionDirection() {
+        return this.readAtomicFloat64(93);
+    }
+    getAIPredictionConfidence() {
+        return this.readAtomicFloat64(94);
+    }
+    getAIPredictionHorizonMs() {
+        return this.readAtomicFloat64(95);
+    }
+    getAIPredictionTimestampNs() {
+        return Atomics.load(this.bigIntView, 96);
+    }
+    getMeasuredRttMs() {
+        return this.readAtomicFloat64(98);
+    }
+    getLatencyPenaltyCoefficient() {
+        return this.readAtomicFloat64(99);
+    }
+    getDynamicSlippageTicks() {
+        return this.readAtomicFloat64(100);
+    }
+    getRollingIC() {
+        return this.readAtomicFloat64(101);
+    }
+    getAIInferenceLatencyNs() {
+        return Atomics.load(this.bigIntView, 102);
     }
 }
 exports.MarketDataClient = MarketDataClient;

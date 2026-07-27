@@ -18,7 +18,7 @@ async function testPnlReconciliationIntegration() {
   console.log("   RUNNING PnL RECONCILIATION INTEGRATION HARNESS ");
   console.log("==================================================");
 
-  const sab = new SharedArrayBuffer(1024);
+  const sab = new SharedArrayBuffer(2048);
   const bigIntView = new BigInt64Array(sab);
 
   const client = new MarketDataClient(sab);

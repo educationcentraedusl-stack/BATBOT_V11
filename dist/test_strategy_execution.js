@@ -78,7 +78,7 @@ async function runVerificationTests() {
     // TEST 3: Strategy Engine Hot-Path Signal Generation
     // -------------------------------------------------------------------
     console.log("\n[TEST 3] Testing Strategy Engine Zero-GC Hot-Path Signal Loop...");
-    const sab = new SharedArrayBuffer(1024);
+    const sab = new SharedArrayBuffer(2048);
     const bigIntView = new BigInt64Array(sab);
     const client = new marketDataClient_1.MarketDataClient(sab);
     const testRiskGuard = new risk_1.RiskGuard({ minCooldownMs: 0 }); // zero cooldown for test loop

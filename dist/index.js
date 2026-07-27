@@ -53,7 +53,7 @@ const server_1 = require("./telemetry/server");
 Object.defineProperty(exports, "TelemetryWSServer", { enumerable: true, get: function () { return server_1.TelemetryWSServer; } });
 exports.DEFAULT_TAKER_FEE_RATE = 0.0004;
 function initializeSystem() {
-    const sab = new SharedArrayBuffer(1024);
+    const sab = new SharedArrayBuffer(2048);
     const client = new marketDataClient_1.MarketDataClient(sab);
     const riskGuard = new risk_1.RiskGuard();
     const executionClient = new binance_1.BinanceExecutionClient();

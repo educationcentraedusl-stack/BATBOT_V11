@@ -7,8 +7,8 @@ export class MarketDataClient {
   private bigIntView: BigInt64Array;
 
   constructor(sab: SharedArrayBuffer) {
-    if (sab.byteLength < 1024) {
-      throw new Error("SharedArrayBuffer must be at least 1024 bytes");
+    if (sab.byteLength < 2048) {
+      throw new Error("SharedArrayBuffer must be at least 2048 bytes");
     }
     this.bigIntView = new BigInt64Array(sab);
   }
@@ -99,5 +99,43 @@ export class MarketDataClient {
 
   public getSequenceNum(): bigint {
     return Atomics.load(this.bigIntView, 92);
+  }
+
+  // --- Slots 93 to 102: AI Prediction & Latency Metrics ---
+
+  public getAIPredictionDirection(): number {
+    return this.readAtomicFloat64(93);
+  }
+
+  public getAIPredictionConfidence(): number {
+    return this.readAtomicFloat64(94);
+  }
+
+  public getAIPredictionHorizonMs(): number {
+    return this.readAtomicFloat64(95);
+  }
+
+  public getAIPredictionTimestampNs(): bigint {
+    return Atomics.load(this.bigIntView, 96);
+  }
+
+  public getMeasuredRttMs(): number {
+    return this.readAtomicFloat64(98);
+  }
+
+  public getLatencyPenaltyCoefficient(): number {
+    return this.readAtomicFloat64(99);
+  }
+
+  public getDynamicSlippageTicks(): number {
+    return this.readAtomicFloat64(100);
+  }
+
+  public getRollingIC(): number {
+    return this.readAtomicFloat64(101);
+  }
+
+  public getAIInferenceLatencyNs(): bigint {
+    return Atomics.load(this.bigIntView, 102);
   }
 }

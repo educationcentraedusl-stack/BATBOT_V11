@@ -35,7 +35,7 @@ export interface SystemControlPlane {
 }
 
 export function initializeSystem(): SystemControlPlane {
-  const sab = new SharedArrayBuffer(1024);
+  const sab = new SharedArrayBuffer(2048);
   const client = new MarketDataClient(sab);
   const riskGuard = new RiskGuard();
   const executionClient = new BinanceExecutionClient();
