@@ -1,6 +1,7 @@
 use std::fs::File;
-use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
+use memmap2::Mmap;
 
 pub const LUT_SIZE: usize = 4096;
 
@@ -40,34 +41,51 @@ impl BSplineLUT {
     }
 
     #[inline]
-    pub fn evaluate(&self, input: f64) -> f64 {
-        let clamped = input.clamp(self.min_val, self.max_val);
-        let norm = (clamped - self.min_val) / (self.max_val - self.min_val);
-        let idx_f = norm * (self.lut.len() - 1) as f64;
+    pub fn evaluate_from_slice(slice: &[f64], min_val: f64, max_val: f64, input: f64) -> f64 {
+        let clamped = input.clamp(min_val, max_val);
+        let norm = (clamped - min_val) / (max_val - min_val);
+        let idx_f = norm * (slice.len() - 1) as f64;
         let i0 = idx_f.floor() as usize;
-        let i1 = (i0 + 1).min(self.lut.len() - 1);
+        let i1 = (i0 + 1).min(slice.len() - 1);
         let frac = idx_f - i0 as f64;
 
-        (1.0 - frac) * self.lut[i0] + frac * self.lut[i1]
+        (1.0 - frac) * slice[i0] + frac * slice[i1]
+    }
+
+    #[inline]
+    pub fn evaluate(&self, input: f64) -> f64 {
+        Self::evaluate_from_slice(&self.lut, self.min_val, self.max_val, input)
     }
 }
 
 #[derive(Debug, Clone)]
+pub enum TKANStorage {
+    Heap(Vec<BSplineLUT>),
+    Mmap {
+        mmap: Arc<Mmap>,
+        num_edges: usize,
+        lut_size: usize,
+        min_val: f64,
+        max_val: f64,
+    },
+}
+
+#[derive(Debug, Clone)]
 pub struct TKANLayer {
-    pub edges: Vec<BSplineLUT>,
+    pub storage: TKANStorage,
     pub input_dim: usize,
     pub output_dim: usize,
 }
 
 impl TKANLayer {
-    pub fn new(edges: Vec<BSplineLUT>, input_dim: usize, output_dim: usize) -> Self {
+    pub fn new_heap(edges: Vec<BSplineLUT>, input_dim: usize, output_dim: usize) -> Self {
         assert_eq!(
             edges.len(),
             input_dim * output_dim,
             "Number of edges must equal input_dim * output_dim"
         );
         Self {
-            edges,
+            storage: TKANStorage::Heap(edges),
             input_dim,
             output_dim,
         }
@@ -83,35 +101,43 @@ impl TKANLayer {
             edges.push(BSplineLUT::default_identity(-1000.0, 1000.0));
         }
 
-        Self::new(edges, input_dim, output_dim)
+        Self::new_heap(edges, input_dim, output_dim)
     }
 
     pub fn load_from_binary<P: AsRef<Path>>(path: P) -> Result<Self, String> {
         let path_ref = path.as_ref();
-        let mut file = File::open(path_ref).map_err(|e| format!("Failed to open LUT binary file {}: {}", path_ref.display(), e))?;
+        let file = File::open(path_ref)
+            .map_err(|e| format!("Failed to open LUT binary file {}: {}", path_ref.display(), e))?;
 
-        let mut header_buf = [0u8; 24];
-        file.read_exact(&mut header_buf).map_err(|e| format!("Failed to read LUT header from {}: {}", path_ref.display(), e))?;
+        let mmap = unsafe {
+            memmap2::MmapOptions::new()
+                .map(&file)
+                .map_err(|e| format!("Failed to mmap LUT binary file {}: {}", path_ref.display(), e))?
+        };
+
+        if mmap.len() < 24 {
+            return Err(format!("LUT binary file {} is too small for header (len={})", path_ref.display(), mmap.len()));
+        }
 
         let num_edges = u32::from_le_bytes(
-            header_buf[0..4]
+            mmap[0..4]
                 .try_into()
-                .map_err(|_| format!("Failed to parse num_edges slice from {}", path_ref.display()))?,
+                .map_err(|_| format!("Failed to parse num_edges from {}", path_ref.display()))?,
         ) as usize;
         let lut_size = u32::from_le_bytes(
-            header_buf[4..8]
+            mmap[4..8]
                 .try_into()
-                .map_err(|_| format!("Failed to parse lut_size slice from {}", path_ref.display()))?,
+                .map_err(|_| format!("Failed to parse lut_size from {}", path_ref.display()))?,
         ) as usize;
         let min_val = f64::from_le_bytes(
-            header_buf[8..16]
+            mmap[8..16]
                 .try_into()
-                .map_err(|_| format!("Failed to parse min_val slice from {}", path_ref.display()))?,
+                .map_err(|_| format!("Failed to parse min_val from {}", path_ref.display()))?,
         );
         let max_val = f64::from_le_bytes(
-            header_buf[16..24]
+            mmap[16..24]
                 .try_into()
-                .map_err(|_| format!("Failed to parse max_val slice from {}", path_ref.display()))?,
+                .map_err(|_| format!("Failed to parse max_val from {}", path_ref.display()))?,
         );
 
         if num_edges != 640 || lut_size < 2 {
@@ -132,37 +158,34 @@ impl TKANLayer {
             ));
         }
 
-        let input_dim = 40;
-        let output_dim = 16;
-
         let total_floats = num_edges * lut_size;
-        let mut data_buf = vec![0u8; total_floats * 8];
-        file.read_exact(&mut data_buf).map_err(|e| format!("Failed to read LUT payload data from {}: {}", path_ref.display(), e))?;
-
-        let mut edges = Vec::with_capacity(num_edges);
-        for edge_idx in 0..num_edges {
-            let start = edge_idx * lut_size * 8;
-            let mut lut = Vec::with_capacity(lut_size);
-            for i in 0..lut_size {
-                let offset = start + i * 8;
-                let slice = data_buf
-                    .get(offset..offset + 8)
-                    .ok_or_else(|| format!("LUT data buffer index out of bounds at offset {} in {}", offset, path_ref.display()))?;
-                let val_bytes: [u8; 8] = slice
-                    .try_into()
-                    .map_err(|_| format!("Failed to parse f64 slice at offset {} in {}", offset, path_ref.display()))?;
-                let val = f64::from_le_bytes(val_bytes);
-                lut.push(val);
-            }
-            edges.push(BSplineLUT::new(lut, min_val, max_val));
+        let expected_bytes = 24 + total_floats * 8;
+        if mmap.len() < expected_bytes {
+            return Err(format!(
+                "Incomplete LUT payload in {}: file size {} bytes, required {} bytes",
+                path_ref.display(),
+                mmap.len(),
+                expected_bytes
+            ));
         }
 
         println!(
-            "[BATBOT_V11][T-KAN] Successfully loaded {} edge B-spline LUTs from {}.",
+            "[BATBOT_V11][T-KAN Zero-Copy] Memory-mapped {} edge B-spline LUTs from {}. Zero heap allocation.",
             num_edges,
             path_ref.display()
         );
-        Ok(Self::new(edges, input_dim, output_dim))
+
+        Ok(Self {
+            storage: TKANStorage::Mmap {
+                mmap: Arc::new(mmap),
+                num_edges,
+                lut_size,
+                min_val,
+                max_val,
+            },
+            input_dim: 40,
+            output_dim: 16,
+        })
     }
 
     pub fn load_from_binary_or_default<P: AsRef<Path>>(path: P) -> Self {
@@ -182,13 +205,39 @@ impl TKANLayer {
     #[inline]
     pub fn forward(&self, input: &[f64; 40]) -> [f64; 16] {
         let mut output = [0.0f64; 16];
-        for j in 0..self.output_dim {
-            let mut sum = 0.0f64;
-            for i in 0..self.input_dim {
-                let edge_idx = i * self.output_dim + j;
-                sum += self.edges[edge_idx].evaluate(input[i]);
+        match &self.storage {
+            TKANStorage::Heap(edges) => {
+                for j in 0..self.output_dim {
+                    let mut sum = 0.0f64;
+                    for i in 0..self.input_dim {
+                        let edge_idx = i * self.output_dim + j;
+                        sum += edges[edge_idx].evaluate(input[i]);
+                    }
+                    output[j] = sum;
+                }
             }
-            output[j] = sum;
+            TKANStorage::Mmap {
+                mmap,
+                num_edges: _,
+                lut_size,
+                min_val,
+                max_val,
+            } => {
+                let total_floats = self.input_dim * self.output_dim * lut_size;
+                let ptr = unsafe { mmap.as_ptr().add(24) as *const f64 };
+                let f64_slice = unsafe { std::slice::from_raw_parts(ptr, total_floats) };
+
+                for j in 0..self.output_dim {
+                    let mut sum = 0.0f64;
+                    for i in 0..self.input_dim {
+                        let edge_idx = i * self.output_dim + j;
+                        let start = edge_idx * lut_size;
+                        let edge_slice = &f64_slice[start..start + lut_size];
+                        sum += BSplineLUT::evaluate_from_slice(edge_slice, *min_val, *max_val, input[i]);
+                    }
+                    output[j] = sum;
+                }
+            }
         }
         output
     }
@@ -223,16 +272,17 @@ mod tests {
     #[test]
     fn test_tkan_binary_missing_file_fallback() {
         let tkan = TKANLayer::load_from_binary_or_default("./models/non_existent_luts.bin");
-        assert_eq!(tkan.edges.len(), 640);
+        assert_eq!(tkan.input_dim, 40);
+        assert_eq!(tkan.output_dim, 16);
         let input = [0.1f64; 40];
         let out = tkan.forward(&input);
         assert_eq!(out.len(), 16);
     }
 
     #[test]
-    fn test_tkan_binary_invalid_range_validation() {
+    fn test_tkan_binary_mmap_invalid_range_validation() {
         let temp_dir = std::env::temp_dir();
-        let test_path = temp_dir.join("invalid_range_lut.bin");
+        let test_path = temp_dir.join("invalid_range_lut_mmap.bin");
 
         // Write header with num_edges=640, lut_size=4096, min_val=10.0, max_val=-10.0
         let mut header = Vec::new();
@@ -250,4 +300,3 @@ mod tests {
         let _ = std::fs::remove_file(test_path);
     }
 }
-

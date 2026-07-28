@@ -21,6 +21,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "arc-swap"
+version = "1.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -36,11 +45,13 @@ checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
 name = "batbot_v11_core"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "candle-core",
  "candle-nn",
  "crossbeam-queue",
  "futures-util",
  "lazy_static",
+ "memmap2",
  "napi",
  "napi-build",
  "napi-derive",

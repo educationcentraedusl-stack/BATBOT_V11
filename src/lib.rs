@@ -8,6 +8,7 @@ pub mod ws;
 
 use std::sync::{Arc, RwLock};
 use lazy_static::lazy_static;
+use arc_swap::ArcSwapOption;
 
 use ai::AIEngine;
 use ipc::bridge::IngestionBridge;
@@ -19,7 +20,7 @@ use napi::Error;
 
 lazy_static! {
     static ref GLOBAL_LOB: RwLock<LimitOrderBook> = RwLock::new(LimitOrderBook::new());
-    pub static ref GLOBAL_AI_ENGINE: RwLock<AIEngine> = RwLock::new(AIEngine::new());
+    pub static ref GLOBAL_AI_ENGINE: ArcSwapOption<AIEngine> = ArcSwapOption::from(Some(Arc::new(AIEngine::new())));
     static ref GLOBAL_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -40,11 +41,26 @@ pub fn create_lob_engine() -> bool {
 
 #[napi]
 pub fn load_ai_model(weights_path: String) -> bool {
-    let mut engine_guard = GLOBAL_AI_ENGINE.write().unwrap_or_else(|e| e.into_inner());
-    let success = engine_guard.reload_weights(&weights_path);
+    let new_engine = AIEngine::load_from_file(&weights_path);
+    let success = new_engine.is_calibrated();
+    GLOBAL_AI_ENGINE.store(Some(Arc::new(new_engine)));
     println!(
-        "[BATBOT_V11][N-API] Dynamic load_ai_model trigger for path '{}'. Status: {}.",
+        "[BATBOT_V11][N-API Lock-Free RCU] Atomic load_ai_model trigger for path '{}'. Status: {}.",
         weights_path,
+        if success { "CALIBRATED" } else { "UNCALIBRATED" }
+    );
+    success
+}
+
+#[napi]
+pub fn load_ai_model_full(weights_path: String, tkan_path: String) -> bool {
+    let new_engine = AIEngine::load_from_paths(&weights_path, &tkan_path);
+    let success = new_engine.is_calibrated();
+    GLOBAL_AI_ENGINE.store(Some(Arc::new(new_engine)));
+    println!(
+        "[BATBOT_V11][N-API Lock-Free RCU] Atomic load_ai_model_full trigger for cfc: '{}', tkan: '{}'. Status: {}.",
+        weights_path,
+        tkan_path,
         if success { "CALIBRATED" } else { "UNCALIBRATED" }
     );
     success

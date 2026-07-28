@@ -66,10 +66,10 @@ impl IngestionBridge {
                         seq,
                     );
 
-                    // Execute AI inference pipeline on every 10th LOB snapshot using GLOBAL_AI_ENGINE
+                    // Execute AI inference pipeline on every 10th LOB snapshot using GLOBAL_AI_ENGINE (Lock-Free RCU)
                     if seq % 10 == 0 {
-                        if let Ok(mut engine_guard) = GLOBAL_AI_ENGINE.write() {
-                            if let Err(e) = engine_guard.run_inference(&bridge) {
+                        if let Some(engine) = GLOBAL_AI_ENGINE.load().as_ref() {
+                            if let Err(e) = engine.run_inference(&bridge) {
                                 eprintln!("[BATBOT_V11][AI Engine Error] Inference error: {}", e);
                             }
                         }

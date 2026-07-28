@@ -1,5 +1,5 @@
 use std::path::Path;
-use candle_core::{Device, safetensors::load};
+use candle_core::{Device, safetensors::MmapedSafetensors};
 use crate::ai::cfc::CfCCell;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,48 +33,48 @@ impl AiEngine {
         }
 
         let device = Device::Cpu;
-        match load(path_ref, &device) {
-            Ok(mut tensors) => {
-                let w_alpha = tensors.remove("w_alpha");
-                let b_alpha = tensors.remove("b_alpha");
-                let w_beta = tensors.remove("w_beta");
-                let b_beta = tensors.remove("b_beta");
-                let w_output = tensors.remove("w_output");
-                let b_output = tensors.remove("b_output");
-
-                if let (Some(w_a), Some(b_a), Some(w_b), Some(b_b), Some(w_o), Some(b_o)) =
-                    (w_alpha, b_alpha, w_beta, b_beta, w_output, b_output)
-                {
-                    let cell = CfCCell::new(w_a, b_a, w_b, b_b, w_o, b_o);
-                    println!(
-                        "[BATBOT_V11][AI Engine] Loaded pre-trained CfC weights from {}. Status: CALIBRATED.",
-                        path_ref.display()
-                    );
-                    Self {
-                        cell: Some(cell),
-                        status: AiEngineStatus::Calibrated,
-                    }
-                } else {
-                    eprintln!(
-                        "[BATBOT_V11][AI Engine] Incomplete tensors in {}. Required: w_alpha, b_alpha, w_beta, b_beta, w_output, b_output. Status: UNCALIBRATED (Bypassing inference safely).",
-                        path_ref.display()
-                    );
-                    Self {
-                        cell: None,
-                        status: AiEngineStatus::Uncalibrated,
-                    }
-                }
-            }
+        let mmaped = match unsafe { MmapedSafetensors::new(path_ref) } {
+            Ok(m) => m,
             Err(e) => {
                 eprintln!(
-                    "[BATBOT_V11][AI Engine] Failed to load safetensors file {}: {}. Status: UNCALIBRATED (Bypassing inference safely).",
+                    "[BATBOT_V11][AI Engine] Failed to mmap safetensors file {}: {}. Status: UNCALIBRATED (Bypassing inference safely).",
                     path_ref.display(),
                     e
                 );
-                Self {
+                return Self {
                     cell: None,
                     status: AiEngineStatus::Uncalibrated,
-                }
+                };
+            }
+        };
+
+        let w_alpha = mmaped.load("w_alpha", &device).ok();
+        let b_alpha = mmaped.load("b_alpha", &device).ok();
+        let w_beta = mmaped.load("w_beta", &device).ok();
+        let b_beta = mmaped.load("b_beta", &device).ok();
+        let w_output = mmaped.load("w_output", &device).ok();
+        let b_output = mmaped.load("b_output", &device).ok();
+
+        if let (Some(w_a), Some(b_a), Some(w_b), Some(b_b), Some(w_o), Some(b_o)) =
+            (w_alpha, b_alpha, w_beta, b_beta, w_output, b_output)
+        {
+            let cell = CfCCell::new(w_a, b_a, w_b, b_b, w_o, b_o);
+            println!(
+                "[BATBOT_V11][AI Engine Zero-Copy] Loaded pre-trained CfC weights from {} via mmap. Status: CALIBRATED.",
+                path_ref.display()
+            );
+            Self {
+                cell: Some(cell),
+                status: AiEngineStatus::Calibrated,
+            }
+        } else {
+            eprintln!(
+                "[BATBOT_V11][AI Engine] Incomplete tensors in {}. Required: w_alpha, b_alpha, w_beta, b_beta, w_output, b_output. Status: UNCALIBRATED (Bypassing inference safely).",
+                path_ref.display()
+            );
+            Self {
+                cell: None,
+                status: AiEngineStatus::Uncalibrated,
             }
         }
     }

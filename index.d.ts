@@ -6,4 +6,5 @@
 export declare function initCore(): string
 export declare function createLobEngine(): boolean
 export declare function loadAiModel(weightsPath: string): boolean
+export declare function loadAiModelFull(weightsPath: string, tkanPath: string): boolean
 export declare function startIngestion(sabBuffer: Buffer): boolean

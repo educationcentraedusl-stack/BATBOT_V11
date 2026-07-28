@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use candle_core::{DType, Device, Result, Tensor};
 
@@ -10,13 +12,13 @@ use crate::ipc::shared_memory::AtomicSharedMemoryBridge;
 pub struct AIEngine {
     pub tkan: TKANLayer,
     pub cell: Option<CfCCell>,
-    pub hidden_state: Tensor,
+    pub hidden_state: Mutex<Tensor>,
     pub status: AiEngineStatus,
-    pub last_inference_ns: u64,
-    pub inference_seq: u64,
-    pub ic_tracker: ICTracker,
-    pub last_mid_price: f64,
-    pub last_prediction_dir: f64,
+    pub last_inference_ns: AtomicU64,
+    pub inference_seq: AtomicU64,
+    pub ic_tracker: Mutex<ICTracker>,
+    pub last_mid_price: AtomicU64,
+    pub last_prediction_dir: AtomicU64,
 }
 
 impl AIEngine {
@@ -24,47 +26,50 @@ impl AIEngine {
         Self::load_from_file("./models/cfc_weights.safetensors")
     }
 
-    pub fn load_from_file(path: &str) -> Self {
+    pub fn load_from_paths(cfc_path: &str, tkan_path: &str) -> Self {
         let device = Device::Cpu;
-        let tkan = TKANLayer::load_from_binary_or_default("./models/tkan_luts.bin");
+        let tkan = TKANLayer::load_from_binary_or_default(tkan_path);
         let hidden_state = Tensor::zeros((1, 32), DType::F32, &device)
             .unwrap_or_else(|_| Tensor::zeros((1, 32), DType::F32, &Device::Cpu).unwrap());
 
-        let weights_engine = AiEngine::load_from_file(path);
+        let weights_engine = AiEngine::load_from_file(cfc_path);
 
         Self {
             tkan,
             cell: weights_engine.cell,
-            hidden_state,
+            hidden_state: Mutex::new(hidden_state),
             status: weights_engine.status,
-            last_inference_ns: 0,
-            inference_seq: 0,
-            ic_tracker: ICTracker::default_1000(),
-            last_mid_price: 0.0,
-            last_prediction_dir: 0.0,
+            last_inference_ns: AtomicU64::new(0),
+            inference_seq: AtomicU64::new(0),
+            ic_tracker: Mutex::new(ICTracker::default_1000()),
+            last_mid_price: AtomicU64::new(0.0f64.to_bits()),
+            last_prediction_dir: AtomicU64::new(0.0f64.to_bits()),
         }
     }
 
+    pub fn load_from_file(path: &str) -> Self {
+        Self::load_from_paths(path, "./models/tkan_luts.bin")
+    }
+
     pub fn reload_weights(&mut self, path: &str) -> bool {
-        let weights_engine = AiEngine::load_from_file(path);
-        self.tkan = TKANLayer::load_from_binary_or_default("./models/tkan_luts.bin");
-        self.status = weights_engine.status;
-        self.cell = weights_engine.cell;
-        if self.cell.is_some() {
-            // Reset hidden state on new model load
-            let device = Device::Cpu;
-            if let Ok(hs) = Tensor::zeros((1, 32), DType::F32, &device) {
-                self.hidden_state = hs;
+        let new_engine = Self::load_from_file(path);
+        let calibrated = new_engine.is_calibrated();
+        self.tkan = new_engine.tkan;
+        self.cell = new_engine.cell;
+        self.status = new_engine.status;
+        if let Ok(new_hs) = new_engine.hidden_state.into_inner() {
+            if let Ok(mut hs) = self.hidden_state.lock() {
+                *hs = new_hs;
             }
         }
-        self.is_calibrated()
+        calibrated
     }
 
     pub fn is_calibrated(&self) -> bool {
         self.status == AiEngineStatus::Calibrated && self.cell.is_some()
     }
 
-    pub fn run_inference(&mut self, sab: &AtomicSharedMemoryBridge) -> Result<()> {
+    pub fn run_inference(&self, sab: &AtomicSharedMemoryBridge) -> Result<()> {
         if self.status != AiEngineStatus::Calibrated || self.cell.is_none() {
             // Zero-thrashing graceful fallback: return instantly if engine is uncalibrated
             return Ok(());
@@ -92,13 +97,14 @@ impl AIEngine {
             0.0
         };
 
-        if self.last_mid_price > 0.0 && current_mid > 0.0 && self.last_prediction_dir != 0.0 {
-            let realized_return = (current_mid - self.last_mid_price) / self.last_mid_price;
-            self.ic_tracker.add_observation(
-                self.last_prediction_dir,
-                realized_return,
-                Some(sab),
-            );
+        let last_mid = f64::from_bits(self.last_mid_price.load(Ordering::Relaxed));
+        let last_pred = f64::from_bits(self.last_prediction_dir.load(Ordering::Relaxed));
+
+        if last_mid > 0.0 && current_mid > 0.0 && last_pred != 0.0 {
+            let realized_return = (current_mid - last_mid) / last_mid;
+            if let Ok(mut tracker) = self.ic_tracker.lock() {
+                tracker.add_observation(last_pred, realized_return, Some(sab));
+            }
         }
 
         // 2. Execute T-KAN forward pass (40 -> 16 spatial encoding)
@@ -107,20 +113,21 @@ impl AIEngine {
         let tkan_tensor = Tensor::from_slice(&tkan_f32, (1, 16), &Device::Cpu)?;
 
         // 3. Compute delta_t from system time
-        let delta_t = if self.last_inference_ns == 0 {
+        let prev_ns = self.last_inference_ns.swap(start_ns, Ordering::Relaxed);
+        let delta_t = if prev_ns == 0 {
             0.001
         } else {
-            (start_ns.saturating_sub(self.last_inference_ns) as f64) / 1e9
+            (start_ns.saturating_sub(prev_ns) as f64) / 1e9
         };
-        self.last_inference_ns = start_ns;
 
         // 4. Execute CfC cell forward pass
+        let mut hidden_guard = self.hidden_state.lock().unwrap_or_else(|e| e.into_inner());
         let (output_tensor, next_hidden) = if let Some(cell) = &self.cell {
-            cell.forward(&tkan_tensor, &self.hidden_state, delta_t)?
+            cell.forward(&tkan_tensor, &*hidden_guard, delta_t)?
         } else {
             return Ok(());
         };
-        self.hidden_state = next_hidden;
+        *hidden_guard = next_hidden;
 
         // Extract predictions
         let output_vec = output_tensor.flatten_all()?.to_vec1::<f32>()?;
@@ -136,8 +143,7 @@ impl AIEngine {
             .as_nanos() as u64;
         let latency_ns = end_ns.saturating_sub(start_ns);
 
-        let hidden_norm = self
-            .hidden_state
+        let hidden_norm = hidden_guard
             .sqr()?
             .sum_all()?
             .to_scalar::<f32>()?
@@ -148,8 +154,10 @@ impl AIEngine {
         let slippage_ticks = 2.0 + (spread_vel.abs() / 0.5).floor();
 
         // Save last state for IC tracker step
-        self.last_mid_price = current_mid;
-        self.last_prediction_dir = direction;
+        self.last_mid_price.store(current_mid.to_bits(), Ordering::Relaxed);
+        self.last_prediction_dir.store(direction.to_bits(), Ordering::Relaxed);
+
+        let seq = self.inference_seq.fetch_add(1, Ordering::Relaxed);
 
         // 5. Write predictions to SAB slots 93..103
         sab.store_f64(93, direction);
@@ -159,9 +167,7 @@ impl AIEngine {
         sab.store_f64(97, hidden_norm);
         sab.store_f64(100, slippage_ticks);
         sab.store_u64(102, latency_ns);
-        sab.store_u64(103, self.inference_seq);
-
-        self.inference_seq = self.inference_seq.wrapping_add(1);
+        sab.store_u64(103, seq);
 
         Ok(())
     }
@@ -179,7 +185,7 @@ mod tests {
 
     #[test]
     fn test_ai_engine_uncalibrated_graceful_inference() {
-        let mut engine = AIEngine::load_from_file("./models/non_existent_weights.safetensors");
+        let engine = AIEngine::load_from_file("./models/non_existent_weights.safetensors");
         let mut buffer = vec![0u8; 2048];
         let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len()).unwrap();
 

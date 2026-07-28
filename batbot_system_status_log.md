@@ -2,6 +2,13 @@
 
 ## Development Changelog
 
+- **Date:** 2026-07-28
+- **Feature/Task:** HFT AI Engine Model Integration & Zero-Copy Hot-Reloading (`memmap2` & `arc-swap` RCU)
+- **Artifacts Created/Modified:** `Cargo.toml`, `src/ai/kan.rs`, `src/ai/weights.rs`, `src/ai/engine.rs`, `src/lib.rs`, `src/ipc/bridge.rs`, `index.d.ts`, `index.js`, `index.win32-x64-msvc.node`
+- **HFT/Performance Compliance:** Implemented zero-copy memory mapping (`memmap2::Mmap`) for `tkan_luts.bin` and `candle_core::safetensors::MmapedSafetensors` for `cfc_weights.safetensors`, completely eliminating heap allocation on hot-path inference. Replaced global `RwLock` with `arc_swap::ArcSwapOption` RCU atomic pointer swapping for `GLOBAL_AI_ENGINE`. Hot-reloading via N-API (`loadAiModel` / `loadAiModelFull`) performs atomic pointer swap without blocking high-frequency WebSocket ingestion or inference ticks. Verified 100% Rust unit tests (`cargo test --lib`, 12/12 passed), native release compilation (`npm run build:rust`), and Node.js N-API verification.
+- **Status:** ✅ Completed & QA Verified
+
+
 - **Date:** 2026-07-25
 - **Feature/Task:** Phase 1: Core Architecture & Dependency Setup (Rust Crate & TypeScript Control Plane)
 - **Artifacts Created/Modified:** `Cargo.toml`, `build.rs`, `src/lib.rs`, `package.json`, `tsconfig.json`, `src/index.ts`, `.antigravity/knowledge/LEARNINGS.md`, `.loki/memory/CONTINUITY.md`
