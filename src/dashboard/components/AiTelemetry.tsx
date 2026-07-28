@@ -12,10 +12,13 @@ export const AiTelemetry: React.FC = () => {
   const rafIdRef = useRef<number | null>(null);
 
   const direction = frame?.aiDirection ?? 0;
-  const confidence = (frame?.aiConfidence ?? 0.88) * 100;
-  const rollingIc = frame?.rollingIc ?? 0.042;
-  const latencyPenalty = frame?.latencyPenalty ?? 1.0;
-  const infLatUs = frame?.aiInferenceLatencyNs ? Number(frame.aiInferenceLatencyNs) / 1000 : 0.82;
+  const confidence = (frame?.aiConfidence ?? 0) * 100;
+  const rollingIc = frame?.rollingIc ?? 0;
+  const latencyPenalty = frame?.latencyPenalty ?? 0;
+  const infLatUs = frame?.aiInferenceLatencyNs ? Number(frame.aiInferenceLatencyNs) / 1000 : 0;
+  const slippageTicks = frame?.slippageTicks ?? 0;
+  const riskStatus = frame?.riskStatus ?? "STANDBY";
+  const drawPct = frame && frame.usdtBalance > 0 ? (Math.abs(frame.stats?.unrealizedPnl ?? 0) / frame.usdtBalance) * 100 : 0;
 
   // Initialize ResizeObserver & Direct RAF Canvas Engine for zero React re-render chart rendering
   useEffect(() => {
@@ -54,7 +57,7 @@ export const AiTelemetry: React.FC = () => {
 
         const count = history.count > 0 ? history.count : 1;
         const initialTs = history.count > 0 ? history.timestamps.subarray(0, count) : new Float64Array([Date.now() / 1000]);
-        const initialNorms = history.count > 0 ? history.stateNorms.subarray(0, count) : new Float64Array([1.0]);
+        const initialNorms = history.count > 0 ? history.stateNorms.subarray(0, count) : new Float64Array([0]);
 
         try {
           uplotInstance.current = new uPlot(opts, [initialTs, initialNorms], container);
@@ -154,26 +157,30 @@ export const AiTelemetry: React.FC = () => {
         <div className="grid grid-cols-2 gap-2 text-xs font-mono">
           <div className="bg-slate-950 p-2.5 rounded border border-slate-800 flex justify-between items-center">
             <span className="text-slate-300">GATE 1 (SPEARMAN IC &gt; 0.03):</span>
-            <span className={`font-bold ${rollingIc >= 0.03 ? "text-emerald-400" : "text-yellow-400"}`}>
-              {rollingIc.toFixed(4)} [PASSED]
+            <span className={`font-bold ${frame ? (rollingIc >= 0.03 ? "text-emerald-400" : "text-yellow-400") : "text-slate-500"}`}>
+              {frame ? `${rollingIc.toFixed(4)} [${rollingIc >= 0.03 ? "PASSED" : "WARN"}]` : "0.0000 [STANDBY]"}
             </span>
           </div>
 
           <div className="bg-slate-950 p-2.5 rounded border border-slate-800 flex justify-between items-center">
             <span className="text-slate-300">GATE 2 (LATENCY PENALTY):</span>
-            <span className="font-bold text-emerald-400">
-              {latencyPenalty.toFixed(2)}x [OPTIMAL]
+            <span className={`font-bold ${frame ? (latencyPenalty > 0 && latencyPenalty <= 1.05 ? "text-emerald-400" : "text-amber-400") : "text-slate-500"}`}>
+              {frame ? `${latencyPenalty.toFixed(2)}x [${latencyPenalty > 0 && latencyPenalty <= 1.05 ? "OPTIMAL" : "DEGRADED"}]` : "0.00x [STANDBY]"}
             </span>
           </div>
 
           <div className="bg-slate-950 p-2.5 rounded border border-slate-800 flex justify-between items-center">
             <span className="text-slate-300">GATE 3 (RISK COLLAR / VaR):</span>
-            <span className="font-bold text-emerald-400">0.42% / 2.50% [PASSED]</span>
+            <span className={`font-bold ${frame ? (riskStatus === "PASSED" ? "text-emerald-400" : "text-rose-400") : "text-slate-500"}`}>
+              {frame ? `${drawPct.toFixed(2)}% / VaR [${riskStatus}]` : "0.00% / - [STANDBY]"}
+            </span>
           </div>
 
           <div className="bg-slate-950 p-2.5 rounded border border-slate-800 flex justify-between items-center">
             <span className="text-slate-300">GATE 4 (SLIPPAGE BUFFER):</span>
-            <span className="font-bold text-yellow-400">+{frame?.slippageTicks || 2} TICKS [OK]</span>
+            <span className={`font-bold ${frame ? "text-yellow-400" : "text-slate-500"}`}>
+              {frame ? `+${slippageTicks} TICKS [OK]` : "0 TICKS [STANDBY]"}
+            </span>
           </div>
         </div>
       </div>
