@@ -266,6 +266,12 @@
 - **HFT/Performance Compliance:** Decoupled SharedArrayBuffer slots to resolve critical Slot 102 collision between `ic_tracker.rs` model drift flag and `engine.rs` inference latency. Aligned SAB layout strictly to specification: Slot 101: Rolling IC (`f64`), Slot 102: Model Drift Flag (`f64`), Slot 103: Inference Latency Ns (`u64`), Slot 104: Sequence Counter (`u64`), and shifted OMS Position Ledger sync slots to 105..111. Updated `marketDataClient.ts` atomic readers to read `getAIInferenceLatencyNs()` from Slot 103 and `getAIInferenceSequenceNum()` from Slot 104. Verified 100% via clean `cargo check` (0 errors), clean unit tests (`cargo test`), and TypeScript compilation (`npm run build:ts`, 0 errors).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-29
+- **Feature/Task:** SharedArrayBuffer (SAB) Orphaned TS Readers Remediation (Slots 105-111 OMS Position Getters)
+- **Artifacts Created/Modified:** `src/marketDataClient.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Injected missing atomic reader getter methods into `src/marketDataClient.ts` for SAB Slots 105–111 (`getOmsPositionQty`, `getOmsAvgEntryPrice`, `getOmsRealizedPnl`, `getOmsUnrealizedPnl`, `getOmsLeverage`, `getOmsCumVolumeUsd`, `getOmsTotalTrades`). Utilized zero-allocation atomic float bitcasting views (`readAtomicFloat64`) for Float64 slots (105-110) and `Atomics.load` with `BigInt64Array` view for Uint64 slot (111). Achieved 100% 1:1 read/write memory symmetry with Rust `PositionLedger` writer (`sync_to_sab`). Verified 100% via TypeScript compilation (`npx tsc --noEmit`, 0 errors).
+- **Status:** ✅ Completed & QA Verified
+
 
 
 

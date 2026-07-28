@@ -146,4 +146,34 @@ export class MarketDataClient {
   public getAIInferenceSequenceNum(): bigint {
     return Atomics.load(this.bigIntView, 104);
   }
+
+  // --- Slots 105 to 111: OMS Position Ledger Metrics ---
+
+  public getOmsPositionQty(): number {
+    return this.readAtomicFloat64(105);
+  }
+
+  public getOmsAvgEntryPrice(): number {
+    return this.readAtomicFloat64(106);
+  }
+
+  public getOmsRealizedPnl(): number {
+    return this.readAtomicFloat64(107);
+  }
+
+  public getOmsUnrealizedPnl(): number {
+    return this.readAtomicFloat64(108);
+  }
+
+  public getOmsLeverage(): number {
+    return this.readAtomicFloat64(109);
+  }
+
+  public getOmsCumVolumeUsd(): number {
+    return this.readAtomicFloat64(110);
+  }
+
+  public getOmsTotalTrades(): bigint {
+    return Atomics.load(this.bigIntView, 111);
+  }
 }
