@@ -260,6 +260,12 @@
 - **HFT/Performance Compliance:** Implemented `AutoRecalibrationManager` to automatically detect sustained model drift (rolling Spearman IC < 0.0300 across 100+ ticks), trigger Python data preparation (`prepare_data.py`) and PyTorch CfC training (`train_cfc.py`), validate output SafeTensors weights (`cfc_weights.safetensors`), and execute zero-downtime N-API lock-free RCU atomic pointer swap via `loadAiModel()`. Programmatically resets IC tracking window via `resetIcTracker()`, updates SAB Slot 102 (`is_drifted`), and lifts the `IDLE_ACTIVE` safety clamp. Verified 100% via 18/18 passing Rust unit tests (`cargo test --lib`), N-API release compilation (`npx napi build --platform --release`), TypeScript build (`npm run build:ts`), and end-to-end pipeline test harness (`src/test_recalibration_pipeline.ts`).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-29
+- **Feature/Task:** SharedArrayBuffer (SAB) Memory Layout Slot Collision Remediation & Slot Decoupling
+- **Artifacts Created/Modified:** `src/ai/engine.rs`, `src/oms/engine.rs`, `src/oms/position.rs`, `src/marketDataClient.ts`, `src/test_oms_integration.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Decoupled SharedArrayBuffer slots to resolve critical Slot 102 collision between `ic_tracker.rs` model drift flag and `engine.rs` inference latency. Aligned SAB layout strictly to specification: Slot 101: Rolling IC (`f64`), Slot 102: Model Drift Flag (`f64`), Slot 103: Inference Latency Ns (`u64`), Slot 104: Sequence Counter (`u64`), and shifted OMS Position Ledger sync slots to 105..111. Updated `marketDataClient.ts` atomic readers to read `getAIInferenceLatencyNs()` from Slot 103 and `getAIInferenceSequenceNum()` from Slot 104. Verified 100% via clean `cargo check` (0 errors), clean unit tests (`cargo test`), and TypeScript compilation (`npm run build:ts`, 0 errors).
+- **Status:** ✅ Completed & QA Verified
+
 
 
 

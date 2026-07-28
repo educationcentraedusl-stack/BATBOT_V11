@@ -111,18 +111,18 @@ impl OmsEngine {
     }
 
     pub fn evaluate_sab_prediction(&self, sab: &AtomicSharedMemoryBridge) -> Option<OrderIntent> {
-        let seq = sab.load_u64(103);
+        let seq = sab.load_u64(104);
         if seq == 0 || seq == self.last_processed_seq.load(Ordering::Relaxed) {
             return None;
         }
         self.last_processed_seq.store(seq, Ordering::Relaxed);
 
-        // 1. Read AI Prediction output from SAB slots 93..102
+        // 1. Read AI Prediction output from SAB slots 93..104
         let direction = sab.load_f64(93);
         let confidence = sab.load_f64(94);
         let horizon_ms = sab.load_f64(95);
         let slippage_ticks = sab.load_f64(100);
-        let latency_ns = sab.load_u64(102);
+        let latency_ns = sab.load_u64(103);
 
         // 2. Read LOB Prices from SAB slots 3..6
         let spread_vel = sab.load_f64(3);
@@ -276,8 +276,8 @@ mod tests {
         sab.store_f64(95, 20.0); // Horizon ms
         sab.store_f64(98, 0.005); // Rolling volatility
         sab.store_f64(100, 2.0); // Slippage ticks
-        sab.store_u64(102, 500_000); // 500us latency
-        sab.store_u64(103, 1); // Sequence 1
+        sab.store_u64(103, 500_000); // 500us latency
+        sab.store_u64(104, 1); // Sequence 1
 
         let intent = engine.evaluate_sab_prediction(&sab);
         assert!(intent.is_some());

@@ -21,8 +21,8 @@ async function main() {
     f64View[94] = 0.92; // confidence 0.92
     f64View[95] = 40.0; // horizon 40ms
     f64View[100] = 2.0; // slippage 2 ticks
-    u64View[102] = 1500000n; // latency 1.5ms
-    u64View[103] = 101n; // sequence 101
+    u64View[103] = 1500000n; // latency 1.5ms
+    u64View[104] = 101n; // sequence 101
     // 4. Evaluate OMS Tick
     const intentJson = (0, index_1.evaluateOmsTick)(Buffer.from(sab));
     console.log(`Evaluated Intent JSON: ${intentJson}`);

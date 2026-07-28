@@ -167,15 +167,15 @@ impl AIEngine {
 
         let seq = self.inference_seq.fetch_add(1, Ordering::Relaxed);
 
-        // 5. Write predictions to SAB slots 93..103
+        // 5. Write predictions to SAB slots 93..104
         sab.store_f64(93, direction);
         sab.store_f64(94, confidence);
         sab.store_f64(95, horizon_ms);
         sab.store_u64(96, start_ns);
         sab.store_f64(97, hidden_norm);
         sab.store_f64(100, slippage_ticks);
-        sab.store_u64(102, latency_ns);
-        sab.store_u64(103, seq);
+        sab.store_u64(103, latency_ns);
+        sab.store_u64(104, seq);
 
         Ok(())
     }

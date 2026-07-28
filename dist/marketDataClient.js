@@ -116,5 +116,8 @@ class MarketDataClient {
     getAIInferenceLatencyNs() {
         return Atomics.load(this.bigIntView, 103);
     }
+    getAIInferenceSequenceNum() {
+        return Atomics.load(this.bigIntView, 104);
+    }
 }
 exports.MarketDataClient = MarketDataClient;

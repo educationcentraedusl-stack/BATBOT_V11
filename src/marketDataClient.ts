@@ -142,4 +142,8 @@ export class MarketDataClient {
   public getAIInferenceLatencyNs(): bigint {
     return Atomics.load(this.bigIntView, 103);
   }
+
+  public getAIInferenceSequenceNum(): bigint {
+    return Atomics.load(this.bigIntView, 104);
+  }
 }

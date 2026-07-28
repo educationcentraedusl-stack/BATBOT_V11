@@ -168,12 +168,12 @@ impl PositionLedger {
     }
 
     pub fn sync_to_sab(&self, sab: &AtomicSharedMemoryBridge) {
-        sab.store_f64(104, self.position_qty());
-        sab.store_f64(105, self.avg_entry_price());
-        sab.store_f64(106, self.realized_pnl());
-        sab.store_f64(107, self.unrealized_pnl());
-        sab.store_f64(108, self.leverage());
-        sab.store_f64(109, self.cum_volume_usd());
-        sab.store_u64(110, self.total_trades());
+        sab.store_f64(105, self.position_qty());
+        sab.store_f64(106, self.avg_entry_price());
+        sab.store_f64(107, self.realized_pnl());
+        sab.store_f64(108, self.unrealized_pnl());
+        sab.store_f64(109, self.leverage());
+        sab.store_f64(110, self.cum_volume_usd());
+        sab.store_u64(111, self.total_trades());
     }
 }
