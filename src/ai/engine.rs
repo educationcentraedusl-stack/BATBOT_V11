@@ -131,9 +131,10 @@ impl AIEngine {
 
         // Extract predictions
         let flat_out = output_tensor.flatten_all()?;
-        let raw_direction = flat_out.get(0)?.to_scalar::<f32>()? as f64;
-        let raw_confidence = flat_out.get(1)?.to_scalar::<f32>()? as f64;
-        let horizon_ms = flat_out.get(2)?.to_scalar::<f32>()? as f64;
+        let num_elems = flat_out.elem_count();
+        let raw_direction = if num_elems > 0 { flat_out.get(0)?.to_scalar::<f32>()? as f64 } else { 0.0 };
+        let raw_confidence = if num_elems > 1 { flat_out.get(1)?.to_scalar::<f32>()? as f64 } else { raw_direction.abs() };
+        let horizon_ms = if num_elems > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
         let direction = raw_direction.tanh(); // Clamped -1.0 to +1.0
         let confidence = (1.0 / (1.0 + (-raw_confidence).exp())).clamp(0.0, 1.0); // Sigmoid 0.0 to 1.0
 
@@ -225,9 +226,10 @@ impl AIEngine {
 
         // Extract predictions
         let flat_out = output_tensor.flatten_all()?;
-        let raw_direction = flat_out.get(0)?.to_scalar::<f32>()? as f64;
-        let raw_confidence = flat_out.get(1)?.to_scalar::<f32>()? as f64;
-        let horizon_ms = flat_out.get(2)?.to_scalar::<f32>()? as f64;
+        let num_elems = flat_out.elem_count();
+        let raw_direction = if num_elems > 0 { flat_out.get(0)?.to_scalar::<f32>()? as f64 } else { 0.0 };
+        let raw_confidence = if num_elems > 1 { flat_out.get(1)?.to_scalar::<f32>()? as f64 } else { raw_direction.abs() };
+        let horizon_ms = if num_elems > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
         let direction = raw_direction.tanh();
         let confidence = (1.0 / (1.0 + (-raw_confidence).exp())).clamp(0.0, 1.0);
 

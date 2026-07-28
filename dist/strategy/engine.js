@@ -106,12 +106,19 @@ class StrategyEngine {
         }
         // TASK 4.3: Apply latency penalty coefficient to orderQuantity BEFORE RiskGuard check
         const scaledQuantity = Number((this.config.orderQuantity * penaltyCoeff).toFixed(4));
-        const finalQuantity = Math.max(0.0001, scaledQuantity);
+        let finalQuantity = Math.max(0.0001, scaledQuantity);
         // TASK 4.3: Apply dynamic slippageTicks to adjust orderIntent price
         const effectiveSlippage = Math.max(2, slippageTicks);
         const priceAdjustment = effectiveSlippage * this.config.tickSize;
         const basePrice = signalType === "BUY" ? askPrice : bidPrice;
         const adjustedPrice = signalType === "BUY" ? basePrice + priceAdjustment : basePrice - priceAdjustment;
+        // Binance Futures Min Notional Guard: ensure order notional >= 55 USDT
+        if (basePrice > 0) {
+            const minNotionalUsdt = 55.0;
+            if (finalQuantity * basePrice < minNotionalUsdt) {
+                finalQuantity = Number((minNotionalUsdt / basePrice).toFixed(4));
+            }
+        }
         // Populate pre-allocated intent
         this.reusableOrderIntent.symbol = this.config.symbol;
         this.reusableOrderIntent.side = signalType;
