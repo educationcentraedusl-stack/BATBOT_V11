@@ -109,7 +109,7 @@ impl AIEngine {
 
         // 2. Execute T-KAN forward pass (40 -> 16 spatial encoding)
         let tkan_out = self.tkan.forward(&lob_features);
-        let tkan_f32: Vec<f32> = tkan_out.iter().map(|&v| v as f32).collect();
+        let tkan_f32: [f32; 16] = std::array::from_fn(|i| tkan_out[i] as f32);
         let tkan_tensor = Tensor::from_slice(&tkan_f32, (1, 16), &Device::Cpu)?;
 
         // 3. Compute delta_t from system time
