@@ -117,7 +117,7 @@ impl AIEngine {
         let delta_t = if prev_ns == 0 {
             0.001
         } else {
-            (start_ns.saturating_sub(prev_ns) as f64) / 1e9
+            ((start_ns.saturating_sub(prev_ns) as f64) / 1e9).max(0.0001)
         };
 
         // 4. Execute CfC cell forward pass
@@ -171,6 +171,81 @@ impl AIEngine {
         sab.store_u64(103, seq);
 
         Ok(())
+    }
+
+    pub fn inherit_hidden_state(&self, other: &AIEngine) {
+        if let Ok(other_hs) = other.hidden_state.lock() {
+            if let Ok(mut self_hs) = self.hidden_state.lock() {
+                *self_hs = other_hs.clone();
+            }
+        }
+    }
+
+    pub fn run_shadow_inference(
+        &self,
+        sab: &AtomicSharedMemoryBridge,
+    ) -> Result<(f64, f64, f64, u64, f64)> {
+        if self.status != AiEngineStatus::Calibrated || self.cell.is_none() {
+            return Ok((0.0, 0.0, 0.0, 0, 0.0));
+        }
+
+        let start_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+
+        // 1. Read 40 LOB features from SAB slots 11..90
+        let mut lob_features = [0.0f64; 40];
+        for i in 0..20 {
+            lob_features[i] = sab.load_f64(11 + i);
+            lob_features[20 + i] = sab.load_f64(51 + i);
+        }
+
+        // 2. Execute T-KAN forward pass (40 -> 16 spatial encoding)
+        let tkan_out = self.tkan.forward(&lob_features);
+        let tkan_f32: [f32; 16] = std::array::from_fn(|i| tkan_out[i] as f32);
+        let tkan_tensor = Tensor::from_slice(&tkan_f32, (1, 16), &Device::Cpu)?;
+
+        // 3. Compute delta_t from system time
+        let prev_ns = self.last_inference_ns.swap(start_ns, Ordering::Relaxed);
+        let delta_t = if prev_ns == 0 {
+            0.001
+        } else {
+            ((start_ns.saturating_sub(prev_ns) as f64) / 1e9).max(0.0001)
+        };
+
+        // 4. Execute CfC cell forward pass
+        let mut hidden_guard = self.hidden_state.lock().unwrap_or_else(|e| e.into_inner());
+        let (output_tensor, next_hidden) = if let Some(cell) = &self.cell {
+            cell.forward(&tkan_tensor, &*hidden_guard, delta_t)?
+        } else {
+            return Ok((0.0, 0.0, 0.0, 0, 0.0));
+        };
+        *hidden_guard = next_hidden;
+
+        // Extract predictions
+        let flat_out = output_tensor.flatten_all()?;
+        let raw_direction = flat_out.get(0)?.to_scalar::<f32>()? as f64;
+        let raw_confidence = flat_out.get(1)?.to_scalar::<f32>()? as f64;
+        let horizon_ms = flat_out.get(2)?.to_scalar::<f32>()? as f64;
+        let direction = raw_direction.tanh();
+        let confidence = (1.0 / (1.0 + (-raw_confidence).exp())).clamp(0.0, 1.0);
+
+        let end_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        let latency_ns = end_ns.saturating_sub(start_ns);
+
+        let hidden_norm = hidden_guard
+            .sqr()?
+            .sum_all()?
+            .to_scalar::<f32>()?
+            .sqrt() as f64;
+
+        self.inference_seq.fetch_add(1, Ordering::Relaxed);
+
+        Ok((direction, confidence, horizon_ms, latency_ns, hidden_norm))
     }
 }
 

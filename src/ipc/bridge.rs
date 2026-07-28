@@ -1,4 +1,5 @@
-use crate::GLOBAL_AI_ENGINE;
+use crate::{GLOBAL_AI_ENGINE, GLOBAL_SHADOW_ENGINE};
+use crate::ai::PreflightPhase;
 use crate::ipc::shared_memory::AtomicSharedMemoryBridge;
 use crate::lob::{LimitOrderBook, LockFreeSpscQueue};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -71,6 +72,22 @@ impl IngestionBridge {
                         if let Some(engine) = GLOBAL_AI_ENGINE.load().as_ref() {
                             if let Err(e) = engine.run_inference(&bridge) {
                                 eprintln!("[BATBOT_V11][AI Engine Error] Inference error: {}", e);
+                            }
+                        }
+
+                        // Parallel Shadow Ingestion & Pre-Flight Gated Auto-Promotion
+                        if let Some(shadow_mutex) = GLOBAL_SHADOW_ENGINE.load().as_ref() {
+                            if let Ok(mut validator) = shadow_mutex.try_lock() {
+                                validator.step_shadow(&bridge);
+                                if validator.phase() == PreflightPhase::Passed {
+                                    if let Some(promoted_engine) = validator.promote() {
+                                        GLOBAL_AI_ENGINE.store(Some(Arc::new(promoted_engine)));
+                                        GLOBAL_SHADOW_ENGINE.store(None);
+                                        println!(
+                                            "[BATBOT_V11][Pre-Flight Auto-Promotion SUCCESS] Passed all 4 Gates! Atomically promoted candidate model to GLOBAL_AI_ENGINE via lock-free RCU store."
+                                        );
+                                    }
+                                }
                             }
                         }
                     }

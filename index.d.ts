@@ -7,4 +7,6 @@ export declare function initCore(): string
 export declare function createLobEngine(): boolean
 export declare function loadAiModel(weightsPath: string): boolean
 export declare function loadAiModelFull(weightsPath: string, tkanPath: string): boolean
+export declare function triggerPreflightWarmup(weightsPath: string, tkanPath: string, minIc?: number | undefined | null, warmupTicks?: number | undefined | null, testingTicks?: number | undefined | null): boolean
+export declare function getPreflightStatus(): string
 export declare function startIngestion(sabBuffer: Buffer): boolean
