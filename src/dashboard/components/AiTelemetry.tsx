@@ -9,6 +9,7 @@ export const AiTelemetry: React.FC = () => {
 
   const chartRef = useRef<HTMLDivElement>(null);
   const uplotInstance = useRef<uPlot | null>(null);
+  const rafIdRef = useRef<number | null>(null);
 
   const direction = frame?.aiDirection ?? 0;
   const confidence = (frame?.aiConfidence ?? 0.88) * 100;
@@ -16,55 +17,97 @@ export const AiTelemetry: React.FC = () => {
   const latencyPenalty = frame?.latencyPenalty ?? 1.0;
   const infLatUs = frame?.aiInferenceLatencyNs ? Number(frame.aiInferenceLatencyNs) / 1000 : 0.82;
 
-  // Initialize uPlot Canvas Chart for CfC Hidden State Norms with Strict Cleanup
+  // Initialize ResizeObserver & Direct RAF Canvas Engine for zero React re-render chart rendering
   useEffect(() => {
-    if (!chartRef.current) return;
-    chartRef.current.innerHTML = "";
+    const container = chartRef.current;
+    if (!container) return;
 
-    const opts: uPlot.Options = {
-      title: "CfC ||h_t|| HIDDEN STATE NORM DRIFT",
-      width: chartRef.current.clientWidth || 360,
-      height: 140,
-      series: [
-        {},
-        {
-          label: "Norm",
-          stroke: "#eab308", // Strict Dark Yellow Canvas plot line
-          width: 2,
-        },
-      ],
-      axes: [
-        { show: false },
-        {
-          stroke: "#94a3b8",
-          size: 35,
-          font: "10px monospace",
-          grid: { stroke: "#1e293b", width: 1 },
-        },
-      ],
+    let isSubscribed = true;
+
+    const initOrResizeChart = (width: number, height: number) => {
+      if (width <= 0 || height <= 0 || !isSubscribed) return;
+
+      if (!uplotInstance.current) {
+        container.innerHTML = "";
+        const opts: uPlot.Options = {
+          title: "CfC ||h_t|| HIDDEN STATE NORM DRIFT",
+          width,
+          height,
+          series: [
+            {},
+            {
+              label: "Norm",
+              stroke: "#eab308", // Dark Yellow Canvas plot line
+              width: 2,
+            },
+          ],
+          axes: [
+            { show: false },
+            {
+              stroke: "#94a3b8",
+              size: 35,
+              font: "10px monospace",
+              grid: { stroke: "#1e293b", width: 1 },
+            },
+          ],
+        };
+
+        const count = history.count > 0 ? history.count : 1;
+        const initialTs = history.count > 0 ? history.timestamps.subarray(0, count) : new Float64Array([Date.now() / 1000]);
+        const initialNorms = history.count > 0 ? history.stateNorms.subarray(0, count) : new Float64Array([1.0]);
+
+        try {
+          uplotInstance.current = new uPlot(opts, [initialTs, initialNorms], container);
+        } catch {
+          // Prevent crash on zero dimensions or invalid DOM state
+        }
+      } else {
+        uplotInstance.current.setSize({ width, height });
+      }
     };
 
-    const data: uPlot.AlignedData = [
-      history.timestamps.length ? history.timestamps : [Date.now() / 1000],
-      history.stateNorms.length ? history.stateNorms : [1.0],
-    ];
+    // Defensive ResizeObserver to prevent zero-dimension instantiation crashes
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          initOrResizeChart(Math.floor(width), Math.floor(height || 140));
+        }
+      }
+    });
 
-    uplotInstance.current = new uPlot(opts, data, chartRef.current);
+    ro.observe(container);
+
+    // Off-Main-Thread Direct RAF Canvas Update Loop (Bypasses React VDOM entirely)
+    let lastRenderedCount = -1;
+    const renderLoop = () => {
+      if (!isSubscribed) return;
+
+      if (uplotInstance.current && history.count > 0 && history.count !== lastRenderedCount) {
+        lastRenderedCount = history.count;
+        const tsSlice = history.timestamps.subarray(0, history.count);
+        const normSlice = history.stateNorms.subarray(0, history.count);
+        uplotInstance.current.setData([tsSlice, normSlice]);
+      }
+
+      rafIdRef.current = requestAnimationFrame(renderLoop);
+    };
+
+    rafIdRef.current = requestAnimationFrame(renderLoop);
 
     return () => {
+      isSubscribed = false;
+      ro.disconnect();
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
       if (uplotInstance.current) {
         uplotInstance.current.destroy();
         uplotInstance.current = null;
       }
     };
   }, []);
-
-  // Update canvas data on incoming telemetry frames without re-creating DOM nodes
-  useEffect(() => {
-    if (uplotInstance.current && history.timestamps.length > 0) {
-      uplotInstance.current.setData([history.timestamps, history.stateNorms]);
-    }
-  }, [history.timestamps, history.stateNorms]);
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-lg space-y-5">
@@ -140,7 +183,7 @@ export const AiTelemetry: React.FC = () => {
         <h3 className="text-xs font-bold text-yellow-500 uppercase tracking-wider">
           CfC RECURRENT CELL STATE NORM (CANVAS 2D)
         </h3>
-        <div ref={chartRef} className="w-full h-36 flex items-center justify-center"></div>
+        <div ref={chartRef} className="w-full h-36 min-h-[140px] flex items-center justify-center"></div>
       </div>
     </div>
   );

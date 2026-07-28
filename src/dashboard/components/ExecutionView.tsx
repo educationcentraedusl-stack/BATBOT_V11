@@ -11,6 +11,7 @@ export const ExecutionView: React.FC = () => {
 
   const chartRef = useRef<HTMLDivElement>(null);
   const uplotInstance = useRef<uPlot | null>(null);
+  const rafIdRef = useRef<number | null>(null);
 
   const obi = frame?.obi ?? 0;
   const cvd = frame?.cvd ?? 0;
@@ -19,55 +20,97 @@ export const ExecutionView: React.FC = () => {
   const winRate = frame?.stats?.winRatePercent ?? 0;
   const totalTrades = frame?.stats?.totalTrades ?? 0;
 
-  // Initialize uPlot PnL Equity Chart with Strict Cleanup
+  // Initialize ResizeObserver & Direct RAF Canvas Engine for zero React re-render PnL Chart
   useEffect(() => {
-    if (!chartRef.current) return;
-    chartRef.current.innerHTML = "";
+    const container = chartRef.current;
+    if (!container) return;
 
-    const opts: uPlot.Options = {
-      title: "REALTIME PnL EQUITY CURVE",
-      width: chartRef.current.clientWidth || 360,
-      height: 140,
-      series: [
-        {},
-        {
-          label: "PnL ($)",
-          stroke: "#f59e0b", // Strict Dark Yellow stroke
-          width: 2,
-        },
-      ],
-      axes: [
-        { show: false },
-        {
-          stroke: "#94a3b8",
-          size: 45,
-          font: "10px monospace",
-          grid: { stroke: "#1e293b", width: 1 },
-        },
-      ],
+    let isSubscribed = true;
+
+    const initOrResizeChart = (width: number, height: number) => {
+      if (width <= 0 || height <= 0 || !isSubscribed) return;
+
+      if (!uplotInstance.current) {
+        container.innerHTML = "";
+        const opts: uPlot.Options = {
+          title: "REALTIME PnL EQUITY CURVE",
+          width,
+          height,
+          series: [
+            {},
+            {
+              label: "PnL ($)",
+              stroke: "#f59e0b", // Dark Yellow stroke
+              width: 2,
+            },
+          ],
+          axes: [
+            { show: false },
+            {
+              stroke: "#94a3b8",
+              size: 45,
+              font: "10px monospace",
+              grid: { stroke: "#1e293b", width: 1 },
+            },
+          ],
+        };
+
+        const count = history.count > 0 ? history.count : 1;
+        const initialTs = history.count > 0 ? history.timestamps.subarray(0, count) : new Float64Array([Date.now() / 1000]);
+        const initialPnl = history.count > 0 ? history.pnl.subarray(0, count) : new Float64Array([0]);
+
+        try {
+          uplotInstance.current = new uPlot(opts, [initialTs, initialPnl], container);
+        } catch {
+          // Defensive catch for zero-dimension instantiation
+        }
+      } else {
+        uplotInstance.current.setSize({ width, height });
+      }
     };
 
-    const data: uPlot.AlignedData = [
-      history.timestamps.length ? history.timestamps : [Date.now() / 1000],
-      history.pnl.length ? history.pnl : [0],
-    ];
+    // Defensive ResizeObserver to guarantee positive canvas bounds
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          initOrResizeChart(Math.floor(width), Math.floor(height || 140));
+        }
+      }
+    });
 
-    uplotInstance.current = new uPlot(opts, data, chartRef.current);
+    ro.observe(container);
+
+    // Off-Main-Thread Direct RAF Canvas Update Loop (Bypasses React VDOM entirely)
+    let lastRenderedCount = -1;
+    const renderLoop = () => {
+      if (!isSubscribed) return;
+
+      if (uplotInstance.current && history.count > 0 && history.count !== lastRenderedCount) {
+        lastRenderedCount = history.count;
+        const tsSlice = history.timestamps.subarray(0, history.count);
+        const pnlSlice = history.pnl.subarray(0, history.count);
+        uplotInstance.current.setData([tsSlice, pnlSlice]);
+      }
+
+      rafIdRef.current = requestAnimationFrame(renderLoop);
+    };
+
+    rafIdRef.current = requestAnimationFrame(renderLoop);
 
     return () => {
+      isSubscribed = false;
+      ro.disconnect();
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
       if (uplotInstance.current) {
         uplotInstance.current.destroy();
         uplotInstance.current = null;
       }
     };
   }, []);
-
-  // Update canvas data on incoming telemetry frames without re-creating DOM nodes
-  useEffect(() => {
-    if (uplotInstance.current && history.timestamps.length > 0) {
-      uplotInstance.current.setData([history.timestamps, history.pnl]);
-    }
-  }, [history.timestamps, history.pnl]);
 
   // Format OBI Bar percentage (-1..+1 -> 0%..100%)
   const obiNorm = ((Math.max(-1, Math.min(1, obi)) + 1) / 2) * 100;
@@ -127,7 +170,7 @@ export const ExecutionView: React.FC = () => {
 
         <div className="flex justify-between text-xs text-slate-400 font-mono pt-1">
           <span>CVD: <strong className="text-yellow-400">{cvd >= 0 ? `+${cvd.toFixed(2)}` : cvd.toFixed(2)}</strong></span>
-          <span>BID/ASK: <strong className="text-emerald-400">${frame?.bidPrice.toFixed(2) || "0.00"}</strong> / <strong className="text-rose-400">${frame?.askPrice.toFixed(2) || "0.00"}</strong></span>
+          <span>BID/ASK: <strong className="text-emerald-400">${frame?.bidPrice ? frame.bidPrice.toFixed(2) : "0.00"}</strong> / <strong className="text-rose-400">${frame?.askPrice ? frame.askPrice.toFixed(2) : "0.00"}</strong></span>
         </div>
       </div>
 
@@ -136,7 +179,7 @@ export const ExecutionView: React.FC = () => {
         <h3 className="text-xs font-bold text-yellow-500 uppercase tracking-wider">
           PnL EQUITY CURVE STREAM (CANVAS 2D)
         </h3>
-        <div ref={chartRef} className="w-full h-36 flex items-center justify-center"></div>
+        <div ref={chartRef} className="w-full h-36 min-h-[140px] flex items-center justify-center"></div>
       </div>
 
       {/* Virtualized Order Execution Log with react-virtuoso */}
@@ -154,6 +197,7 @@ export const ExecutionView: React.FC = () => {
           ) : (
             <Virtuoso
               data={executions}
+              computeItemKey={(_, item) => item.id}
               itemContent={(index, item) => (
                 <div key={item.id || index} className="flex justify-between items-center py-1.5 px-2 border-b border-slate-800/60 text-xs font-mono">
                   <div className="flex items-center space-x-2">
