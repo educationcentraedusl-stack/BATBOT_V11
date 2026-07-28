@@ -16,44 +16,53 @@ export const AiTelemetry: React.FC = () => {
   const latencyPenalty = frame?.latencyPenalty ?? 1.0;
   const infLatUs = frame?.aiInferenceLatencyNs ? Number(frame.aiInferenceLatencyNs) / 1000 : 0.82;
 
-  // Initialize and update uPlot Canvas Chart for CfC Hidden State Norms
+  // Initialize uPlot Canvas Chart for CfC Hidden State Norms with Strict Cleanup
   useEffect(() => {
     if (!chartRef.current) return;
+    chartRef.current.innerHTML = "";
 
-    if (!uplotInstance.current) {
-      const opts: uPlot.Options = {
-        title: "CfC ||h_t|| HIDDEN STATE NORM DRIFT",
-        width: chartRef.current.clientWidth || 360,
-        height: 140,
-        series: [
-          {},
-          {
-            label: "Norm",
-            stroke: "#eab308", // Strict Dark Yellow Canvas plot line
-            width: 2,
-          },
-        ],
-        axes: [
-          { show: false },
-          {
-            stroke: "#94a3b8",
-            size: 35,
-            font: "10px monospace",
-            grid: { stroke: "#1e293b", width: 1 },
-          },
-        ],
-      };
+    const opts: uPlot.Options = {
+      title: "CfC ||h_t|| HIDDEN STATE NORM DRIFT",
+      width: chartRef.current.clientWidth || 360,
+      height: 140,
+      series: [
+        {},
+        {
+          label: "Norm",
+          stroke: "#eab308", // Strict Dark Yellow Canvas plot line
+          width: 2,
+        },
+      ],
+      axes: [
+        { show: false },
+        {
+          stroke: "#94a3b8",
+          size: 35,
+          font: "10px monospace",
+          grid: { stroke: "#1e293b", width: 1 },
+        },
+      ],
+    };
 
-      const data: uPlot.AlignedData = [
-        history.timestamps.length ? history.timestamps : [Date.now() / 1000],
-        history.stateNorms.length ? history.stateNorms : [1.0],
-      ];
+    const data: uPlot.AlignedData = [
+      history.timestamps.length ? history.timestamps : [Date.now() / 1000],
+      history.stateNorms.length ? history.stateNorms : [1.0],
+    ];
 
-      uplotInstance.current = new uPlot(opts, data, chartRef.current);
-    } else {
-      if (history.timestamps.length > 0) {
-        uplotInstance.current.setData([history.timestamps, history.stateNorms]);
+    uplotInstance.current = new uPlot(opts, data, chartRef.current);
+
+    return () => {
+      if (uplotInstance.current) {
+        uplotInstance.current.destroy();
+        uplotInstance.current = null;
       }
+    };
+  }, []);
+
+  // Update canvas data on incoming telemetry frames without re-creating DOM nodes
+  useEffect(() => {
+    if (uplotInstance.current && history.timestamps.length > 0) {
+      uplotInstance.current.setData([history.timestamps, history.stateNorms]);
     }
   }, [history.timestamps, history.stateNorms]);
 

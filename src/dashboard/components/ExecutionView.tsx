@@ -19,44 +19,53 @@ export const ExecutionView: React.FC = () => {
   const winRate = frame?.stats?.winRatePercent ?? 0;
   const totalTrades = frame?.stats?.totalTrades ?? 0;
 
-  // Initialize and update uPlot PnL Equity Chart
+  // Initialize uPlot PnL Equity Chart with Strict Cleanup
   useEffect(() => {
     if (!chartRef.current) return;
+    chartRef.current.innerHTML = "";
 
-    if (!uplotInstance.current) {
-      const opts: uPlot.Options = {
-        title: "REALTIME PnL EQUITY CURVE",
-        width: chartRef.current.clientWidth || 360,
-        height: 140,
-        series: [
-          {},
-          {
-            label: "PnL ($)",
-            stroke: "#f59e0b", // Strict Dark Yellow stroke
-            width: 2,
-          },
-        ],
-        axes: [
-          { show: false },
-          {
-            stroke: "#94a3b8",
-            size: 45,
-            font: "10px monospace",
-            grid: { stroke: "#1e293b", width: 1 },
-          },
-        ],
-      };
+    const opts: uPlot.Options = {
+      title: "REALTIME PnL EQUITY CURVE",
+      width: chartRef.current.clientWidth || 360,
+      height: 140,
+      series: [
+        {},
+        {
+          label: "PnL ($)",
+          stroke: "#f59e0b", // Strict Dark Yellow stroke
+          width: 2,
+        },
+      ],
+      axes: [
+        { show: false },
+        {
+          stroke: "#94a3b8",
+          size: 45,
+          font: "10px monospace",
+          grid: { stroke: "#1e293b", width: 1 },
+        },
+      ],
+    };
 
-      const data: uPlot.AlignedData = [
-        history.timestamps.length ? history.timestamps : [Date.now() / 1000],
-        history.pnl.length ? history.pnl : [0],
-      ];
+    const data: uPlot.AlignedData = [
+      history.timestamps.length ? history.timestamps : [Date.now() / 1000],
+      history.pnl.length ? history.pnl : [0],
+    ];
 
-      uplotInstance.current = new uPlot(opts, data, chartRef.current);
-    } else {
-      if (history.timestamps.length > 0) {
-        uplotInstance.current.setData([history.timestamps, history.pnl]);
+    uplotInstance.current = new uPlot(opts, data, chartRef.current);
+
+    return () => {
+      if (uplotInstance.current) {
+        uplotInstance.current.destroy();
+        uplotInstance.current = null;
       }
+    };
+  }, []);
+
+  // Update canvas data on incoming telemetry frames without re-creating DOM nodes
+  useEffect(() => {
+    if (uplotInstance.current && history.timestamps.length > 0) {
+      uplotInstance.current.setData([history.timestamps, history.pnl]);
     }
   }, [history.timestamps, history.pnl]);
 
