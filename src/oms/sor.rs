@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use crate::oms::types::{OrderIntent, OrderSide, OrderType, TimeInForce};
 
@@ -5,6 +6,7 @@ pub struct SmartOrderRouter {
     min_confidence_threshold: f64,
     aggressive_confidence_threshold: f64,
     max_horizon_for_sweep_ms: f64,
+    tick_size: f64,
     order_seq: AtomicU64,
 }
 
@@ -13,17 +15,23 @@ impl SmartOrderRouter {
         min_confidence_threshold: f64,
         aggressive_confidence_threshold: f64,
         max_horizon_for_sweep_ms: f64,
+        tick_size: f64,
     ) -> Self {
         Self {
             min_confidence_threshold,
             aggressive_confidence_threshold,
             max_horizon_for_sweep_ms,
+            tick_size,
             order_seq: AtomicU64::new(1),
         }
     }
 
     pub fn default_hft() -> Self {
-        Self::new(0.60, 0.85, 50.0)
+        Self::new(0.60, 0.85, 50.0, 0.10)
+    }
+
+    pub fn tick_size(&self) -> f64 {
+        self.tick_size
     }
 
     pub fn route_order(
@@ -49,6 +57,8 @@ impl SmartOrderRouter {
             return None;
         }
 
+        let effective_tick = if tick_size > 0.0 { tick_size } else { self.tick_size };
+
         let side = if direction > 0.0 {
             OrderSide::Buy
         } else {
@@ -60,10 +70,10 @@ impl SmartOrderRouter {
             && spread_vel.abs() > 0.5;
 
         let (price, time_in_force, post_only) = if is_aggressive_sweep {
-            let offset = slippage_ticks.max(1.0) * tick_size;
+            let offset = slippage_ticks.max(1.0) * effective_tick;
             let sweep_price = match side {
                 OrderSide::Buy => best_ask + offset,
-                OrderSide::Sell => (best_bid - offset).max(tick_size),
+                OrderSide::Sell => (best_bid - offset).max(effective_tick),
             };
             (sweep_price, TimeInForce::Ioc, false)
         } else {
@@ -75,11 +85,25 @@ impl SmartOrderRouter {
         };
 
         let seq = self.order_seq.fetch_add(1, Ordering::Relaxed);
-        let client_order_id = format!("BAT_{}_{}", creation_ns % 1_000_000_000, seq);
+
+        // Stack-allocated buffer for zero-heap client_order_id formatting
+        let mut id_buf = [0u8; 64];
+        let id_len = {
+            let mut cursor = std::io::Cursor::new(&mut id_buf[..]);
+            let ts_mod = creation_ns % 1_000_000_000;
+            let _ = write!(cursor, "BAT_{}_{}", ts_mod, seq);
+            cursor.position() as usize
+        };
+
+        let client_order_id = match std::str::from_utf8(&id_buf[..id_len]) {
+            Ok(s) => String::from(s),
+            Err(_) => String::from("BAT_0_0"),
+        };
+        let symbol_str = String::from(symbol);
 
         Some(OrderIntent::new(
             client_order_id,
-            symbol.to_string(),
+            symbol_str,
             side,
             OrderType::Limit,
             time_in_force,

@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -8,7 +9,6 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use url::Url;
 
 use crate::oms::types::{ExecutionReport, OrderIntent, OrderStatus, OrderSide};
 
@@ -65,12 +65,22 @@ impl BinanceWsApiClient {
         self.is_connected.load(Ordering::Relaxed)
     }
 
-    pub fn sign_query_string(query: &str, secret: &str) -> Result<String, String> {
+    pub fn sign_query_string_buf(query_bytes: &[u8], secret: &str, out_hex: &mut [u8; 64]) -> Result<(), String> {
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
             .map_err(|e| format!("HMAC init error: {}", e))?;
-        mac.update(query.as_bytes());
+        mac.update(query_bytes);
         let result = mac.finalize();
-        Ok(hex::encode(result.into_bytes()))
+        hex::encode_to_slice(result.into_bytes(), out_hex)
+            .map_err(|e| format!("Hex encode error: {}", e))?;
+        Ok(())
+    }
+
+    pub fn sign_query_string(query: &str, secret: &str) -> Result<String, String> {
+        let mut sig_buf = [0u8; 64];
+        Self::sign_query_string_buf(query.as_bytes(), secret, &mut sig_buf)?;
+        let sig_str = std::str::from_utf8(&sig_buf)
+            .map_err(|e| format!("UTF8 error: {}", e))?;
+        Ok(sig_str.to_string())
     }
 
     pub fn send_order_intent(&self, intent: &OrderIntent) -> Result<(), String> {
@@ -79,40 +89,58 @@ impl BinanceWsApiClient {
             .unwrap_or_default()
             .as_millis();
 
-        // 1. Build sorted query parameters string for signature calculation
-        let query_str = format!(
-            "apiKey={}&newClientOrderId={}&price={:.2}&quantity={:.3}&side={}&symbol={}&timeInForce={}&timestamp={}&type={}",
-            self.config.api_key,
-            intent.client_order_id,
-            intent.price,
-            intent.quantity,
-            intent.side.as_str(),
-            intent.symbol,
-            intent.time_in_force.as_str(),
-            now_ms,
-            intent.order_type.as_str()
-        );
+        // 1. Stack-allocated buffer for query parameters string
+        let mut query_buf = [0u8; 512];
+        let query_len = {
+            let mut cursor = std::io::Cursor::new(&mut query_buf[..]);
+            write!(
+                cursor,
+                "apiKey={}&newClientOrderId={}&price={:.2}&quantity={:.3}&side={}&symbol={}&timeInForce={}&timestamp={}&type={}",
+                self.config.api_key,
+                intent.client_order_id,
+                intent.price,
+                intent.quantity,
+                intent.side.as_str(),
+                intent.symbol,
+                intent.time_in_force.as_str(),
+                now_ms,
+                intent.order_type.as_str()
+            ).map_err(|e| format!("Write error: {}", e))?;
+            cursor.position() as usize
+        };
 
-        let signature = Self::sign_query_string(&query_str, &self.config.api_secret)?;
+        // 2. Zero-heap HMAC-SHA256 signature into stack buffer
+        let mut sig_buf = [0u8; 64];
+        Self::sign_query_string_buf(&query_buf[..query_len], &self.config.api_secret, &mut sig_buf)?;
+        let sig_str = std::str::from_utf8(&sig_buf).map_err(|e| format!("UTF8 error: {}", e))?;
 
-        // 2. Format Binance WebSocket API v3 order.place payload
-        let payload = format!(
-            "{{\"id\":\"{}\",\"method\":\"order.place\",\"params\":{{\"apiKey\":\"{}\",\"newClientOrderId\":\"{}\",\"price\":\"{:.2}\",\"quantity\":\"{:.3}\",\"side\":\"{}\",\"symbol\":\"{}\",\"timeInForce\":\"{}\",\"timestamp\":{},\"type\":\"{}\",\"signature\":\"{}\"}}}}",
-            intent.client_order_id,
-            self.config.api_key,
-            intent.client_order_id,
-            intent.price,
-            intent.quantity,
-            intent.side.as_str(),
-            intent.symbol,
-            intent.time_in_force.as_str(),
-            now_ms,
-            intent.order_type.as_str(),
-            signature
-        );
+        // 3. Stack-allocated buffer for WebSocket payload JSON
+        let mut payload_buf = [0u8; 1024];
+        let payload_len = {
+            let mut cursor = std::io::Cursor::new(&mut payload_buf[..]);
+            write!(
+                cursor,
+                "{{\"id\":\"{}\",\"method\":\"order.place\",\"params\":{{\"apiKey\":\"{}\",\"newClientOrderId\":\"{}\",\"price\":\"{:.2}\",\"quantity\":\"{:.3}\",\"side\":\"{}\",\"symbol\":\"{}\",\"timeInForce\":\"{}\",\"timestamp\":{},\"type\":\"{}\",\"signature\":\"{}\"}}}}",
+                intent.client_order_id,
+                self.config.api_key,
+                intent.client_order_id,
+                intent.price,
+                intent.quantity,
+                intent.side.as_str(),
+                intent.symbol,
+                intent.time_in_force.as_str(),
+                now_ms,
+                intent.order_type.as_str(),
+                sig_str
+            ).map_err(|e| format!("Write payload error: {}", e))?;
+            cursor.position() as usize
+        };
+
+        let payload_str = std::str::from_utf8(&payload_buf[..payload_len])
+            .map_err(|e| format!("UTF8 error: {}", e))?;
 
         self.tx_order_outbound
-            .send(payload)
+            .send(payload_str.to_string())
             .map_err(|e| format!("Failed to queue order payload: {}", e))
     }
 
@@ -122,25 +150,42 @@ impl BinanceWsApiClient {
             .unwrap_or_default()
             .as_millis();
 
-        let query_str = format!(
-            "apiKey={}&origClientOrderId={}&symbol={}&timestamp={}",
-            self.config.api_key, client_order_id, symbol, now_ms
-        );
+        let mut query_buf = [0u8; 256];
+        let query_len = {
+            let mut cursor = std::io::Cursor::new(&mut query_buf[..]);
+            write!(
+                cursor,
+                "apiKey={}&origClientOrderId={}&symbol={}&timestamp={}",
+                self.config.api_key, client_order_id, symbol, now_ms
+            ).map_err(|e| format!("Write cancel query error: {}", e))?;
+            cursor.position() as usize
+        };
 
-        let signature = Self::sign_query_string(&query_str, &self.config.api_secret)?;
+        let mut sig_buf = [0u8; 64];
+        Self::sign_query_string_buf(&query_buf[..query_len], &self.config.api_secret, &mut sig_buf)?;
+        let sig_str = std::str::from_utf8(&sig_buf).map_err(|e| format!("UTF8 error: {}", e))?;
 
-        let payload = format!(
-            "{{\"id\":\"cancel_{}\",\"method\":\"order.cancel\",\"params\":{{\"apiKey\":\"{}\",\"origClientOrderId\":\"{}\",\"symbol\":\"{}\",\"timestamp\":{},\"signature\":\"{}\"}}}}",
-            client_order_id,
-            self.config.api_key,
-            client_order_id,
-            symbol,
-            now_ms,
-            signature
-        );
+        let mut payload_buf = [0u8; 512];
+        let payload_len = {
+            let mut cursor = std::io::Cursor::new(&mut payload_buf[..]);
+            write!(
+                cursor,
+                "{{\"id\":\"cancel_{}\",\"method\":\"order.cancel\",\"params\":{{\"apiKey\":\"{}\",\"origClientOrderId\":\"{}\",\"symbol\":\"{}\",\"timestamp\":{},\"signature\":\"{}\"}}}}",
+                client_order_id,
+                self.config.api_key,
+                client_order_id,
+                symbol,
+                now_ms,
+                sig_str
+            ).map_err(|e| format!("Write cancel payload error: {}", e))?;
+            cursor.position() as usize
+        };
+
+        let payload_str = std::str::from_utf8(&payload_buf[..payload_len])
+            .map_err(|e| format!("UTF8 error: {}", e))?;
 
         self.tx_order_outbound
-            .send(payload)
+            .send(payload_str.to_string())
             .map_err(|e| format!("Failed to queue cancel payload: {}", e))
     }
 
