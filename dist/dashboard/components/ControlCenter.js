@@ -1,0 +1,35 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ControlCenter = void 0;
+const jsx_runtime_1 = require("react/jsx-runtime");
+const react_1 = require("react");
+const store_1 = require("../store");
+const ControlCenter = () => {
+    const state = (0, store_1.useTelemetryStore)();
+    const frame = state.latestFrame;
+    const isActive = frame?.isEngineActive ?? false;
+    const [showKillModal, setShowKillModal] = (0, react_1.useState)(false);
+    const [selectedModel, setSelectedModel] = (0, react_1.useState)("models/tkan_v2_optimized.bin");
+    const [statusNotice, setStatusNotice] = (0, react_1.useState)(null);
+    const handleToggleEngine = () => {
+        const action = isActive ? "ENGINE_PAUSE" : "ENGINE_START";
+        (0, store_1.sendRpcCommand)(action);
+        setStatusNotice(`Requested ${action}...`);
+        setTimeout(() => setStatusNotice(null), 3000);
+    };
+    const handleConfirmKill = () => {
+        (0, store_1.sendRpcCommand)("EMERGENCY_KILL");
+        setShowKillModal(false);
+        setStatusNotice("EMERGENCY KILL SWITCH TRIGGERED!");
+        setTimeout(() => setStatusNotice(null), 5000);
+    };
+    const handleHotSwap = () => {
+        (0, store_1.sendRpcCommand)("AI_HOT_SWAP", selectedModel);
+        setStatusNotice(`Triggered Hot-Swap for ${selectedModel}...`);
+        setTimeout(() => setStatusNotice(null), 4000);
+    };
+    return ((0, jsx_runtime_1.jsxs)("div", { className: "bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-lg space-y-5", children: [(0, jsx_runtime_1.jsxs)("div", { className: "border-b border-yellow-600/30 pb-3 flex items-center justify-between", children: [(0, jsx_runtime_1.jsxs)("h2", { className: "text-base font-bold text-yellow-500 uppercase tracking-wider flex items-center gap-2", children: [(0, jsx_runtime_1.jsx)("svg", { className: "w-5 h-5 text-yellow-500", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24", children: (0, jsx_runtime_1.jsx)("path", { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M12 6V4m0 2a2 2 2 0 100 4m0-4a2 2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" }) }), "ENGINE GOVERNANCE & CONTROL"] }), (0, jsx_runtime_1.jsx)("span", { className: "text-xs text-yellow-400 font-mono", children: "RPC GATEWAY: WS READY" })] }), statusNotice && ((0, jsx_runtime_1.jsxs)("div", { className: "bg-yellow-950/80 border border-yellow-500 text-yellow-400 text-xs px-3 py-2 rounded font-mono animate-bounce", children: ["[SYSTEM NOTICE] ", statusNotice] })), (0, jsx_runtime_1.jsxs)("div", { className: "grid grid-cols-1 sm:grid-cols-2 gap-4", children: [(0, jsx_runtime_1.jsx)("button", { onClick: handleToggleEngine, className: `w-full py-3 px-4 rounded font-extrabold text-sm uppercase tracking-wider transition-all duration-200 shadow-md ${isActive
+                            ? "bg-amber-600 hover:bg-amber-500 text-slate-950 border border-yellow-400"
+                            : "bg-yellow-500 hover:bg-yellow-400 text-slate-950 border border-yellow-300"}`, children: isActive ? "PAUSE HFT ENGINE" : "START HFT ENGINE" }), (0, jsx_runtime_1.jsxs)("button", { onClick: () => setShowKillModal(true), className: "w-full py-3 px-4 rounded font-black text-sm uppercase tracking-wider bg-rose-700 hover:bg-rose-600 text-white border border-rose-500 shadow-lg transition-all duration-200 flex items-center justify-center gap-2", children: [(0, jsx_runtime_1.jsx)("svg", { className: "w-5 h-5 text-yellow-400", fill: "currentColor", viewBox: "0 0 20 20", children: (0, jsx_runtime_1.jsx)("path", { fillRule: "evenodd", d: "M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z", clipRule: "evenodd" }) }), "EMERGENCY KILL SWITCH"] })] }), (0, jsx_runtime_1.jsxs)("div", { className: "bg-slate-950 border border-slate-800 rounded p-4 space-y-3", children: [(0, jsx_runtime_1.jsx)("h3", { className: "text-xs font-bold text-yellow-500 uppercase tracking-wider", children: "ATOMIC AI MODEL HOT-SWAP (ARC-SWAP & SHADOW PRE-FLIGHT)" }), (0, jsx_runtime_1.jsxs)("div", { className: "flex flex-col sm:flex-row gap-3", children: [(0, jsx_runtime_1.jsxs)("select", { value: selectedModel, onChange: (e) => setSelectedModel(e.target.value), className: "bg-slate-900 border border-yellow-600/40 text-yellow-300 text-xs rounded px-3 py-2 focus:outline-none focus:border-yellow-500 font-mono flex-1", children: [(0, jsx_runtime_1.jsx)("option", { value: "models/tkan_v2_optimized.bin", children: "tkan_v2_optimized.bin (T-KAN Spline LUT)" }), (0, jsx_runtime_1.jsx)("option", { value: "models/cfc_hft_model.safetensors", children: "cfc_hft_model.safetensors (CfC Recurrent Cell)" }), (0, jsx_runtime_1.jsx)("option", { value: "models/shadow_experiment_v3.bin", children: "shadow_experiment_v3.bin (Experimental Model)" })] }), (0, jsx_runtime_1.jsx)("button", { onClick: handleHotSwap, className: "py-2 px-4 bg-yellow-600 hover:bg-yellow-500 text-slate-950 font-bold text-xs uppercase tracking-wider rounded border border-yellow-400 transition-all shadow", children: "EXECUTE HOT-SWAP" })] })] }), showKillModal && ((0, jsx_runtime_1.jsx)("div", { className: "fixed inset-0 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4 z-50", children: (0, jsx_runtime_1.jsxs)("div", { className: "bg-slate-900 border-2 border-rose-600 rounded-lg max-w-md w-full p-6 space-y-5 shadow-2xl", children: [(0, jsx_runtime_1.jsx)("h2", { className: "text-lg font-black text-rose-500 uppercase tracking-wider flex items-center gap-2", children: "\u26A0\uFE0F EMERGENCY KILL SWITCH CONFIRMATION" }), (0, jsx_runtime_1.jsx)("p", { className: "text-xs text-slate-300 leading-relaxed font-mono", children: "THIS ACTION WILL IMMEDIATELY CANCEL ALL PENDING ORDERS, FLATTEN ACTIVE INVENTORY (MARKET SELL/BUY), AND HARD-HALT THE RUST TICK EVALUATION LOOP." }), (0, jsx_runtime_1.jsxs)("div", { className: "flex gap-4", children: [(0, jsx_runtime_1.jsx)("button", { onClick: handleConfirmKill, className: "flex-1 py-3 bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs uppercase tracking-wider rounded border border-rose-400 shadow-lg", children: "CONFIRM KILL & FLATTEN" }), (0, jsx_runtime_1.jsx)("button", { onClick: () => setShowKillModal(false), className: "flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-yellow-400 font-bold text-xs uppercase tracking-wider rounded border border-yellow-600/30", children: "CANCEL" })] })] }) }))] }));
+};
+exports.ControlCenter = ControlCenter;
