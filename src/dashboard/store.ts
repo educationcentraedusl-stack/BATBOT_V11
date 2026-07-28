@@ -1,5 +1,7 @@
-import { useSyncExternalStore } from "react";
+import { useSyncExternalStore, useRef } from "react";
 import { WorkerFrameData } from "./telemetry.worker";
+
+export type { WorkerFrameData } from "./telemetry.worker";
 
 export const HISTORY_CAPACITY = 300;
 
@@ -26,9 +28,11 @@ export interface SystemExecution {
 
 export interface SystemStoreState {
   connectionStatus: "DISCONNECTED" | "CONNECTING" | "CONNECTED" | "ERROR";
+  isEngineActive: boolean;
   latestFrame: WorkerFrameData | null;
   history: HistoryRingBuffer;
   executions: SystemExecution[];
+  totalExecutionsCount: number;
 }
 
 // Pre-allocate typed arrays to eliminate V8 heap allocation on hot path
@@ -79,11 +83,15 @@ function pushHistoryPoint(
   }
 }
 
+let latestFrameSnapshot: WorkerFrameData | null = null;
+
 const defaultState: SystemStoreState = {
   connectionStatus: "DISCONNECTED",
+  isEngineActive: false,
   latestFrame: null,
   history: historyBuffer,
   executions: [],
+  totalExecutionsCount: 0,
 };
 
 let currentState: SystemStoreState = { ...defaultState };
@@ -106,16 +114,20 @@ export function initTelemetryWorker(wsUrl: string = "ws://localhost:8080") {
   if (worker || typeof window === "undefined") return;
 
   try {
-    // PHASE 1 FIX: Strict Vite Module Worker Instantiation
+    // Vite Module Worker Instantiation
     worker = new Worker(new URL("./telemetry.worker.ts", import.meta.url), { type: "module" });
 
     worker.onmessage = (e: MessageEvent) => {
       const { type, status, frame } = e.data;
 
       if (type === "STATUS") {
-        currentState = { ...currentState, connectionStatus: status };
-        scheduleNotify();
+        if (currentState.connectionStatus !== status) {
+          currentState = { ...currentState, connectionStatus: status };
+          scheduleNotify();
+        }
       } else if (type === "FRAME_BATCH" && frame) {
+        latestFrameSnapshot = frame;
+
         const nowSec = (frame.timestamp || Date.now()) / 1000;
         const price = frame.bidPrice || frame.askPrice || 0;
         const obi = frame.obi || 0;
@@ -123,13 +135,18 @@ export function initTelemetryWorker(wsUrl: string = "ws://localhost:8080") {
         const pnl = frame.stats?.realizedPnl || 0;
         const stateNorm = Math.abs(frame.aiDirection || 0) * 1.5 + (frame.aiConfidence || 0) * 0.5;
 
-        // Zero-GC in-place typed array push
+        // Zero-GC in-place typed array push (High frequency off-react data buffer)
         pushHistoryPoint(nowSec, price, obi, cvd, pnl, stateNorm);
 
-        // Append execution if trade count or executions logged increased
+        const newActive = frame.isEngineActive ?? false;
+        const isEngineActiveChanged = newActive !== currentState.isEngineActive;
+
+        const prevExecCount = currentState.totalExecutionsCount;
+        const newExecCount = frame.stats?.totalExecutionsLogged || 0;
+        const hasNewExecution = frame.stats && newExecCount > prevExecCount;
+
         let newExecutions = currentState.executions;
-        const prevExecCount = currentState.latestFrame?.stats?.totalExecutionsLogged || 0;
-        if (frame.stats && frame.stats.totalExecutionsLogged > prevExecCount) {
+        if (hasNewExecution) {
           const execSide: "BUY" | "SELL" = (frame.lastSignal === "SELL" || frame.lastSignal === "BUY")
             ? frame.lastSignal
             : (frame.stats.positionSide === "SHORT" ? "SELL" : "BUY");
@@ -149,13 +166,17 @@ export function initTelemetryWorker(wsUrl: string = "ws://localhost:8080") {
           newExecutions = [newExec, ...currentState.executions].slice(0, 200);
         }
 
-        currentState = {
-          ...currentState,
-          latestFrame: frame,
-          executions: newExecutions,
-        };
-
-        scheduleNotify();
+        // ONLY notify structural state changes or actual new execution logs
+        if (isEngineActiveChanged || hasNewExecution) {
+          currentState = {
+            ...currentState,
+            isEngineActive: newActive,
+            latestFrame: frame,
+            executions: newExecutions,
+            totalExecutionsCount: newExecCount,
+          };
+          scheduleNotify();
+        }
       }
     };
 
@@ -185,12 +206,33 @@ export function getTelemetrySnapshot(): SystemStoreState {
   return currentState;
 }
 
+export function getLatestFrameSnapshot(): WorkerFrameData | null {
+  return latestFrameSnapshot;
+}
+
+export function getHistorySnapshot(): HistoryRingBuffer {
+  return historyBuffer;
+}
+
 export function useTelemetryStore(): SystemStoreState {
   return useSyncExternalStore(subscribeTelemetry, getTelemetrySnapshot, getTelemetrySnapshot);
 }
 
-// Selector hook with fallback snapshot comparison for optimized sub-component subscriptions
-export function useTelemetrySelector<T>(selector: (state: SystemStoreState) => T): T {
-  const getSubSnapshot = () => selector(currentState);
+// Fine-grained selector hook with customizable equality guard to eliminate redundant component re-renders
+export function useTelemetrySelector<T>(
+  selector: (state: SystemStoreState) => T,
+  equalityFn: (a: T, b: T) => boolean = (a, b) => Object.is(a, b)
+): T {
+  const lastSelectedRef = useRef<T | undefined>(undefined);
+
+  const getSubSnapshot = () => {
+    const nextSelected = selector(currentState);
+    if (lastSelectedRef.current !== undefined && equalityFn(lastSelectedRef.current, nextSelected)) {
+      return lastSelectedRef.current;
+    }
+    lastSelectedRef.current = nextSelected;
+    return nextSelected;
+  };
+
   return useSyncExternalStore(subscribeTelemetry, getSubSnapshot, getSubSnapshot);
 }

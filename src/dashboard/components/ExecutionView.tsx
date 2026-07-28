@@ -1,24 +1,41 @@
 import React, { useEffect, useRef } from "react";
 import uPlot from "uplot";
 import { Virtuoso } from "react-virtuoso";
-import { useTelemetryStore } from "../store";
+import { useTelemetrySelector, getHistorySnapshot } from "../store";
+import { useTelemetryRefMutator } from "../hooks/useTelemetryRefMutator";
 
 export const ExecutionView: React.FC = () => {
-  const state = useTelemetryStore();
-  const frame = state.latestFrame;
-  const history = state.history;
-  const executions = state.executions;
+  // ONLY subscribe to executions array (re-renders ONLY on actual trade execution events)
+  const executions = useTelemetrySelector((state) => state.executions);
 
   const chartRef = useRef<HTMLDivElement>(null);
   const uplotInstance = useRef<uPlot | null>(null);
   const rafIdRef = useRef<number | null>(null);
 
-  const obi = frame?.obi ?? 0;
-  const cvd = frame?.cvd ?? 0;
-  const realizedPnl = frame?.stats?.realizedPnl ?? 0;
-  const unrealizedPnl = frame?.stats?.unrealizedPnl ?? 0;
-  const winRate = frame?.stats?.winRatePercent ?? 0;
-  const totalTrades = frame?.stats?.totalTrades ?? 0;
+  // Direct DOM Mutator Refs for high-frequency inventory & microstructure metrics
+  const realizedPnlRef = useRef<HTMLDivElement>(null);
+  const unrealizedPnlRef = useRef<HTMLDivElement>(null);
+  const winRateRef = useRef<HTMLDivElement>(null);
+  const totalTradesRef = useRef<HTMLDivElement>(null);
+  const obiValRef = useRef<HTMLSpanElement>(null);
+  const obiBarGreenRef = useRef<HTMLDivElement>(null);
+  const obiBarRedRef = useRef<HTMLDivElement>(null);
+  const cvdValRef = useRef<HTMLElement>(null);
+  const bidPriceRef = useRef<HTMLElement>(null);
+  const askPriceRef = useRef<HTMLElement>(null);
+
+  useTelemetryRefMutator({
+    realizedPnlRef,
+    unrealizedPnlRef,
+    winRateRef,
+    totalTradesRef,
+    obiValRef,
+    obiBarGreenRef,
+    obiBarRedRef,
+    cvdValRef,
+    bidPriceRef,
+    askPriceRef,
+  });
 
   // Initialize ResizeObserver & Direct RAF Canvas Engine for zero React re-render PnL Chart
   useEffect(() => {
@@ -26,6 +43,7 @@ export const ExecutionView: React.FC = () => {
     if (!container) return;
 
     let isSubscribed = true;
+    const history = getHistorySnapshot();
 
     const initOrResizeChart = (width: number, height: number) => {
       if (width <= 0 || height <= 0 || !isSubscribed) return;
@@ -112,9 +130,6 @@ export const ExecutionView: React.FC = () => {
     };
   }, []);
 
-  // Format OBI Bar percentage (-1..+1 -> 0%..100%)
-  const obiNorm = ((Math.max(-1, Math.min(1, obi)) + 1) / 2) * 100;
-
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-lg space-y-5">
       {/* Title strictly Dark Yellow */}
@@ -128,49 +143,45 @@ export const ExecutionView: React.FC = () => {
         <span className="text-xs text-yellow-400 font-mono">ZERO-GC VIRTUOSO</span>
       </div>
 
-      {/* Account Inventory Stats */}
+      {/* Account Inventory Stats - Direct DOM Mutators */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
         <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
           <div className="text-slate-500 mb-1">REALIZED PnL</div>
-          <div className={`text-base font-bold ${realizedPnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-            ${realizedPnl.toFixed(2)}
-          </div>
+          <div ref={realizedPnlRef} className="text-base font-bold text-emerald-400">$0.00</div>
         </div>
 
         <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
           <div className="text-slate-500 mb-1">UNREALIZED PnL</div>
-          <div className={`text-base font-bold ${unrealizedPnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-            ${unrealizedPnl.toFixed(2)}
-          </div>
+          <div ref={unrealizedPnlRef} className="text-base font-bold text-emerald-400">$0.00</div>
         </div>
 
         <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
           <div className="text-slate-500 mb-1">WIN RATE</div>
-          <div className="text-base font-bold text-yellow-400">{winRate.toFixed(1)}%</div>
+          <div ref={winRateRef} className="text-base font-bold text-yellow-400">0.0%</div>
         </div>
 
         <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
           <div className="text-slate-500 mb-1">TOTAL TRADES</div>
-          <div className="text-base font-bold text-yellow-400">{totalTrades}</div>
+          <div ref={totalTradesRef} className="text-base font-bold text-yellow-400">0</div>
         </div>
       </div>
 
-      {/* Order Book Microstructure (OBI & CVD) */}
+      {/* Order Book Microstructure (OBI & CVD) - Direct DOM Mutators */}
       <div className="bg-slate-950 p-3 rounded border border-slate-800 space-y-2">
         <div className="flex justify-between items-center text-xs">
           <span className="font-bold text-yellow-500 uppercase">ORDER BOOK IMBALANCE (OBI):</span>
-          <span className="font-mono text-yellow-400">{obi >= 0 ? `+${obi.toFixed(4)}` : obi.toFixed(4)}</span>
+          <span ref={obiValRef} className="font-mono text-yellow-400">+0.0000</span>
         </div>
 
         {/* Visual OBI Progress Bar */}
         <div className="w-full bg-slate-800 h-3 rounded-full overflow-hidden flex">
-          <div className="bg-emerald-500 h-full transition-all duration-100" style={{ width: `${obiNorm}%` }}></div>
-          <div className="bg-rose-500 h-full transition-all duration-100" style={{ width: `${100 - obiNorm}%` }}></div>
+          <div ref={obiBarGreenRef} className="bg-emerald-500 h-full transition-all duration-100" style={{ width: "50%" }}></div>
+          <div ref={obiBarRedRef} className="bg-rose-500 h-full transition-all duration-100" style={{ width: "50%" }}></div>
         </div>
 
         <div className="flex justify-between text-xs text-slate-400 font-mono pt-1">
-          <span>CVD: <strong className="text-yellow-400">{cvd >= 0 ? `+${cvd.toFixed(2)}` : cvd.toFixed(2)}</strong></span>
-          <span>BID/ASK: <strong className="text-emerald-400">${frame?.bidPrice ? frame.bidPrice.toFixed(2) : "0.00"}</strong> / <strong className="text-rose-400">${frame?.askPrice ? frame.askPrice.toFixed(2) : "0.00"}</strong></span>
+          <span>CVD: <strong ref={cvdValRef} className="text-yellow-400">+0.00</strong></span>
+          <span>BID/ASK: <strong ref={bidPriceRef} className="text-emerald-400">$0.00</strong> / <strong ref={askPriceRef} className="text-rose-400">$0.00</strong></span>
         </div>
       </div>
 

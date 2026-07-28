@@ -1,17 +1,15 @@
 import React, { useState } from "react";
-import { useTelemetryStore, sendRpcCommand } from "../store";
+import { useTelemetrySelector, sendRpcCommand } from "../store";
 
 export const ControlCenter: React.FC = () => {
-  const state = useTelemetryStore();
-  const frame = state.latestFrame;
-  const isActive = frame?.isEngineActive ?? false;
+  const isEngineActive = useTelemetrySelector((state) => state.isEngineActive);
 
   const [showKillModal, setShowKillModal] = useState(false);
   const [selectedModel, setSelectedModel] = useState("models/tkan_v2_optimized.bin");
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
 
   const handleToggleEngine = () => {
-    const action = isActive ? "ENGINE_PAUSE" : "ENGINE_START";
+    const action = isEngineActive ? "ENGINE_PAUSE" : "ENGINE_START";
     sendRpcCommand(action);
     setStatusNotice(`Requested ${action}...`);
     setTimeout(() => setStatusNotice(null), 3000);
@@ -36,7 +34,7 @@ export const ControlCenter: React.FC = () => {
       <div className="border-b border-yellow-600/30 pb-3 flex items-center justify-between">
         <h2 className="text-base font-bold text-yellow-500 uppercase tracking-wider flex items-center gap-2">
           <svg className="w-5 h-5 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6V4m0 2a2 2 2 0 100 4m0-4a2 2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
           </svg>
           ENGINE GOVERNANCE & CONTROL
         </h2>
@@ -55,12 +53,12 @@ export const ControlCenter: React.FC = () => {
         <button
           onClick={handleToggleEngine}
           className={`w-full py-3 px-4 rounded font-extrabold text-sm uppercase tracking-wider transition-all duration-200 shadow-md ${
-            isActive
+            isEngineActive
               ? "bg-amber-600 hover:bg-amber-500 text-slate-950 border border-yellow-400"
               : "bg-yellow-500 hover:bg-yellow-400 text-slate-950 border border-yellow-300"
           }`}
         >
-          {isActive ? "PAUSE HFT ENGINE" : "START HFT ENGINE"}
+          {isEngineActive ? "PAUSE HFT ENGINE" : "START HFT ENGINE"}
         </button>
 
         {/* Emergency Kill Button */}

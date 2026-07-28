@@ -1,12 +1,23 @@
-import React from "react";
-import { useTelemetryStore } from "../store";
+import React, { useRef } from "react";
+import { useTelemetrySelector } from "../store";
+import { useTelemetryRefMutator } from "../hooks/useTelemetryRefMutator";
 
 export const Header: React.FC = () => {
-  const state = useTelemetryStore();
-  const frame = state.latestFrame;
+  const connectionStatus = useTelemetrySelector((state) => state.connectionStatus);
+  const isEngineActive = useTelemetrySelector((state) => state.isEngineActive);
 
-  const isConnected = state.connectionStatus === "CONNECTED";
-  const isActive = frame?.isEngineActive ?? false;
+  const isConnected = connectionStatus === "CONNECTED";
+
+  const sequenceNumRef = useRef<HTMLSpanElement>(null);
+  const tickLatencyRef = useRef<HTMLSpanElement>(null);
+  const rttMsRef = useRef<HTMLSpanElement>(null);
+
+  // Bind direct RAF DOM mutator for zero React VDOM re-renders
+  useTelemetryRefMutator({
+    sequenceNumRef,
+    tickLatencyRef,
+    rttMsRef,
+  });
 
   return (
     <header className="bg-slate-900 border-b border-yellow-600/30 px-6 py-3.5 flex flex-wrap items-center justify-between shadow-lg">
@@ -23,28 +34,28 @@ export const Header: React.FC = () => {
         <div className="flex items-center space-x-2">
           <span className="text-slate-400 font-semibold">STREAM:</span>
           <span className={`px-2 py-0.5 rounded font-bold ${isConnected ? "bg-emerald-950 text-emerald-400 border border-emerald-600" : "bg-rose-950 text-rose-400 border border-rose-600"}`}>
-            {state.connectionStatus}
+            {connectionStatus}
           </span>
         </div>
 
         {/* Engine State */}
         <div className="flex items-center space-x-2">
           <span className="text-slate-400 font-semibold">ENGINE:</span>
-          <span className={`px-2 py-0.5 rounded font-bold ${isActive ? "bg-yellow-950 text-yellow-400 border border-yellow-500" : "bg-slate-800 text-slate-400"}`}>
-            {isActive ? "LIVE ACTIVE" : "IDLE / PAUSED"}
+          <span className={`px-2 py-0.5 rounded font-bold ${isEngineActive ? "bg-yellow-950 text-yellow-400 border border-yellow-500" : "bg-slate-800 text-slate-400"}`}>
+            {isEngineActive ? "LIVE ACTIVE" : "IDLE / PAUSED"}
           </span>
         </div>
 
-        {/* Sequence & Latency Metrics */}
+        {/* Sequence & Latency Metrics - Direct DOM Mutators */}
         <div className="hidden lg:flex items-center space-x-4 border-l border-slate-800 pl-4 text-slate-300">
           <div>
-            <span className="text-slate-500">SEQ:</span> <span className="text-yellow-400 font-semibold">#{frame?.sequenceNum || "0"}</span>
+            <span className="text-slate-500">SEQ:</span> <span ref={sequenceNumRef} className="text-yellow-400 font-semibold">#0</span>
           </div>
           <div>
-            <span className="text-slate-500">LATENCY:</span> <span className="text-yellow-400 font-semibold">{(frame?.tickEvaluationLatencyUs || 0).toFixed(2)} µs</span>
+            <span className="text-slate-500">LATENCY:</span> <span ref={tickLatencyRef} className="text-yellow-400 font-semibold">0.00 µs</span>
           </div>
           <div>
-            <span className="text-slate-500">RTT:</span> <span className="text-yellow-400 font-semibold">{(frame?.rttMs || 0).toFixed(1)} ms</span>
+            <span className="text-slate-500">RTT:</span> <span ref={rttMsRef} className="text-yellow-400 font-semibold">0.0 ms</span>
           </div>
         </div>
       </div>

@@ -1,24 +1,33 @@
 import React, { useEffect, useRef } from "react";
 import uPlot from "uplot";
-import { useTelemetryStore } from "../store";
+import { getHistorySnapshot } from "../store";
+import { useTelemetryRefMutator } from "../hooks/useTelemetryRefMutator";
 
 export const AiTelemetry: React.FC = () => {
-  const state = useTelemetryStore();
-  const frame = state.latestFrame;
-  const history = state.history;
-
   const chartRef = useRef<HTMLDivElement>(null);
   const uplotInstance = useRef<uPlot | null>(null);
   const rafIdRef = useRef<number | null>(null);
 
-  const direction = frame?.aiDirection ?? 0;
-  const confidence = (frame?.aiConfidence ?? 0) * 100;
-  const rollingIc = frame?.rollingIc ?? 0;
-  const latencyPenalty = frame?.latencyPenalty ?? 0;
-  const infLatUs = frame?.aiInferenceLatencyNs ? Number(frame.aiInferenceLatencyNs) / 1000 : 0;
-  const slippageTicks = frame?.slippageTicks ?? 0;
-  const riskStatus = frame?.riskStatus ?? "STANDBY";
-  const drawPct = frame && frame.usdtBalance > 0 ? (Math.abs(frame.stats?.unrealizedPnl ?? 0) / frame.usdtBalance) * 100 : 0;
+  // Direct DOM Mutator Refs for 0-VDOM Render Metric Updating
+  const directionRef = useRef<HTMLSpanElement>(null);
+  const directionBadgeRef = useRef<HTMLSpanElement>(null);
+  const confidenceRef = useRef<HTMLSpanElement>(null);
+  const infLatUsRef = useRef<HTMLSpanElement>(null);
+  const gate1Ref = useRef<HTMLSpanElement>(null);
+  const gate2Ref = useRef<HTMLSpanElement>(null);
+  const gate3Ref = useRef<HTMLSpanElement>(null);
+  const gate4Ref = useRef<HTMLSpanElement>(null);
+
+  useTelemetryRefMutator({
+    directionRef,
+    directionBadgeRef,
+    confidenceRef,
+    infLatUsRef,
+    gate1Ref,
+    gate2Ref,
+    gate3Ref,
+    gate4Ref,
+  });
 
   // Initialize ResizeObserver & Direct RAF Canvas Engine for zero React re-render chart rendering
   useEffect(() => {
@@ -26,6 +35,7 @@ export const AiTelemetry: React.FC = () => {
     if (!container) return;
 
     let isSubscribed = true;
+    const history = getHistorySnapshot();
 
     const initOrResizeChart = (width: number, height: number) => {
       if (width <= 0 || height <= 0 || !isSubscribed) return;
@@ -125,30 +135,26 @@ export const AiTelemetry: React.FC = () => {
         <span className="text-xs text-yellow-400 font-mono">T-KAN + CfC CELL</span>
       </div>
 
-      {/* Signal Direction & Confidence Meter */}
+      {/* Signal Direction & Confidence Meter - Direct DOM Mutators */}
       <div className="grid grid-cols-2 gap-4 bg-slate-950 p-4 rounded border border-slate-800">
         <div>
           <div className="text-xs text-slate-400 font-semibold mb-1">PREDICTED DIRECTION</div>
           <div className="flex items-center space-x-2">
-            <span className={`text-xl font-black ${direction >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-              {direction >= 0 ? `+${direction.toFixed(4)}` : direction.toFixed(4)}
-            </span>
-            <span className={`text-xs px-2 py-0.5 rounded font-bold ${direction > 0.05 ? "bg-emerald-950 text-emerald-400 border border-emerald-600" : direction < -0.05 ? "bg-rose-950 text-rose-400 border border-rose-600" : "bg-slate-800 text-slate-400"}`}>
-              {direction > 0.05 ? "BULLISH LONG" : direction < -0.05 ? "BEARISH SHORT" : "NEUTRAL"}
-            </span>
+            <span ref={directionRef} className="text-xl font-black text-slate-400">+0.0000</span>
+            <span ref={directionBadgeRef} className="text-xs px-2 py-0.5 rounded font-bold bg-slate-800 text-slate-400">NEUTRAL</span>
           </div>
         </div>
 
         <div>
           <div className="text-xs text-slate-400 font-semibold mb-1">NEURAL CONFIDENCE</div>
           <div className="flex items-center space-x-2">
-            <span className="text-xl font-black text-yellow-400">{confidence.toFixed(1)}%</span>
-            <span className="text-xs text-slate-400 font-mono">({infLatUs.toFixed(1)} µs)</span>
+            <span ref={confidenceRef} className="text-xl font-black text-yellow-400">0.0%</span>
+            <span ref={infLatUsRef} className="text-xs text-slate-400 font-mono">(0.0 µs)</span>
           </div>
         </div>
       </div>
 
-      {/* Pre-Flight Validation Gates Status Radar */}
+      {/* Pre-Flight Validation Gates Status Radar - Direct DOM Mutators */}
       <div className="space-y-2">
         <h3 className="text-xs font-bold text-yellow-500 uppercase tracking-wider">
           GATE 1–4 PRE-FLIGHT VALIDATION RADAR
@@ -157,30 +163,22 @@ export const AiTelemetry: React.FC = () => {
         <div className="grid grid-cols-2 gap-2 text-xs font-mono">
           <div className="bg-slate-950 p-2.5 rounded border border-slate-800 flex justify-between items-center">
             <span className="text-slate-300">GATE 1 (SPEARMAN IC &gt; 0.03):</span>
-            <span className={`font-bold ${frame ? (rollingIc >= 0.03 ? "text-emerald-400" : "text-yellow-400") : "text-slate-500"}`}>
-              {frame ? `${rollingIc.toFixed(4)} [${rollingIc >= 0.03 ? "PASSED" : "WARN"}]` : "0.0000 [STANDBY]"}
-            </span>
+            <span ref={gate1Ref} className="font-bold text-slate-500">0.0000 [STANDBY]</span>
           </div>
 
           <div className="bg-slate-950 p-2.5 rounded border border-slate-800 flex justify-between items-center">
             <span className="text-slate-300">GATE 2 (LATENCY PENALTY):</span>
-            <span className={`font-bold ${frame ? (latencyPenalty > 0 && latencyPenalty <= 1.05 ? "text-emerald-400" : "text-amber-400") : "text-slate-500"}`}>
-              {frame ? `${latencyPenalty.toFixed(2)}x [${latencyPenalty > 0 && latencyPenalty <= 1.05 ? "OPTIMAL" : "DEGRADED"}]` : "0.00x [STANDBY]"}
-            </span>
+            <span ref={gate2Ref} className="font-bold text-slate-500">0.00x [STANDBY]</span>
           </div>
 
           <div className="bg-slate-950 p-2.5 rounded border border-slate-800 flex justify-between items-center">
             <span className="text-slate-300">GATE 3 (RISK COLLAR / VaR):</span>
-            <span className={`font-bold ${frame ? (riskStatus === "PASSED" ? "text-emerald-400" : "text-rose-400") : "text-slate-500"}`}>
-              {frame ? `${drawPct.toFixed(2)}% / VaR [${riskStatus}]` : "0.00% / - [STANDBY]"}
-            </span>
+            <span ref={gate3Ref} className="font-bold text-slate-500">0.00% / - [STANDBY]</span>
           </div>
 
           <div className="bg-slate-950 p-2.5 rounded border border-slate-800 flex justify-between items-center">
             <span className="text-slate-300">GATE 4 (SLIPPAGE BUFFER):</span>
-            <span className={`font-bold ${frame ? "text-yellow-400" : "text-slate-500"}`}>
-              {frame ? `+${slippageTicks} TICKS [OK]` : "0 TICKS [STANDBY]"}
-            </span>
+            <span ref={gate4Ref} className="font-bold text-slate-500">0 TICKS [STANDBY]</span>
           </div>
         </div>
       </div>
