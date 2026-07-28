@@ -1,0 +1,54 @@
+[2026-07-28T20:54:04.687Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 16, in <module>
+    import polars as pl
+ModuleNotFoundError: No module named 'polars'
+
+[2026-07-28T20:58:50.351Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 16, in <module>
+    import polars as pl
+ModuleNotFoundError: No module named 'polars'
+
+[2026-07-28T20:59:50.305Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 16, in <module>
+    import polars as pl
+ModuleNotFoundError: No module named 'polars'
+
+[2026-07-28T21:00:50.336Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 16, in <module>
+    import polars as pl
+ModuleNotFoundError: No module named 'polars'
+
+[2026-07-28T21:01:50.471Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 16, in <module>
+    import polars as pl
+ModuleNotFoundError: No module named 'polars'
+
+[2026-07-28T21:02:50.261Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 16, in <module>
+    import polars as pl
+ModuleNotFoundError: No module named 'polars'
+
+[2026-07-28T21:03:50.336Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 16, in <module>
+    import polars as pl
+ModuleNotFoundError: No module named 'polars'
+
+[2026-07-28T21:04:50.431Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 16, in <module>
+    import polars as pl
+ModuleNotFoundError: No module named 'polars'
+
+[2026-07-28T21:05:50.416Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 16, in <module>
+    import polars as pl
+ModuleNotFoundError: No module named 'polars'
+

@@ -155,11 +155,29 @@ export class StrategyEngine {
     const scaledQuantity = Number((this.config.orderQuantity * penaltyCoeff).toFixed(4));
     let finalQuantity = Math.max(0.0001, scaledQuantity);
 
-    // TASK 4.3: Apply dynamic slippageTicks to adjust orderIntent price
+    // TASK 4.3 & 4.4: Dynamic Taker Fallback (>75% Confidence) & 1-Tick Post-Only Offset (<=75%)
     const effectiveSlippage = Math.max(2, slippageTicks);
     const priceAdjustment = effectiveSlippage * this.config.tickSize;
     const basePrice = signalType === "BUY" ? askPrice : bidPrice;
-    const adjustedPrice = signalType === "BUY" ? basePrice + priceAdjustment : basePrice - priceAdjustment;
+
+    const isHighConfidence = aiConfidence > 0.75;
+    const isAggressive = aiConfidence >= this.config.aggressiveConfidenceThreshold;
+
+    let targetPrice: number;
+    let orderType: "LIMIT" | "MARKET";
+    let timeInForce: "GTC" | "IOC" | "GTX";
+
+    if (isHighConfidence) {
+      console.log("[EXECUTION] High Confidence (>75%) - Bypassing Post-Only for Guaranteed Fill");
+      orderType = isAggressive ? "MARKET" : "LIMIT";
+      timeInForce = isAggressive ? "IOC" : "GTC";
+      targetPrice = signalType === "BUY" ? askPrice + priceAdjustment : bidPrice - priceAdjustment;
+    } else {
+      // Standard confidence (<= 0.75): retain Post-Only (GTX) with safe 1-tick non-crossing maker placement
+      orderType = "LIMIT";
+      timeInForce = "GTX";
+      targetPrice = signalType === "BUY" ? bidPrice : askPrice;
+    }
 
     // Binance Futures Min Notional Guard: ensure order notional >= 55 USDT
     if (basePrice > 0) {
@@ -173,7 +191,7 @@ export class StrategyEngine {
     this.reusableOrderIntent.symbol = this.config.symbol;
     this.reusableOrderIntent.side = signalType;
     this.reusableOrderIntent.quantity = finalQuantity;
-    this.reusableOrderIntent.price = Number(adjustedPrice.toFixed(2));
+    this.reusableOrderIntent.price = Number(targetPrice.toFixed(2));
     this.reusableOrderIntent.currentPositionSide = this.positionLedger.getSummary().side;
 
     // Pass through Risk Management Guard with current position side
@@ -189,11 +207,6 @@ export class StrategyEngine {
     if (riskResult.passed) {
       const notional = this.reusableOrderIntent.price * this.reusableOrderIntent.quantity;
       this.riskGuard.recordExecutionSuccess(notional);
-
-      // TASK 4.4: Aggressive vs. Passive Order Routing
-      const isAggressive = aiConfidence >= this.config.aggressiveConfidenceThreshold;
-      const orderType = isAggressive ? "MARKET" : "LIMIT";
-      const timeInForce = isAggressive ? "IOC" : "GTX";
 
       // Execute order with safe exception handler to prevent unhandled promise rejections
       executionPromise = this.executionClient
