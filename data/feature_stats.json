@@ -1,0 +1,99 @@
+{
+  "dataset_records": 5770,
+  "train_records": 4616,
+  "val_records": 1154,
+  "welford_window": 1000,
+  "cfc_sequence_length": 32,
+  "tkan_features": {
+    "dim": 40,
+    "names": [
+      "spread",
+      "relative_spread",
+      "micro_price_dev",
+      "mid_log_ret_1",
+      "mid_log_ret_5",
+      "mid_log_ret_10",
+      "mid_log_ret_50",
+      "mid_log_ret_100",
+      "obi_l1",
+      "obi_ema_5",
+      "obi_ema_10",
+      "obi_ema_25",
+      "obi_ema_50",
+      "obi_ema_100",
+      "obi_ema_250",
+      "obi_vel_1",
+      "obi_vel_5",
+      "obi_press_ratio",
+      "cvd_raw",
+      "cvd_delta_1",
+      "cvd_delta_5",
+      "cvd_delta_10",
+      "cvd_delta_50",
+      "cvd_delta_100",
+      "trade_vel",
+      "trade_vel_accel",
+      "vpin_proxy_10",
+      "vpin_proxy_50",
+      "lat_us",
+      "lat_us_mean_50",
+      "lat_us_std_50",
+      "lat_us_jitter",
+      "seq_gap",
+      "execution_latency_ms",
+      "vol_realized_10",
+      "vol_realized_50",
+      "vol_realized_100",
+      "vol_parkinson_50",
+      "price_acceleration",
+      "momentum_direction"
+    ],
+    "min_val": -1.0,
+    "max_val": 1.0,
+    "mean_val": -0.008699139580130577
+  },
+  "cfc_features": {
+    "dim": 16,
+    "names": [
+      "mid_log_ret_10",
+      "mid_log_ret_50",
+      "relative_spread",
+      "micro_price_dev",
+      "obi_l1",
+      "obi_ema_10",
+      "obi_ema_50",
+      "cvd_delta_10",
+      "trade_vel",
+      "vpin_proxy_10",
+      "lat_us_norm",
+      "vol_realized_50",
+      "exec_side_flag",
+      "order_fill_qty",
+      "pnl_realized_trend",
+      "delta_tau"
+    ],
+    "min_val": -1.0,
+    "max_val": 1.0,
+    "mean_val": -0.010801823809742928
+  },
+  "shapes": {
+    "tkan_train_inputs": [
+      4616,
+      40
+    ],
+    "tkan_val_inputs": [
+      1154,
+      40
+    ],
+    "cfc_train_inputs": [
+      4585,
+      32,
+      16
+    ],
+    "cfc_val_inputs": [
+      1123,
+      32,
+      16
+    ]
+  }
+}
