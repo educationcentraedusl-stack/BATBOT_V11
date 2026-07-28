@@ -46,7 +46,7 @@ class AutoRecalibrationManager {
     static instance = null;
     isRecalibrating = false;
     driftTickCounter = 0;
-    sustainedDriftThreshold = 100; // 100 consecutive ticks below IC threshold (0.0300)
+    sustainedDriftThreshold = 50; // 50 consecutive ticks below IC threshold (0.0300)
     cooldownMs = 60000; // 60s cooldown between recalibration attempts
     lastAttemptTimestamp = 0;
     lastSuccessTimestamp = 0;

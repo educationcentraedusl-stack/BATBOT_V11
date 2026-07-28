@@ -25,7 +25,7 @@ export class AutoRecalibrationManager {
 
   private isRecalibrating = false;
   private driftTickCounter = 0;
-  private sustainedDriftThreshold = 100; // 100 consecutive ticks below IC threshold (0.0300)
+  private sustainedDriftThreshold = 50; // 50 consecutive ticks below IC threshold (0.0300)
   private cooldownMs = 60000; // 60s cooldown between recalibration attempts
   private lastAttemptTimestamp = 0;
   private lastSuccessTimestamp = 0;

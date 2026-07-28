@@ -8,6 +8,7 @@ import { TradeLogger } from "./telemetry/logger";
 import { CLIDashboard, TelemetryFrame } from "./telemetry/dashboard";
 import { TelemetryWSServer } from "./telemetry/server";
 import { ControlCommand } from "./telemetry/proto";
+import { AutoRecalibrationManager } from "./ai/recalibrationWorker";
 
 export const DEFAULT_TAKER_FEE_RATE = 0.0004;
 
@@ -45,6 +46,8 @@ export function initializeSystem(): SystemControlPlane {
   const dashboard = new CLIDashboard(true);
   const telemetryPort = parseInt(process.env.TELEMETRY_PORT || "8080", 10);
   const telemetryServer = new TelemetryWSServer(telemetryPort);
+  const recalibrationManager = AutoRecalibrationManager.getInstance();
+  recalibrationManager.setSustainedDriftThreshold(50);
 
   let isRunning = true;
   let tickInterval: NodeJS.Timeout | null = null;
@@ -106,6 +109,11 @@ export function initializeSystem(): SystemControlPlane {
     const tickResult = strategyEngine.evaluateTick();
     const endHr = process.hrtime.bigint();
     const latencyUs = Number(endHr - startHr) / 1000;
+
+    // Active Model Drift Evaluation & Self-Healing Trigger (SAB Slot 101 & 102)
+    const rollingIc = client.getRollingIC();
+    const isDrifted = client.getIsModelDrifted();
+    recalibrationManager.evaluateTickDrift(rollingIc, isDrifted);
 
     logger.logSignal(
       tickResult.sequenceNum,
@@ -180,6 +188,13 @@ export function initializeSystem(): SystemControlPlane {
         : "IDLE_ACTIVE",
       isEngineActive: isRunning,
       usdtBalance: executionClient.getUsdtAvailableBalance(),
+      aiDirection: client.getAIPredictionDirection(),
+      aiConfidence: client.getAIPredictionConfidence(),
+      rollingIc: rollingIc,
+      aiInferenceLatencyNs: client.getAIInferenceLatencyNs(),
+      rttMs: client.getMeasuredRttMs(),
+      latencyPenalty: client.getLatencyPenaltyCoefficient(),
+      slippageTicks: client.getDynamicSlippageTicks(),
     };
 
     dashboard.render(frame);

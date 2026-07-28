@@ -51,6 +51,7 @@ const dashboard_1 = require("./telemetry/dashboard");
 Object.defineProperty(exports, "CLIDashboard", { enumerable: true, get: function () { return dashboard_1.CLIDashboard; } });
 const server_1 = require("./telemetry/server");
 Object.defineProperty(exports, "TelemetryWSServer", { enumerable: true, get: function () { return server_1.TelemetryWSServer; } });
+const recalibrationWorker_1 = require("./ai/recalibrationWorker");
 exports.DEFAULT_TAKER_FEE_RATE = 0.0004;
 function initializeSystem() {
     const sab = new SharedArrayBuffer(2048);
@@ -62,6 +63,8 @@ function initializeSystem() {
     const dashboard = new dashboard_1.CLIDashboard(true);
     const telemetryPort = parseInt(process.env.TELEMETRY_PORT || "8080", 10);
     const telemetryServer = new server_1.TelemetryWSServer(telemetryPort);
+    const recalibrationManager = recalibrationWorker_1.AutoRecalibrationManager.getInstance();
+    recalibrationManager.setSustainedDriftThreshold(50);
     let isRunning = true;
     let tickInterval = null;
     // Set up Bi-directional WebSocket RPC Control Command Handler
@@ -120,6 +123,10 @@ function initializeSystem() {
         const tickResult = strategyEngine.evaluateTick();
         const endHr = process.hrtime.bigint();
         const latencyUs = Number(endHr - startHr) / 1000;
+        // Active Model Drift Evaluation & Self-Healing Trigger (SAB Slot 101 & 102)
+        const rollingIc = client.getRollingIC();
+        const isDrifted = client.getIsModelDrifted();
+        recalibrationManager.evaluateTickDrift(rollingIc, isDrifted);
         logger.logSignal(tickResult.sequenceNum, tickResult.signalType, tickResult.obi, tickResult.cvd, tickResult.spreadVelocity, tickResult.bidPrice, tickResult.askPrice, latencyUs);
         const positionLedger = strategyEngine.getPositionLedger();
         if (tickResult.executionPromise) {
@@ -170,6 +177,13 @@ function initializeSystem() {
                 : "IDLE_ACTIVE",
             isEngineActive: isRunning,
             usdtBalance: executionClient.getUsdtAvailableBalance(),
+            aiDirection: client.getAIPredictionDirection(),
+            aiConfidence: client.getAIPredictionConfidence(),
+            rollingIc: rollingIc,
+            aiInferenceLatencyNs: client.getAIInferenceLatencyNs(),
+            rttMs: client.getMeasuredRttMs(),
+            latencyPenalty: client.getLatencyPenaltyCoefficient(),
+            slippageTicks: client.getDynamicSlippageTicks(),
         };
         dashboard.render(frame);
         telemetryServer.broadcast(frame);
