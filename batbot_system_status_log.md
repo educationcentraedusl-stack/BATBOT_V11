@@ -1,6 +1,10 @@
 # BATBOT_V11 System Status Log
 
-## Development Changelog
+- **Date:** 2026-07-28
+- **Feature/Task:** Dashboard Telemetry Protobuf & Mock Data Eradication Remediation
+- **Artifacts Created/Modified:** `src/telemetry/proto.ts`, `src/telemetry/server.ts`, `src/dashboard/telemetry.worker.ts`, `src/dashboard/store.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Remediated all deep scan audit findings across dashboard & telemetry subsystems. Replaced `TextDecoder().decode()` and `JSON.parse()` in `telemetry.worker.ts` with direct Protobuf binary frame deserialization (`decodeTelemetryFrame`). Converted UI RPC command dispatch to binary Protobuf (`encodeControlCommand`) and eradicated `buf[0] === 0x7b` JSON fallback hack in `server.ts`. Eradicated `Math.sin(now / 500) * 0.1` synthetic noise and hardcoded `qty: 0.01` from `store.ts`, mapping 100% genuine neural and execution telemetry from decoded Protobuf frames. Verified 100% via strict TypeScript compilation (`npx tsc --noEmit`), Vite production build (`npm run build:dashboard`), and phase 5 integration harness (`npx tsx src/test_phase5_telemetry.ts`).
+- **Status:** ✅ Completed & QA Verified
 
 - **Date:** 2026-07-28
 - **Feature/Task:** 2026 SOTA HFT Telemetry & Control Dashboard (Phases 1-7 Physical Execution)

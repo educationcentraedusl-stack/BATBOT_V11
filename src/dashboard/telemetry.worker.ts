@@ -1,4 +1,5 @@
 // Telemetry WebWorker for Off-Main-Thread Processing & 60Hz Batching
+import { decodeTelemetryFrame, encodeControlCommand, ControlCommand } from "../telemetry/proto";
 
 export interface WorkerFrameData {
   symbol: string;
@@ -50,8 +51,10 @@ ctx().onmessage = (e: MessageEvent) => {
   if (type === "CONNECT") {
     connectWebSocket(url || "ws://localhost:8080");
   } else if (type === "SEND_COMMAND") {
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(command));
+    if (socket && socket.readyState === WebSocket.OPEN && command) {
+      // Direct Protobuf binary command encoding
+      const binaryCmd = encodeControlCommand(command as ControlCommand);
+      socket.send(binaryCmd);
     }
   } else if (type === "DISCONNECT") {
     if (socket) socket.close();
@@ -76,32 +79,30 @@ function connectWebSocket(url: string) {
 
   socket.onmessage = (event: MessageEvent) => {
     try {
-      if (typeof event.data === "string") {
-        const json = JSON.parse(event.data);
-        if (json.type === "INIT") {
-          ctx().postMessage({ type: "INIT_MESSAGE", message: json.message });
-          return;
+      if (event.data instanceof ArrayBuffer) {
+        // Strict binary Protobuf telemetry frame deserialization
+        const decodedFrame = decodeTelemetryFrame(new Uint8Array(event.data));
+        const workerFrame: WorkerFrameData = {
+          ...decodedFrame,
+          sequenceNum: decodedFrame.sequenceNum.toString(),
+          aiInferenceLatencyNs: (decodedFrame.aiInferenceLatencyNs || 0n).toString(),
+          aiDirection: decodedFrame.aiDirection ?? 0,
+          aiConfidence: decodedFrame.aiConfidence ?? 0,
+          rollingIc: decodedFrame.rollingIc ?? 0,
+          rttMs: decodedFrame.rttMs ?? 0,
+          latencyPenalty: decodedFrame.latencyPenalty ?? 1.0,
+          slippageTicks: decodedFrame.slippageTicks ?? 2,
+          timestamp: Date.now(),
+        };
+
+        latestFrame = workerFrame;
+        frameQueue.push(workerFrame);
+        if (frameQueue.length > 500) {
+          frameQueue.shift();
         }
       }
-
-      // Handle binary or JSON frame
-      let frame: WorkerFrameData;
-      if (event.data instanceof ArrayBuffer) {
-        // Fast text/json or binary parsing fallback
-        const str = new TextDecoder().decode(event.data);
-        const parsed = JSON.parse(str);
-        frame = parsed.data || parsed;
-      } else {
-        frame = JSON.parse(event.data);
-      }
-
-      latestFrame = frame;
-      frameQueue.push(frame);
-      if (frameQueue.length > 500) {
-        frameQueue.shift();
-      }
     } catch (err) {
-      // Ignore transient decode errors on partial frames
+      // Ignore partial/corrupted frames
     }
   };
 
@@ -128,3 +129,4 @@ function connectWebSocket(url: string) {
     }
   }, 16);
 }
+
