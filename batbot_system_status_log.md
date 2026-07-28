@@ -148,6 +148,12 @@
 - **HFT/Performance Compliance:** Implemented Mid-2026 state-of-the-art Python ML dependency management using Rust-native `uv` package manager with PEP 621 metadata, fast PyPI wheel resolution, and deterministic `uv.lock`. Installed core ML stack (`torch` 2.13.0, `ncps` 0.0.2, `pykan` 0.2.8, `safetensors` 0.8.0, `numpy`, `scipy`, `sympy`, `scikit-learn`, `matplotlib`, `tqdm`, `pandas`, `pyyaml`). Created and executed `training/verify_env.py` diagnostic harness validating PyTorch CPU matmul tensor allocation, SafeTensors zero-copy save/load, NCPS CfC Liquid Neural Network forward pass, and PyKAN Kolmogorov-Arnold Network spline evaluation. 100% verified with 5/5 PASSED execution.
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-28
+- **Feature/Task:** Step 1 Remediation: PyTorch CUDA Explicit Index Configuration & Environment Verification
+- **Artifacts Created/Modified:** `training/pyproject.toml`, `training/uv.lock`, `training/verify_env.py`
+- **HFT/Performance Compliance:** Remediated DEFICIENCY #1 by appending explicit PyTorch CUDA wheel index (`pytorch-cu121`, `https://download.pytorch.org/whl/cu121`, `explicit = true`) to `training/pyproject.toml`. Regenerated cryptographic `uv.lock` bound to PyTorch CUDA binaries. Installed `torch==2.4.1+cu121` into `.venv`. Executed `training/verify_env.py` diagnostic harness confirming 100% genuine execution across PyTorch CUDA tensors (`torch.matmul`), SafeTensors zero-copy serialization, NCPS CfC Liquid Neural Network forward pass (`torch.Size([8, 10, 3])`), and PyKAN spline model forward pass (`torch.Size([16, 1])`).
+- **Status:** ✅ Completed & QA Verified
+
 
 
 
