@@ -1,195 +1,226 @@
 #!/usr/bin/env python3
 """
-BATBOT_V11 Offline CfC Neural Network Training Script
-Reads trading signals from data/signals.jsonl and executions from data/executions.jsonl.
-Exports trained weights to models/cfc_weights.safetensors compatible with Candle Rust runtime.
-Supports PyTorch/safetensors backend as well as zero-dependency NumPy/struct fallback.
+BATBOT_V11 SOTA CfC (Closed-Form Continuous-Time) Liquid Neural Network Trainer
+Trains 16 -> 32 -> 1 continuous-time dynamic solver model on 32-step sequence datasets using
+Huber + Pearson Rank Correlation (IC) loss, AdamW optimizer, OneCycleLR scheduler,
+gradient clipping, and exports weights directly to SafeTensors for zero-copy Rust Candle inference.
 """
 
 import os
-import json
-import struct
+import sys
+import math
+import time
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import TensorDataset, DataLoader
+from safetensors.torch import load_file, save_file
 
-def load_dataset(signals_path: str, executions_path: str):
-    signals = []
-    executions = []
+# Add training dir to sys.path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from data_config import (
+    CFC_OUT_PATH, MODELS_DIR, CFC_WEIGHTS_PATH
+)
 
-    if os.path.exists(signals_path):
-        with open(signals_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                if line.strip():
-                    try:
-                        signals.append(json.loads(line))
-                    except Exception:
-                        pass
-
-    if os.path.exists(executions_path):
-        with open(executions_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                if line.strip():
-                    try:
-                        executions.append(json.loads(line))
-                    except Exception:
-                        pass
-
-    print(f"[train_cfc] Loaded {len(signals)} signal records and {len(executions)} execution records.")
-    return signals, executions
-
-def save_safetensors_raw(tensors: dict, output_path: str):
+class PyTorchCfCCell(nn.Module):
     """
-    Saves a dictionary of name -> numpy array / flat list of floats into valid Safetensors binary format.
-    Header format:
-    - 8 bytes uint64 Little-Endian: header string byte length N
-    - N bytes UTF-8 encoded JSON string
-    - Concatenated raw Little-Endian Float32 buffer
+    Exact PyTorch implementation of the 2026 Closed-Form Continuous-Time (CfC) cell
+    matching the Candle Rust formulation in src/ai/cfc.rs.
     """
-    buffer = bytearray()
-    header_dict = {}
+    def __init__(self, input_dim: int = 16, hidden_dim: int = 32, output_dim: int = 1):
+        super().__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        concat_dim = input_dim + hidden_dim # 48
 
-    for name, shape_and_data in tensors.items():
-        shape, data_floats = shape_and_data
-        start_offset = len(buffer)
-        raw_bytes = struct.pack(f'<{len(data_floats)}f', *data_floats)
-        buffer.extend(raw_bytes)
-        end_offset = len(buffer)
+        # Weights matching Candle Rust shapes:
+        # w_alpha: [48, 32], b_alpha: [32]
+        # w_beta:  [48, 32], b_beta:  [32]
+        # w_output:[32, 1],  b_output:[1]
+        self.w_alpha = nn.Parameter(torch.randn(concat_dim, hidden_dim) * (1.0 / math.sqrt(concat_dim)))
+        self.b_alpha = nn.Parameter(torch.zeros(hidden_dim))
 
-        header_dict[name] = {
-            "dtype": "F32",
-            "shape": list(shape),
-            "data_offsets": [start_offset, end_offset]
-        }
+        self.w_beta = nn.Parameter(torch.randn(concat_dim, hidden_dim) * (1.0 / math.sqrt(concat_dim)))
+        self.b_beta = nn.Parameter(torch.zeros(hidden_dim))
 
-    header_json = json.dumps(header_dict, separators=(',', ':')).encode('utf-8')
-    header_len = len(header_json)
+        self.w_output = nn.Parameter(torch.randn(hidden_dim, output_dim) * (1.0 / math.sqrt(hidden_dim)))
+        self.b_output = nn.Parameter(torch.zeros(output_dim))
 
-    with open(output_path, 'wb') as f:
-        f.write(struct.pack('<Q', header_len))
-        f.write(header_json)
-        f.write(buffer)
+    def forward(self, input_seq: torch.Tensor) -> torch.Tensor:
+        """
+        input_seq: [Batch, SeqLen (32), InputDim (16)]
+        Returns:   [Batch, SeqLen (32), OutputDim (1)]
+        """
+        batch_size, seq_len, _ = input_seq.shape
+        device = input_seq.device
 
-    print(f"[train_cfc] Safetensors binary file written to '{output_path}' ({os.path.getsize(output_path)} bytes).")
+        z_prev = torch.zeros(batch_size, self.hidden_dim, device=device)
+        outputs = []
 
-def main():
-    signals_path = os.path.join("data", "signals.jsonl")
-    executions_path = os.path.join("data", "executions.jsonl")
-    models_dir = "models"
-    os.makedirs(models_dir, exist_ok=True)
-    weights_path = os.path.join(models_dir, "cfc_weights.safetensors")
+        for t in range(seq_len):
+            x_t = input_seq[:, t, :] # [Batch, 16]
 
-    signals, executions = load_dataset(signals_path, executions_path)
+            # Delta t extracted from column 15 (delta_tau) or defaulted to 0.001s
+            delta_t = x_t[:, 15:16].abs() + 1e-4 # [Batch, 1]
 
-    # Try PyTorch backend first, fallback to pure Python generator
-    try:
-        import torch
-        import torch.nn as nn
-        from torch.utils.data import Dataset, DataLoader
-        from safetensors.torch import save_file
+            # Chi = concat(x_t, z_prev) -> [Batch, 48]
+            chi = torch.cat([x_t, z_prev], dim=-1)
 
-        print("[train_cfc] Using PyTorch backend for CfC neural optimization...")
+            # Alpha = softplus(chi @ w_alpha + b_alpha) -> [Batch, 32]
+            alpha = F.softplus(chi @ self.w_alpha + self.b_alpha)
 
-        class CfCModel(nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.w_alpha = nn.Parameter(torch.randn(16, 32) * 0.1)
-                self.b_alpha = nn.Parameter(torch.zeros(32))
-                self.w_beta = nn.Parameter(torch.randn(16, 32) * 0.1)
-                self.b_beta = nn.Parameter(torch.zeros(32))
-                self.w_output = nn.Parameter(torch.randn(32, 3) * 0.1)
-                self.b_output = nn.Parameter(torch.zeros(3))
+            # Beta = tanh(chi @ w_beta + b_beta) -> [Batch, 32]
+            beta = torch.tanh(chi @ self.w_beta + self.b_beta)
 
-            def forward(self, x):
-                # x: [batch, 16]
-                alpha = torch.tanh(torch.matmul(x, self.w_alpha) + self.b_alpha)
-                beta = torch.sigmoid(torch.matmul(x, self.w_beta) + self.b_beta)
-                h = alpha * beta
-                out = torch.matmul(h, self.w_output) + self.b_output
-                return out
+            # z_t = beta - (beta - z_prev) * exp(-alpha * delta_t) -> [Batch, 32]
+            decay_factor = torch.exp(-alpha * delta_t)
+            z_t = beta - (beta - z_prev) * decay_factor
 
-        class SignalDataset(Dataset):
-            def __init__(self, signals, executions):
-                self.inputs = []
-                self.targets = []
-                if len(signals) > 0:
-                    for s in signals:
-                        # Extract features if present or synthesize 16-dim latent vector
-                        feat = s.get("features", [0.0] * 16)
-                        if len(feat) < 16:
-                            feat = feat + [0.0] * (16 - len(feat))
-                        target = [s.get("direction", 0.0), s.get("confidence", 1.0), s.get("horizon_ms", 500.0)]
-                        self.inputs.append(feat[:16])
-                        self.targets.append(target)
-                else:
-                    # Synthesize training batches for dry-run verification
-                    torch.manual_seed(42)
-                    for _ in range(128):
-                        self.inputs.append(torch.randn(16).tolist())
-                        self.targets.append([torch.randn(1).item(), 0.95, 500.0])
+            # output_t = z_t @ w_output + b_output -> [Batch, 1]
+            output_t = z_t @ self.w_output + self.b_output
+            outputs.append(output_t.unsqueeze(1))
 
-                self.inputs = torch.tensor(self.inputs, dtype=torch.float32)
-                self.targets = torch.tensor(self.targets, dtype=torch.float32)
+            z_prev = z_t
 
-            def __len__(self):
-                return len(self.inputs)
+        return torch.cat(outputs, dim=1) # [Batch, SeqLen, 1]
 
-            def __getitem__(self, idx):
-                return self.inputs[idx], self.targets[idx]
+class HuberICLoss(nn.Module):
+    def __init__(self, delta: float = 1e-3, ic_weight: float = 0.5, eps: float = 1e-8):
+        super().__init__()
+        self.huber = nn.HuberLoss(delta=delta)
+        self.ic_weight = ic_weight
+        self.eps = eps
 
-        dataset = SignalDataset(signals, executions)
-        dataloader = DataLoader(dataset, batch_size=16, shuffle=True)
+    def forward(self, pred: torch.Tensor, target: torch.Tensor):
+        h_loss = self.huber(pred, target)
+        pred_flat = pred.view(-1)
+        target_flat = target.view(-1)
 
-        model = CfCModel()
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-        criterion = nn.MSELoss()
+        p_mean = pred_flat.mean()
+        t_mean = target_flat.mean()
 
-        epochs = 5
-        print(f"[train_cfc] Starting gradient descent optimization ({epochs} epochs over {len(dataset)} samples)...")
-        for epoch in range(1, epochs + 1):
-            total_loss = 0.0
-            for batch_x, batch_y in dataloader:
-                optimizer.zero_grad()
-                pred = model(batch_x)
-                loss = criterion(pred, batch_y)
-                loss.backward()
-                optimizer.step()
-                total_loss += loss.item() * len(batch_x)
+        p_diff = pred_flat - p_mean
+        t_diff = target_flat - t_mean
 
-            avg_loss = total_loss / len(dataset)
-            print(f"  Epoch {epoch}/{epochs} | Loss: {avg_loss:.6f}")
+        p_std = torch.sqrt((p_diff ** 2).mean() + self.eps)
+        t_std = torch.sqrt((t_diff ** 2).mean() + self.eps)
 
-        state_dict = {
-            "w_alpha": model.w_alpha.detach(),
-            "b_alpha": model.b_alpha.detach(),
-            "w_beta": model.w_beta.detach(),
-            "b_beta": model.b_beta.detach(),
-            "w_output": model.w_output.detach(),
-            "b_output": model.b_output.detach(),
-        }
-        save_file(state_dict, weights_path)
-        print(f"[train_cfc] Successfully exported PyTorch trained weights to '{weights_path}'.")
+        cov = (p_diff * t_diff).mean()
+        ic = cov / (p_std * t_std)
 
-    except ImportError:
-        print("[train_cfc] PyTorch not detected. Running zero-dependency CfC weight initialization pipeline...")
-        # Pure Python float32 initialization matching target tensor shapes
-        import random
-        random.seed(42)
+        # Maximize IC -> minimize 1.0 - IC
+        loss = h_loss + self.ic_weight * (1.0 - ic)
+        return loss, h_loss, ic
 
-        w_alpha = [random.gauss(0, 0.1) for _ in range(16 * 32)]
-        b_alpha = [0.0] * 32
-        w_beta = [random.gauss(0, 0.1) for _ in range(16 * 32)]
-        b_beta = [0.0] * 32
-        w_output = [random.gauss(0, 0.1) for _ in range(32 * 3)]
-        b_output = [0.0] * 3
+def train_cfc():
+    print("=" * 75)
+    print("BATBOT_V11 SOTA CfC LIQUID NEURAL NETWORK TRAINING PIPELINE")
+    print("=" * 75)
 
-        tensors = {
-            "w_alpha": ((16, 32), w_alpha),
-            "b_alpha": ((32,), b_alpha),
-            "w_beta": ((16, 32), w_beta),
-            "b_beta": ((32,), b_beta),
-            "w_output": ((32, 3), w_output),
-            "b_output": ((3,), b_output),
-        }
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[Device] Operating on: {device}")
 
-        save_safetensors_raw(tensors, weights_path)
+    if not os.path.exists(CFC_OUT_PATH):
+        raise FileNotFoundError(f"CfC dataset safe tensors not found at: {CFC_OUT_PATH}")
+
+    print(f"[Dataset] Loading SafeTensors from '{CFC_OUT_PATH}'...")
+    data = load_file(CFC_OUT_PATH)
+
+    x_train = data["train_inputs"].to(device)
+    y_train = data["train_targets"].to(device)
+    x_val = data["val_inputs"].to(device)
+    y_val = data["val_targets"].to(device)
+
+    print(f"[Dataset] Train sequences: {x_train.shape[0]} | Val sequences: {x_val.shape[0]}")
+
+    batch_size = 128
+    train_dataset = TensorDataset(x_train, y_train)
+    val_dataset = TensorDataset(x_val, y_val)
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+
+    model = PyTorchCfCCell(input_dim=16, hidden_dim=32, output_dim=1).to(device)
+    criterion = HuberICLoss(delta=1e-3, ic_weight=0.5)
+
+    epochs = 35
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4, amsgrad=True)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=1e-3, total_steps=epochs * len(train_loader), pct_start=0.1
+    )
+
+    print(f"[Training] Starting CfC optimization for {epochs} epochs...")
+    start_time = time.time()
+
+    best_val_ic = -1.0
+
+    for epoch in range(1, epochs + 1):
+        model.train()
+        train_loss_sum = 0.0
+        train_ic_sum = 0.0
+
+        for bx, by in train_loader:
+            optimizer.zero_grad()
+            pred = model(bx)
+            loss, h_loss, ic = criterion(pred, by)
+            loss.backward()
+
+            # Gradient Clipping for stiff ODE numerical stability
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+            scheduler.step()
+
+            train_loss_sum += loss.item() * len(bx)
+            train_ic_sum += ic.item() * len(bx)
+
+        train_loss = train_loss_sum / len(train_dataset)
+        train_ic = train_ic_sum / len(train_dataset)
+
+        # Validation Phase
+        model.eval()
+        val_loss_sum = 0.0
+        val_ic_sum = 0.0
+
+        with torch.no_grad():
+            for bx, by in val_loader:
+                pred = model(bx)
+                loss, h_loss, ic = criterion(pred, by)
+                val_loss_sum += loss.item() * len(bx)
+                val_ic_sum += ic.item() * len(bx)
+
+        val_loss = val_loss_sum / len(val_dataset)
+        val_ic = val_ic_sum / len(val_dataset)
+
+        if val_ic > best_val_ic:
+            best_val_ic = val_ic
+
+        if epoch % 5 == 0 or epoch == epochs:
+            print(f"Epoch {epoch:02d}/{epochs} | Train Loss: {train_loss:.6f} | Train IC: {train_ic:+.4f} | Val Loss: {val_loss:.6f} | Val IC: {val_ic:+.4f}")
+
+    print(f"[Training] Completed in {time.time() - start_time:.2f}s | Best Val IC: {best_val_ic:+.4f}")
+
+    # Export SafeTensors for Rust Candle
+    print("[Export] Exporting zero-copy SafeTensors weights for Candle Rust...")
+    os.makedirs(MODELS_DIR, exist_ok=True)
+
+    weight_tensors = {
+        "w_alpha": model.w_alpha.detach().cpu().contiguous(),
+        "b_alpha": model.b_alpha.detach().cpu().contiguous(),
+        "w_beta": model.w_beta.detach().cpu().contiguous(),
+        "b_beta": model.b_beta.detach().cpu().contiguous(),
+        "w_output": model.w_output.detach().cpu().contiguous(),
+        "b_output": model.b_output.detach().cpu().contiguous(),
+    }
+
+    save_file(weight_tensors, CFC_WEIGHTS_PATH)
+    file_bytes = os.path.getsize(CFC_WEIGHTS_PATH)
+    print(f"         Exported SafeTensors: '{CFC_WEIGHTS_PATH}' ({file_bytes} bytes)")
+
+    print("=" * 75)
+    print("CfC TRAINING & SAFETENSORS EXPORT COMPLETED SUCCESSFULLY [SUCCESS]")
+    print("=" * 75)
 
 if __name__ == "__main__":
-    main()
+    train_cfc()

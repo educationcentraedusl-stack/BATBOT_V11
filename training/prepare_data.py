@@ -39,7 +39,7 @@ def compute_polars_rolling_tanh_df(df: pl.DataFrame, feature_names: list[str], w
         mean_expr = pl.col(col).rolling_mean(window_size=window, min_samples=1)
         std_expr = pl.col(col).rolling_std(window_size=window, min_samples=1).fill_null(1.0)
         z_expr = (pl.col(col) - mean_expr) / (std_expr + eps)
-        norm_expr = (z_expr / 3.0).tanh().fill_null(0.0).alias(col)
+        norm_expr = (z_expr / 3.0).tanh().fill_null(0.0).fill_nan(0.0).alias(col)
         exprs.append(norm_expr)
 
     df_norm = df.select(exprs)
@@ -120,7 +120,7 @@ def load_and_preprocess_lob_data():
 
     # Step 1: Base Price and Spread Metrics
     df = df_sig.with_columns([
-        ((pl.col("bid") + pl.col("ask")) / 2.0).alias("mid_price"),
+        ((pl.col("bid") + pl.col("ask")) / 2.0).clip(lower_bound=1e-5).alias("mid_price"),
         (pl.col("ask") - pl.col("bid")).alias("spread"),
         (pl.col("ts").diff().fill_null(0).cast(pl.Float64) / 1000.0).alias("delta_tau"), # in seconds
         (pl.col("seq").cast(pl.Int64).diff().fill_null(1) - 1).clip(0, 100).alias("seq_gap"),
@@ -129,13 +129,13 @@ def load_and_preprocess_lob_data():
 
     # Step 2: Micro-Price & Returns
     df = df.with_columns([
-        (pl.col("spread") / (pl.col("mid_price") + 1e-8)).alias("relative_spread"),
+        (pl.col("spread") / (pl.col("mid_price") + 1e-8)).fill_nan(0.0).alias("relative_spread"),
         (pl.col("bid") * (1.0 - pl.col("obi")) / 2.0 + pl.col("ask") * (1.0 + pl.col("obi")) / 2.0).alias("micro_price"),
-        (pl.col("mid_price").log() - pl.col("mid_price").log().shift(1).fill_null(0.0)).alias("mid_log_ret_1"),
-        (pl.col("mid_price").log() - pl.col("mid_price").log().shift(5).fill_null(0.0)).alias("mid_log_ret_5"),
-        (pl.col("mid_price").log() - pl.col("mid_price").log().shift(10).fill_null(0.0)).alias("mid_log_ret_10"),
-        (pl.col("mid_price").log() - pl.col("mid_price").log().shift(50).fill_null(0.0)).alias("mid_log_ret_50"),
-        (pl.col("mid_price").log() - pl.col("mid_price").log().shift(100).fill_null(0.0)).alias("mid_log_ret_100"),
+        (pl.col("mid_price").log() - pl.col("mid_price").log().shift(1)).fill_null(0.0).fill_nan(0.0).alias("mid_log_ret_1"),
+        (pl.col("mid_price").log() - pl.col("mid_price").log().shift(5)).fill_null(0.0).fill_nan(0.0).alias("mid_log_ret_5"),
+        (pl.col("mid_price").log() - pl.col("mid_price").log().shift(10)).fill_null(0.0).fill_nan(0.0).alias("mid_log_ret_10"),
+        (pl.col("mid_price").log() - pl.col("mid_price").log().shift(50)).fill_null(0.0).fill_nan(0.0).alias("mid_log_ret_50"),
+        (pl.col("mid_price").log() - pl.col("mid_price").log().shift(100)).fill_null(0.0).fill_nan(0.0).alias("mid_log_ret_100"),
     ])
 
     # Step 3: Order Book Imbalance, CVD Deltas, Trade Velocity & Volatility
@@ -200,10 +200,10 @@ def load_and_preprocess_lob_data():
             pl.lit(0.0).alias("execution_latency_ms")
         ])
 
-    # Step 6: Calculate Future Return Target (y = 10-tick and 50-tick forward returns)
+    # Step 6: Calculate Future Return Target (y = 10-tick and 50-tick forward log returns)
     df = df.with_columns([
-        (pl.col("mid_price").shift(-10) / pl.col("mid_price") - 1.0).fill_null(0.0).alias("target_return_10"),
-        (pl.col("mid_price").shift(-50) / pl.col("mid_price") - 1.0).fill_null(0.0).alias("target_return_50")
+        (pl.col("mid_price").shift(-10).log() - pl.col("mid_price").log()).fill_null(0.0).fill_nan(0.0).clip(-0.5, 0.5).alias("target_return_10"),
+        (pl.col("mid_price").shift(-50).log() - pl.col("mid_price").log()).fill_null(0.0).fill_nan(0.0).clip(-0.5, 0.5).alias("target_return_50")
     ])
 
     # Extract raw targets

@@ -15,6 +15,11 @@ TKAN_OUT_PATH = os.path.join(DATA_DIR, "tkan_features.safetensors")
 CFC_OUT_PATH = os.path.join(DATA_DIR, "cfc_features.safetensors")
 STATS_OUT_PATH = os.path.join(DATA_DIR, "feature_stats.json")
 
+# Trained Models & Binary LUT Export Paths
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+TKAN_LUT_PATH = os.path.join(MODELS_DIR, "tkan_luts.bin")
+CFC_WEIGHTS_PATH = os.path.join(MODELS_DIR, "cfc_weights.safetensors")
+
 # Normalization & Window Settings
 WELFORD_WINDOW = 1000       # Rolling window size for online Welford Z-Score
 CFC_SEQ_LEN = 32           # Sequence length for CfC continuous-time solver

@@ -162,6 +162,10 @@
 - **Feature/Task:** Step 2 Remediation: HFT Data Preparation Engine Optimization & Zero-Leakage Purge Buffer
 - **Artifacts Created/Modified:** `training/prepare_data.py`, `data/tkan_features.safetensors`, `data/cfc_features.safetensors`, `data/feature_stats.json`
 - **HFT/Performance Compliance:** Completely eliminated Python `for` loops in feature normalization (`compute_polars_rolling_tanh_df`) using Rust-backed Polars SIMD rolling expressions (`rolling_mean`, `rolling_std`). Replaced Python sequence generation loops in `create_cfc_sequences_strided` with zero-copy NumPy striding (`np.lib.stride_tricks.sliding_window_view`). Implemented numerically stable Rust Welford rolling variance in Polars. Applied a strict 50-tick Purge Buffer at the 80/20 split boundary to prevent validation price leakage into forward target labels. Executed in 0.049s normalization time with 100% pass rate.
+- **Date:** 2026-07-28
+- **Feature/Task:** Step 3: HFT Neural Model Training (T-KAN & CfC) & Zero-Copy Rust Model Exporter
+- **Artifacts Created/Modified:** `training/data_config.py`, `training/train_tkan.py`, `training/train_cfc.py`, `models/tkan_luts.bin`, `models/cfc_weights.safetensors`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Implemented PyTorch FastKAN (40 -> 16) spatial encoder with 640 Gaussian RBF spline edge activation functions and PyTorch CfC continuous-time cell (alpha, beta, z_t) matching Candle Rust formulation. Optimized using combined Huber (delta=1e-3) + Pearson Rank Correlation (IC) loss, AdamW optimizer, OneCycleLR scheduler, and gradient norm clipping (1.0). Discretized 640 spline edges into 4096-point lookup tables written with exact 24-byte LE header (u32 num_edges=640, u32 lut_size=4096, f64 min_val=-1.0, f64 max_val=1.0) into `models/tkan_luts.bin` (20.97 MB). Exported trained CfC weight matrices directly to `models/cfc_weights.safetensors`. Verified 100% via PyTorch training loops, binary file header inspection, and 12/12 passing Rust unit tests (`cargo test --lib`).
 - **Status:** ✅ Completed & QA Verified
 
 

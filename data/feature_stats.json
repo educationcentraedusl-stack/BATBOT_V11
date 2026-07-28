@@ -50,9 +50,9 @@
       "price_acceleration",
       "momentum_direction"
     ],
-    "min_val": NaN,
-    "max_val": NaN,
-    "mean_val": NaN
+    "min_val": -1.0,
+    "max_val": 1.0,
+    "mean_val": -0.008194563910365105
   },
   "cfc_features": {
     "dim": 16,
@@ -74,9 +74,9 @@
       "pnl_realized_trend",
       "delta_tau"
     ],
-    "min_val": NaN,
-    "max_val": NaN,
-    "mean_val": NaN
+    "min_val": -1.0,
+    "max_val": 1.0,
+    "mean_val": -0.009646625258028507
   },
   "shapes": {
     "tkan_train_inputs": [
