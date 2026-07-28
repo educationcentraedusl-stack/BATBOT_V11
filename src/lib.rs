@@ -4,6 +4,7 @@ extern crate napi_derive;
 pub mod ai;
 pub mod ipc;
 pub mod lob;
+pub mod oms;
 pub mod ws;
 
 use std::sync::{Arc, Mutex, RwLock};
@@ -14,6 +15,7 @@ use ai::{AIEngine, PreflightValidator};
 use ipc::bridge::IngestionBridge;
 use ipc::shared_memory::AtomicSharedMemoryBridge;
 use lob::{LimitOrderBook, LockFreeSpscQueue};
+use oms::{BinanceWsConfig, OmsEngine};
 use ws::manager::{ConnectionManager, ExchangeType};
 use napi::bindgen_prelude::Buffer;
 use napi::Error;
@@ -22,6 +24,7 @@ lazy_static! {
     static ref GLOBAL_LOB: RwLock<LimitOrderBook> = RwLock::new(LimitOrderBook::new());
     pub static ref GLOBAL_AI_ENGINE: ArcSwapOption<AIEngine> = ArcSwapOption::from(Some(Arc::new(AIEngine::new())));
     pub static ref GLOBAL_SHADOW_ENGINE: ArcSwapOption<Mutex<PreflightValidator>> = ArcSwapOption::from(None);
+    pub static ref GLOBAL_OMS_ENGINE: ArcSwapOption<OmsEngine> = ArcSwapOption::from(None);
     static ref GLOBAL_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -125,6 +128,77 @@ pub fn get_preflight_status() -> String {
         }
     } else {
         "{\"phase\":\"UNLOADED\"}".to_string()
+    }
+}
+
+#[napi]
+pub fn start_oms_engine(
+    symbol: String,
+    initial_balance: Option<f64>,
+    api_key: Option<String>,
+    api_secret: Option<String>,
+    is_testnet: Option<bool>,
+) -> bool {
+    let balance = initial_balance.unwrap_or(100_000.0);
+    let ws_config = if let (Some(key), Some(secret)) = (api_key, api_secret) {
+        if !key.is_empty() && !secret.is_empty() {
+            Some(BinanceWsConfig {
+                api_key: key,
+                api_secret: secret,
+                is_testnet: is_testnet.unwrap_or(true),
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let oms = OmsEngine::new(symbol.clone(), balance, None, None, ws_config);
+    GLOBAL_OMS_ENGINE.store(Some(Arc::new(oms)));
+    println!(
+        "[BATBOT_V11][OMS Core] Order Management System initialized for symbol '{}' with balance ${:.2}.",
+        symbol, balance
+    );
+    true
+}
+
+#[napi]
+pub fn evaluate_oms_tick(sab_buffer: Buffer) -> napi::Result<String> {
+    let raw_ptr = sab_buffer.as_ptr() as *mut u8;
+    let len = sab_buffer.len();
+
+    let bridge = AtomicSharedMemoryBridge::new(raw_ptr, len)
+        .map_err(|err| Error::from_reason(err.to_string()))?;
+
+    if let Some(oms) = GLOBAL_OMS_ENGINE.load().as_ref() {
+        if let Some(intent) = oms.evaluate_sab_prediction(&bridge) {
+            let json = serde_json::to_string(&intent)
+                .map_err(|e| Error::from_reason(e.to_string()))?;
+            return Ok(json);
+        }
+    }
+
+    Ok("null".to_string())
+}
+
+#[napi]
+pub fn get_oms_metrics() -> String {
+    if let Some(oms) = GLOBAL_OMS_ENGINE.load().as_ref() {
+        let m = oms.get_metrics();
+        serde_json::to_string(&m).unwrap_or_else(|_| "{}".to_string())
+    } else {
+        "{\"status\":\"UNINITIALIZED\"}".to_string()
+    }
+}
+
+#[napi]
+pub fn get_position_snapshot() -> String {
+    if let Some(oms) = GLOBAL_OMS_ENGINE.load().as_ref() {
+        let snap = oms.position_ledger().snapshot();
+        serde_json::to_string(&snap).unwrap_or_else(|_| "{}".to_string())
+    } else {
+        "{\"status\":\"UNINITIALIZED\"}".to_string()
     }
 }
 
