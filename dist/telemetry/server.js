@@ -26,16 +26,8 @@ class TelemetryWSServer {
                 ws.on("message", async (data) => {
                     try {
                         const buf = new Uint8Array(data);
-                        // Handle incoming binary Protobuf or JSON RPC control commands
-                        let cmd;
-                        if (buf[0] === 0x7b) {
-                            // JSON Fallback
-                            const str = Buffer.from(buf).toString("utf-8");
-                            cmd = JSON.parse(str);
-                        }
-                        else {
-                            cmd = (0, proto_1.decodeControlCommand)(buf);
-                        }
+                        // Strict binary Protobuf control command decoding
+                        const cmd = (0, proto_1.decodeControlCommand)(buf);
                         if (this.commandHandler) {
                             const res = await this.commandHandler(cmd);
                             if (ws.readyState === ws_1.WebSocket.OPEN) {
