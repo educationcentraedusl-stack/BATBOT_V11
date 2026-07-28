@@ -130,12 +130,13 @@ impl AIEngine {
         *hidden_guard = next_hidden;
 
         // Extract predictions
-        let output_vec = output_tensor.flatten_all()?.to_vec1::<f32>()?;
-        let raw_direction = output_vec.get(0).copied().unwrap_or(0.0) as f64;
+        let flat_out = output_tensor.flatten_all()?;
+        let raw_direction = flat_out.get(0)?.to_scalar::<f32>()? as f64;
+        let raw_confidence = flat_out.get(1)?.to_scalar::<f32>()? as f64;
+        let horizon_ms = flat_out.get(2)?.to_scalar::<f32>()? as f64;
         let direction = raw_direction.tanh(); // Clamped -1.0 to +1.0
-        let raw_confidence = output_vec.get(1).copied().unwrap_or(1.0) as f64;
         let confidence = (1.0 / (1.0 + (-raw_confidence).exp())).clamp(0.0, 1.0); // Sigmoid 0.0 to 1.0
-        let horizon_ms = output_vec.get(2).copied().unwrap_or(500.0) as f64;
+
 
         let end_ns = SystemTime::now()
             .duration_since(UNIX_EPOCH)
