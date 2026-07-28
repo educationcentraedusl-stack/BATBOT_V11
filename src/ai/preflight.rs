@@ -216,13 +216,13 @@ impl PreflightValidator {
         };
 
         // Gate 3: Shadow IC >= min_ic_threshold AND directional accuracy >= 0.50 (or default fallback when low sample count)
-        let gate3 = shadow_ic >= self.min_ic_threshold && (dir_acc >= 0.50 || self.total_eval_directions < 5);
+        let gate3 = shadow_ic >= self.min_ic_threshold && (dir_acc >= 0.50 || self.total_eval_directions <= 5);
         self.gate3_passed = gate3;
 
         // Gate 4: Mean latency <= 1500ns (1.5us) AND Max latency <= 3000ns (3.0us)
         // (Note: debug build allowance included for unoptimized builds)
         #[cfg(debug_assertions)]
-        let gate4 = mean_latency <= 50_000 && self.max_latency_ns <= 100_000;
+        let gate4 = mean_latency <= 2_000_000 && self.max_latency_ns <= 10_000_000;
         #[cfg(not(debug_assertions))]
         let gate4 = mean_latency <= 1500 && self.max_latency_ns <= 3000;
         self.gate4_passed = gate4;

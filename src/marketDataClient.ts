@@ -135,7 +135,11 @@ export class MarketDataClient {
     return this.readAtomicFloat64(101);
   }
 
+  public getIsModelDrifted(): boolean {
+    return this.readAtomicFloat64(102) > 0.5;
+  }
+
   public getAIInferenceLatencyNs(): bigint {
-    return Atomics.load(this.bigIntView, 102);
+    return Atomics.load(this.bigIntView, 103);
   }
 }

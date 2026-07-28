@@ -41,10 +41,6 @@ impl ICTracker {
         let ic = self.compute_spearman_ic();
         self.current_ic = ic;
 
-        if let Some(bridge) = sab {
-            bridge.store_f64(101, ic);
-        }
-
         if self.pairs.len() >= MIN_SAMPLES_FOR_DRIFT && ic < MODEL_DRIFT_THRESHOLD {
             if !self.is_drifted {
                 self.is_drifted = true;
@@ -57,7 +53,18 @@ impl ICTracker {
             self.is_drifted = false;
         }
 
+        if let Some(bridge) = sab {
+            bridge.store_f64(101, ic);
+            bridge.store_f64(102, if self.is_drifted { 1.0 } else { 0.0 });
+        }
+
         ic
+    }
+
+    pub fn reset(&mut self) {
+        self.pairs.clear();
+        self.current_ic = 0.0;
+        self.is_drifted = false;
     }
 
     pub fn current_ic(&self) -> f64 {
@@ -208,6 +215,27 @@ mod tests {
         }
 
         let sab_ic = bridge.load_f64(101);
+        let sab_drift = bridge.load_f64(102);
         assert!((sab_ic - 1.0).abs() < 1e-4, "SAB slot 101 expected ~ 1.0, got {}", sab_ic);
+        assert_eq!(sab_drift, 0.0);
+    }
+
+    #[test]
+    fn test_ic_tracker_reset_and_drift_slot() {
+        let mut buffer = vec![0u8; 2048];
+        let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len()).unwrap();
+        let mut tracker = ICTracker::new(100);
+
+        for i in 1..=50 {
+            tracker.add_observation(i as f64, - (i as f64), Some(&bridge));
+        }
+
+        assert!(tracker.is_drifted());
+        assert_eq!(bridge.load_f64(102), 1.0);
+
+        tracker.reset();
+        assert!(!tracker.is_drifted());
+        assert_eq!(tracker.len(), 0);
+        assert_eq!(tracker.current_ic(), 0.0);
     }
 }

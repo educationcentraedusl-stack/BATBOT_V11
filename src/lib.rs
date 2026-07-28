@@ -71,6 +71,35 @@ pub fn load_ai_model_full(weights_path: String, tkan_path: String) -> bool {
 }
 
 #[napi]
+pub fn reset_ic_tracker() -> bool {
+    if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
+        active_engine.reset_ic_tracker();
+        println!("[BATBOT_V11][N-API IC Tracker] Reset IC tracking window and cleared drift status.");
+        true
+    } else {
+        false
+    }
+}
+
+#[napi]
+pub fn get_ic_status() -> String {
+    if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
+        if let Ok(tracker) = active_engine.ic_tracker.lock() {
+            format!(
+                "{{\"ic\":{:.6},\"is_drifted\":{},\"sample_count\":{}}}",
+                tracker.current_ic(),
+                tracker.is_drifted(),
+                tracker.len()
+            )
+        } else {
+            "{\"ic\":0.0,\"is_drifted\":false,\"sample_count\":0}".to_string()
+        }
+    } else {
+        "{\"ic\":0.0,\"is_drifted\":false,\"sample_count\":0}".to_string()
+    }
+}
+
+#[napi]
 pub fn trigger_preflight_warmup(
     weights_path: String,
     tkan_path: String,

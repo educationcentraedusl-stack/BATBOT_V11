@@ -310,12 +310,14 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { initCore, createLobEngine, loadAiModel, loadAiModelFull, triggerPreflightWarmup, getPreflightStatus, startOmsEngine, evaluateOmsTick, getOmsMetrics, getPositionSnapshot, startIngestion } = nativeBinding
+const { initCore, createLobEngine, loadAiModel, loadAiModelFull, resetIcTracker, getIcStatus, triggerPreflightWarmup, getPreflightStatus, startOmsEngine, evaluateOmsTick, getOmsMetrics, getPositionSnapshot, startIngestion } = nativeBinding
 
 module.exports.initCore = initCore
 module.exports.createLobEngine = createLobEngine
 module.exports.loadAiModel = loadAiModel
 module.exports.loadAiModelFull = loadAiModelFull
+module.exports.resetIcTracker = resetIcTracker
+module.exports.getIcStatus = getIcStatus
 module.exports.triggerPreflightWarmup = triggerPreflightWarmup
 module.exports.getPreflightStatus = getPreflightStatus
 module.exports.startOmsEngine = startOmsEngine

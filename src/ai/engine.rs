@@ -69,6 +69,12 @@ impl AIEngine {
         self.status == AiEngineStatus::Calibrated && self.cell.is_some()
     }
 
+    pub fn reset_ic_tracker(&self) {
+        if let Ok(mut tracker) = self.ic_tracker.lock() {
+            tracker.reset();
+        }
+    }
+
     pub fn run_inference(&self, sab: &AtomicSharedMemoryBridge) -> Result<()> {
         if self.status != AiEngineStatus::Calibrated || self.cell.is_none() {
             // Zero-thrashing graceful fallback: return instantly if engine is uncalibrated

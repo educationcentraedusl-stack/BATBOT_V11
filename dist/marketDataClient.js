@@ -110,8 +110,11 @@ class MarketDataClient {
     getRollingIC() {
         return this.readAtomicFloat64(101);
     }
+    getIsModelDrifted() {
+        return this.readAtomicFloat64(102) > 0.5;
+    }
     getAIInferenceLatencyNs() {
-        return Atomics.load(this.bigIntView, 102);
+        return Atomics.load(this.bigIntView, 103);
     }
 }
 exports.MarketDataClient = MarketDataClient;
