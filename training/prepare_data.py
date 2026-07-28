@@ -2,8 +2,9 @@
 """
 BATBOT_V11 SOTA High-Frequency Trading (HFT) Data Preparation Pipeline
 Processes raw signals.jsonl and executions.jsonl into training-ready SafeTensors.
-Uses Polars (Rust-backed multi-threaded columnar engine), Apache Arrow zero-copy memory buffers,
-Online Welford Rolling Z-Scores, and Symmetrical Tanh Bounding for T-KAN and CfC models.
+Uses Polars (Rust-backed multi-threaded SIMD columnar engine), Apache Arrow zero-copy memory buffers,
+SIMD Rolling Z-Scores (Welford SIMD), Symmetrical Tanh Bounding, Strided Sequence Extraction,
+and Strict Split Purge Buffers for T-KAN and CfC models.
 """
 
 import os
@@ -22,56 +23,52 @@ from data_config import (
     TKAN_FEATURE_NAMES, CFC_FEATURE_NAMES
 )
 
-def compute_welford_rolling_tanh(matrix: np.ndarray, window: int = 1000, eps: float = 1e-8) -> np.ndarray:
+# Strict Purge Buffer to prevent target horizon leakage across train/val boundary
+PURGE_BUFFER_TICKS = 50
+
+def compute_polars_rolling_tanh_df(df: pl.DataFrame, feature_names: list[str], window: int = 1000, eps: float = 1e-8) -> np.ndarray:
     """
-    Computes Online Welford Rolling Z-Score followed by symmetrical Tanh bounding on a 2D feature matrix [N, D].
+    Computes SIMD-accelerated Rolling Z-Score followed by symmetrical Tanh bounding in Polars (Rust).
+    Uses Polars native rolling_mean and rolling_std (powered by Rust multi-threaded SIMD Welford variance).
+    Completely eliminates Python for-loops for feature normalization.
     Formula: z_t = (x_t - mean_W(x)) / (std_W(x) + eps)
              x_norm = tanh(z_t / 3.0) -> strictly bounded into (-1.0, 1.0)
-    Prevents lookahead bias and avoids KAN spline knot out-of-bounds collapse.
     """
-    N, D = matrix.shape
-    normalized = np.zeros_like(matrix, dtype=np.float32)
+    exprs = []
+    for col in feature_names:
+        mean_expr = pl.col(col).rolling_mean(window_size=window, min_samples=1)
+        std_expr = pl.col(col).rolling_std(window_size=window, min_samples=1).fill_null(1.0)
+        z_expr = (pl.col(col) - mean_expr) / (std_expr + eps)
+        norm_expr = (z_expr / 3.0).tanh().fill_null(0.0).alias(col)
+        exprs.append(norm_expr)
 
-    for col in range(D):
-        arr = matrix[:, col]
-        roll_mean = np.zeros(N, dtype=np.float64)
-        roll_std = np.zeros(N, dtype=np.float64)
+    df_norm = df.select(exprs)
+    return df_norm.to_numpy().astype(np.float32)
 
-        current_sum = 0.0
-        current_sq_sum = 0.0
+def create_cfc_sequences_strided(features: np.ndarray, targets: np.ndarray, seq_len: int = 32):
+    """
+    Memory-efficient 32-step sliding window sequence extraction using zero-copy NumPy striding
+    (np.lib.stride_tricks.sliding_window_view).
+    Completely eliminates Python for-loops during sequence generation.
+    Returns PyTorch tensors of shape [Batch, SeqLen, Features].
+    """
+    num_samples = len(features) - seq_len + 1
+    if num_samples <= 0:
+        return torch.from_numpy(features).unsqueeze(0).contiguous(), torch.from_numpy(targets).unsqueeze(0).contiguous()
 
-        for i in range(N):
-            val = float(arr[i])
-            if math.isnan(val) or math.isinf(val):
-                val = 0.0
-                arr[i] = 0.0
+    # sliding_window_view on axis 0 yields shape: (num_samples, Features, SeqLen)
+    in_sw = np.lib.stride_tricks.sliding_window_view(features, window_shape=seq_len, axis=0)
+    tgt_sw = np.lib.stride_tricks.sliding_window_view(targets, window_shape=seq_len, axis=0)
 
-            current_sum += val
-            current_sq_sum += val * val
+    # Transpose to (num_samples, SeqLen, Features)
+    seq_inputs = np.transpose(in_sw, (0, 2, 1)).astype(np.float32)
+    seq_targets = np.transpose(tgt_sw, (0, 2, 1)).astype(np.float32)
 
-            if i >= window:
-                old_val = float(arr[i - window])
-                current_sum -= old_val
-                current_sq_sum -= old_val * old_val
-                count = window
-            else:
-                count = i + 1
-
-            mean = current_sum / count
-            variance = max(0.0, (current_sq_sum / count) - (mean * mean))
-            std = math.sqrt(variance)
-
-            roll_mean[i] = mean
-            roll_std[i] = std if std > eps else 1.0
-
-        z_scores = (arr - roll_mean) / (roll_std + eps)
-        normalized[:, col] = np.tanh(z_scores / 3.0).astype(np.float32)
-
-    return normalized
+    return torch.from_numpy(seq_inputs).contiguous(), torch.from_numpy(seq_targets).contiguous()
 
 def load_and_preprocess_lob_data():
     print("=" * 75)
-    print("BATBOT_V11 SOTA HFT DATA PREPARATION ENGINE (POLARS + ARROW + SAFETENSORS)")
+    print("BATBOT_V11 SOTA HFT DATA PREPARATION ENGINE (POLARS SIMD + ARROW + SAFETENSORS)")
     print("=" * 75)
 
     if not os.path.exists(SIGNALS_PATH):
@@ -209,21 +206,18 @@ def load_and_preprocess_lob_data():
         (pl.col("mid_price").shift(-50) / pl.col("mid_price") - 1.0).fill_null(0.0).alias("target_return_50")
     ])
 
-    # Convert Polars DataFrame to contiguous NumPy buffers
-    print("[Normalization] Extracting raw feature matrices and executing Welford Rolling Tanh Bounding...")
-    
-    tkan_raw = df.select(TKAN_FEATURE_NAMES).to_numpy()
-    cfc_raw = df.select(CFC_FEATURE_NAMES).to_numpy()
+    # Extract raw targets
     y_tkan_raw = df.select(["target_return_10"]).to_numpy().astype(np.float32)
     y_cfc_raw = df.select(["target_return_50"]).to_numpy().astype(np.float32)
 
-    # Clean NaNs and Infs before Welford calculation
-    tkan_raw = np.nan_to_num(tkan_raw, nan=0.0, posinf=0.0, neginf=0.0)
-    cfc_raw = np.nan_to_num(cfc_raw, nan=0.0, posinf=0.0, neginf=0.0)
+    # Perform SIMD-Accelerated Rolling Z-Score + Tanh Bounding entirely in Rust/Polars
+    print("[Normalization] Executing SIMD Polars Rolling Z-Scores (Rust Welford) + Symmetrical Tanh Bounding...")
+    norm_start = time.time()
 
-    # Perform Online Welford Rolling Z-Score + Tanh Bounding
-    tkan_norm = compute_welford_rolling_tanh(tkan_raw, window=WELFORD_WINDOW)
-    cfc_norm = compute_welford_rolling_tanh(cfc_raw, window=WELFORD_WINDOW)
+    tkan_norm = compute_polars_rolling_tanh_df(df, TKAN_FEATURE_NAMES, window=WELFORD_WINDOW)
+    cfc_norm = compute_polars_rolling_tanh_df(df, CFC_FEATURE_NAMES, window=WELFORD_WINDOW)
+
+    print(f"[Normalization] Completed SIMD feature normalization in {time.time() - norm_start:.4f}s")
 
     N, num_tkan_features = tkan_norm.shape
     _, num_cfc_features = cfc_norm.shape
@@ -235,16 +229,21 @@ def load_and_preprocess_lob_data():
     assert num_tkan_features == 40, f"Error: T-KAN feature count is {num_tkan_features}, expected 40!"
     assert num_cfc_features == 16, f"Error: CfC feature count is {num_cfc_features}, expected 16!"
 
-    # Split 80/20 Chronologically
+    # Split 80/20 Chronologically with Strict Purge Buffer
     split_idx = int(N * TRAIN_SPLIT_RATIO)
-    print(f"[Dataset Split] Non-overlapping Chronological 80/20 Split at index {split_idx}:")
-    print(f"                Train Samples: {split_idx} | Validation Samples: {N - split_idx}")
+    val_start_idx = split_idx + PURGE_BUFFER_TICKS
+    purged_count = min(PURGE_BUFFER_TICKS, max(0, N - split_idx))
+
+    print(f"[Dataset Split] Chronological 80/20 Split with Purge Buffer:")
+    print(f"                Train Range: [0 : {split_idx}] ({split_idx} samples)")
+    print(f"                Purge Buffer Range: [{split_idx} : {val_start_idx}] ({purged_count} ticks purged)")
+    print(f"                Validation Range: [{val_start_idx} : {N}] ({max(0, N - val_start_idx)} samples)")
 
     # Prepare T-KAN Tensors
     tkan_train_in = torch.from_numpy(tkan_norm[:split_idx])
     tkan_train_tgt = torch.from_numpy(y_tkan_raw[:split_idx])
-    tkan_val_in = torch.from_numpy(tkan_norm[split_idx:])
-    tkan_val_tgt = torch.from_numpy(y_tkan_raw[split_idx:])
+    tkan_val_in = torch.from_numpy(tkan_norm[val_start_idx:])
+    tkan_val_tgt = torch.from_numpy(y_tkan_raw[val_start_idx:])
 
     tkan_tensors = {
         "train_inputs": tkan_train_in.contiguous(),
@@ -253,24 +252,14 @@ def load_and_preprocess_lob_data():
         "val_targets": tkan_val_tgt.contiguous(),
     }
 
-    # Prepare CfC Sequence Tensors [Batch, SeqLen, 16]
-    print(f"[CfC Sequence Engine] Building 32-step sliding window sequences for CfC model...")
-    def create_cfc_sequences(features: np.ndarray, targets: np.ndarray, seq_len: int = 32):
-        num_samples = len(features) - seq_len + 1
-        if num_samples <= 0:
-            return torch.from_numpy(features).unsqueeze(0).contiguous(), torch.from_numpy(targets).unsqueeze(0).contiguous()
-        
-        seq_inputs = np.zeros((num_samples, seq_len, features.shape[1]), dtype=np.float32)
-        seq_targets = np.zeros((num_samples, seq_len, targets.shape[1]), dtype=np.float32)
+    # Prepare CfC Sequence Tensors [Batch, SeqLen, 16] using Strided Zero-Copy Extraction
+    print(f"[CfC Sequence Engine] Building 32-step sliding window sequences via NumPy SIMD striding...")
+    seq_start = time.time()
 
-        for i in range(num_samples):
-            seq_inputs[i] = features[i:i+seq_len]
-            seq_targets[i] = targets[i:i+seq_len]
+    cfc_train_in, cfc_train_tgt = create_cfc_sequences_strided(cfc_norm[:split_idx], y_cfc_raw[:split_idx], CFC_SEQ_LEN)
+    cfc_val_in, cfc_val_tgt = create_cfc_sequences_strided(cfc_norm[val_start_idx:], y_cfc_raw[val_start_idx:], CFC_SEQ_LEN)
 
-        return torch.from_numpy(seq_inputs).contiguous(), torch.from_numpy(seq_targets).contiguous()
-
-    cfc_train_in, cfc_train_tgt = create_cfc_sequences(cfc_norm[:split_idx], y_cfc_raw[:split_idx], CFC_SEQ_LEN)
-    cfc_val_in, cfc_val_tgt = create_cfc_sequences(cfc_norm[split_idx:], y_cfc_raw[split_idx:], CFC_SEQ_LEN)
+    print(f"[CfC Sequence Engine] Built sequence tensors in {time.time() - seq_start:.4f}s")
 
     cfc_tensors = {
         "train_inputs": cfc_train_in.contiguous(),
@@ -292,9 +281,11 @@ def load_and_preprocess_lob_data():
     stats = {
         "dataset_records": N,
         "train_records": split_idx,
-        "val_records": N - split_idx,
+        "purged_records": purged_count,
+        "val_records": max(0, N - val_start_idx),
         "welford_window": WELFORD_WINDOW,
         "cfc_sequence_length": CFC_SEQ_LEN,
+        "purge_buffer_ticks": PURGE_BUFFER_TICKS,
         "tkan_features": {
             "dim": 40,
             "names": TKAN_FEATURE_NAMES,
