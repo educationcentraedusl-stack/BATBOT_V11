@@ -300,6 +300,30 @@ export class BinanceExecutionClient {
     );
   }
 
+  public async flattenPositions(symbol: string): Promise<boolean> {
+    try {
+      await this.cancelAllOrders(symbol);
+      const positions = await this.getPositionRisk(symbol);
+      for (const pos of positions) {
+        const amt = parseFloat(pos.positionAmt || "0");
+        if (Math.abs(amt) > 0) {
+          const side = amt > 0 ? "SELL" : "BUY";
+          await this.placeOrder({
+            symbol: pos.symbol,
+            side: side,
+            type: "MARKET",
+            quantity: Math.abs(amt),
+            reduceOnly: true,
+          });
+        }
+      }
+      return true;
+    } catch (err: any) {
+      console.error(`[BinanceExecutionClient] flattenPositions error: ${err.message}`);
+      return false;
+    }
+  }
+
   public async getPositionRisk(symbol?: string): Promise<BinancePositionRisk[]> {
     const params: Record<string, string> = {};
     if (symbol) params.symbol = symbol;

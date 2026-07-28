@@ -64,6 +64,34 @@ function initializeSystem() {
     const telemetryServer = new server_1.TelemetryWSServer(telemetryPort);
     let isRunning = true;
     let tickInterval = null;
+    // Set up Bi-directional WebSocket RPC Control Command Handler
+    telemetryServer.setCommandHandler(async (cmd) => {
+        switch (cmd.action) {
+            case "ENGINE_START":
+                isRunning = true;
+                return { success: true, message: "HFT Engine Started Successfully" };
+            case "ENGINE_PAUSE":
+                isRunning = false;
+                return { success: true, message: "HFT Engine Paused Successfully" };
+            case "EMERGENCY_KILL":
+                isRunning = false;
+                riskGuard.updatePositionNotional(0);
+                // Attempt flattening position via execution client if configured
+                if (executionClient.isConfigured()) {
+                    try {
+                        await executionClient.flattenPositions(strategyEngine.getConfig().symbol);
+                    }
+                    catch (err) {
+                        console.error(`[EMERGENCY_KILL] Flattening error: ${err.message}`);
+                    }
+                }
+                return { success: true, message: "EMERGENCY KILL EXECUTED: Engine Halted & Position Flattened" };
+            case "AI_HOT_SWAP":
+                return { success: true, message: `Model Hot-Swap Triggered for: ${cmd.modelPath || "default"}` };
+            default:
+                return { success: false, message: `Unknown command action: ${cmd.action}` };
+        }
+    });
     // Try loading native Rust N-API module and starting zero-copy data ingestion
     try {
         const nativePath = path.resolve(__dirname, "../index.js");

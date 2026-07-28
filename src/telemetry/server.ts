@@ -1,15 +1,23 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { TelemetryFrame } from "./dashboard";
+import { encodeTelemetryFrame, decodeControlCommand, ControlCommand, encodeControlResponse } from "./proto";
+
+export type ControlCommandHandler = (cmd: ControlCommand) => Promise<{ success: boolean; message: string }>;
 
 export class TelemetryWSServer {
   private wss: WebSocketServer | null = null;
   private port: number;
   private clients: Set<WebSocket> = new Set();
   private lastBroadcastTime = 0;
-  private broadcastIntervalMs = 100; // Throttle broadcasts to 10Hz max
+  private broadcastIntervalMs = 16; // 60Hz streaming (16.6ms) for ultra-low latency canvas updates
+  private commandHandler: ControlCommandHandler | null = null;
 
   constructor(port: number = 8080) {
     this.port = port;
+  }
+
+  public setCommandHandler(handler: ControlCommandHandler): void {
+    this.commandHandler = handler;
   }
 
   public start(): void {
@@ -21,6 +29,31 @@ export class TelemetryWSServer {
       this.wss.on("connection", (ws: WebSocket) => {
         this.clients.add(ws);
 
+        ws.on("message", async (data: Buffer | ArrayBuffer) => {
+          try {
+            const buf = new Uint8Array(data as ArrayBuffer);
+            // Handle incoming binary Protobuf or JSON RPC control commands
+            let cmd: ControlCommand;
+            if (buf[0] === 0x7b) {
+              // JSON Fallback
+              const str = Buffer.from(buf).toString("utf-8");
+              cmd = JSON.parse(str);
+            } else {
+              cmd = decodeControlCommand(buf);
+            }
+
+            if (this.commandHandler) {
+              const res = await this.commandHandler(cmd);
+              if (ws.readyState === WebSocket.OPEN) {
+                const responseBuf = encodeControlResponse(res.success, cmd.action, res.message);
+                ws.send(responseBuf);
+              }
+            }
+          } catch (err: any) {
+            console.error(`[TelemetryWSServer] RPC processing error: ${err.message}`);
+          }
+        });
+
         ws.on("close", () => {
           this.clients.delete(ws);
         });
@@ -30,12 +63,12 @@ export class TelemetryWSServer {
           this.clients.delete(ws);
         });
 
-        // Send initial handshake message
+        // Send initial JSON handshake message
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(
             JSON.stringify({
               type: "INIT",
-              message: "BATBOT_V11 Telemetry Stream Connected",
+              message: "BATBOT_V11 Protobuf Telemetry & Control Stream Connected",
               timestamp: Date.now(),
             })
           );
@@ -52,7 +85,7 @@ export class TelemetryWSServer {
   }
 
   /**
-   * Non-blocking broadcast of telemetry frame to connected clients.
+   * High-frequency binary Protobuf broadcast to all connected clients.
    */
   public broadcast(frame: TelemetryFrame): void {
     if (!this.wss || this.clients.size === 0) return;
@@ -63,24 +96,20 @@ export class TelemetryWSServer {
     }
     this.lastBroadcastTime = now;
 
-    // Convert BigInt to string for JSON serialization
-    const payload = JSON.stringify({
-      type: "TELEMETRY",
-      data: {
-        ...frame,
-        sequenceNum: frame.sequenceNum.toString(),
-      },
-      timestamp: now,
-    });
+    try {
+      const binaryPayload = encodeTelemetryFrame(frame, now);
 
-    for (const client of this.clients) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(payload, (err) => {
-          if (err) {
-            this.clients.delete(client);
-          }
-        });
+      for (const client of this.clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(binaryPayload, (err) => {
+            if (err) {
+              this.clients.delete(client);
+            }
+          });
+        }
       }
+    } catch (err: any) {
+      console.error(`[TelemetryWSServer] Frame broadcast encoding error: ${err.message}`);
     }
   }
 

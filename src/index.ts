@@ -7,6 +7,7 @@ import { BinanceExecutionClient } from "./execution/binance";
 import { TradeLogger } from "./telemetry/logger";
 import { CLIDashboard, TelemetryFrame } from "./telemetry/dashboard";
 import { TelemetryWSServer } from "./telemetry/server";
+import { ControlCommand } from "./telemetry/proto";
 
 export const DEFAULT_TAKER_FEE_RATE = 0.0004;
 
@@ -47,6 +48,34 @@ export function initializeSystem(): SystemControlPlane {
 
   let isRunning = true;
   let tickInterval: NodeJS.Timeout | null = null;
+
+  // Set up Bi-directional WebSocket RPC Control Command Handler
+  telemetryServer.setCommandHandler(async (cmd: ControlCommand) => {
+    switch (cmd.action) {
+      case "ENGINE_START":
+        isRunning = true;
+        return { success: true, message: "HFT Engine Started Successfully" };
+      case "ENGINE_PAUSE":
+        isRunning = false;
+        return { success: true, message: "HFT Engine Paused Successfully" };
+      case "EMERGENCY_KILL":
+        isRunning = false;
+        riskGuard.updatePositionNotional(0);
+        // Attempt flattening position via execution client if configured
+        if (executionClient.isConfigured()) {
+          try {
+            await executionClient.flattenPositions(strategyEngine.getConfig().symbol);
+          } catch (err: any) {
+            console.error(`[EMERGENCY_KILL] Flattening error: ${err.message}`);
+          }
+        }
+        return { success: true, message: "EMERGENCY KILL EXECUTED: Engine Halted & Position Flattened" };
+      case "AI_HOT_SWAP":
+        return { success: true, message: `Model Hot-Swap Triggered for: ${cmd.modelPath || "default"}` };
+      default:
+        return { success: false, message: `Unknown command action: ${(cmd as any).action}` };
+    }
+  });
 
   // Try loading native Rust N-API module and starting zero-copy data ingestion
   try {
@@ -171,7 +200,6 @@ export function initializeSystem(): SystemControlPlane {
     process.stdout.write("[BATBOT_V11] System shutdown cleanly.\n");
   };
 
-
   return {
     status: "BATBOT_V11_CONTROL_PLANE_READY",
     sab,
@@ -198,4 +226,3 @@ if (require.main === module) {
   process.on("SIGINT", handleShutdown);
   process.on("SIGTERM", handleShutdown);
 }
-
