@@ -75,6 +75,7 @@ export async function syncStateOnStartup(
     }
   } catch (err: any) {
     console.error(`[StateSync] Critical Error during startup state sync: ${err.message}`);
+    throw err;
   }
 }
 
@@ -95,11 +96,7 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
   let tickInterval: NodeJS.Timeout | null = null;
 
   // Physically await Binance Server Time & State Synchronization BEFORE starting tick loop
-  try {
-    await syncStateOnStartup(executionClient, strategyEngine, riskGuard);
-  } catch (err: any) {
-    console.error(`[StateSync] Blocking state sync error: ${err.message}`);
-  }
+  await syncStateOnStartup(executionClient, strategyEngine, riskGuard);
 
   // Set up Bi-directional WebSocket RPC Control Command Handler
   telemetryServer.setCommandHandler(async (cmd: ControlCommand) => {
@@ -178,34 +175,38 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
     const positionLedger = strategyEngine.getPositionLedger();
 
     if (tickResult.executionPromise) {
-      tickResult.executionPromise.then((orderRes) => {
-        if (orderRes) {
-          const execQty = parseFloat(orderRes.executedQty || "0");
-          const origQty = parseFloat(orderRes.origQty || "0");
-          const finalQty = execQty > 0 ? execQty : (origQty > 0 ? origQty : strategyEngine.getConfig().orderQuantity);
-          const px = parseFloat(orderRes.price || orderRes.avgPrice || "0") || (tickResult.signalType === "BUY" ? tickResult.askPrice : tickResult.bidPrice);
-          const fee = (px * finalQty) * DEFAULT_TAKER_FEE_RATE;
-          const fillSide = (orderRes.side as "BUY" | "SELL") || tickResult.signalType;
-          const symbol = orderRes.symbol || strategyEngine.getConfig().symbol;
+      tickResult.executionPromise
+        .then((orderRes) => {
+          if (orderRes) {
+            const execQty = parseFloat(orderRes.executedQty || "0");
+            const origQty = parseFloat(orderRes.origQty || "0");
+            const finalQty = execQty > 0 ? execQty : (origQty > 0 ? origQty : strategyEngine.getConfig().orderQuantity);
+            const px = parseFloat(orderRes.price || orderRes.avgPrice || "0") || (tickResult.signalType === "BUY" ? tickResult.askPrice : tickResult.bidPrice);
+            const fee = (px * finalQty) * DEFAULT_TAKER_FEE_RATE;
+            const fillSide = (orderRes.side as "BUY" | "SELL") || tickResult.signalType;
+            const symbol = orderRes.symbol || strategyEngine.getConfig().symbol;
 
-          // Route fill execution through zero-GC PositionLedger FIFO engine
-          const ledgerResult = positionLedger.processFill(symbol, fillSide, px, finalQty, fee);
+            // Route fill execution through zero-GC PositionLedger FIFO engine
+            const ledgerResult = positionLedger.processFill(symbol, fillSide, px, finalQty, fee);
 
-          // Update RiskGuard position state & record realized PnL
-          riskGuard.recordRealizedPnl(ledgerResult.realizedPnl);
-          riskGuard.updatePositionNotional(ledgerResult.netQuantityAfterFill * ledgerResult.averageEntryPriceAfterFill);
+            // Update RiskGuard position state & record realized PnL
+            riskGuard.recordRealizedPnl(ledgerResult.realizedPnl);
+            riskGuard.updatePositionNotional(ledgerResult.netQuantityAfterFill * ledgerResult.averageEntryPriceAfterFill);
 
-          logger.logExecution(
-            symbol,
-            fillSide,
-            px,
-            finalQty,
-            ledgerResult.realizedPnl,
-            fee,
-            0
-          );
-        }
-      });
+            logger.logExecution(
+              symbol,
+              fillSide,
+              px,
+              finalQty,
+              ledgerResult.realizedPnl,
+              fee,
+              0
+            );
+          }
+        })
+        .catch((err: any) => {
+          console.error(`[Execution] Order placement execution error: ${err.message}`);
+        });
     }
 
     const posSummary = positionLedger.getSummary(tickResult.askPrice || tickResult.bidPrice);

@@ -69,8 +69,11 @@ async function runTest() {
     topBidsBuffer[1] === 4.5
   ) {
     console.log("✅ [PASSED] Zero-Copy IPC SharedArrayBuffer Verification Passed!");
+    await system.stop();
+    process.exit(0);
   } else {
     console.error("❌ [FAILED] Verification failed.");
+    await system.stop();
     process.exit(1);
   }
 }

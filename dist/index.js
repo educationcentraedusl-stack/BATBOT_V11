@@ -89,6 +89,7 @@ async function syncStateOnStartup(executionClient, strategyEngine, riskGuard) {
     }
     catch (err) {
         console.error(`[StateSync] Critical Error during startup state sync: ${err.message}`);
+        throw err;
     }
 }
 async function initializeSystem() {
@@ -106,12 +107,7 @@ async function initializeSystem() {
     let isRunning = true;
     let tickInterval = null;
     // Physically await Binance Server Time & State Synchronization BEFORE starting tick loop
-    try {
-        await syncStateOnStartup(executionClient, strategyEngine, riskGuard);
-    }
-    catch (err) {
-        console.error(`[StateSync] Blocking state sync error: ${err.message}`);
-    }
+    await syncStateOnStartup(executionClient, strategyEngine, riskGuard);
     // Set up Bi-directional WebSocket RPC Control Command Handler
     telemetryServer.setCommandHandler(async (cmd) => {
         switch (cmd.action) {
@@ -175,7 +171,8 @@ async function initializeSystem() {
         logger.logSignal(tickResult.sequenceNum, tickResult.signalType, tickResult.obi, tickResult.cvd, tickResult.spreadVelocity, tickResult.bidPrice, tickResult.askPrice, latencyUs);
         const positionLedger = strategyEngine.getPositionLedger();
         if (tickResult.executionPromise) {
-            tickResult.executionPromise.then((orderRes) => {
+            tickResult.executionPromise
+                .then((orderRes) => {
                 if (orderRes) {
                     const execQty = parseFloat(orderRes.executedQty || "0");
                     const origQty = parseFloat(orderRes.origQty || "0");
@@ -191,6 +188,9 @@ async function initializeSystem() {
                     riskGuard.updatePositionNotional(ledgerResult.netQuantityAfterFill * ledgerResult.averageEntryPriceAfterFill);
                     logger.logExecution(symbol, fillSide, px, finalQty, ledgerResult.realizedPnl, fee, 0);
                 }
+            })
+                .catch((err) => {
+                console.error(`[Execution] Order placement execution error: ${err.message}`);
             });
         }
         const posSummary = positionLedger.getSummary(tickResult.askPrice || tickResult.bidPrice);
