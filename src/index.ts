@@ -5,6 +5,7 @@ import { StrategyEngine } from "./strategy/engine";
 import { RiskGuard } from "./strategy/risk";
 import { BinanceExecutionClient } from "./execution/binance";
 import { TradeLogger } from "./telemetry/logger";
+import { CsvTradeLogger } from "./utils/csvLogger";
 import { CLIDashboard, TelemetryFrame } from "./telemetry/dashboard";
 import { TelemetryWSServer } from "./telemetry/server";
 import { ControlCommand } from "./telemetry/proto";
@@ -18,6 +19,7 @@ export {
   RiskGuard,
   BinanceExecutionClient,
   TradeLogger,
+  CsvTradeLogger,
   CLIDashboard,
   TelemetryWSServer,
 };
@@ -30,6 +32,7 @@ export interface SystemControlPlane {
   executionClient: BinanceExecutionClient;
   strategyEngine: StrategyEngine;
   logger: TradeLogger;
+  csvLogger: CsvTradeLogger;
   dashboard: CLIDashboard;
   telemetryServer: TelemetryWSServer;
   isRunning: boolean;
@@ -86,6 +89,7 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
   const executionClient = new BinanceExecutionClient();
   const strategyEngine = new StrategyEngine(client, riskGuard, executionClient);
   const logger = new TradeLogger("data");
+  const csvLogger = new CsvTradeLogger("data", "trade_history.csv");
   const dashboard = new CLIDashboard(true);
   const telemetryPort = parseInt(process.env.TELEMETRY_PORT || "8080", 10);
   const telemetryServer = new TelemetryWSServer(telemetryPort);
@@ -187,7 +191,12 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
             const symbol = orderRes.symbol || strategyEngine.getConfig().symbol;
 
             // Route fill execution through zero-GC PositionLedger FIFO engine
-            const ledgerResult = positionLedger.processFill(symbol, fillSide, px, finalQty, fee);
+            const ledgerResult = positionLedger.processFill(symbol, fillSide, px, finalQty, fee, tickResult.exitReason);
+
+            // Log closed trade to CSV asynchronously (non-blocking) when a position is completely closed
+            if (ledgerResult.closedTrade) {
+              csvLogger.logClosedTrade(ledgerResult.closedTrade);
+            }
 
             // Update RiskGuard position state & record realized PnL
             riskGuard.recordRealizedPnl(ledgerResult.realizedPnl);
@@ -273,6 +282,7 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
     executionClient,
     strategyEngine,
     logger,
+    csvLogger,
     dashboard,
     telemetryServer,
     isRunning: true,

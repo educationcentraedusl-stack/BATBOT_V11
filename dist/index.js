@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TelemetryWSServer = exports.CLIDashboard = exports.TradeLogger = exports.BinanceExecutionClient = exports.RiskGuard = exports.StrategyEngine = exports.MarketDataClient = exports.DEFAULT_TAKER_FEE_RATE = void 0;
+exports.TelemetryWSServer = exports.CLIDashboard = exports.CsvTradeLogger = exports.TradeLogger = exports.BinanceExecutionClient = exports.RiskGuard = exports.StrategyEngine = exports.MarketDataClient = exports.DEFAULT_TAKER_FEE_RATE = void 0;
 exports.syncStateOnStartup = syncStateOnStartup;
 exports.initializeSystem = initializeSystem;
 require("dotenv/config");
@@ -48,6 +48,8 @@ const binance_1 = require("./execution/binance");
 Object.defineProperty(exports, "BinanceExecutionClient", { enumerable: true, get: function () { return binance_1.BinanceExecutionClient; } });
 const logger_1 = require("./telemetry/logger");
 Object.defineProperty(exports, "TradeLogger", { enumerable: true, get: function () { return logger_1.TradeLogger; } });
+const csvLogger_1 = require("./utils/csvLogger");
+Object.defineProperty(exports, "CsvTradeLogger", { enumerable: true, get: function () { return csvLogger_1.CsvTradeLogger; } });
 const dashboard_1 = require("./telemetry/dashboard");
 Object.defineProperty(exports, "CLIDashboard", { enumerable: true, get: function () { return dashboard_1.CLIDashboard; } });
 const server_1 = require("./telemetry/server");
@@ -99,6 +101,7 @@ async function initializeSystem() {
     const executionClient = new binance_1.BinanceExecutionClient();
     const strategyEngine = new engine_1.StrategyEngine(client, riskGuard, executionClient);
     const logger = new logger_1.TradeLogger("data");
+    const csvLogger = new csvLogger_1.CsvTradeLogger("data", "trade_history.csv");
     const dashboard = new dashboard_1.CLIDashboard(true);
     const telemetryPort = parseInt(process.env.TELEMETRY_PORT || "8080", 10);
     const telemetryServer = new server_1.TelemetryWSServer(telemetryPort);
@@ -182,7 +185,11 @@ async function initializeSystem() {
                     const fillSide = orderRes.side || tickResult.signalType;
                     const symbol = orderRes.symbol || strategyEngine.getConfig().symbol;
                     // Route fill execution through zero-GC PositionLedger FIFO engine
-                    const ledgerResult = positionLedger.processFill(symbol, fillSide, px, finalQty, fee);
+                    const ledgerResult = positionLedger.processFill(symbol, fillSide, px, finalQty, fee, tickResult.exitReason);
+                    // Log closed trade to CSV asynchronously (non-blocking) when a position is completely closed
+                    if (ledgerResult.closedTrade) {
+                        csvLogger.logClosedTrade(ledgerResult.closedTrade);
+                    }
                     // Update RiskGuard position state & record realized PnL
                     riskGuard.recordRealizedPnl(ledgerResult.realizedPnl);
                     riskGuard.updatePositionNotional(ledgerResult.netQuantityAfterFill * ledgerResult.averageEntryPriceAfterFill);
@@ -255,6 +262,7 @@ async function initializeSystem() {
         executionClient,
         strategyEngine,
         logger,
+        csvLogger,
         dashboard,
         telemetryServer,
         isRunning: true,

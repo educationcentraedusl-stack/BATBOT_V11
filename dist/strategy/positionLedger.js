@@ -12,6 +12,7 @@ class PositionLedger {
     side = "FLAT";
     netQuantity = 0;
     averageEntryPrice = 0;
+    positionOpenTime = 0;
     cumulativeRealizedPnl = 0;
     cumulativeFees = 0;
     totalTrades = 0;
@@ -31,6 +32,7 @@ class PositionLedger {
         positionSideAfterFill: "FLAT",
         netQuantityAfterFill: 0,
         averageEntryPriceAfterFill: 0,
+        closedTrade: undefined,
     };
     constructor(symbol = "BTCUSDT", maxCapacity = DEFAULT_MAX_LOTS) {
         this.symbol = symbol;
@@ -63,6 +65,7 @@ class PositionLedger {
             this.side = side;
             this.netQuantity = netQuantity;
             this.averageEntryPrice = averageEntryPrice;
+            this.positionOpenTime = Date.now();
             this.pushLot(averageEntryPrice, netQuantity);
             console.log(`[PositionLedger] Position state synced on startup: ${side} ${netQuantity} @ $${averageEntryPrice}`);
         }
@@ -72,16 +75,21 @@ class PositionLedger {
      * Calculates closed lot Realized PnL, updates average cost basis, and returns reconciliation details.
      * Zero heap allocations during fill processing.
      */
-    processFill(symbol, fillSide, fillPrice, fillQuantity, fee) {
+    processFill(symbol, fillSide, fillPrice, fillQuantity, fee, exitReason) {
         this.cumulativeFees += fee;
+        this.reconciliationResult.closedTrade = undefined;
         let remainingFillQty = fillQuantity;
         let totalClosedQty = 0;
         let realizedPnlDelta = 0;
+        const prevSide = this.side;
+        const prevEntryPrice = this.averageEntryPrice;
+        const prevOpenTime = this.positionOpenTime;
         if (this.side === "FLAT") {
             // Open new position
             this.side = fillSide === "BUY" ? "LONG" : "SHORT";
             this.netQuantity = fillQuantity;
             this.averageEntryPrice = fillPrice;
+            this.positionOpenTime = Date.now();
             this.pushLot(fillPrice, fillQuantity);
         }
         else if ((this.side === "LONG" && fillSide === "BUY") ||
@@ -113,7 +121,9 @@ class PositionLedger {
                 }
             }
             this.netQuantity -= totalClosedQty;
-            if (this.netQuantity <= 1e-9) {
+            const isCompletelyClosed = this.netQuantity <= 1e-9;
+            const wasPositionFlipped = remainingFillQty > 1e-9;
+            if (isCompletelyClosed) {
                 // Position fully closed
                 this.netQuantity = 0;
                 this.averageEntryPrice = 0;
@@ -122,11 +132,15 @@ class PositionLedger {
                 this.lotTail = 0;
                 this.lotCount = 0;
                 // If fill quantity exceeded closed lots, open position on opposite side with leftover quantity
-                if (remainingFillQty > 1e-9) {
+                if (wasPositionFlipped) {
                     this.side = fillSide === "BUY" ? "LONG" : "SHORT";
                     this.netQuantity = remainingFillQty;
                     this.averageEntryPrice = fillPrice;
+                    this.positionOpenTime = Date.now();
                     this.pushLot(fillPrice, remainingFillQty);
+                }
+                else {
+                    this.positionOpenTime = 0;
                 }
             }
             // Pro-rate fee for closed lot portion to maintain precise PnL accounting during lot flips
@@ -139,6 +153,25 @@ class PositionLedger {
             }
             else if (netRealizedTradePnl < 0) {
                 this.losingTrades++;
+            }
+            // If the trade was completely closed (or flipped), record closed trade info for CSV logger
+            if (totalClosedQty > 0 && (isCompletelyClosed || wasPositionFlipped) && prevSide !== "FLAT") {
+                const durationMs = prevOpenTime > 0 ? Math.max(0, Date.now() - prevOpenTime) : 0;
+                const roePercent = prevEntryPrice > 0
+                    ? (((fillPrice - prevEntryPrice) / prevEntryPrice) * 100) * (prevSide === "LONG" ? 1 : -1)
+                    : 0;
+                this.reconciliationResult.closedTrade = {
+                    timestamp: Date.now(),
+                    symbol,
+                    side: prevSide,
+                    size: totalClosedQty,
+                    entryPrice: prevEntryPrice,
+                    exitPrice: fillPrice,
+                    exitReason: exitReason || "SIGNAL_EXIT",
+                    durationMs,
+                    roePercent,
+                    pnlUsdt: netRealizedTradePnl,
+                };
             }
         }
         // Populate static result structure
@@ -203,6 +236,7 @@ class PositionLedger {
         this.side = "FLAT";
         this.netQuantity = 0;
         this.averageEntryPrice = 0;
+        this.positionOpenTime = 0;
         this.cumulativeRealizedPnl = 0;
         this.cumulativeFees = 0;
         this.totalTrades = 0;

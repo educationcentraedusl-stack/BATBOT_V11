@@ -28,6 +28,7 @@ export interface StrategySignalResult {
   askPrice: number;
   riskResult?: RiskCheckResult;
   executionPromise?: Promise<BinanceOrderResponse | null>;
+  exitReason?: string;
 }
 
 export class StrategyEngine {
@@ -190,6 +191,7 @@ export class StrategyEngine {
             askPrice,
             riskResult,
             executionPromise,
+            exitReason: dynamicTrigger,
           };
         }
       }
@@ -304,6 +306,12 @@ export class StrategyEngine {
         });
     }
 
+    const currentPosSide = this.positionLedger.getSummary().side;
+    const signalExitReason =
+      currentPosSide !== "FLAT" && currentPosSide !== (signalType === "BUY" ? "LONG" : "SHORT")
+        ? "AI_REVERSAL"
+        : undefined;
+
     return {
       sequenceNum: seq,
       signalType,
@@ -314,6 +322,7 @@ export class StrategyEngine {
       askPrice,
       riskResult,
       executionPromise,
+      exitReason: signalExitReason,
     };
   }
 

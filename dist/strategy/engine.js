@@ -130,6 +130,7 @@ class StrategyEngine {
                         askPrice,
                         riskResult,
                         executionPromise,
+                        exitReason: dynamicTrigger,
                     };
                 }
             }
@@ -223,6 +224,10 @@ class StrategyEngine {
                 return null;
             });
         }
+        const currentPosSide = this.positionLedger.getSummary().side;
+        const signalExitReason = currentPosSide !== "FLAT" && currentPosSide !== (signalType === "BUY" ? "LONG" : "SHORT")
+            ? "AI_REVERSAL"
+            : undefined;
         return {
             sequenceNum: seq,
             signalType,
@@ -233,6 +238,7 @@ class StrategyEngine {
             askPrice,
             riskResult,
             executionPromise,
+            exitReason: signalExitReason,
         };
     }
     getConfig() {

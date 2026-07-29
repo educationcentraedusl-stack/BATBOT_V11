@@ -62,3 +62,14 @@
 {"timestamp":1785274813127,"symbol":"BTCUSDT","side":"BUY","price":63942.6,"quantity":0.0009,"realizedPnl":0,"fee":0.023019335999999998,"latencyMs":0}
 {"timestamp":1785274919976,"symbol":"BTCUSDT","side":"BUY","price":63942.6,"quantity":0.0009,"realizedPnl":0,"fee":0.023019335999999998,"latencyMs":0}
 {"timestamp":1785274921390,"symbol":"BTCUSDT","side":"BUY","price":63942.6,"quantity":0.0009,"realizedPnl":0,"fee":0.023019335999999998,"latencyMs":0}
+{"timestamp":1785311501405,"symbol":"BTCUSDT","side":"SELL","price":64479.9,"quantity":0.0009,"realizedPnl":0.4601666477646743,"fee":0.023212764,"latencyMs":0}
+{"timestamp":1785311502441,"symbol":"BTCUSDT","side":"SELL","price":64479.9,"quantity":0.0009,"realizedPnl":0.4601666477646743,"fee":0.023212764,"latencyMs":0}
+{"timestamp":1785311505243,"symbol":"BTCUSDT","side":"SELL","price":64479.9,"quantity":0.0009,"realizedPnl":0.4601666477646743,"fee":0.023212764,"latencyMs":0}
+{"timestamp":1785311506671,"symbol":"BTCUSDT","side":"SELL","price":64479.9,"quantity":0.0009,"realizedPnl":0.4601666477646743,"fee":0.023212764,"latencyMs":0}
+{"timestamp":1785311508884,"symbol":"BTCUSDT","side":"SELL","price":64479.9,"quantity":0.0009,"realizedPnl":0.4601666477646743,"fee":0.023212764,"latencyMs":0}
+{"timestamp":1785311510295,"symbol":"BTCUSDT","side":"SELL","price":64479.9,"quantity":0.0009,"realizedPnl":0.4601666477646743,"fee":0.023212764,"latencyMs":0}
+{"timestamp":1785312267276,"symbol":"BTCUSDT","side":"BUY","price":64494,"quantity":0.0009,"realizedPnl":0,"fee":0.02321784,"latencyMs":0}
+{"timestamp":1785312268739,"symbol":"BTCUSDT","side":"BUY","price":64494,"quantity":0.0009,"realizedPnl":0,"fee":0.02321784,"latencyMs":0}
+{"timestamp":1785312378412,"symbol":"BTCUSDT","side":"BUY","price":64476.3,"quantity":0.0009,"realizedPnl":0,"fee":0.023211468,"latencyMs":0}
+{"timestamp":1785312379732,"symbol":"BTCUSDT","side":"BUY","price":64475.4,"quantity":0.0009,"realizedPnl":0,"fee":0.023211144,"latencyMs":0}
+{"timestamp":1785312623491,"symbol":"BTCUSDT","side":"BUY","price":64412.5,"quantity":0.0009,"realizedPnl":0,"fee":0.0231885,"latencyMs":0}
