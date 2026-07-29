@@ -339,11 +339,19 @@ export class BinanceExecutionClient {
     if (params.price !== undefined) payload.price = params.price;
     if (params.stopPrice !== undefined) payload.stopPrice = params.stopPrice;
     if (params.timeInForce !== undefined) payload.timeInForce = params.timeInForce;
-    if (params.reduceOnly !== undefined) payload.reduceOnly = params.reduceOnly;
     if (params.closePosition !== undefined) payload.closePosition = params.closePosition;
     if (params.workingType !== undefined) payload.workingType = params.workingType;
     if (params.recvWindow !== undefined) payload.recvWindow = params.recvWindow;
     if (params.positionSide !== undefined) payload.positionSide = params.positionSide;
+
+    // Binance API Error -1106: Parameter 'reduceonly' sent when not required.
+    // In Hedge Mode (when positionSide is "LONG" or "SHORT"), reduceOnly MUST NOT be sent.
+    if (
+      params.reduceOnly !== undefined &&
+      (params.positionSide === undefined || params.positionSide === "BOTH")
+    ) {
+      payload.reduceOnly = params.reduceOnly;
+    }
 
     return this.request<BinanceOrderResponse>("POST", "/fapi/v1/order", payload, true);
   }
@@ -374,13 +382,18 @@ export class BinanceExecutionClient {
         const amt = parseFloat(pos.positionAmt || "0");
         if (Math.abs(amt) > 0) {
           const side = amt > 0 ? "SELL" : "BUY";
-          await this.placeOrder({
+          const orderParams: BinanceOrderParams = {
             symbol: pos.symbol,
             side: side,
             type: "MARKET",
             quantity: Math.abs(amt),
-            reduceOnly: true,
-          });
+          };
+          if (pos.positionSide && pos.positionSide !== "BOTH") {
+            orderParams.positionSide = pos.positionSide as "LONG" | "SHORT";
+          } else {
+            orderParams.reduceOnly = true;
+          }
+          await this.placeOrder(orderParams);
         }
       }
       return true;

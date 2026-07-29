@@ -29,21 +29,21 @@ async function runAuditAndVerification() {
         console.error("❌ TEST 1 FAILED: Signed query missing required parameters.");
     }
     // TEST 2: Environment Variable Integration for TP / SL Thresholds
-    console.log("\n[TEST 2] Testing .env Integration for TAKE_PROFIT_PERCENT and STOP_LOSS_PERCENT...");
-    process.env.TAKE_PROFIT_PERCENT = "2.5";
-    process.env.STOP_LOSS_PERCENT = "1.2";
+    console.log("\n[TEST 2] Testing .env Integration for LONG_TAKE_PROFIT_PERCENT and LONG_STOP_LOSS_PERCENT...");
+    process.env.LONG_TAKE_PROFIT_PERCENT = "2.5";
+    process.env.LONG_STOP_LOSS_PERCENT = "1.2";
     const sab = new SharedArrayBuffer(2048);
     const mktClient = new marketDataClient_1.MarketDataClient(sab);
     const riskGuard = new risk_1.RiskGuard();
     const engineWithEnv = new engine_1.StrategyEngine(mktClient, riskGuard, client);
     const cfgEnv = engineWithEnv.getConfig();
-    console.log(`Engine Config TP: ${cfgEnv.takeProfitPercent}%, SL: ${cfgEnv.stopLossPercent}%`);
-    if (cfgEnv.takeProfitPercent === 2.5 && cfgEnv.stopLossPercent === 1.2) {
-        console.log("✅ TEST 2 PASSED: StrategyEngine dynamically parsed .env TAKE_PROFIT_PERCENT (2.5%) and STOP_LOSS_PERCENT (1.2%).");
+    console.log(`Engine Config TP: ${cfgEnv.longTakeProfitPercent}%, SL: ${cfgEnv.longStopLossPercent}%`);
+    if (cfgEnv.longTakeProfitPercent === 2.5 && cfgEnv.longStopLossPercent === 1.2) {
+        console.log("✅ TEST 2 PASSED: StrategyEngine dynamically parsed .env LONG_TAKE_PROFIT_PERCENT (2.5%) and LONG_STOP_LOSS_PERCENT (1.2%).");
         passedTests++;
     }
     else {
-        console.error(`❌ TEST 2 FAILED: Expected TP 2.5% and SL 1.2%, got TP ${cfgEnv.takeProfitPercent}% and SL ${cfgEnv.stopLossPercent}%.`);
+        console.error(`❌ TEST 2 FAILED: Expected TP 2.5% and SL 1.2%, got TP ${cfgEnv.longTakeProfitPercent}% and SL ${cfgEnv.longStopLossPercent}%.`);
     }
     // TEST 3: Startup State Sync Verification
     console.log("\n[TEST 3] Testing Startup State Sync on PositionLedger & RiskGuard...");
@@ -71,10 +71,12 @@ async function runAuditAndVerification() {
     Atomics.store(sabBigIntView, 92, 100n); // Sequence slot 92
     writeAtomicFloat(4, 62000.0); // Best Bid price slot 4
     writeAtomicFloat(6, 62000.0); // Best Ask price slot 6
-    const customEngine = new engine_1.StrategyEngine(mktClient, riskGuard, client, {}, ledger);
+    const hedgeLedger = new positionLedger_1.HedgePositionLedger("BTCUSDT");
+    hedgeLedger.occupyCoreLong(0.05, 60000.0, 2.5, 1.2);
+    const customEngine = new engine_1.StrategyEngine(mktClient, riskGuard, client, {}, ledger, hedgeLedger);
     const result = customEngine.evaluateTick();
     if (result.signalType === "SELL" && result.executionPromise !== undefined) {
-        console.log(`✅ TEST 4 PASSED: Dynamic Take Profit trigger detected +3.33% gain! Dispatched MARKET SELL close order with reduceOnly.`);
+        console.log(`✅ TEST 4 PASSED: Dynamic Take Profit trigger detected +3.33% gain! Dispatched MARKET SELL close order.`);
         passedTests++;
     }
     else {

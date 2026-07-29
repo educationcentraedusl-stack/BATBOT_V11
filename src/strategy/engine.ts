@@ -222,7 +222,6 @@ export class StrategyEngine {
               side: exitSide,
               type: "MARKET",
               quantity: trigger.quantity,
-              reduceOnly: true,
               positionSide: trigger.side,
             })
             .then((res) => {

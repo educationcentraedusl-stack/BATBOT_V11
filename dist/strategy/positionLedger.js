@@ -309,6 +309,61 @@ class HedgePositionLedger {
         }
         return -1;
     }
+    /**
+     * Tier-1 Institutional Micro-Burst Mitigation & Dynamic Slot Dispersion Engine.
+     * Evaluates slot allocation eligibility using Volatility-Adjusted Dynamic Grid Spacing (VADGS)
+     * and Time-Weighted Cooldown Hysteresis Lockouts (TWCHL).
+     */
+    evaluateDispersedShortSlotAllocation(currentPrice, tickSize = 0.1, realizedVol = 0.001, hawkesIntensity = 0, cooldownLockMs = 0, nowMs = Date.now()) {
+        // 1. Enforce Temporal Cooldown Hysteresis Lockout
+        if (nowMs < cooldownLockMs) {
+            return null;
+        }
+        // 2. Locate first unoccupied slot index
+        let targetIdx = -1;
+        for (let i = 0; i < this.maxShortSlots; i++) {
+            if (!this.shortSlots[i].isOccupied) {
+                targetIdx = i;
+                break;
+            }
+        }
+        if (targetIdx === -1) {
+            return null;
+        }
+        // First slot (k = 0) has no previous slot collision constraint
+        if (targetIdx === 0) {
+            return { slotIndex: 0, requiredMinSpacing: 0, sizeDecayCoeff: 1.0 };
+        }
+        // 3. Calculate Volatility-Adjusted Dynamic Grid Spacing ΔP_min(k)
+        // ΔP_min = TickSize * max(BaseTicks, BaseTicks * VolFactor * sqrt(k) * HawkesFactor)
+        const baseTicks = 5;
+        const volFactor = Math.max(1.0, 1.0 + realizedVol * 100.0);
+        const hawkesFactor = 1.0 + 0.25 * Math.min(10.0, hawkesIntensity);
+        const requiredTicks = Math.max(baseTicks, baseTicks * volFactor * Math.sqrt(targetIdx) * hawkesFactor);
+        const minSpacing = requiredTicks * tickSize;
+        // 4. Verify spatial separation from all occupied short slots
+        for (let i = 0; i < targetIdx; i++) {
+            if (this.shortSlots[i].isOccupied) {
+                const fillPrice = this.shortSlots[i].entryPrice;
+                const priceDelta = Math.abs(currentPrice - fillPrice);
+                if (priceDelta < minSpacing) {
+                    // Spatial co-location collision! Reject multi-slot fill at identical price.
+                    return null;
+                }
+            }
+        }
+        // 5. Position Sizing Decay Coefficient per slot index depth
+        const decayCoeff = targetIdx === 1
+            ? 0.75
+            : targetIdx === 2
+                ? 0.50
+                : Math.max(0.25, 0.50 ** (targetIdx - 1));
+        return {
+            slotIndex: targetIdx,
+            requiredMinSpacing: minSpacing,
+            sizeDecayCoeff: decayCoeff,
+        };
+    }
     getActiveShortCount() {
         let count = 0;
         for (let i = 0; i < this.maxShortSlots; i++) {

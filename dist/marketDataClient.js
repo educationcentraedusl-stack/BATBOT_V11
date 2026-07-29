@@ -141,5 +141,64 @@ class MarketDataClient {
     getOmsTotalTrades() {
         return Atomics.load(this.bigIntView, 111);
     }
+    // --- Slots 112 to 120: Micro-Burst & Dynamic Dispersion Metrics ---
+    writeAtomicFloat64(slot, value) {
+        BITCAST_FLOAT[0] = value;
+        Atomics.store(this.bigIntView, slot, BITCAST_BIGINT[0]);
+    }
+    getHawkesIntensity() {
+        return this.readAtomicFloat64(112);
+    }
+    setHawkesIntensity(val) {
+        this.writeAtomicFloat64(112, val);
+    }
+    getMicroburstScore() {
+        return this.readAtomicFloat64(113);
+    }
+    setMicroburstScore(val) {
+        this.writeAtomicFloat64(113, val);
+    }
+    getRealizedVolatility() {
+        return this.readAtomicFloat64(114);
+    }
+    setRealizedVolatility(val) {
+        this.writeAtomicFloat64(114, val);
+    }
+    getLastShortFillPrice() {
+        return this.readAtomicFloat64(115);
+    }
+    setLastShortFillPrice(price) {
+        this.writeAtomicFloat64(115, price);
+    }
+    getLastLongFillPrice() {
+        return this.readAtomicFloat64(116);
+    }
+    setLastLongFillPrice(price) {
+        this.writeAtomicFloat64(116, price);
+    }
+    getLastShortFillTime() {
+        return this.readAtomicFloat64(117);
+    }
+    setLastShortFillTime(time) {
+        this.writeAtomicFloat64(117, time);
+    }
+    getLastLongFillTime() {
+        return this.readAtomicFloat64(118);
+    }
+    setLastLongFillTime(time) {
+        this.writeAtomicFloat64(118, time);
+    }
+    getShortCooldownLock() {
+        return this.readAtomicFloat64(119);
+    }
+    setShortCooldownLock(expiryMs) {
+        this.writeAtomicFloat64(119, expiryMs);
+    }
+    getLongCooldownLock() {
+        return this.readAtomicFloat64(120);
+    }
+    setLongCooldownLock(expiryMs) {
+        this.writeAtomicFloat64(120, expiryMs);
+    }
 }
 exports.MarketDataClient = MarketDataClient;

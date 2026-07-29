@@ -143,7 +143,6 @@ class StrategyEngine {
                         side: exitSide,
                         type: "MARKET",
                         quantity: trigger.quantity,
-                        reduceOnly: true,
                         positionSide: trigger.side,
                     })
                         .then((res) => {
@@ -183,32 +182,39 @@ class StrategyEngine {
         let targetPosSide = undefined;
         let targetSlotId = undefined;
         let targetSlotIndex = undefined;
-        // Asymmetric Signal Evaluation Logic
-        // BUY -> Core Long Entry (allowed if Core Long is FLAT)
+        // Read Hawkes & Microburst Metrics from SAB
+        const hawkesIntensity = this.client.getHawkesIntensity();
+        const realizedVol = this.client.getRealizedVolatility();
+        const shortCooldownLock = this.client.getShortCooldownLock();
+        const longCooldownLock = this.client.getLongCooldownLock();
+        let targetSizeDecayCoeff = 1.0;
+        // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
         if (obi > this.config.obiBuyThreshold &&
             cvd > this.config.cvdBuyThreshold &&
             spreadVelocity < this.config.maxSpreadVelocity &&
             askPrice > 0 &&
             aiDirection > 0 &&
             aiConfidence >= this.config.minAiConfidence &&
-            !this.hedgeLedger.getCoreLong().isOccupied) {
+            !this.hedgeLedger.getCoreLong().isOccupied &&
+            Date.now() >= longCooldownLock) {
             signalType = "BUY";
             targetPosSide = "LONG";
             targetSlotId = "CORE_LONG";
         }
-        // SELL -> Short Slot Entry (allowed if at least 1 Short slot is available)
+        // SELL -> Short Slot Entry (Evaluated via Tier-1 Dynamic Slot Dispersion Engine)
         else if (obi < this.config.obiSellThreshold &&
             cvd < this.config.cvdSellThreshold &&
             spreadVelocity < this.config.maxSpreadVelocity &&
             bidPrice > 0 &&
             aiDirection < 0 &&
             aiConfidence >= this.config.minAiConfidence) {
-            const availShortIdx = this.hedgeLedger.getAvailableShortSlotIndex();
-            if (availShortIdx !== -1) {
+            const slotEval = this.hedgeLedger.evaluateDispersedShortSlotAllocation(bidPrice, this.config.tickSize, realizedVol, hawkesIntensity, shortCooldownLock, Date.now());
+            if (slotEval !== null) {
                 signalType = "SELL";
                 targetPosSide = "SHORT";
-                targetSlotIndex = availShortIdx;
-                targetSlotId = `SHORT_SLOT_${availShortIdx}`;
+                targetSlotIndex = slotEval.slotIndex;
+                targetSlotId = `SHORT_SLOT_${slotEval.slotIndex}`;
+                targetSizeDecayCoeff = slotEval.sizeDecayCoeff;
             }
         }
         if (signalType === "NONE") {
@@ -223,8 +229,8 @@ class StrategyEngine {
             this.staticResult.executionPromise = undefined;
             return this.staticResult;
         }
-        // Apply latency penalty coefficient to orderQuantity BEFORE RiskGuard check
-        const scaledQuantity = Number((this.config.orderQuantity * penaltyCoeff).toFixed(4));
+        // Apply latency penalty & slot-index decay coefficients to orderQuantity BEFORE RiskGuard check
+        const scaledQuantity = Number((this.config.orderQuantity * penaltyCoeff * targetSizeDecayCoeff).toFixed(4));
         let finalQuantity = Math.max(0.0001, scaledQuantity);
         // Dynamic Taker Fallback (>75% Confidence) & 1-Tick Post-Only Offset (<=75%)
         const effectiveSlippage = Math.max(2, slippageTicks);
@@ -245,6 +251,10 @@ class StrategyEngine {
             timeInForce = "GTX";
             targetPrice = signalType === "BUY" ? bidPrice : askPrice;
         }
+        // Avellaneda-Stoikov Inventory Shift: Skew sell target higher for deeper short slots
+        if (signalType === "SELL" && targetSlotIndex !== undefined && targetSlotIndex > 0) {
+            targetPrice = targetPrice + targetSlotIndex * 2.0 * this.config.tickSize;
+        }
         // Binance Futures Min Notional Guard: ensure order notional >= 55 USDT
         if (basePrice > 0) {
             const minNotionalUsdt = 55.0;
@@ -264,6 +274,15 @@ class StrategyEngine {
         const riskResult = this.riskGuard.validateOrder(this.reusableOrderIntent, isConfigured, targetPosSide);
         let executionPromise = undefined;
         if (riskResult.passed) {
+            // Set atomic SAB hysteresis lockout (250ms cooldown per side) to suppress microburst sweeps
+            if (targetPosSide === "SHORT") {
+                this.client.setShortCooldownLock(Date.now() + 250);
+                this.client.setLastShortFillPrice(this.reusableOrderIntent.price);
+            }
+            else if (targetPosSide === "LONG") {
+                this.client.setLongCooldownLock(Date.now() + 250);
+                this.client.setLastLongFillPrice(this.reusableOrderIntent.price);
+            }
             const notional = this.reusableOrderIntent.price * this.reusableOrderIntent.quantity;
             this.riskGuard.recordExecutionSuccess(notional);
             executionPromise = this.executionClient
