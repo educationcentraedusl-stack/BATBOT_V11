@@ -424,3 +424,23 @@ Traceback (most recent call last):
     from safetensors.torch import save_file
 ModuleNotFoundError: No module named 'safetensors'
 
+[2026-07-29T08:49:18.103Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+
+[2026-07-29T08:54:04.234Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+
+[2026-07-29T08:59:49.346Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+
+[2026-07-29T09:05:41.951Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+
+[2026-07-29T09:10:54.127Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+
+[2026-07-29T09:16:07.191Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+
+[2026-07-29T09:21:17.624Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+
+[2026-07-29T09:26:28.013Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+
+[2026-07-29T09:31:38.024Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+
+[2026-07-29T09:36:48.484Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+
