@@ -159,6 +159,20 @@ class StrategyEngine {
                     })
                         .catch((err) => {
                         console.error(`[DYNAMIC_MONITORING_ERROR] Hedge ${trigger.reason} MARKET order failed: ${err.message}`);
+                        if (err.message &&
+                            (err.message.includes("-2022") ||
+                                err.message.includes("ReduceOnly") ||
+                                err.message.includes("-2011") ||
+                                err.message.includes("not configured"))) {
+                            console.warn(`[DYNAMIC_MONITORING_WARN] Clearing local slot ${trigger.slotId} due to exchange release/error: ${err.message}`);
+                            if (trigger.side === "LONG") {
+                                this.hedgeLedger.releaseCoreLong();
+                            }
+                            else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
+                                const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
+                                this.hedgeLedger.releaseShortSlot(sIdx);
+                            }
+                        }
                         return null;
                     });
                 }

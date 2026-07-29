@@ -368,6 +368,12 @@
 - **HFT/Performance Compliance:** Sanitized order payload creation in `BinanceExecutionClient.placeOrder()` to strictly omit `reduceOnly` when `positionSide` is set to `"LONG"` or `"SHORT"` (Hedge Mode), resolving Binance API Error `-1106` when dynamic TP/SL triggers fire. Removed explicit `reduceOnly: true` parameter from `StrategyEngine.evaluateTick()` dynamic monitoring close order placement calls. Updated `flattenPositions()` in `BinanceExecutionClient` to pass `positionSide` when available. Verified 100% via TypeScript compilation (`npm run build:ts`, 0 errors), dynamic monitoring test harness (`node dist/test_state_sync_and_monitoring.js`, 4/4 PASSED), and hedge profit lock test suite (`node dist/test_hedge_profit_lock.js`, 4/4 PASSED).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-29
+- **Feature/Task:** Remediation of Binance API Error [-2022] (ReduceOnly Order is rejected) & Local Hedge Slot Auto-Cleanup
+- **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/execution/binance.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Implemented automated exception interception and recovery for Binance API Error `-2022` ("ReduceOnly Order is rejected") and missing position errors within `StrategyEngine` dynamic TP/SL monitoring catch block. When exchange position is closed or size is zero, `StrategyEngine` logs a diagnostic warning and automatically releases the local `hedgeLedger` slot (`releaseCoreLong` / `releaseShortSlot`), completely eliminating tick-by-tick API retry spams while keeping local and exchange position state in 1:1 synchronization. Verified 100% via TypeScript compilation (`npm run build:ts`, 0 errors) and dynamic monitoring test harness (`node dist/test_state_sync_and_monitoring.js`, 4/4 PASSED).
+- **Status:** ✅ Completed & QA Verified
+
 
 
 

@@ -594,3 +594,89 @@ Epoch 05/35 | Train Loss: 0.234633 | Train IC: +0.5307 | Val Loss: 0.468682 | Va
 Epoch 10/35 | Train Loss: 0.208199 | Train IC: +0.5836 | Val Loss: 0.444110 | Val IC: +0.1118
 Epoch 15/35 | Train Loss: 0.207080 | Train IC: +0.5858 | Val Loss: 0.497404 | Val IC: +0.0052
 Epoch 20/35 | Train Loss: 0.203351 | Train IC: +0.5933 | Val Loss: 0.483160 | Val IC: +0.0337
+[2026-07-29T16:32:16.703Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDOUT LOG ---
+===========================================================================
+BATBOT_V11 SOTA CfC LIQUID NEURAL NETWORK TRAINING PIPELINE
+===========================================================================
+[Device] Operating on: cpu (CPU threads: 8)
+[Dataset] Loading SafeTensors from 'D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\data\cfc_features.safetensors'...
+[Dataset] Train sequences: 51274 | Val sequences: 12746
+[Training] Starting CfC optimization for 35 epochs (Batch Size: 256)...
+Epoch 05/35 | Train Loss: 0.249465 | Train IC: +0.5011 | Val Loss: 0.448028 | Val IC: +0.1040
+Epoch 10/35 | Train Loss: 0.219373 | Train IC: +0.5613 | Val Loss: 0.452855 | Val IC: +0.0943
+Epoch 15/35 | Train Loss: 0.206397 | Train IC: +0.5872 | Val Loss: 0.428627 | Val IC: +0.1428
+Epoch 20/35 | Train Loss: 0.197468 | Train IC: +0.6051 | Val Loss: 0.445099 | Val IC: +0.1098
+[2026-07-29T16:47:29.233Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDOUT LOG ---
+===========================================================================
+BATBOT_V11 SOTA CfC LIQUID NEURAL NETWORK TRAINING PIPELINE
+===========================================================================
+[Device] Operating on: cpu (CPU threads: 8)
+[Dataset] Loading SafeTensors from 'D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\data\cfc_features.safetensors'...
+[Dataset] Train sequences: 51944 | Val sequences: 12913
+[Training] Starting CfC optimization for 35 epochs (Batch Size: 256)...
+Epoch 05/35 | Train Loss: 0.252010 | Train IC: +0.4960 | Val Loss: 0.461132 | Val IC: +0.0778
+Epoch 10/35 | Train Loss: 0.231742 | Train IC: +0.5365 | Val Loss: 0.460303 | Val IC: +0.0794
+Epoch 15/35 | Train Loss: 0.216712 | Train IC: +0.5666 | Val Loss: 0.488258 | Val IC: +0.0235
+Epoch 20/35 | Train Loss: 0.210279 | Train IC: +0.5794 | Val Loss: 0.476515 | Val IC: +0.0470
+[2026-07-29T17:02:48.370Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDOUT LOG ---
+===========================================================================
+BATBOT_V11 SOTA CfC LIQUID NEURAL NETWORK TRAINING PIPELINE
+===========================================================================
+[Device] Operating on: cpu (CPU threads: 8)
+[Dataset] Loading SafeTensors from 'D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\data\cfc_features.safetensors'...
+[Dataset] Train sequences: 52616 | Val sequences: 13081
+[Training] Starting CfC optimization for 35 epochs (Batch Size: 256)...
+Epoch 05/35 | Train Loss: 0.240562 | Train IC: +0.5189 | Val Loss: 0.428522 | Val IC: +0.1430
+Epoch 10/35 | Train Loss: 0.206388 | Train IC: +0.5872 | Val Loss: 0.454104 | Val IC: +0.0918
+Epoch 15/35 | Train Loss: 0.216476 | Train IC: +0.5671 | Val Loss: 0.453256 | Val IC: +0.0935
+Epoch 20/35 | Train Loss: 0.210506 | Train IC: +0.5790 | Val Loss: 0.463853 | Val IC: +0.0723
+[2026-07-29T17:31:20.866Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDOUT LOG ---
+===========================================================================
+BATBOT_V11 SOTA CfC LIQUID NEURAL NETWORK TRAINING PIPELINE
+===========================================================================
+[Device] Operating on: cpu (CPU threads: 8)
+[Dataset] Loading SafeTensors from 'D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\data\cfc_features.safetensors'...
+[Dataset] Train sequences: 53861 | Val sequences: 13392
+[Training] Starting CfC optimization for 35 epochs (Batch Size: 256)...
+Epoch 05/35 | Train Loss: 0.246940 | Train IC: +0.5061 | Val Loss: 0.451150 | Val IC: +0.0977
+Epoch 10/35 | Train Loss: 0.212771 | Train IC: +0.5745 | Val Loss: 0.473368 | Val IC: +0.0533
+Epoch 15/35 | Train Loss: 0.197184 | Train IC: +0.6056 | Val Loss: 0.458557 | Val IC: +0.0829
+Epoch 20/35 | Train Loss: 0.200212 | Train IC: +0.5996 | Val Loss: 0.459816 | Val IC: +0.0804
+Epoch 25/35 | Train Loss: 0.193324 | Train IC: +0.6134 | Val Loss: 0.469769 | Val IC: +0.0605
+[2026-07-29T17:46:31.510Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDOUT LOG ---
+===========================================================================
+BATBOT_V11 SOTA CfC LIQUID NEURAL NETWORK TRAINING PIPELINE
+===========================================================================
+[Device] Operating on: cpu (CPU threads: 8)
+[Dataset] Loading SafeTensors from 'D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\data\cfc_features.safetensors'...
+[Dataset] Train sequences: 54537 | Val sequences: 13562
+[Training] Starting CfC optimization for 35 epochs (Batch Size: 256)...
+Epoch 05/35 | Train Loss: 0.230392 | Train IC: +0.5392 | Val Loss: 0.460087 | Val IC: +0.0799
+Epoch 10/35 | Train Loss: 0.203029 | Train IC: +0.5939 | Val Loss: 0.482933 | Val IC: +0.0342
+Epoch 15/35 | Train Loss: 0.200732 | Train IC: +0.5985 | Val Loss: 0.507106 | Val IC: -0.0142
+Epoch 20/35 | Train Loss: 0.195860 | Train IC: +0.6083 | Val Loss: 0.469402 | Val IC: +0.0612
+Epoch 25/35 | Train Loss: 0.199269 | Train IC: +0.6015 | Val Loss: 0.470632 | Val IC: +0.0588
+[2026-07-29T18:06:32.804Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDOUT LOG ---
+===========================================================================
+BATBOT_V11 SOTA CfC LIQUID NEURAL NETWORK TRAINING PIPELINE
+===========================================================================
+[Device] Operating on: cpu (CPU threads: 8)
+[Dataset] Loading SafeTensors from 'D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\data\cfc_features.safetensors'...
+[Dataset] Train sequences: 55392 | Val sequences: 13775
+[Training] Starting CfC optimization for 35 epochs (Batch Size: 256)...
+Epoch 05/35 | Train Loss: 0.225524 | Train IC: +0.5490 | Val Loss: 0.504247 | Val IC: -0.0085
+Epoch 10/35 | Train Loss: 0.208072 | Train IC: +0.5839 | Val Loss: 0.491470 | Val IC: +0.0171
+Epoch 15/35 | Train Loss: 0.207347 | Train IC: +0.5853 | Val Loss: 0.459167 | Val IC: +0.0817
+Epoch 20/35 | Train Loss: 0.203945 | Train IC: +0.5921 | Val Loss: 0.492517 | Val IC: +0.0150
