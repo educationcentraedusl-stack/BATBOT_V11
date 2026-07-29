@@ -93,6 +93,23 @@ export class AutoRecalibrationManager {
   }
 
   /**
+   * Resolve the Python binary executable path, prioritizing the project's virtual environment.
+   */
+  private getPythonExecutable(): string {
+    const venvPythonWin = path.join(this.projectRoot, "training", ".venv", "Scripts", "python.exe");
+    const venvPythonPosix = path.join(this.projectRoot, "training", ".venv", "bin", "python");
+
+    if (fs.existsSync(venvPythonWin)) {
+      return venvPythonWin;
+    }
+    if (fs.existsSync(venvPythonPosix)) {
+      return venvPythonPosix;
+    }
+
+    return process.platform === "win32" ? "python" : "python3";
+  }
+
+  /**
    * Execute autonomous training, hot-swapping, and self-healing pipeline.
    */
   public async runRecalibrationPipeline(currentIc: number): Promise<boolean> {
@@ -119,9 +136,11 @@ export class AutoRecalibrationManager {
         throw new Error(`Telemetry signals file '${this.signalsPath}' contains insufficient data (${stats.size} bytes).`);
       }
 
-      console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Step 1/4: Executing Python data preparation (prepare_data.py)...`);
+      const pythonCmd = this.getPythonExecutable();
+      console.log(
+        `[BATBOT_V11][AUTO-RECALIBRATION] Step 1/4: Executing Python data preparation (prepare_data.py) using runtime '${pythonCmd}'...`
+      );
       const prepScript = path.join(this.projectRoot, "training", "prepare_data.py");
-      const pythonCmd = process.platform === "win32" ? "python" : "python3";
 
       const prepResult = await execFileAsync(pythonCmd, [prepScript], {
         cwd: this.projectRoot,

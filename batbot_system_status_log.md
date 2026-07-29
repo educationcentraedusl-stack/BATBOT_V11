@@ -312,5 +312,12 @@
 - **HFT/Performance Compliance:** Implemented high-performance, non-blocking asynchronous `CsvTradeLogger` (`src/utils/csvLogger.ts`) appending completely closed trade records (`Time,Symbol,Side,Size,Entry Price,Exit Price,Exit Reason,Duration,ROE %,PnL USDT`) to `data/trade_history.csv`. Integrated trade open timestamp tracking and position closure calculations (ROE %, Duration, PnL USDT) in `PositionLedger`, passing exit reasons (`TAKE_PROFIT`, `STOP_LOSS`, `AI_REVERSAL`) from `StrategyEngine`. Guaranteed 100% background non-blocking disk I/O via `fs.appendFile` with zero terminal/console trade table output to preserve HFT event loop execution latency. Verified 100% via unit tests (`src/test_csv_logger.ts`, 3/3 PASSED), Phase 4 regression test suite (`src/test_strategy_execution.ts`, 4/4 PASSED), and clean TypeScript compilation (`npm run build:ts`, 0 errors).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-29
+- **Feature/Task:** AutoRecalibrationManager Python Virtualenv Path Resolution Fix
+- **Artifacts Created/Modified:** `src/ai/recalibrationWorker.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Implemented `getPythonExecutable()` helper in `AutoRecalibrationManager` to dynamically detect and resolve the Python binary path in the dedicated virtual environment (`training/.venv/Scripts/python.exe` on Windows or `training/.venv/bin/python` on Unix) prior to falling back to system binaries. Updated `runRecalibrationPipeline()` to execute `prepare_data.py` and `train_cfc.py` using this resolved binary, resolving `ModuleNotFoundError: No module named 'safetensors'` on sustained model drift auto-recalibration triggers. Verified 100% via PyTorch CUDA verification harness (`training/verify_env.py`), TypeScript compilation (`npm run build:ts`, 0 errors), and recalibration test suite (`node dist/test_recalibration_pipeline.js`, 4/4 PASSED).
+- **Status:** ✅ Completed & QA Verified
+
+
 
 

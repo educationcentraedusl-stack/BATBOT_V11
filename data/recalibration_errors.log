@@ -340,3 +340,87 @@ Traceback (most recent call last):
     import polars as pl
 ModuleNotFoundError: No module named 'polars'
 
+[2026-07-29T08:13:08.143Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 16, in <module>
+    import polars as pl
+ModuleNotFoundError: No module named 'polars'
+
+[2026-07-29T08:14:17.534Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 17, in <module>
+    import torch
+ModuleNotFoundError: No module named 'torch'
+
+[2026-07-29T08:15:11.449Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 17, in <module>
+    import torch
+ModuleNotFoundError: No module named 'torch'
+
+[2026-07-29T08:16:09.986Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 17, in <module>
+    import torch
+ModuleNotFoundError: No module named 'torch'
+
+[2026-07-29T08:17:09.600Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 17, in <module>
+    import torch
+ModuleNotFoundError: No module named 'torch'
+
+[2026-07-29T08:18:09.414Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 17, in <module>
+    import torch
+ModuleNotFoundError: No module named 'torch'
+
+[2026-07-29T08:31:08.449Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 18, in <module>
+    from safetensors.torch import save_file
+ModuleNotFoundError: No module named 'safetensors'
+
+[2026-07-29T08:32:02.209Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 18, in <module>
+    from safetensors.torch import save_file
+ModuleNotFoundError: No module named 'safetensors'
+
+[2026-07-29T08:33:04.650Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 18, in <module>
+    from safetensors.torch import save_file
+ModuleNotFoundError: No module named 'safetensors'
+
+[2026-07-29T08:34:06.229Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 18, in <module>
+    from safetensors.torch import save_file
+ModuleNotFoundError: No module named 'safetensors'
+
+[2026-07-29T08:34:59.776Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 18, in <module>
+    from safetensors.torch import save_file
+ModuleNotFoundError: No module named 'safetensors'
+
+[2026-07-29T08:35:58.340Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 18, in <module>
+    from safetensors.torch import save_file
+ModuleNotFoundError: No module named 'safetensors'
+
+[2026-07-29T08:37:01.720Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 18, in <module>
+    from safetensors.torch import save_file
+ModuleNotFoundError: No module named 'safetensors'
+
+[2026-07-29T08:38:05.907Z] [RECALIBRATION_FAILURE] Command failed: python D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py", line 18, in <module>
+    from safetensors.torch import save_file
+ModuleNotFoundError: No module named 'safetensors'
+
