@@ -90,6 +90,8 @@ export class BinanceExecutionClient {
   private testnet: boolean;
   private cachedUsdtAvailableBalance: number = 0;
   private balancePollTimer: NodeJS.Timeout | null = null;
+  private timeOffset: number = 0;
+  private isTimeSynced: boolean = false;
 
   constructor(options?: BinanceClientOptions) {
     this.testnet = options?.useTestnet ?? (process.env.USE_TESTNET === "true" || process.env.USE_TESTNET === "1" || process.env.BINANCE_TESTNET === "true");
@@ -139,6 +141,28 @@ export class BinanceExecutionClient {
     return this.apiKey.length > 0 && this.apiSecret.length > 0;
   }
 
+  public getTimeOffset(): number {
+    return this.timeOffset;
+  }
+
+  public async syncServerTime(): Promise<number> {
+    try {
+      const startTime = Date.now();
+      const res = await this.request<{ serverTime: number }>("GET", "/fapi/v1/time", {}, false);
+      const endTime = Date.now();
+      const rtt = endTime - startTime;
+      if (res && typeof res.serverTime === "number") {
+        this.timeOffset = res.serverTime - (startTime + Math.floor(rtt / 2));
+        this.isTimeSynced = true;
+        console.log(`[BinanceExecutionClient] Time synced with Binance Server. Server Time: ${res.serverTime}, Local Time: ${Date.now()}, Offset: ${this.timeOffset}ms (RTT: ${rtt}ms)`);
+        return this.timeOffset;
+      }
+    } catch (err: any) {
+      console.error(`[BinanceExecutionClient] Failed to sync Binance server time: ${err.message}`);
+    }
+    return this.timeOffset;
+  }
+
   public getUsdtAvailableBalance(): number {
     return this.cachedUsdtAvailableBalance;
   }
@@ -182,13 +206,17 @@ export class BinanceExecutionClient {
 
 
   public signQuery(params: Record<string, string | number | boolean>): string {
-    const timestamp = Date.now();
+    const timestamp = Date.now() + this.timeOffset;
     const queryParams = new URLSearchParams();
 
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined && value !== null) {
         queryParams.append(key, String(value));
       }
+    }
+
+    if (!queryParams.has("recvWindow")) {
+      queryParams.append("recvWindow", "10000");
     }
     queryParams.append("timestamp", String(timestamp));
 
@@ -205,7 +233,8 @@ export class BinanceExecutionClient {
     method: "GET" | "POST" | "DELETE" | "PUT",
     endpoint: string,
     params: Record<string, string | number | boolean> = {},
-    signed: boolean = true
+    signed: boolean = true,
+    isRetryAfterSync: boolean = false
   ): Promise<T> {
     if (signed && !this.isConfigured()) {
       throw new Error(
@@ -239,7 +268,7 @@ export class BinanceExecutionClient {
           body += chunk;
         });
 
-        res.on("end", () => {
+        res.on("end", async () => {
           try {
             const data = JSON.parse(body);
             if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
@@ -247,6 +276,19 @@ export class BinanceExecutionClient {
             } else {
               const errCode = data?.code ?? res.statusCode;
               const errMsg = data?.msg ?? body;
+              // Auto-resync timestamp and retry once if error code is -1021 (Timestamp ahead/behind)
+              if (errCode === -1021 && signed && !isRetryAfterSync) {
+                console.warn(`[BinanceExecutionClient] Timestamp error -1021 detected. Resynchronizing server time and retrying request...`);
+                await this.syncServerTime();
+                try {
+                  const retryRes = await this.request<T>(method, endpoint, params, signed, true);
+                  resolve(retryRes);
+                  return;
+                } catch (retryErr) {
+                  reject(retryErr);
+                  return;
+                }
+              }
               reject(new Error(`Binance API Error [${errCode}]: ${errMsg}`));
             }
           } catch (err) {

@@ -47,6 +47,8 @@ class BinanceExecutionClient {
     testnet;
     cachedUsdtAvailableBalance = 0;
     balancePollTimer = null;
+    timeOffset = 0;
+    isTimeSynced = false;
     constructor(options) {
         this.testnet = options?.useTestnet ?? (process.env.USE_TESTNET === "true" || process.env.USE_TESTNET === "1" || process.env.BINANCE_TESTNET === "true");
         const envApiKey = this.testnet
@@ -80,6 +82,27 @@ class BinanceExecutionClient {
     }
     isConfigured() {
         return this.apiKey.length > 0 && this.apiSecret.length > 0;
+    }
+    getTimeOffset() {
+        return this.timeOffset;
+    }
+    async syncServerTime() {
+        try {
+            const startTime = Date.now();
+            const res = await this.request("GET", "/fapi/v1/time", {}, false);
+            const endTime = Date.now();
+            const rtt = endTime - startTime;
+            if (res && typeof res.serverTime === "number") {
+                this.timeOffset = res.serverTime - (startTime + Math.floor(rtt / 2));
+                this.isTimeSynced = true;
+                console.log(`[BinanceExecutionClient] Time synced with Binance Server. Server Time: ${res.serverTime}, Local Time: ${Date.now()}, Offset: ${this.timeOffset}ms (RTT: ${rtt}ms)`);
+                return this.timeOffset;
+            }
+        }
+        catch (err) {
+            console.error(`[BinanceExecutionClient] Failed to sync Binance server time: ${err.message}`);
+        }
+        return this.timeOffset;
     }
     getUsdtAvailableBalance() {
         return this.cachedUsdtAvailableBalance;
@@ -122,12 +145,15 @@ class BinanceExecutionClient {
         }
     }
     signQuery(params) {
-        const timestamp = Date.now();
+        const timestamp = Date.now() + this.timeOffset;
         const queryParams = new URLSearchParams();
         for (const [key, value] of Object.entries(params)) {
             if (value !== undefined && value !== null) {
                 queryParams.append(key, String(value));
             }
+        }
+        if (!queryParams.has("recvWindow")) {
+            queryParams.append("recvWindow", "10000");
         }
         queryParams.append("timestamp", String(timestamp));
         const queryString = queryParams.toString();
@@ -137,7 +163,7 @@ class BinanceExecutionClient {
             .digest("hex");
         return `${queryString}&signature=${signature}`;
     }
-    async request(method, endpoint, params = {}, signed = true) {
+    async request(method, endpoint, params = {}, signed = true, isRetryAfterSync = false) {
         if (signed && !this.isConfigured()) {
             throw new Error("BinanceExecutionClient is not configured with API key and secret. Cannot execute signed request.");
         }
@@ -163,7 +189,7 @@ class BinanceExecutionClient {
                 res.on("data", (chunk) => {
                     body += chunk;
                 });
-                res.on("end", () => {
+                res.on("end", async () => {
                     try {
                         const data = JSON.parse(body);
                         if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
@@ -172,6 +198,20 @@ class BinanceExecutionClient {
                         else {
                             const errCode = data?.code ?? res.statusCode;
                             const errMsg = data?.msg ?? body;
+                            // Auto-resync timestamp and retry once if error code is -1021 (Timestamp ahead/behind)
+                            if (errCode === -1021 && signed && !isRetryAfterSync) {
+                                console.warn(`[BinanceExecutionClient] Timestamp error -1021 detected. Resynchronizing server time and retrying request...`);
+                                await this.syncServerTime();
+                                try {
+                                    const retryRes = await this.request(method, endpoint, params, signed, true);
+                                    resolve(retryRes);
+                                    return;
+                                }
+                                catch (retryErr) {
+                                    reject(retryErr);
+                                    return;
+                                }
+                            }
                             reject(new Error(`Binance API Error [${errCode}]: ${errMsg}`));
                         }
                     }

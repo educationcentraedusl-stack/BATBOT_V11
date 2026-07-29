@@ -34,6 +34,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TelemetryWSServer = exports.CLIDashboard = exports.TradeLogger = exports.BinanceExecutionClient = exports.RiskGuard = exports.StrategyEngine = exports.MarketDataClient = exports.DEFAULT_TAKER_FEE_RATE = void 0;
+exports.syncStateOnStartup = syncStateOnStartup;
 exports.initializeSystem = initializeSystem;
 require("dotenv/config");
 const path = __importStar(require("path"));
@@ -53,6 +54,43 @@ const server_1 = require("./telemetry/server");
 Object.defineProperty(exports, "TelemetryWSServer", { enumerable: true, get: function () { return server_1.TelemetryWSServer; } });
 const recalibrationWorker_1 = require("./ai/recalibrationWorker");
 exports.DEFAULT_TAKER_FEE_RATE = 0.0004;
+async function syncStateOnStartup(executionClient, strategyEngine, riskGuard) {
+    if (!executionClient.isConfigured()) {
+        console.log("[StateSync] BinanceExecutionClient unconfigured. Skipping remote state sync.");
+        return;
+    }
+    try {
+        console.log("[StateSync] Initiating Binance Server Time & State Synchronization...");
+        // 1. Sync server time to fix timestamp error -1021
+        await executionClient.syncServerTime();
+        // 2. Fetch USDT Account Balance
+        const balance = await executionClient.fetchUsdtBalanceAsync();
+        console.log(`[StateSync] Binance Wallet Available Balance Synced: $${balance.toFixed(2)} USDT`);
+        // 3. Fetch Position Risk & Sync Active Positions
+        const symbol = strategyEngine.getConfig().symbol;
+        const positions = await executionClient.getPositionRisk(symbol);
+        if (Array.isArray(positions)) {
+            const match = positions.find((p) => p.symbol === symbol);
+            if (match) {
+                const amt = parseFloat(match.positionAmt || "0");
+                const entryPx = parseFloat(match.entryPrice || "0");
+                if (Math.abs(amt) > 0 && entryPx > 0) {
+                    const posSide = amt > 0 ? "LONG" : "SHORT";
+                    const qty = Math.abs(amt);
+                    strategyEngine.getPositionLedger().syncActivePosition(posSide, qty, entryPx);
+                    riskGuard.updatePositionNotional(qty * entryPx);
+                    console.log(`[StateSync] Open Binance Position Synced: ${posSide} ${qty} ${symbol} @ $${entryPx.toFixed(2)}`);
+                }
+                else {
+                    console.log(`[StateSync] Binance Position Synced: FLAT (No active open positions for ${symbol})`);
+                }
+            }
+        }
+    }
+    catch (err) {
+        console.error(`[StateSync] Critical Error during startup state sync: ${err.message}`);
+    }
+}
 function initializeSystem() {
     const sab = new SharedArrayBuffer(2048);
     const client = new marketDataClient_1.MarketDataClient(sab);
@@ -67,6 +105,10 @@ function initializeSystem() {
     recalibrationManager.setSustainedDriftThreshold(50);
     let isRunning = true;
     let tickInterval = null;
+    // Trigger non-blocking async state sync on startup
+    syncStateOnStartup(executionClient, strategyEngine, riskGuard).catch((err) => {
+        console.error(`[StateSync] Non-blocking state sync error: ${err.message}`);
+    });
     // Set up Bi-directional WebSocket RPC Control Command Handler
     telemetryServer.setCommandHandler(async (cmd) => {
         switch (cmd.action) {

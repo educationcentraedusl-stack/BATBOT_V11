@@ -36,6 +36,48 @@ export interface SystemControlPlane {
   stop: () => Promise<void>;
 }
 
+export async function syncStateOnStartup(
+  executionClient: BinanceExecutionClient,
+  strategyEngine: StrategyEngine,
+  riskGuard: RiskGuard
+): Promise<void> {
+  if (!executionClient.isConfigured()) {
+    console.log("[StateSync] BinanceExecutionClient unconfigured. Skipping remote state sync.");
+    return;
+  }
+  try {
+    console.log("[StateSync] Initiating Binance Server Time & State Synchronization...");
+    // 1. Sync server time to fix timestamp error -1021
+    await executionClient.syncServerTime();
+
+    // 2. Fetch USDT Account Balance
+    const balance = await executionClient.fetchUsdtBalanceAsync();
+    console.log(`[StateSync] Binance Wallet Available Balance Synced: $${balance.toFixed(2)} USDT`);
+
+    // 3. Fetch Position Risk & Sync Active Positions
+    const symbol = strategyEngine.getConfig().symbol;
+    const positions = await executionClient.getPositionRisk(symbol);
+    if (Array.isArray(positions)) {
+      const match = positions.find((p) => p.symbol === symbol);
+      if (match) {
+        const amt = parseFloat(match.positionAmt || "0");
+        const entryPx = parseFloat(match.entryPrice || "0");
+        if (Math.abs(amt) > 0 && entryPx > 0) {
+          const posSide = amt > 0 ? "LONG" : "SHORT";
+          const qty = Math.abs(amt);
+          strategyEngine.getPositionLedger().syncActivePosition(posSide, qty, entryPx);
+          riskGuard.updatePositionNotional(qty * entryPx);
+          console.log(`[StateSync] Open Binance Position Synced: ${posSide} ${qty} ${symbol} @ $${entryPx.toFixed(2)}`);
+        } else {
+          console.log(`[StateSync] Binance Position Synced: FLAT (No active open positions for ${symbol})`);
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error(`[StateSync] Critical Error during startup state sync: ${err.message}`);
+  }
+}
+
 export function initializeSystem(): SystemControlPlane {
   const sab = new SharedArrayBuffer(2048);
   const client = new MarketDataClient(sab);
@@ -51,6 +93,11 @@ export function initializeSystem(): SystemControlPlane {
 
   let isRunning = true;
   let tickInterval: NodeJS.Timeout | null = null;
+
+  // Trigger non-blocking async state sync on startup
+  syncStateOnStartup(executionClient, strategyEngine, riskGuard).catch((err) => {
+    console.error(`[StateSync] Non-blocking state sync error: ${err.message}`);
+  });
 
   // Set up Bi-directional WebSocket RPC Control Command Handler
   telemetryServer.setCommandHandler(async (cmd: ControlCommand) => {

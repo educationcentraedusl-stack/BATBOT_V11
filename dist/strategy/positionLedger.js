@@ -54,6 +54,20 @@ class PositionLedger {
         };
     }
     /**
+     * Synchronizes an existing active position from Binance REST API on startup.
+     * Directly sets side, netQuantity, averageEntryPrice and initial FIFO lot without generating synthetic realized trade PnL.
+     */
+    syncActivePosition(side, netQuantity, averageEntryPrice) {
+        this.reset();
+        if (netQuantity > 0 && averageEntryPrice > 0) {
+            this.side = side;
+            this.netQuantity = netQuantity;
+            this.averageEntryPrice = averageEntryPrice;
+            this.pushLot(averageEntryPrice, netQuantity);
+            console.log(`[PositionLedger] Position state synced on startup: ${side} ${netQuantity} @ $${averageEntryPrice}`);
+        }
+    }
+    /**
      * Processes a filled order execution using FIFO lot matching.
      * Calculates closed lot Realized PnL, updates average cost basis, and returns reconciliation details.
      * Zero heap allocations during fill processing.

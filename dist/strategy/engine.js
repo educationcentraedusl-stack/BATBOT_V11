@@ -30,6 +30,10 @@ class StrategyEngine {
         this.client = client;
         this.riskGuard = riskGuard;
         this.executionClient = executionClient;
+        const envTp = process.env.TAKE_PROFIT_PERCENT ? parseFloat(process.env.TAKE_PROFIT_PERCENT) : NaN;
+        const envSl = process.env.STOP_LOSS_PERCENT ? parseFloat(process.env.STOP_LOSS_PERCENT) : NaN;
+        const defaultTp = !isNaN(envTp) ? envTp : 1.5;
+        const defaultSl = !isNaN(envSl) ? envSl : 1.0;
         this.config = {
             symbol: config?.symbol ?? "BTCUSDT",
             orderQuantity: config?.orderQuantity ?? 0.001,
@@ -41,6 +45,8 @@ class StrategyEngine {
             minAiConfidence: config?.minAiConfidence ?? 0.6,
             aggressiveConfidenceThreshold: config?.aggressiveConfidenceThreshold ?? 0.85,
             tickSize: config?.tickSize ?? 0.1,
+            takeProfitPercent: config?.takeProfitPercent ?? defaultTp,
+            stopLossPercent: config?.stopLossPercent ?? defaultSl,
         };
         this.positionLedger = positionLedger ?? new positionLedger_1.PositionLedger(this.config.symbol);
         this.reusableOrderIntent.symbol = this.config.symbol;
@@ -74,6 +80,60 @@ class StrategyEngine {
         const latencyPenalty = this.client.getLatencyPenaltyCoefficient();
         const penaltyCoeff = latencyPenalty > 0 ? latencyPenalty : 1.0;
         const slippageTicks = this.client.getDynamicSlippageTicks();
+        // 1. Dynamic Monitoring: Evaluate Unrealized PnL against dynamic TP/SL thresholds
+        const markPrice = askPrice > 0 ? (askPrice + bidPrice) / 2 : bidPrice;
+        if (markPrice > 0) {
+            const posSummary = this.positionLedger.getSummary(markPrice);
+            if (posSummary.side !== "FLAT" && posSummary.netQuantity > 0 && posSummary.averageEntryPrice > 0) {
+                const unrealizedPnl = posSummary.unrealizedPnl;
+                const initialNotional = posSummary.netQuantity * posSummary.averageEntryPrice;
+                const pnlPercent = initialNotional > 0 ? (unrealizedPnl / initialNotional) * 100 : 0;
+                let dynamicTrigger = null;
+                if (pnlPercent >= this.config.takeProfitPercent) {
+                    dynamicTrigger = "TAKE_PROFIT";
+                }
+                else if (pnlPercent <= -this.config.stopLossPercent) {
+                    dynamicTrigger = "STOP_LOSS";
+                }
+                if (dynamicTrigger !== null) {
+                    const exitSide = posSummary.side === "LONG" ? "SELL" : "BUY";
+                    console.log(`[DYNAMIC_MONITORING] ${dynamicTrigger} TRIGGERED! Side: ${posSummary.side}, PnL: $${unrealizedPnl.toFixed(4)} (${pnlPercent.toFixed(2)}%), TP Threshold: ${this.config.takeProfitPercent}%, SL Threshold: ${this.config.stopLossPercent}%. Dispatching dynamic MARKET close.`);
+                    this.reusableOrderIntent.symbol = this.config.symbol;
+                    this.reusableOrderIntent.side = exitSide;
+                    this.reusableOrderIntent.quantity = posSummary.netQuantity;
+                    this.reusableOrderIntent.price = markPrice;
+                    this.reusableOrderIntent.currentPositionSide = posSummary.side;
+                    const isConfigured = this.executionClient.isConfigured();
+                    const riskResult = this.riskGuard.validateOrder(this.reusableOrderIntent, isConfigured, posSummary.side);
+                    let executionPromise = undefined;
+                    if (riskResult.passed) {
+                        executionPromise = this.executionClient
+                            .placeOrder({
+                            symbol: this.config.symbol,
+                            side: exitSide,
+                            type: "MARKET",
+                            quantity: posSummary.netQuantity,
+                            reduceOnly: true,
+                        })
+                            .catch((err) => {
+                            console.error(`[DYNAMIC_MONITORING_ERROR] Dynamic ${dynamicTrigger} MARKET order failed: ${err.message}`);
+                            return null;
+                        });
+                    }
+                    return {
+                        sequenceNum: seq,
+                        signalType: exitSide,
+                        obi,
+                        cvd,
+                        spreadVelocity,
+                        bidPrice,
+                        askPrice,
+                        riskResult,
+                        executionPromise,
+                    };
+                }
+            }
+        }
         let signalType = "NONE";
         // Enhanced Signal Evaluation Logic: OBI/CVD combined with AI direction and AI confidence gating
         if (obi > this.config.obiBuyThreshold &&
