@@ -97,6 +97,32 @@ async function runPhase5Tests() {
         riskStatus: "PASSED (0 Rejections)",
         isEngineActive: true,
         usdtBalance: 10000.0,
+        activeTrades: [
+            {
+                symbol: "BTCUSDT",
+                side: "BUY/LONG",
+                size: 0.001,
+                entryPrice: 95000.0,
+                currentPrice: 95015.5,
+                tpPrice: 97375.0,
+                slPrice: 93860.0,
+                leverage: 10,
+                unrealizedPnl: 15.5,
+                durationMs: 45000,
+            },
+            {
+                symbol: "BTCUSDT",
+                side: "SELL/SHORT",
+                size: 0.001,
+                entryPrice: 95020.0,
+                currentPrice: 95015.5,
+                tpPrice: 94449.88,
+                slPrice: 95495.1,
+                leverage: 10,
+                unrealizedPnl: 4.5,
+                durationMs: 12000,
+            },
+        ],
     };
     dashboard.render(sampleFrame);
     console.log("[TEST 2 PASSED] CLI Dashboard frame rendered cleanly.");

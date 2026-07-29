@@ -13,7 +13,8 @@
     "check": "cargo check",
     "test": "tsc --noEmit",
     "start": "node dist/index.js",
-    "dev": "vite"
+    "dev": "vite",
+    "trainmodels": "ts-node src/scripts/manual_train.ts"
   },
   "dependencies": {
     "dotenv": "^17.4.2",

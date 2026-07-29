@@ -62,8 +62,26 @@ impl LatencyMonitor {
 }
 
 pub fn spawn_latency_monitor(bridge: AtomicSharedMemoryBridge) {
+    let use_testnet = std::env::var("USE_TESTNET")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false)
+        || std::env::var("BINANCE_TESTNET")
+            .map(|v| v == "true")
+            .unwrap_or(false);
+
+    let endpoint: &'static str = if use_testnet {
+        "https://testnet.binancefuture.com/fapi/v1/time"
+    } else {
+        "https://fapi.binance.com/fapi/v1/time"
+    };
+
+    println!(
+        "[BATBOT_V11][LatencyMonitor] Targeting endpoint: {} (testnet={})",
+        endpoint, use_testnet
+    );
+
     tokio::spawn(async move {
-        let monitor = LatencyMonitor::new(bridge, None);
+        let monitor = LatencyMonitor::new(bridge, Some(endpoint));
         monitor.run_loop().await;
     });
 }

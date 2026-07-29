@@ -48,6 +48,7 @@ pub struct BybitWsStream {
     symbol: String,
     stream_url: String,
     is_running: Arc<AtomicBool>,
+    shutdown_requested: Arc<AtomicBool>,
     shutdown_notify: Arc<tokio::sync::Notify>,
 }
 
@@ -57,6 +58,7 @@ impl BybitWsStream {
             symbol: symbol.to_uppercase(),
             stream_url: "wss://stream.bybit.com/v5/public/linear".to_string(),
             is_running: Arc::new(AtomicBool::new(false)),
+            shutdown_requested: Arc::new(AtomicBool::new(false)),
             shutdown_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
@@ -66,8 +68,13 @@ impl BybitWsStream {
     }
 
     pub fn stop(&self) {
+        self.shutdown_requested.store(true, Ordering::Relaxed);
         self.is_running.store(false, Ordering::Relaxed);
         self.shutdown_notify.notify_one();
+    }
+
+    pub fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_requested.load(Ordering::Relaxed)
     }
 
     pub async fn connect_and_listen(&self, queue: LockFreeSpscQueue) -> Result<(), String> {

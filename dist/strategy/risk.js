@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RiskGuard = exports.RISK_REJECTED_DAILY_LOSS = exports.RISK_REJECTED_COOLDOWN = exports.RISK_REJECTED_UNCONFIGURED = exports.RISK_PASSED = void 0;
+exports.RiskGuard = exports.RISK_REJECTED_PROFIT_LOCKED = exports.RISK_REJECTED_DAILY_LOSS = exports.RISK_REJECTED_COOLDOWN = exports.RISK_REJECTED_UNCONFIGURED = exports.RISK_PASSED = void 0;
 exports.RISK_PASSED = Object.freeze({
     passed: true,
     reasonCode: "APPROVED",
@@ -21,17 +21,27 @@ exports.RISK_REJECTED_DAILY_LOSS = Object.freeze({
     reasonCode: "EXCEEDS_DAILY_LOSS",
     message: "Order rejected: daily cumulative loss limit reached.",
 });
+exports.RISK_REJECTED_PROFIT_LOCKED = Object.freeze({
+    passed: false,
+    reasonCode: "PROFIT_LOCKED_ACTIVE",
+    message: "Order rejected: Daily profit target reached. System in Profit Lock Shadow Mode.",
+});
 class RiskGuard {
     config;
     lastExecutionTimestampMs = 0;
     cumulativeDailyLossUsdt = 0;
+    cumulativeDailyRealizedPnl = 0;
+    isProfitLocked = false;
     currentPositionNotionalUsdt = 0;
     constructor(config) {
+        const envDailyProfitLock = process.env.DAILY_PROFIT_LOCK_USDT ? parseFloat(process.env.DAILY_PROFIT_LOCK_USDT) : NaN;
+        const defaultProfitLock = !isNaN(envDailyProfitLock) ? envDailyProfitLock : 10.0;
         this.config = {
             maxPositionSizeUsdt: config?.maxPositionSizeUsdt ?? 1000.0,
             minCooldownMs: config?.minCooldownMs ?? 1000,
             maxDailyLossUsdt: config?.maxDailyLossUsdt ?? 500.0,
             maxPriceSlippagePercent: config?.maxPriceSlippagePercent ?? 0.5,
+            dailyProfitLockTargetUsdt: config?.dailyProfitLockTargetUsdt ?? defaultProfitLock,
         };
     }
     getConfig() {
@@ -46,11 +56,15 @@ class RiskGuard {
         if (now - this.lastExecutionTimestampMs < this.config.minCooldownMs) {
             return exports.RISK_REJECTED_COOLDOWN;
         }
-        // 2. Daily Loss Threshold
+        // 2. Profit Lock Enforcement (Only allow position close orders when profit locked)
+        if (this.isProfitLocked && !intent.isCloseOrder) {
+            return exports.RISK_REJECTED_PROFIT_LOCKED;
+        }
+        // 3. Daily Loss Threshold
         if (this.cumulativeDailyLossUsdt >= this.config.maxDailyLossUsdt) {
             return exports.RISK_REJECTED_DAILY_LOSS;
         }
-        // 3. Price & Quantity Sanity
+        // 4. Price & Quantity Sanity
         if (intent.price <= 0 || intent.quantity <= 0) {
             return {
                 passed: false,
@@ -111,15 +125,30 @@ class RiskGuard {
         this.lastExecutionTimestampMs = Date.now();
     }
     recordRealizedPnl(pnlUsdt) {
+        this.cumulativeDailyRealizedPnl += pnlUsdt;
         if (pnlUsdt < 0) {
             this.cumulativeDailyLossUsdt += Math.abs(pnlUsdt);
         }
+        if (this.cumulativeDailyRealizedPnl >= this.config.dailyProfitLockTargetUsdt) {
+            if (!this.isProfitLocked) {
+                this.isProfitLocked = true;
+                console.log(`[RiskGuard][PROFIT_LOCK] Daily profit lock target reached ($${this.cumulativeDailyRealizedPnl.toFixed(2)} / $${this.config.dailyProfitLockTargetUsdt.toFixed(2)} USDT). Halting new live entries.`);
+            }
+        }
+    }
+    isProfitLockedState() {
+        return this.isProfitLocked;
+    }
+    getCumulativeDailyRealizedPnl() {
+        return this.cumulativeDailyRealizedPnl;
     }
     updatePositionNotional(notionalUsdt) {
         this.currentPositionNotionalUsdt = Math.max(0, notionalUsdt);
     }
-    resetDailyLoss() {
+    resetDailyStats() {
         this.cumulativeDailyLossUsdt = 0;
+        this.cumulativeDailyRealizedPnl = 0;
+        this.isProfitLocked = false;
     }
 }
 exports.RiskGuard = RiskGuard;

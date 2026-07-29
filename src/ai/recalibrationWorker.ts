@@ -16,14 +16,25 @@ export interface RecalibrationStatus {
   lastSuccessTimestamp: number;
   totalRecalibrations: number;
   lastError: string | null;
+  isShadowMode: boolean;
 }
 
 export type RecalibrationSuccessCallback = () => void;
+
+interface ChildProcessError extends Error {
+  code?: number | string;
+  signal?: string;
+  killed?: boolean;
+  stdout?: string;
+  stderr?: string;
+}
 
 export class AutoRecalibrationManager {
   private static instance: AutoRecalibrationManager | null = null;
 
   private isRecalibrating = false;
+  private isShadowMode = false;
+  private shadowTickCounter = 0;
   private driftTickCounter = 0;
   private sustainedDriftThreshold = 50; // 50 consecutive ticks below IC threshold (0.0300)
   private cooldownMs = 60000; // 60s cooldown between recalibration attempts
@@ -62,6 +73,24 @@ export class AutoRecalibrationManager {
     this.sustainedDriftThreshold = ticks;
   }
 
+  public enableShadowMode(): void {
+    if (!this.isShadowMode) {
+      this.isShadowMode = true;
+      console.log("[BATBOT_V11][SHADOW_MODE] Shadow Training & Paper Calibration Mode ACTIVATED.");
+    }
+  }
+
+  public disableShadowMode(): void {
+    if (this.isShadowMode) {
+      this.isShadowMode = false;
+      console.log("[BATBOT_V11][SHADOW_MODE] Shadow Training Mode DEACTIVATED.");
+    }
+  }
+
+  public isInShadowMode(): boolean {
+    return this.isShadowMode;
+  }
+
   public getStatus(): RecalibrationStatus {
     return {
       isRecalibrating: this.isRecalibrating,
@@ -70,7 +99,24 @@ export class AutoRecalibrationManager {
       lastSuccessTimestamp: this.lastSuccessTimestamp,
       totalRecalibrations: this.totalRecalibrations,
       lastError: this.lastError,
+      isShadowMode: this.isShadowMode,
     };
+  }
+
+  public evaluateShadowTick(seq: bigint, ic: number): void {
+    if (!this.isShadowMode) return;
+
+    this.shadowTickCounter++;
+    // Periodically trigger background model retraining in Shadow Mode every 300 ticks (~3 seconds)
+    if (
+      this.shadowTickCounter >= 300 &&
+      !this.isRecalibrating &&
+      Date.now() - this.lastAttemptTimestamp >= this.cooldownMs
+    ) {
+      this.shadowTickCounter = 0;
+      console.log("[BATBOT_V11][SHADOW_MODE] Triggering background PyTorch calibration training...");
+      void this.runRecalibrationPipeline(ic);
+    }
   }
 
   /**
@@ -145,11 +191,11 @@ export class AutoRecalibrationManager {
       const prepResult = await execFileAsync(pythonCmd, [prepScript], {
         cwd: this.projectRoot,
         env: { ...process.env },
-        timeout: 120000, // 2 min timeout
+        timeout: 300000, // 5 min timeout for data preparation
       });
 
-      if (prepResult.stderr && prepResult.stderr.includes("Error")) {
-        console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Data prep stderr: ${prepResult.stderr}`);
+      if (prepResult.stderr && prepResult.stderr.trim().length > 0) {
+        console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Data prep stderr log: ${prepResult.stderr.trim()}`);
       }
 
       console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Step 2/4: Executing PyTorch CfC neural network trainer (train_cfc.py)...`);
@@ -158,11 +204,11 @@ export class AutoRecalibrationManager {
       const trainResult = await execFileAsync(pythonCmd, [trainScript], {
         cwd: this.projectRoot,
         env: { ...process.env },
-        timeout: 300000, // 5 min timeout
+        timeout: 900000, // 15 min extended timeout for deep neural network training
       });
 
-      if (trainResult.stderr && trainResult.stderr.includes("Error")) {
-        console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Training stderr: ${trainResult.stderr}`);
+      if (trainResult.stderr && trainResult.stderr.trim().length > 0) {
+        console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Training stderr log: ${trainResult.stderr.trim()}`);
       }
 
       // Step 3: Validate generated SafeTensors weights file
@@ -205,7 +251,20 @@ export class AutoRecalibrationManager {
 
       return true;
     } catch (err: unknown) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const childErr = err as ChildProcessError;
+      const baseMsg = childErr.message || String(err);
+      const rawStderr = childErr.stderr ? childErr.stderr.trim() : "";
+      const rawStdout = childErr.stdout ? childErr.stdout.trim() : "";
+      const isKilled = childErr.killed ? `[KILLED BY NODE TIMEOUT (signal: ${childErr.signal || "SIGTERM"})]` : "";
+
+      let errorMsg = `${baseMsg} ${isKilled}`.trim();
+      if (rawStderr) {
+        errorMsg += `\n--- PYTHON STDERR TRACEBACK ---\n${rawStderr}`;
+      }
+      if (rawStdout && !rawStderr) {
+        errorMsg += `\n--- PYTHON STDOUT LOG ---\n${rawStdout}`;
+      }
+
       this.lastError = errorMsg;
       this.isRecalibrating = false;
 
@@ -217,10 +276,11 @@ export class AutoRecalibrationManager {
       }
 
       console.error(
-        `[BATBOT_V11][AUTO-RECALIBRATION ERROR] Pipeline execution failed! Remaining in IDLE_ACTIVE safety clamp. Reason: ${errorMsg}`
+        `[BATBOT_V11][AUTO-RECALIBRATION ERROR] Pipeline execution failed! Remaining in IDLE_ACTIVE safety clamp.\nReason: ${errorMsg}`
       );
 
       return false;
     }
   }
 }
+

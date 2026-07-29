@@ -30,20 +30,25 @@ def compute_polars_rolling_tanh_df(df: pl.DataFrame, feature_names: list[str], w
     """
     Computes SIMD-accelerated Rolling Z-Score followed by symmetrical Tanh bounding in Polars (Rust).
     Uses Polars native rolling_mean and rolling_std (powered by Rust multi-threaded SIMD Welford variance).
-    Completely eliminates Python for-loops for feature normalization.
+    Preserves unnormalized physical time delta (delta_tau) in seconds for continuous-time liquid neural network ODE solving.
     Formula: z_t = (x_t - mean_W(x)) / (std_W(x) + eps)
              x_norm = tanh(z_t / 3.0) -> strictly bounded into (-1.0, 1.0)
     """
     exprs = []
     for col in feature_names:
-        mean_expr = pl.col(col).rolling_mean(window_size=window, min_samples=1)
-        std_expr = pl.col(col).rolling_std(window_size=window, min_samples=1).fill_null(1.0)
-        z_expr = (pl.col(col) - mean_expr) / (std_expr + eps)
-        norm_expr = (z_expr / 3.0).tanh().fill_null(0.0).fill_nan(0.0).alias(col)
+        if col == "delta_tau":
+            # Preserve raw physical seconds for ODE solver delta_t, clipped to [1e-4, 10.0] seconds
+            norm_expr = pl.col(col).fill_null(0.001).clip(1e-4, 10.0).alias(col)
+        else:
+            mean_expr = pl.col(col).rolling_mean(window_size=window, min_samples=1)
+            std_expr = pl.col(col).rolling_std(window_size=window, min_samples=1).fill_null(1.0)
+            z_expr = (pl.col(col) - mean_expr) / (std_expr + eps)
+            norm_expr = (z_expr / 3.0).tanh().fill_null(0.0).fill_nan(0.0).alias(col)
         exprs.append(norm_expr)
 
     df_norm = df.select(exprs)
     return df_norm.to_numpy().astype(np.float32)
+
 
 def create_cfc_sequences_strided(features: np.ndarray, targets: np.ndarray, seq_len: int = 32):
     """
@@ -226,18 +231,23 @@ def load_and_preprocess_lob_data():
     print(f"               T-KAN Feature Matrix Shape: ({N}, {num_tkan_features})")
     print(f"               CfC Feature Matrix Shape:   ({N}, {num_cfc_features})")
 
+    if N < 64:
+        raise ValueError(f"Error: Insufficient telemetry records for sequence training (N={N}, minimum required N >= 64).")
+
     assert num_tkan_features == 40, f"Error: T-KAN feature count is {num_tkan_features}, expected 40!"
     assert num_cfc_features == 16, f"Error: CfC feature count is {num_cfc_features}, expected 16!"
 
-    # Split 80/20 Chronologically with Strict Purge Buffer
+    # Split 80/20 Chronologically with Dynamic Purge Buffer
     split_idx = int(N * TRAIN_SPLIT_RATIO)
-    val_start_idx = split_idx + PURGE_BUFFER_TICKS
-    purged_count = min(PURGE_BUFFER_TICKS, max(0, N - split_idx))
+    max_purge = max(0, N - split_idx - 1)
+    purged_count = min(PURGE_BUFFER_TICKS, max(0, int(max_purge / 2)))
+    val_start_idx = min(N - 1, split_idx + purged_count)
 
-    print(f"[Dataset Split] Chronological 80/20 Split with Purge Buffer:")
+    print(f"[Dataset Split] Chronological 80/20 Split with Dynamic Purge Buffer:")
     print(f"                Train Range: [0 : {split_idx}] ({split_idx} samples)")
     print(f"                Purge Buffer Range: [{split_idx} : {val_start_idx}] ({purged_count} ticks purged)")
     print(f"                Validation Range: [{val_start_idx} : {N}] ({max(0, N - val_start_idx)} samples)")
+
 
     # Prepare T-KAN Tensors
     tkan_train_in = torch.from_numpy(tkan_norm[:split_idx])

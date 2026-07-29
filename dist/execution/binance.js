@@ -226,6 +226,24 @@ class BinanceExecutionClient {
             req.end();
         });
     }
+    async setHedgeMode(enable) {
+        if (!this.isConfigured())
+            return false;
+        try {
+            const dualSidePosition = enable ? "true" : "false";
+            const res = await this.request("POST", "/fapi/v1/positionSide/dual", { dualSidePosition }, true);
+            console.log(`[BinanceExecutionClient] Dual-side Hedge Mode set to ${enable} (Response: ${JSON.stringify(res)})`);
+            return true;
+        }
+        catch (err) {
+            if (err.message && err.message.includes("-4059")) {
+                console.log(`[BinanceExecutionClient] Dual-side Hedge Mode is already set to ${enable}.`);
+                return true;
+            }
+            console.warn(`[BinanceExecutionClient] Unable to set Hedge Mode: ${err.message}`);
+            return false;
+        }
+    }
     async placeOrder(params) {
         const payload = {
             symbol: params.symbol,
@@ -247,6 +265,8 @@ class BinanceExecutionClient {
             payload.workingType = params.workingType;
         if (params.recvWindow !== undefined)
             payload.recvWindow = params.recvWindow;
+        if (params.positionSide !== undefined)
+            payload.positionSide = params.positionSide;
         return this.request("POST", "/fapi/v1/order", payload, true);
     }
     async cancelOrder(symbol, orderId) {

@@ -3,6 +3,7 @@ export interface RiskConfig {
   minCooldownMs: number;
   maxDailyLossUsdt: number;
   maxPriceSlippagePercent: number;
+  dailyProfitLockTargetUsdt: number;
 }
 
 export interface OrderIntent {
@@ -13,11 +14,12 @@ export interface OrderIntent {
   stopLossPrice?: number;
   takeProfitPrice?: number;
   currentPositionSide?: "FLAT" | "LONG" | "SHORT";
+  isCloseOrder?: boolean;
 }
 
 export interface RiskCheckResult {
   passed: boolean;
-  reasonCode: "APPROVED" | "COOLDOWN_ACTIVE" | "EXCEEDS_MAX_POSITION" | "EXCEEDS_DAILY_LOSS" | "INVALID_PRICE" | "UNCONFIGURED_CREDENTIALS" | "INVALID_STOP_LOSS";
+  reasonCode: "APPROVED" | "COOLDOWN_ACTIVE" | "EXCEEDS_MAX_POSITION" | "EXCEEDS_DAILY_LOSS" | "PROFIT_LOCKED_ACTIVE" | "INVALID_PRICE" | "UNCONFIGURED_CREDENTIALS" | "INVALID_STOP_LOSS";
   message: string;
 }
 
@@ -45,18 +47,30 @@ export const RISK_REJECTED_DAILY_LOSS: RiskCheckResult = Object.freeze({
   message: "Order rejected: daily cumulative loss limit reached.",
 });
 
+export const RISK_REJECTED_PROFIT_LOCKED: RiskCheckResult = Object.freeze({
+  passed: false,
+  reasonCode: "PROFIT_LOCKED_ACTIVE",
+  message: "Order rejected: Daily profit target reached. System in Profit Lock Shadow Mode.",
+});
+
 export class RiskGuard {
   private config: RiskConfig;
   private lastExecutionTimestampMs: number = 0;
   private cumulativeDailyLossUsdt: number = 0;
+  private cumulativeDailyRealizedPnl: number = 0;
+  private isProfitLocked: boolean = false;
   private currentPositionNotionalUsdt: number = 0;
 
   constructor(config?: Partial<RiskConfig>) {
+    const envDailyProfitLock = process.env.DAILY_PROFIT_LOCK_USDT ? parseFloat(process.env.DAILY_PROFIT_LOCK_USDT) : NaN;
+    const defaultProfitLock = !isNaN(envDailyProfitLock) ? envDailyProfitLock : 10.0;
+
     this.config = {
       maxPositionSizeUsdt: config?.maxPositionSizeUsdt ?? 1000.0,
       minCooldownMs: config?.minCooldownMs ?? 1000,
       maxDailyLossUsdt: config?.maxDailyLossUsdt ?? 500.0,
       maxPriceSlippagePercent: config?.maxPriceSlippagePercent ?? 0.5,
+      dailyProfitLockTargetUsdt: config?.dailyProfitLockTargetUsdt ?? defaultProfitLock,
     };
   }
 
@@ -80,12 +94,17 @@ export class RiskGuard {
       return RISK_REJECTED_COOLDOWN;
     }
 
-    // 2. Daily Loss Threshold
+    // 2. Profit Lock Enforcement (Only allow position close orders when profit locked)
+    if (this.isProfitLocked && !intent.isCloseOrder) {
+      return RISK_REJECTED_PROFIT_LOCKED;
+    }
+
+    // 3. Daily Loss Threshold
     if (this.cumulativeDailyLossUsdt >= this.config.maxDailyLossUsdt) {
       return RISK_REJECTED_DAILY_LOSS;
     }
 
-    // 3. Price & Quantity Sanity
+    // 4. Price & Quantity Sanity
     if (intent.price <= 0 || intent.quantity <= 0) {
       return {
         passed: false,
@@ -149,16 +168,38 @@ export class RiskGuard {
   }
 
   public recordRealizedPnl(pnlUsdt: number): void {
+    this.cumulativeDailyRealizedPnl += pnlUsdt;
     if (pnlUsdt < 0) {
       this.cumulativeDailyLossUsdt += Math.abs(pnlUsdt);
     }
+    if (this.cumulativeDailyRealizedPnl >= this.config.dailyProfitLockTargetUsdt) {
+      if (!this.isProfitLocked) {
+        this.isProfitLocked = true;
+        console.log(
+          `[RiskGuard][PROFIT_LOCK] Daily profit lock target reached ($${this.cumulativeDailyRealizedPnl.toFixed(
+            2
+          )} / $${this.config.dailyProfitLockTargetUsdt.toFixed(2)} USDT). Halting new live entries.`
+        );
+      }
+    }
+  }
+
+  public isProfitLockedState(): boolean {
+    return this.isProfitLocked;
+  }
+
+  public getCumulativeDailyRealizedPnl(): number {
+    return this.cumulativeDailyRealizedPnl;
   }
 
   public updatePositionNotional(notionalUsdt: number): void {
     this.currentPositionNotionalUsdt = Math.max(0, notionalUsdt);
   }
 
-  public resetDailyLoss(): void {
+  public resetDailyStats(): void {
     this.cumulativeDailyLossUsdt = 0;
+    this.cumulativeDailyRealizedPnl = 0;
+    this.isProfitLocked = false;
   }
 }
+

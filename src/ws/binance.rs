@@ -52,6 +52,7 @@ pub struct BinanceWsStream {
     pub symbol: String,
     stream_url: String,
     is_running: Arc<AtomicBool>,
+    shutdown_requested: Arc<AtomicBool>,
     shutdown_notify: Arc<tokio::sync::Notify>,
 }
 
@@ -78,6 +79,7 @@ impl BinanceWsStream {
             symbol: symbol.to_uppercase(),
             stream_url: url_str,
             is_running: Arc::new(AtomicBool::new(false)),
+            shutdown_requested: Arc::new(AtomicBool::new(false)),
             shutdown_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
@@ -87,8 +89,13 @@ impl BinanceWsStream {
     }
 
     pub fn stop(&self) {
+        self.shutdown_requested.store(true, Ordering::Relaxed);
         self.is_running.store(false, Ordering::Relaxed);
         self.shutdown_notify.notify_one();
+    }
+
+    pub fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_requested.load(Ordering::Relaxed)
     }
 
     pub async fn connect_and_listen(&self, queue: LockFreeSpscQueue) -> Result<(), String> {

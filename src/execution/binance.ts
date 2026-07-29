@@ -17,6 +17,7 @@ export interface BinanceOrderParams {
   closePosition?: boolean;
   workingType?: "MARKET_PRICE" | "CONTRACT_PRICE";
   recvWindow?: number;
+  positionSide?: "LONG" | "SHORT" | "BOTH";
 }
 
 export interface BinanceOrderResponse {
@@ -305,6 +306,28 @@ export class BinanceExecutionClient {
     });
   }
 
+  public async setHedgeMode(enable: boolean): Promise<boolean> {
+    if (!this.isConfigured()) return false;
+    try {
+      const dualSidePosition = enable ? "true" : "false";
+      const res = await this.request<{ code: number; msg: string }>(
+        "POST",
+        "/fapi/v1/positionSide/dual",
+        { dualSidePosition },
+        true
+      );
+      console.log(`[BinanceExecutionClient] Dual-side Hedge Mode set to ${enable} (Response: ${JSON.stringify(res)})`);
+      return true;
+    } catch (err: any) {
+      if (err.message && err.message.includes("-4059")) {
+        console.log(`[BinanceExecutionClient] Dual-side Hedge Mode is already set to ${enable}.`);
+        return true;
+      }
+      console.warn(`[BinanceExecutionClient] Unable to set Hedge Mode: ${err.message}`);
+      return false;
+    }
+  }
+
   public async placeOrder(params: BinanceOrderParams): Promise<BinanceOrderResponse> {
     const payload: Record<string, string | number | boolean> = {
       symbol: params.symbol,
@@ -320,6 +343,7 @@ export class BinanceExecutionClient {
     if (params.closePosition !== undefined) payload.closePosition = params.closePosition;
     if (params.workingType !== undefined) payload.workingType = params.workingType;
     if (params.recvWindow !== undefined) payload.recvWindow = params.recvWindow;
+    if (params.positionSide !== undefined) payload.positionSide = params.positionSide;
 
     return this.request<BinanceOrderResponse>("POST", "/fapi/v1/order", payload, true);
   }

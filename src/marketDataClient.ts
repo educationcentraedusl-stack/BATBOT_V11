@@ -176,4 +176,84 @@ export class MarketDataClient {
   public getOmsTotalTrades(): bigint {
     return Atomics.load(this.bigIntView, 111);
   }
+
+  // --- Slots 112 to 120: Micro-Burst & Dynamic Dispersion Metrics ---
+
+  private writeAtomicFloat64(slot: number, value: number): void {
+    BITCAST_FLOAT[0] = value;
+    Atomics.store(this.bigIntView, slot, BITCAST_BIGINT[0]);
+  }
+
+  public getHawkesIntensity(): number {
+    return this.readAtomicFloat64(112);
+  }
+
+  public setHawkesIntensity(val: number): void {
+    this.writeAtomicFloat64(112, val);
+  }
+
+  public getMicroburstScore(): number {
+    return this.readAtomicFloat64(113);
+  }
+
+  public setMicroburstScore(val: number): void {
+    this.writeAtomicFloat64(113, val);
+  }
+
+  public getRealizedVolatility(): number {
+    return this.readAtomicFloat64(114);
+  }
+
+  public setRealizedVolatility(val: number): void {
+    this.writeAtomicFloat64(114, val);
+  }
+
+  public getLastShortFillPrice(): number {
+    return this.readAtomicFloat64(115);
+  }
+
+  public setLastShortFillPrice(price: number): void {
+    this.writeAtomicFloat64(115, price);
+  }
+
+  public getLastLongFillPrice(): number {
+    return this.readAtomicFloat64(116);
+  }
+
+  public setLastLongFillPrice(price: number): void {
+    this.writeAtomicFloat64(116, price);
+  }
+
+  public getLastShortFillTime(): number {
+    return this.readAtomicFloat64(117);
+  }
+
+  public setLastShortFillTime(time: number): void {
+    this.writeAtomicFloat64(117, time);
+  }
+
+  public getLastLongFillTime(): number {
+    return this.readAtomicFloat64(118);
+  }
+
+  public setLastLongFillTime(time: number): void {
+    this.writeAtomicFloat64(118, time);
+  }
+
+  public getShortCooldownLock(): number {
+    return this.readAtomicFloat64(119);
+  }
+
+  public setShortCooldownLock(expiryMs: number): void {
+    this.writeAtomicFloat64(119, expiryMs);
+  }
+
+  public getLongCooldownLock(): number {
+    return this.readAtomicFloat64(120);
+  }
+
+  public setLongCooldownLock(expiryMs: number): void {
+    this.writeAtomicFloat64(120, expiryMs);
+  }
 }
+

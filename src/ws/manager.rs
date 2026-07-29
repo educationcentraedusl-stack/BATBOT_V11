@@ -53,7 +53,29 @@ impl ConnectionManager {
                 let stream = Arc::new(BinanceWsStream::new(&self.symbol));
                 let s_clone = stream.clone();
                 tokio::spawn(async move {
-                    let _ = s_clone.connect_and_listen(queue).await;
+                    let mut backoff_secs = 1u64;
+                    loop {
+                        match s_clone.connect_and_listen(queue.clone()).await {
+                            Ok(()) => {
+                                if s_clone.is_shutdown_requested() {
+                                    // Graceful shutdown requested — don't reconnect
+                                    break;
+                                }
+                                eprintln!(
+                                    "[Binance WS] Stream disconnected. Reconnecting in {}s...",
+                                    backoff_secs
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[Binance WS] Connection failed: {}. Retrying in {}s...",
+                                    e, backoff_secs
+                                );
+                            }
+                        }
+                        sleep(Duration::from_secs(backoff_secs)).await;
+                        backoff_secs = (backoff_secs * 2).min(30);
+                    }
                 });
                 ActiveStream::Binance(stream)
             }
@@ -61,7 +83,28 @@ impl ConnectionManager {
                 let stream = Arc::new(BybitWsStream::new(&self.symbol));
                 let s_clone = stream.clone();
                 tokio::spawn(async move {
-                    let _ = s_clone.connect_and_listen(queue).await;
+                    let mut backoff_secs = 1u64;
+                    loop {
+                        match s_clone.connect_and_listen(queue.clone()).await {
+                            Ok(()) => {
+                                if s_clone.is_shutdown_requested() {
+                                    break;
+                                }
+                                eprintln!(
+                                    "[Bybit WS] Stream disconnected. Reconnecting in {}s...",
+                                    backoff_secs
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[Bybit WS] Connection failed: {}. Retrying in {}s...",
+                                    e, backoff_secs
+                                );
+                            }
+                        }
+                        sleep(Duration::from_secs(backoff_secs)).await;
+                        backoff_secs = (backoff_secs * 2).min(30);
+                    }
                 });
                 ActiveStream::Bybit(stream)
             }

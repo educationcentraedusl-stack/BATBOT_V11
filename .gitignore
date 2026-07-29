@@ -2,3 +2,14 @@ target/
 node_modules/
 .env
 Free-Tier Bot Transformation Blueprint.pdf
+signals.jsonl
+tkan_features.safetensors
+data/*.safetensors
+models/*.safetensors
+# Ignore dynamically generated data and log files
+data/*.jsonl
+data/*.json
+data/*.log
+# Ignore all safetensors files everywhere
+*.safetensors
+data/*.safetensors

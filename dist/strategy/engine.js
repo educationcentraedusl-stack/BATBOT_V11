@@ -7,6 +7,7 @@ class StrategyEngine {
     riskGuard;
     executionClient;
     positionLedger;
+    hedgeLedger;
     config;
     lastProcessedSequence = -1n;
     // Pre-allocated order intent structure to avoid GC-thrashing on signal triggers
@@ -26,34 +27,72 @@ class StrategyEngine {
         bidPrice: 0,
         askPrice: 0,
     };
-    constructor(client, riskGuard, executionClient, config, positionLedger) {
+    constructor(client, riskGuard, executionClient, config, positionLedger, hedgeLedger) {
         this.client = client;
         this.riskGuard = riskGuard;
         this.executionClient = executionClient;
-        const envTp = process.env.TAKE_PROFIT_PERCENT ? parseFloat(process.env.TAKE_PROFIT_PERCENT) : NaN;
-        const envSl = process.env.STOP_LOSS_PERCENT ? parseFloat(process.env.STOP_LOSS_PERCENT) : NaN;
-        const defaultTp = !isNaN(envTp) ? envTp : 1.5;
-        const defaultSl = !isNaN(envSl) ? envSl : 1.0;
+        const envLongTp = process.env.LONG_TAKE_PROFIT_PERCENT ? parseFloat(process.env.LONG_TAKE_PROFIT_PERCENT) : NaN;
+        const envLongSl = process.env.LONG_STOP_LOSS_PERCENT ? parseFloat(process.env.LONG_STOP_LOSS_PERCENT) : NaN;
+        const envShortTp = process.env.SHORT_TAKE_PROFIT_PERCENT ? parseFloat(process.env.SHORT_TAKE_PROFIT_PERCENT) : NaN;
+        const envShortSl = process.env.SHORT_STOP_LOSS_PERCENT ? parseFloat(process.env.SHORT_STOP_LOSS_PERCENT) : NaN;
+        const envProfitLock = process.env.DAILY_PROFIT_LOCK_USDT ? parseFloat(process.env.DAILY_PROFIT_LOCK_USDT) : NaN;
+        const envMaxShortSlots = process.env.MAX_SHORT_SLOTS ? parseInt(process.env.MAX_SHORT_SLOTS, 10) : NaN;
+        const envMinAiConfidence = process.env.MIN_AI_CONFIDENCE ? parseFloat(process.env.MIN_AI_CONFIDENCE) : NaN;
+        const envAggressiveConfidence = process.env.AGGRESSIVE_CONFIDENCE_THRESHOLD ? parseFloat(process.env.AGGRESSIVE_CONFIDENCE_THRESHOLD) : NaN;
+        const envObiBuy = process.env.OBI_BUY_THRESHOLD ? parseFloat(process.env.OBI_BUY_THRESHOLD) : NaN;
+        const envObiSell = process.env.OBI_SELL_THRESHOLD ? parseFloat(process.env.OBI_SELL_THRESHOLD) : NaN;
+        const envCvdBuy = process.env.CVD_BUY_THRESHOLD ? parseFloat(process.env.CVD_BUY_THRESHOLD) : NaN;
+        const envCvdSell = process.env.CVD_SELL_THRESHOLD ? parseFloat(process.env.CVD_SELL_THRESHOLD) : NaN;
+        const envOrderQty = process.env.ORDER_QUANTITY ? parseFloat(process.env.ORDER_QUANTITY) : NaN;
+        const envLeverage = process.env.LEVERAGE ? parseInt(process.env.LEVERAGE, 10) : NaN;
+        const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 2.5;
+        const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 1.2;
+        const defaultShortTp = !isNaN(envShortTp) ? envShortTp : 0.6;
+        const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.5;
+        const defaultProfitLock = !isNaN(envProfitLock) ? envProfitLock : 10.0;
+        const defaultMaxShortSlots = !isNaN(envMaxShortSlots) ? envMaxShortSlots : 3;
+        const defaultMinAiConfidence = !isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.6;
+        const defaultAggressiveConfidence = !isNaN(envAggressiveConfidence) ? envAggressiveConfidence : 0.85;
+        const defaultObiBuy = !isNaN(envObiBuy) ? envObiBuy : 0.25;
+        const defaultObiSell = !isNaN(envObiSell) ? envObiSell : -0.25;
+        const defaultCvdBuy = !isNaN(envCvdBuy) ? envCvdBuy : 50.0;
+        const defaultCvdSell = !isNaN(envCvdSell) ? envCvdSell : -50.0;
+        const defaultOrderQty = !isNaN(envOrderQty) ? envOrderQty : 0.001;
+        const defaultLeverage = !isNaN(envLeverage) ? envLeverage : 10;
         this.config = {
             symbol: config?.symbol ?? "BTCUSDT",
-            orderQuantity: config?.orderQuantity ?? 0.001,
-            obiBuyThreshold: config?.obiBuyThreshold ?? 0.25,
-            obiSellThreshold: config?.obiSellThreshold ?? -0.25,
-            cvdBuyThreshold: config?.cvdBuyThreshold ?? 50.0,
-            cvdSellThreshold: config?.cvdSellThreshold ?? -50.0,
+            orderQuantity: config?.orderQuantity ?? defaultOrderQty,
+            obiBuyThreshold: config?.obiBuyThreshold ?? defaultObiBuy,
+            obiSellThreshold: config?.obiSellThreshold ?? defaultObiSell,
+            cvdBuyThreshold: config?.cvdBuyThreshold ?? defaultCvdBuy,
+            cvdSellThreshold: config?.cvdSellThreshold ?? defaultCvdSell,
             maxSpreadVelocity: config?.maxSpreadVelocity ?? 0.1,
-            minAiConfidence: config?.minAiConfidence ?? 0.6,
-            aggressiveConfidenceThreshold: config?.aggressiveConfidenceThreshold ?? 0.85,
+            minAiConfidence: config?.minAiConfidence ?? defaultMinAiConfidence,
+            aggressiveConfidenceThreshold: config?.aggressiveConfidenceThreshold ?? defaultAggressiveConfidence,
             tickSize: config?.tickSize ?? 0.1,
-            takeProfitPercent: config?.takeProfitPercent ?? defaultTp,
-            stopLossPercent: config?.stopLossPercent ?? defaultSl,
+            takeProfitPercent: config?.takeProfitPercent ?? defaultLongTp,
+            stopLossPercent: config?.stopLossPercent ?? defaultLongSl,
+            longTakeProfitPercent: config?.longTakeProfitPercent ?? defaultLongTp,
+            longStopLossPercent: config?.longStopLossPercent ?? defaultLongSl,
+            shortTakeProfitPercent: config?.shortTakeProfitPercent ?? defaultShortTp,
+            shortStopLossPercent: config?.shortStopLossPercent ?? defaultShortSl,
+            dailyProfitLockUsdt: config?.dailyProfitLockUsdt ?? defaultProfitLock,
+            maxShortSlots: config?.maxShortSlots ?? defaultMaxShortSlots,
+            leverageMultiplier: config?.leverageMultiplier ?? defaultLeverage,
         };
-        this.positionLedger = positionLedger ?? new positionLedger_1.PositionLedger(this.config.symbol);
+        this.hedgeLedger = hedgeLedger ?? new positionLedger_1.HedgePositionLedger(this.config.symbol, this.config.maxShortSlots);
+        this.positionLedger = positionLedger ?? this.hedgeLedger.getLegacyLedger();
         this.reusableOrderIntent.symbol = this.config.symbol;
         this.reusableOrderIntent.quantity = this.config.orderQuantity;
     }
     getPositionLedger() {
         return this.positionLedger;
+    }
+    getHedgeLedger() {
+        return this.hedgeLedger;
+    }
+    getActiveTrades(currentPrice = 0) {
+        return this.hedgeLedger.getActiveTradeSlots(currentPrice, this.config.leverageMultiplier, this.config.longTakeProfitPercent, this.config.longStopLossPercent, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent);
     }
     /**
      * High-frequency tick evaluation loop.
@@ -80,78 +119,97 @@ class StrategyEngine {
         const latencyPenalty = this.client.getLatencyPenaltyCoefficient();
         const penaltyCoeff = latencyPenalty > 0 ? latencyPenalty : 1.0;
         const slippageTicks = this.client.getDynamicSlippageTicks();
-        // 1. Dynamic Monitoring: Evaluate Unrealized PnL against dynamic TP/SL thresholds
+        // 1. Dynamic Monitoring: Evaluate Unrealized PnL against dynamic TP/SL thresholds across Hedge Slots
         const markPrice = askPrice > 0 ? (askPrice + bidPrice) / 2 : bidPrice;
         if (markPrice > 0) {
-            const posSummary = this.positionLedger.getSummary(markPrice);
-            if (posSummary.side !== "FLAT" && posSummary.netQuantity > 0 && posSummary.averageEntryPrice > 0) {
-                const unrealizedPnl = posSummary.unrealizedPnl;
-                const initialNotional = posSummary.netQuantity * posSummary.averageEntryPrice;
-                const pnlPercent = initialNotional > 0 ? (unrealizedPnl / initialNotional) * 100 : 0;
-                let dynamicTrigger = null;
-                if (pnlPercent >= this.config.takeProfitPercent) {
-                    dynamicTrigger = "TAKE_PROFIT";
+            const hedgeTriggers = this.hedgeLedger.evaluateHedgeDynamicTpSl(markPrice);
+            if (hedgeTriggers.length > 0) {
+                const trigger = hedgeTriggers[0];
+                const exitSide = trigger.side === "LONG" ? "SELL" : "BUY";
+                console.log(`[HEDGE_DYNAMIC_MONITORING] Slot ${trigger.slotId} ${trigger.reason} TRIGGERED! Side: ${trigger.side}, Entry: $${trigger.entryPrice.toFixed(2)}, Mark: $${markPrice.toFixed(2)}. Dispatching MARKET close with positionSide: ${trigger.side}.`);
+                this.reusableOrderIntent.symbol = this.config.symbol;
+                this.reusableOrderIntent.side = exitSide;
+                this.reusableOrderIntent.quantity = trigger.quantity;
+                this.reusableOrderIntent.price = markPrice;
+                this.reusableOrderIntent.currentPositionSide = trigger.side;
+                this.reusableOrderIntent.isCloseOrder = true;
+                const isConfigured = this.executionClient.isConfigured();
+                const riskResult = this.riskGuard.validateOrder(this.reusableOrderIntent, isConfigured, trigger.side);
+                let executionPromise = undefined;
+                if (riskResult.passed) {
+                    executionPromise = this.executionClient
+                        .placeOrder({
+                        symbol: this.config.symbol,
+                        side: exitSide,
+                        type: "MARKET",
+                        quantity: trigger.quantity,
+                        reduceOnly: true,
+                        positionSide: trigger.side,
+                    })
+                        .then((res) => {
+                        if (res) {
+                            if (trigger.side === "LONG") {
+                                this.hedgeLedger.releaseCoreLong();
+                            }
+                            else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
+                                const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
+                                this.hedgeLedger.releaseShortSlot(sIdx);
+                            }
+                        }
+                        return res;
+                    })
+                        .catch((err) => {
+                        console.error(`[DYNAMIC_MONITORING_ERROR] Hedge ${trigger.reason} MARKET order failed: ${err.message}`);
+                        return null;
+                    });
                 }
-                else if (pnlPercent <= -this.config.stopLossPercent) {
-                    dynamicTrigger = "STOP_LOSS";
-                }
-                if (dynamicTrigger !== null) {
-                    const exitSide = posSummary.side === "LONG" ? "SELL" : "BUY";
-                    console.log(`[DYNAMIC_MONITORING] ${dynamicTrigger} TRIGGERED! Side: ${posSummary.side}, PnL: $${unrealizedPnl.toFixed(4)} (${pnlPercent.toFixed(2)}%), TP Threshold: ${this.config.takeProfitPercent}%, SL Threshold: ${this.config.stopLossPercent}%. Dispatching dynamic MARKET close.`);
-                    this.reusableOrderIntent.symbol = this.config.symbol;
-                    this.reusableOrderIntent.side = exitSide;
-                    this.reusableOrderIntent.quantity = posSummary.netQuantity;
-                    this.reusableOrderIntent.price = markPrice;
-                    this.reusableOrderIntent.currentPositionSide = posSummary.side;
-                    const isConfigured = this.executionClient.isConfigured();
-                    const riskResult = this.riskGuard.validateOrder(this.reusableOrderIntent, isConfigured, posSummary.side);
-                    let executionPromise = undefined;
-                    if (riskResult.passed) {
-                        executionPromise = this.executionClient
-                            .placeOrder({
-                            symbol: this.config.symbol,
-                            side: exitSide,
-                            type: "MARKET",
-                            quantity: posSummary.netQuantity,
-                            reduceOnly: true,
-                        })
-                            .catch((err) => {
-                            console.error(`[DYNAMIC_MONITORING_ERROR] Dynamic ${dynamicTrigger} MARKET order failed: ${err.message}`);
-                            return null;
-                        });
-                    }
-                    return {
-                        sequenceNum: seq,
-                        signalType: exitSide,
-                        obi,
-                        cvd,
-                        spreadVelocity,
-                        bidPrice,
-                        askPrice,
-                        riskResult,
-                        executionPromise,
-                        exitReason: dynamicTrigger,
-                    };
-                }
+                return {
+                    sequenceNum: seq,
+                    signalType: exitSide,
+                    positionSide: trigger.side,
+                    slotId: trigger.slotId,
+                    obi,
+                    cvd,
+                    spreadVelocity,
+                    bidPrice,
+                    askPrice,
+                    riskResult,
+                    executionPromise,
+                    exitReason: trigger.reason,
+                };
             }
         }
         let signalType = "NONE";
-        // Enhanced Signal Evaluation Logic: OBI/CVD combined with AI direction and AI confidence gating
+        let targetPosSide = undefined;
+        let targetSlotId = undefined;
+        let targetSlotIndex = undefined;
+        // Asymmetric Signal Evaluation Logic
+        // BUY -> Core Long Entry (allowed if Core Long is FLAT)
         if (obi > this.config.obiBuyThreshold &&
             cvd > this.config.cvdBuyThreshold &&
             spreadVelocity < this.config.maxSpreadVelocity &&
             askPrice > 0 &&
             aiDirection > 0 &&
-            aiConfidence >= this.config.minAiConfidence) {
+            aiConfidence >= this.config.minAiConfidence &&
+            !this.hedgeLedger.getCoreLong().isOccupied) {
             signalType = "BUY";
+            targetPosSide = "LONG";
+            targetSlotId = "CORE_LONG";
         }
+        // SELL -> Short Slot Entry (allowed if at least 1 Short slot is available)
         else if (obi < this.config.obiSellThreshold &&
             cvd < this.config.cvdSellThreshold &&
             spreadVelocity < this.config.maxSpreadVelocity &&
             bidPrice > 0 &&
             aiDirection < 0 &&
             aiConfidence >= this.config.minAiConfidence) {
-            signalType = "SELL";
+            const availShortIdx = this.hedgeLedger.getAvailableShortSlotIndex();
+            if (availShortIdx !== -1) {
+                signalType = "SELL";
+                targetPosSide = "SHORT";
+                targetSlotIndex = availShortIdx;
+                targetSlotId = `SHORT_SLOT_${availShortIdx}`;
+            }
         }
         if (signalType === "NONE") {
             this.staticResult.sequenceNum = seq;
@@ -165,10 +223,10 @@ class StrategyEngine {
             this.staticResult.executionPromise = undefined;
             return this.staticResult;
         }
-        // TASK 4.3: Apply latency penalty coefficient to orderQuantity BEFORE RiskGuard check
+        // Apply latency penalty coefficient to orderQuantity BEFORE RiskGuard check
         const scaledQuantity = Number((this.config.orderQuantity * penaltyCoeff).toFixed(4));
         let finalQuantity = Math.max(0.0001, scaledQuantity);
-        // TASK 4.3 & 4.4: Dynamic Taker Fallback (>75% Confidence) & 1-Tick Post-Only Offset (<=75%)
+        // Dynamic Taker Fallback (>75% Confidence) & 1-Tick Post-Only Offset (<=75%)
         const effectiveSlippage = Math.max(2, slippageTicks);
         const priceAdjustment = effectiveSlippage * this.config.tickSize;
         const basePrice = signalType === "BUY" ? askPrice : bidPrice;
@@ -178,13 +236,11 @@ class StrategyEngine {
         let orderType;
         let timeInForce;
         if (isHighConfidence) {
-            console.log("[EXECUTION] High Confidence (>75%) - Bypassing Post-Only for Guaranteed Fill");
             orderType = isAggressive ? "MARKET" : "LIMIT";
             timeInForce = isAggressive ? "IOC" : "GTC";
             targetPrice = signalType === "BUY" ? askPrice + priceAdjustment : bidPrice - priceAdjustment;
         }
         else {
-            // Standard confidence (<= 0.75): retain Post-Only (GTX) with safe 1-tick non-crossing maker placement
             orderType = "LIMIT";
             timeInForce = "GTX";
             targetPrice = signalType === "BUY" ? bidPrice : askPrice;
@@ -201,15 +257,15 @@ class StrategyEngine {
         this.reusableOrderIntent.side = signalType;
         this.reusableOrderIntent.quantity = finalQuantity;
         this.reusableOrderIntent.price = Number(targetPrice.toFixed(2));
-        this.reusableOrderIntent.currentPositionSide = this.positionLedger.getSummary().side;
-        // Pass through Risk Management Guard with current position side
+        this.reusableOrderIntent.currentPositionSide = targetPosSide;
+        this.reusableOrderIntent.isCloseOrder = false;
+        // Pass through Risk Management Guard with target position side
         const isConfigured = this.executionClient.isConfigured();
-        const riskResult = this.riskGuard.validateOrder(this.reusableOrderIntent, isConfigured, this.reusableOrderIntent.currentPositionSide);
+        const riskResult = this.riskGuard.validateOrder(this.reusableOrderIntent, isConfigured, targetPosSide);
         let executionPromise = undefined;
         if (riskResult.passed) {
             const notional = this.reusableOrderIntent.price * this.reusableOrderIntent.quantity;
             this.riskGuard.recordExecutionSuccess(notional);
-            // Execute order with safe exception handler to prevent unhandled promise rejections
             executionPromise = this.executionClient
                 .placeOrder({
                 symbol: this.reusableOrderIntent.symbol,
@@ -218,19 +274,31 @@ class StrategyEngine {
                 quantity: this.reusableOrderIntent.quantity,
                 price: orderType === "LIMIT" ? this.reusableOrderIntent.price : undefined,
                 timeInForce: timeInForce,
+                positionSide: targetPosSide,
+            })
+                .then((res) => {
+                if (res) {
+                    const execPx = parseFloat(res.price || res.avgPrice || "0") || targetPrice;
+                    if (targetPosSide === "LONG") {
+                        this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, this.config.longTakeProfitPercent, this.config.longStopLossPercent);
+                    }
+                    else if (targetPosSide === "SHORT" && targetSlotIndex !== undefined) {
+                        this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent);
+                    }
+                }
+                return res;
             })
                 .catch((err) => {
                 console.error(`[CRITICAL_EXECUTION_ERROR] Order placement failed: ${err.message}`);
                 return null;
             });
         }
-        const currentPosSide = this.positionLedger.getSummary().side;
-        const signalExitReason = currentPosSide !== "FLAT" && currentPosSide !== (signalType === "BUY" ? "LONG" : "SHORT")
-            ? "AI_REVERSAL"
-            : undefined;
         return {
             sequenceNum: seq,
             signalType,
+            positionSide: targetPosSide,
+            slotId: targetSlotId,
+            targetSlotIndex,
             obi,
             cvd,
             spreadVelocity,
@@ -238,7 +306,6 @@ class StrategyEngine {
             askPrice,
             riskResult,
             executionPromise,
-            exitReason: signalExitReason,
         };
     }
     getConfig() {

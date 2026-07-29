@@ -157,9 +157,9 @@ impl AIEngine {
             .to_scalar::<f32>()?
             .sqrt() as f64;
 
-        // Compute dynamic slippage buffer: 2 + floor(spread_velocity / 0.5)
+        // Compute dynamic slippage buffer: 2 + floor(spread_velocity / 0.5), clamped to [2, 20]
         let spread_vel = sab.load_f64(3);
-        let slippage_ticks = 2.0 + (spread_vel.abs() / 0.5).floor();
+        let slippage_ticks = (2.0 + (spread_vel.abs() / 0.5).floor()).min(20.0);
 
         // Save last state for IC tracker step
         self.last_mid_price.store(current_mid.to_bits(), Ordering::Relaxed);

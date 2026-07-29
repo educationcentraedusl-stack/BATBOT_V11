@@ -75,3 +75,17 @@
 {"timestamp":1785312623491,"symbol":"BTCUSDT","side":"BUY","price":64412.5,"quantity":0.0009,"realizedPnl":0,"fee":0.0231885,"latencyMs":0}
 {"timestamp":1785313863048,"symbol":"BTCUSDT","side":"BUY","price":64264.5,"quantity":0.0009,"realizedPnl":0,"fee":0.023135219999999998,"latencyMs":0}
 {"timestamp":1785314651172,"symbol":"BTCUSDT","side":"BUY","price":64331.5,"quantity":0.0009,"realizedPnl":0,"fee":0.02315934,"latencyMs":0}
+{"timestamp":1785323421509,"symbol":"BTCUSDT","side":"SELL","price":64474.8,"quantity":0.0009,"realizedPnl":0.29533457373006716,"fee":0.023210928000000002,"latencyMs":0}
+{"timestamp":1785323422626,"symbol":"BTCUSDT","side":"SELL","price":64474.8,"quantity":0.0009,"realizedPnl":0.29533457373006716,"fee":0.023210928000000002,"latencyMs":0}
+{"timestamp":1785323424043,"symbol":"BTCUSDT","side":"SELL","price":64474.8,"quantity":0.0009,"realizedPnl":0.29533457373006716,"fee":0.023210928000000002,"latencyMs":0}
+{"timestamp":1785323426161,"symbol":"BTCUSDT","side":"SELL","price":64474.8,"quantity":0.0009,"realizedPnl":0.29533457373006716,"fee":0.023210928000000002,"latencyMs":0}
+{"timestamp":1785323427280,"symbol":"BTCUSDT","side":"SELL","price":64474.8,"quantity":0.0009,"realizedPnl":0.29533457373006716,"fee":0.023210928000000002,"latencyMs":0}
+{"timestamp":1785324649322,"symbol":"BTCUSDT","side":"BUY","price":64447.1,"quantity":0.0009,"realizedPnl":0,"fee":0.023200956000000002,"latencyMs":0}
+{"timestamp":1785325805683,"symbol":"BTCUSDT","side":"SELL","price":64451.5,"quantity":0.0009,"realizedPnl":0.2517871539046761,"fee":0.02320254,"latencyMs":0}
+{"timestamp":1785332745405,"symbol":"BTCUSDT","side":"BUY","price":64316.9,"quantity":0.0009,"realizedPnl":0,"fee":0.023154084000000002,"latencyMs":0}
+{"timestamp":1785333400756,"symbol":"BTCUSDT","side":"SELL","price":64397,"quantity":0.0009,"realizedPnl":0.04890707999999869,"fee":0.02318292,"latencyMs":0}
+{"timestamp":1785333402122,"symbol":"BTCUSDT","side":"SELL","price":64397,"quantity":0.0009,"realizedPnl":0,"fee":0.02318292,"latencyMs":0}
+{"timestamp":1785333428521,"symbol":"BTCUSDT","side":"SELL","price":64397,"quantity":0.0009,"realizedPnl":0,"fee":0.02318292,"latencyMs":0}
+{"timestamp":1785334166543,"symbol":"BTCUSDT","side":"SELL","price":64461.8,"quantity":0.0009,"realizedPnl":0.1072037520000013,"fee":0.023206248,"latencyMs":0}
+{"timestamp":1785334168421,"symbol":"BTCUSDT","side":"SELL","price":64461.8,"quantity":0.0009,"realizedPnl":0,"fee":0.023206248,"latencyMs":0}
+{"timestamp":1785334169917,"symbol":"BTCUSDT","side":"SELL","price":64461.8,"quantity":0.0009,"realizedPnl":0,"fee":0.023206248,"latencyMs":0}

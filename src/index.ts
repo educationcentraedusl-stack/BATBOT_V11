@@ -53,7 +53,10 @@ export async function syncStateOnStartup(
     // 1. Sync server time to fix timestamp error -1021
     await executionClient.syncServerTime();
 
-    // 2. Fetch USDT Account Balance
+    // 2. Enable Dual-Side Hedge Mode on Binance Futures
+    await executionClient.setHedgeMode(true);
+
+    // 3. Fetch USDT Account Balance
     const balance = await executionClient.fetchUsdtBalanceAsync();
     console.log(`[StateSync] Binance Wallet Available Balance Synced: $${balance.toFixed(2)} USDT`);
 
@@ -69,6 +72,22 @@ export async function syncStateOnStartup(
           const posSide = amt > 0 ? "LONG" : "SHORT";
           const qty = Math.abs(amt);
           strategyEngine.getPositionLedger().syncActivePosition(posSide, qty, entryPx);
+          if (posSide === "LONG") {
+            strategyEngine.getHedgeLedger().occupyCoreLong(
+              qty,
+              entryPx,
+              strategyEngine.getConfig().longTakeProfitPercent,
+              strategyEngine.getConfig().longStopLossPercent
+            );
+          } else {
+            strategyEngine.getHedgeLedger().occupyShortSlot(
+              0,
+              qty,
+              entryPx,
+              strategyEngine.getConfig().shortTakeProfitPercent,
+              strategyEngine.getConfig().shortStopLossPercent
+            );
+          }
           riskGuard.updatePositionNotional(qty * entryPx);
           console.log(`[StateSync] Open Binance Position Synced: ${posSide} ${qty} ${symbol} @ $${entryPx.toFixed(2)}`);
         } else {
@@ -163,7 +182,13 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
     // Active Model Drift Evaluation & Self-Healing Trigger (SAB Slot 101 & 102)
     const rollingIc = client.getRollingIC();
     const isDrifted = client.getIsModelDrifted();
-    recalibrationManager.evaluateTickDrift(rollingIc, isDrifted);
+
+    if (riskGuard.isProfitLockedState()) {
+      recalibrationManager.enableShadowMode();
+      recalibrationManager.evaluateShadowTick(tickResult.sequenceNum, rollingIc);
+    } else {
+      recalibrationManager.evaluateTickDrift(rollingIc, isDrifted);
+    }
 
     logger.logSignal(
       tickResult.sequenceNum,
@@ -219,6 +244,7 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
     }
 
     const posSummary = positionLedger.getSummary(tickResult.askPrice || tickResult.bidPrice);
+    const activeTrades = strategyEngine.getActiveTrades(tickResult.askPrice || tickResult.bidPrice);
     const frame: TelemetryFrame = {
       symbol: strategyEngine.getConfig().symbol,
       sequenceNum: tickResult.sequenceNum,
@@ -254,6 +280,7 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
       rttMs: client.getMeasuredRttMs(),
       latencyPenalty: client.getLatencyPenaltyCoefficient(),
       slippageTicks: client.getDynamicSlippageTicks(),
+      activeTrades: activeTrades,
     };
 
     dashboard.render(frame);

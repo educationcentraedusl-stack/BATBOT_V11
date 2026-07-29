@@ -56,6 +56,9 @@ class PyTorchCfCCell(nn.Module):
         batch_size, seq_len, _ = input_seq.shape
         device = input_seq.device
 
+        if seq_len == 0:
+            return torch.empty(batch_size, 0, self.output_dim, device=device)
+
         z_prev = torch.zeros(batch_size, self.hidden_dim, device=device)
         outputs = []
 
@@ -120,7 +123,9 @@ def train_cfc():
     print("=" * 75)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[Device] Operating on: {device}")
+    num_threads = min(8, os.cpu_count() or 4)
+    torch.set_num_threads(num_threads)
+    print(f"[Device] Operating on: {device} (CPU threads: {num_threads})")
 
     if not os.path.exists(CFC_OUT_PATH):
         raise FileNotFoundError(f"CfC dataset safe tensors not found at: {CFC_OUT_PATH}")
@@ -135,7 +140,10 @@ def train_cfc():
 
     print(f"[Dataset] Train sequences: {x_train.shape[0]} | Val sequences: {x_val.shape[0]}")
 
-    batch_size = 128
+    if x_train.shape[0] == 0:
+        raise ValueError("Error: Training dataset contains 0 sequence samples. Aborting training.")
+
+    batch_size = 256
     train_dataset = TensorDataset(x_train, y_train)
     val_dataset = TensorDataset(x_val, y_val)
 
@@ -146,12 +154,14 @@ def train_cfc():
     criterion = HuberICLoss(delta=1e-3, ic_weight=0.5)
 
     epochs = 35
+    total_steps = max(1, epochs * len(train_loader))
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4, amsgrad=True)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=1e-3, total_steps=epochs * len(train_loader), pct_start=0.1
+        optimizer, max_lr=1e-3, total_steps=total_steps, pct_start=0.1
     )
 
-    print(f"[Training] Starting CfC optimization for {epochs} epochs...")
+    print(f"[Training] Starting CfC optimization for {epochs} epochs (Batch Size: {batch_size})...")
+    sys.stdout.flush()
     start_time = time.time()
 
     best_val_ic = -1.0
@@ -162,6 +172,8 @@ def train_cfc():
         train_ic_sum = 0.0
 
         for bx, by in train_loader:
+            if bx.shape[1] == 0:
+                continue
             optimizer.zero_grad()
             pred = model(bx)
             loss, h_loss, ic = criterion(pred, by)
@@ -175,29 +187,36 @@ def train_cfc():
             train_loss_sum += loss.item() * len(bx)
             train_ic_sum += ic.item() * len(bx)
 
-        train_loss = train_loss_sum / len(train_dataset)
-        train_ic = train_ic_sum / len(train_dataset)
+        train_loss = train_loss_sum / max(1, len(train_dataset))
+        train_ic = train_ic_sum / max(1, len(train_dataset))
 
         # Validation Phase
-        model.eval()
-        val_loss_sum = 0.0
-        val_ic_sum = 0.0
+        val_loss = 0.0
+        val_ic = 0.0
+        if len(val_dataset) > 0:
+            model.eval()
+            val_loss_sum = 0.0
+            val_ic_sum = 0.0
 
-        with torch.no_grad():
-            for bx, by in val_loader:
-                pred = model(bx)
-                loss, h_loss, ic = criterion(pred, by)
-                val_loss_sum += loss.item() * len(bx)
-                val_ic_sum += ic.item() * len(bx)
+            with torch.no_grad():
+                for bx, by in val_loader:
+                    if bx.shape[1] == 0:
+                        continue
+                    pred = model(bx)
+                    loss, h_loss, ic = criterion(pred, by)
+                    val_loss_sum += loss.item() * len(bx)
+                    val_ic_sum += ic.item() * len(bx)
 
-        val_loss = val_loss_sum / len(val_dataset)
-        val_ic = val_ic_sum / len(val_dataset)
+            val_loss = val_loss_sum / len(val_dataset)
+            val_ic = val_ic_sum / len(val_dataset)
 
-        if val_ic > best_val_ic:
-            best_val_ic = val_ic
+            if val_ic > best_val_ic:
+                best_val_ic = val_ic
 
         if epoch % 5 == 0 or epoch == epochs:
             print(f"Epoch {epoch:02d}/{epochs} | Train Loss: {train_loss:.6f} | Train IC: {train_ic:+.4f} | Val Loss: {val_loss:.6f} | Val IC: {val_ic:+.4f}")
+            sys.stdout.flush()
+
 
     print(f"[Training] Completed in {time.time() - start_time:.2f}s | Best Val IC: {best_val_ic:+.4f}")
 
