@@ -10,7 +10,7 @@ function storeAtomicFloat64(bigIntView, slot, value) {
 }
 async function runTest() {
     console.log("[TEST] Initializing BATBOT_V11 Control Plane...");
-    const system = (0, index_1.initializeSystem)();
+    const system = await (0, index_1.initializeSystem)();
     console.log(`[TEST] Status: ${system.status}`);
     const sab = system.sab;
     const client = system.client;

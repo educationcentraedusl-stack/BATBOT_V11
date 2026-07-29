@@ -78,7 +78,7 @@ export async function syncStateOnStartup(
   }
 }
 
-export function initializeSystem(): SystemControlPlane {
+export async function initializeSystem(): Promise<SystemControlPlane> {
   const sab = new SharedArrayBuffer(2048);
   const client = new MarketDataClient(sab);
   const riskGuard = new RiskGuard();
@@ -94,10 +94,12 @@ export function initializeSystem(): SystemControlPlane {
   let isRunning = true;
   let tickInterval: NodeJS.Timeout | null = null;
 
-  // Trigger non-blocking async state sync on startup
-  syncStateOnStartup(executionClient, strategyEngine, riskGuard).catch((err) => {
-    console.error(`[StateSync] Non-blocking state sync error: ${err.message}`);
-  });
+  // Physically await Binance Server Time & State Synchronization BEFORE starting tick loop
+  try {
+    await syncStateOnStartup(executionClient, strategyEngine, riskGuard);
+  } catch (err: any) {
+    console.error(`[StateSync] Blocking state sync error: ${err.message}`);
+  }
 
   // Set up Bi-directional WebSocket RPC Control Command Handler
   telemetryServer.setCommandHandler(async (cmd: ControlCommand) => {
@@ -278,13 +280,18 @@ export function initializeSystem(): SystemControlPlane {
 }
 
 if (require.main === module) {
-  const system = initializeSystem();
+  (async () => {
+    const system = await initializeSystem();
 
-  const handleShutdown = async () => {
-    await system.stop();
-    process.exit(0);
-  };
+    const handleShutdown = async () => {
+      await system.stop();
+      process.exit(0);
+    };
 
-  process.on("SIGINT", handleShutdown);
-  process.on("SIGTERM", handleShutdown);
+    process.on("SIGINT", handleShutdown);
+    process.on("SIGTERM", handleShutdown);
+  })().catch((err) => {
+    console.error("[BATBOT_V11] Critical startup initialization error:", err);
+    process.exit(1);
+  });
 }

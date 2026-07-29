@@ -11,7 +11,7 @@ function storeAtomicFloat64(bigIntView: BigInt64Array, slot: number, value: numb
 
 async function runTest() {
   console.log("[TEST] Initializing BATBOT_V11 Control Plane...");
-  const system = initializeSystem();
+  const system = await initializeSystem();
   console.log(`[TEST] Status: ${system.status}`);
 
   const sab = system.sab;

@@ -91,7 +91,7 @@ async function syncStateOnStartup(executionClient, strategyEngine, riskGuard) {
         console.error(`[StateSync] Critical Error during startup state sync: ${err.message}`);
     }
 }
-function initializeSystem() {
+async function initializeSystem() {
     const sab = new SharedArrayBuffer(2048);
     const client = new marketDataClient_1.MarketDataClient(sab);
     const riskGuard = new risk_1.RiskGuard();
@@ -105,10 +105,13 @@ function initializeSystem() {
     recalibrationManager.setSustainedDriftThreshold(50);
     let isRunning = true;
     let tickInterval = null;
-    // Trigger non-blocking async state sync on startup
-    syncStateOnStartup(executionClient, strategyEngine, riskGuard).catch((err) => {
-        console.error(`[StateSync] Non-blocking state sync error: ${err.message}`);
-    });
+    // Physically await Binance Server Time & State Synchronization BEFORE starting tick loop
+    try {
+        await syncStateOnStartup(executionClient, strategyEngine, riskGuard);
+    }
+    catch (err) {
+        console.error(`[StateSync] Blocking state sync error: ${err.message}`);
+    }
     // Set up Bi-directional WebSocket RPC Control Command Handler
     telemetryServer.setCommandHandler(async (cmd) => {
         switch (cmd.action) {
@@ -259,11 +262,16 @@ function initializeSystem() {
     };
 }
 if (require.main === module) {
-    const system = initializeSystem();
-    const handleShutdown = async () => {
-        await system.stop();
-        process.exit(0);
-    };
-    process.on("SIGINT", handleShutdown);
-    process.on("SIGTERM", handleShutdown);
+    (async () => {
+        const system = await initializeSystem();
+        const handleShutdown = async () => {
+            await system.stop();
+            process.exit(0);
+        };
+        process.on("SIGINT", handleShutdown);
+        process.on("SIGTERM", handleShutdown);
+    })().catch((err) => {
+        console.error("[BATBOT_V11] Critical startup initialization error:", err);
+        process.exit(1);
+    });
 }
