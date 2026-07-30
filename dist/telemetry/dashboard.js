@@ -1,6 +1,57 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CLIDashboard = void 0;
+const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
+function readTrainingProgress() {
+    try {
+        const progressPath = path.resolve(process.cwd(), ".training_progress");
+        if (fs.existsSync(progressPath)) {
+            const raw = fs.readFileSync(progressPath, "utf-8").trim();
+            const val = parseInt(raw, 10);
+            if (!isNaN(val) && val >= 0 && val <= 100) {
+                return val;
+            }
+        }
+    }
+    catch (_e) {
+        // Safe non-blocking read
+    }
+    return null;
+}
 class CLIDashboard {
     enabled;
     lastRenderTimestamp = 0;
@@ -99,6 +150,16 @@ class CLIDashboard {
         output += ` Position: ${posSideColor}${bold}${frame.stats.positionSide}${reset} (${frame.stats.netQuantity.toFixed(4)})  |  Avg Entry: $${frame.stats.averageEntryPrice.toFixed(2)}  |  Unrealized PnL: ${unrealizedColor}${bold}$${frame.stats.unrealizedPnl.toFixed(2)}${reset}${clearLine}\n`;
         output += ` Available Balance: ${green}${bold}$${frame.usdtBalance.toFixed(2)}${reset}  |  Realized PnL: ${pnlColor}${bold}$${frame.stats.realizedPnl.toFixed(2)}${reset}  |  Fees: $${frame.stats.totalFees.toFixed(2)}${clearLine}\n`;
         output += ` Win Rate: ${yellow}${frame.stats.winRatePercent.toFixed(2)}%${reset}  |  Total Trades: ${frame.stats.totalTrades} (W: ${frame.stats.winningTrades} / L: ${frame.stats.losingTrades})${clearLine}\n`;
+        const trainingProgress = readTrainingProgress();
+        if (trainingProgress !== null) {
+            const totalBlocks = 20;
+            const filledBlocks = Math.round((trainingProgress / 100) * totalBlocks);
+            const emptyBlocks = totalBlocks - filledBlocks;
+            const progressBar = "▓".repeat(filledBlocks) + "░".repeat(emptyBlocks);
+            output += subDivider;
+            output += `${bold}--- NOTIFICATION AREA & REAL-TIME TRAINING MONITOR ---${reset}${clearLine}\n`;
+            output += ` [BATBOT_V11][TRAINING] Progress: ${yellow}${bold}${trainingProgress}%${reset} [${green}${progressBar}${reset}]${clearLine}\n`;
+        }
         output += borderLine;
         process.stdout.write(output);
     }
