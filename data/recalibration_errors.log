@@ -2123,3 +2123,8 @@ Training already in progress.
 [2026-07-30T20:02:31.210Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
 --- PYTHON STDOUT LOG ---
 Training already in progress.
+[2026-07-30T21:02:18.686Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDERR TRACEBACK ---
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
