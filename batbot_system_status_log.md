@@ -386,6 +386,12 @@
 - **HFT/Performance Compliance:** Implemented high-frequency Garman-Klass Realized Volatility (RV_GK), Volume-Synchronized Probability of Toxicity (VPIN), LOB Depth Depletion Rate (dDepth/dt), Micro Hurst Exponent (H_micro), and Shannon LOB Entropy directly inside the Rust zero-copy SIMD engine (`src/lob/microstructure.rs`). Built zero-GC `DynamicRiskEngine` in TypeScript to calculate real-time dynamic SL/TP collars and intercept liquidity sweeps / toxic order flow traps before order dispatch. Verified 100% via Rust unit tests (`cargo test --lib`, 21/21 passed), N-API native release compilation (`npx napi build --platform --release`), TypeScript compilation (`npm run build:ts`, 0 errors), and 100,000 tick performance benchmark (`node dist/test_dynamic_risk_and_traps.js` - ALL PASSED).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-30
+- **Feature/Task:** Remediation of Rust to SAB Microstructure Metrics IPC Ingestion Gap
+- **Artifacts Created/Modified:** `src/ipc/shared_memory.rs`, `src/ipc/bridge.rs`, `tests/ipc_tests.rs`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Fixed critical IPC Bridge gap where Rust calculated Garman-Klass RV, VPIN, Hurst Exponent, LOB Entropy, Regime State Code, and Sweep Detection Flag but failed to populate them into SharedArrayBuffer during live WS ingestion. Updated `write_lob_snapshot` in `src/ipc/shared_memory.rs` and `IngestionBridge::start_consumer_loop` in `src/ipc/bridge.rs` to write slots 121–126 using atomic release `store_f64` calls with 0 heap allocations on the ingestion hot-path. Updated IPC unit test suite (`tests/ipc_tests.rs`). Verified 100% via Rust unit tests (`cargo test --lib` - 21 passed), Rust IPC tests (`cargo test --test ipc_tests` - 3 passed), N-API native release build (`npx napi build --platform --release`), TypeScript build (`npm run build:ts`), and dynamic risk test suite (`node dist/test_dynamic_risk_and_traps.js`).
+- **Status:** ✅ Completed & QA Verified
+
 
 
 

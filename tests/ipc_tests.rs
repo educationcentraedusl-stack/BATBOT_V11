@@ -44,6 +44,12 @@ mod tests {
             50000.0,
             30000.0,
             20000.0,
+            0.0035, // rv_gk
+            0.15,   // vpin
+            0.55,   // hurst
+            1.2,    // lob_entropy
+            1,      // regime
+            true,   // is_sweep_detected
             1_700_000_000,
             0,
             1,
@@ -61,5 +67,11 @@ mod tests {
         assert_eq!(bridge.load_f64(9), 30000.0);
         assert_eq!(bridge.load_f64(10), 20000.0);
         assert_eq!(bridge.load_u64(92), 1);
+        assert_eq!(bridge.load_f64(121), 0.0035);
+        assert_eq!(bridge.load_f64(122), 0.15);
+        assert_eq!(bridge.load_f64(123), 0.55);
+        assert_eq!(bridge.load_f64(124), 1.2);
+        assert_eq!(bridge.load_f64(125), 1.0);
+        assert_eq!(bridge.load_f64(126), 1.0);
     }
 }

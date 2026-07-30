@@ -166,6 +166,12 @@ impl AtomicSharedMemoryBridge {
         total_liq: f64,
         buy_liq: f64,
         sell_liq: f64,
+        rv_gk: f64,
+        vpin: f64,
+        hurst: f64,
+        lob_entropy: f64,
+        regime: u8,
+        is_sweep_detected: bool,
         timestamp_ns: u64,
         dropped_events: u64,
         seq: u64,
@@ -230,6 +236,14 @@ impl AtomicSharedMemoryBridge {
         self.store_f64(112, hawkes_intensity);
         self.store_f64(113, microburst_score);
         self.store_f64(114, realized_vol);
+
+        // Slots 121..126: Dynamic Microstructure & Trap Metrics
+        self.store_f64(121, rv_gk);
+        self.store_f64(122, vpin);
+        self.store_f64(123, hurst);
+        self.store_f64(124, lob_entropy);
+        self.store_f64(125, regime as f64);
+        self.store_f64(126, if is_sweep_detected { 1.0 } else { 0.0 });
     }
 }
 
