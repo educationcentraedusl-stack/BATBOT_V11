@@ -1808,3 +1808,167 @@ W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]
  [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
 --- PYTHON STDERR TRACEBACK ---
 [FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
+[2026-07-30T17:12:41.170Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDERR TRACEBACK ---
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
+[2026-07-30T17:28:17.480Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDERR TRACEBACK ---
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
+[2026-07-30T17:49:49.088Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDERR TRACEBACK ---
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
+[2026-07-30T18:10:46.955Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
+OpenBLAS error: Memory allocation still failed after 10 retries, giving up.
+OpenBLAS error: Memory allocation still failed after 10 retries, giving up.
+OpenBLAS error: Memory allocation still failed after 10 retries, giving up.
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\spawn.py", line 131, in _main
+    prepare(preparation_data)
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\spawn.py", line 246, in prepare
+    _fixup_main_from_path(data['init_main_from_path'])
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\spawn.py", line 297, in _fixup_main_from_path
+    main_content = runpy.run_path(main_path,
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen runpy>", line 291, in run_path
+  File "<frozen runpy>", line 98, in _run_module_code
+  File "<frozen runpy>", line 88, in _run_code
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 15, in <module>
+    import torch
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\__init__.py", line 137, in <module>
+    raise err
+OSError: [WinError 1455] The paging file is too small for this operation to complete. Error loading "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\lib\cublas64_12.dll" or one of its dependencies.
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\spawn.py", line 131, in _main
+    prepare(preparation_data)
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\spawn.py", line 246, in prepare
+    _fixup_main_from_path(data['init_main_from_path'])
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\spawn.py", line 297, in _fixup_main_from_path
+    main_content = runpy.run_path(main_path,
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen runpy>", line 291, in run_path
+  File "<frozen runpy>", line 98, in _run_module_code
+  File "<frozen runpy>", line 88, in _run_code
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 15, in <module>
+    import torch
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\__init__.py", line 137, in <module>
+    raise err
+OSError: [WinError 1455] The paging file is too small for this operation to complete. Error loading "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\lib\cublas64_12.dll" or one of its dependencies.
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\utils\data\dataloader.py", line 1131, in _try_get_data
+    data = self._data_queue.get(timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\queues.py", line 114, in get
+    raise Empty
+_queue.Empty
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 336, in <module>
+    train_cfc()
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 291, in train_cfc
+    for bx, by in val_loader:
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\utils\data\dataloader.py", line 630, in __next__
+    data = self._next_data()
+           ^^^^^^^^^^^^^^^^^
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\utils\data\dataloader.py", line 1327, in _next_data
+    idx, data = self._get_data()
+                ^^^^^^^^^^^^^^^^
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\utils\data\dataloader.py", line 1293, in _get_data
+    success, data = self._try_get_data()
+                    ^^^^^^^^^^^^^^^^^^^^
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\utils\data\dataloader.py", line 1144, in _try_get_data
+    raise RuntimeError(f'DataLoader worker (pid(s) {pids_str}) exited unexpectedly') from e
+RuntimeError: DataLoader worker (pid(s) 19116, 19296, 15904) exited unexpectedly
+--- PYTHON STDERR TRACEBACK ---
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
+OpenBLAS error: Memory allocation still failed after 10 retries, giving up.
+OpenBLAS error: Memory allocation still failed after 10 retries, giving up.
+OpenBLAS error: Memory allocation still failed after 10 retries, giving up.
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\spawn.py", line 131, in _main
+    prepare(preparation_data)
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\spawn.py", line 246, in prepare
+    _fixup_main_from_path(data['init_main_from_path'])
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\spawn.py", line 297, in _fixup_main_from_path
+    main_content = runpy.run_path(main_path,
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen runpy>", line 291, in run_path
+  File "<frozen runpy>", line 98, in _run_module_code
+  File "<frozen runpy>", line 88, in _run_code
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 15, in <module>
+    import torch
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\__init__.py", line 137, in <module>
+    raise err
+OSError: [WinError 1455] The paging file is too small for this operation to complete. Error loading "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\lib\cublas64_12.dll" or one of its dependencies.
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\spawn.py", line 131, in _main
+    prepare(preparation_data)
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\spawn.py", line 246, in prepare
+    _fixup_main_from_path(data['init_main_from_path'])
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\spawn.py", line 297, in _fixup_main_from_path
+    main_content = runpy.run_path(main_path,
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen runpy>", line 291, in run_path
+  File "<frozen runpy>", line 98, in _run_module_code
+  File "<frozen runpy>", line 88, in _run_code
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 15, in <module>
+    import torch
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\__init__.py", line 137, in <module>
+    raise err
+OSError: [WinError 1455] The paging file is too small for this operation to complete. Error loading "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\lib\cublas64_12.dll" or one of its dependencies.
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\utils\data\dataloader.py", line 1131, in _try_get_data
+    data = self._data_queue.get(timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\queues.py", line 114, in get
+    raise Empty
+_queue.Empty
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 336, in <module>
+    train_cfc()
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 291, in train_cfc
+    for bx, by in val_loader:
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\utils\data\dataloader.py", line 630, in __next__
+    data = self._next_data()
+           ^^^^^^^^^^^^^^^^^
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\utils\data\dataloader.py", line 1327, in _next_data
+    idx, data = self._get_data()
+                ^^^^^^^^^^^^^^^^
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\utils\data\dataloader.py", line 1293, in _get_data
+    success, data = self._try_get_data()
+                    ^^^^^^^^^^^^^^^^^^^^
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\utils\data\dataloader.py", line 1144, in _try_get_data
+    raise RuntimeError(f'DataLoader worker (pid(s) {pids_str}) exited unexpectedly') from e
+RuntimeError: DataLoader worker (pid(s) 19116, 19296, 15904) exited unexpectedly
+[2026-07-30T18:26:51.752Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDERR TRACEBACK ---
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.

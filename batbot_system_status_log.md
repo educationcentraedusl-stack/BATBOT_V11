@@ -445,6 +445,12 @@
 - **HFT/Performance Compliance:** Resolved hardcoded `"BTCUSDT"` in `StrategyEngine` constructor by binding `symbol` dynamically to `process.env.SYMBOL ?? "BTCUSDT"`. Passed `{ symbol }` config from `src/index.ts` upon engine initialization. Updated fallbacks in `src/telemetry/proto.ts` and `src/dashboard/store.ts` to utilize `process.env.SYMBOL`. Verified 100% via TypeScript compilation (`npm run build:ts`, 0 errors).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-30
+- **Feature/Task:** PyTorch DataLoader Single-Thread Optimization & Real-Time Training Progress IPC
+- **Artifacts Created/Modified:** `training/train_cfc.py`, `src/telemetry/dashboard.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Resolved Windows PyTorch multiprocessing DataLoader worker crashes on CPU-only environments by setting `num_workers = 0` and `use_persistent = False` in `training/train_cfc.py`. Implemented atomic cross-process progress IPC writing step percentages `[0..100]` to `.training_progress`. Integrated non-blocking IPC progress reader into CLI Telemetry Dashboard (`src/telemetry/dashboard.ts`) rendering dynamic `[BATBOT_V11][TRAINING] Progress: X% [▓▓▓░░░]` ASCII progress bar in the Notification Area. Verified 100% via TypeScript compilation (`npm run build:ts`, 0 errors) and background training execution.
+- **Status:** ✅ Completed & QA Verified
+
 
 
 

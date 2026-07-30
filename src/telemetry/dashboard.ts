@@ -1,5 +1,23 @@
+import * as fs from "fs";
+import * as path from "path";
 import { TradeLoggerStats } from "./logger";
 import { ActiveTradeSlot } from "../strategy/positionLedger";
+
+function readTrainingProgress(): number | null {
+  try {
+    const progressPath = path.resolve(process.cwd(), ".training_progress");
+    if (fs.existsSync(progressPath)) {
+      const raw = fs.readFileSync(progressPath, "utf-8").trim();
+      const val = parseInt(raw, 10);
+      if (!isNaN(val) && val >= 0 && val <= 100) {
+        return val;
+      }
+    }
+  } catch (_e) {
+    // Safe non-blocking read
+  }
+  return null;
+}
 
 export interface TelemetryFrame {
   symbol: string;
@@ -135,6 +153,18 @@ export class CLIDashboard {
     output += ` Position: ${posSideColor}${bold}${frame.stats.positionSide}${reset} (${frame.stats.netQuantity.toFixed(4)})  |  Avg Entry: $${frame.stats.averageEntryPrice.toFixed(2)}  |  Unrealized PnL: ${unrealizedColor}${bold}$${frame.stats.unrealizedPnl.toFixed(2)}${reset}${clearLine}\n`;
     output += ` Available Balance: ${green}${bold}$${frame.usdtBalance.toFixed(2)}${reset}  |  Realized PnL: ${pnlColor}${bold}$${frame.stats.realizedPnl.toFixed(2)}${reset}  |  Fees: $${frame.stats.totalFees.toFixed(2)}${clearLine}\n`;
     output += ` Win Rate: ${yellow}${frame.stats.winRatePercent.toFixed(2)}%${reset}  |  Total Trades: ${frame.stats.totalTrades} (W: ${frame.stats.winningTrades} / L: ${frame.stats.losingTrades})${clearLine}\n`;
+
+    const trainingProgress = readTrainingProgress();
+    if (trainingProgress !== null) {
+      const totalBlocks = 20;
+      const filledBlocks = Math.round((trainingProgress / 100) * totalBlocks);
+      const emptyBlocks = totalBlocks - filledBlocks;
+      const progressBar = "▓".repeat(filledBlocks) + "░".repeat(emptyBlocks);
+      output += subDivider;
+      output += `${bold}--- NOTIFICATION AREA & REAL-TIME TRAINING MONITOR ---${reset}${clearLine}\n`;
+      output += ` [BATBOT_V11][TRAINING] Progress: ${yellow}${bold}${trainingProgress}%${reset} [${green}${progressBar}${reset}]${clearLine}\n`;
+    }
+
     output += borderLine;
 
     process.stdout.write(output);

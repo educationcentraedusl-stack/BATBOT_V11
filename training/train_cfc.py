@@ -27,6 +27,18 @@ from data_config import (
     CFC_OUT_PATH, MODELS_DIR, CFC_WEIGHTS_PATH
 )
 
+PROGRESS_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".training_progress"))
+
+def update_training_progress(pct: int):
+    try:
+        tmp_path = f"{PROGRESS_FILE}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(str(pct))
+            f.flush()
+        os.replace(tmp_path, PROGRESS_FILE)
+    except Exception:
+        pass
+
 class PyTorchCfCCell(nn.Module):
     """
     Exact PyTorch implementation of the 2026 Closed-Form Continuous-Time (CfC) cell
@@ -170,8 +182,8 @@ def train_cfc():
     val_dataset = TensorDataset(x_val, y_val)
 
     # 3. DataLoader Optimization: pin_memory, persistent_workers, num_workers tuning
-    num_workers = min(4, os.cpu_count() or 4)
-    use_persistent = num_workers > 0
+    num_workers = 0
+    use_persistent = False
 
     train_loader = DataLoader(
         train_dataset,
@@ -227,6 +239,8 @@ def train_cfc():
     start_time = time.time()
 
     best_val_ic = -1.0
+    current_step = 0
+    update_training_progress(0)
 
     for epoch in range(1, epochs + 1):
         raw_model.train()
@@ -234,6 +248,10 @@ def train_cfc():
         train_ic_sum = 0.0
 
         for bx, by in train_loader:
+            current_step += 1
+            progress_pct = min(100, int((current_step / total_steps) * 100))
+            update_training_progress(progress_pct)
+
             bx = bx.to(device, non_blocking=pin_memory)
             by = by.to(device, non_blocking=pin_memory)
 
@@ -328,6 +346,7 @@ def train_cfc():
     file_bytes = os.path.getsize(CFC_WEIGHTS_PATH)
     print(f"         Exported SafeTensors: '{CFC_WEIGHTS_PATH}' ({file_bytes} bytes)")
 
+    update_training_progress(100)
     print("=" * 75)
     print("CfC TRAINING & SAFETENSORS EXPORT COMPLETED SUCCESSFULLY [SUCCESS]")
     print("=" * 75)
