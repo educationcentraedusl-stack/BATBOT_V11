@@ -57,8 +57,8 @@ class StrategyEngine {
         const defaultAggressiveConfidence = !isNaN(envAggressiveConfidence) ? envAggressiveConfidence : 0.85;
         const defaultObiBuy = !isNaN(envObiBuy) ? envObiBuy : 0.25;
         const defaultObiSell = !isNaN(envObiSell) ? envObiSell : -0.25;
-        const defaultCvdBuy = !isNaN(envCvdBuy) ? envCvdBuy : 50.0;
-        const defaultCvdSell = !isNaN(envCvdSell) ? envCvdSell : -50.0;
+        const defaultCvdBuy = !isNaN(envCvdBuy) ? envCvdBuy : 0.0;
+        const defaultCvdSell = !isNaN(envCvdSell) ? envCvdSell : 0.0;
         const defaultOrderQty = !isNaN(envOrderQty) ? envOrderQty : 0.001;
         const defaultLeverage = !isNaN(envLeverage) ? envLeverage : 10;
         this.config = {
@@ -198,33 +198,43 @@ class StrategyEngine {
         let targetPosSide = undefined;
         let targetSlotId = undefined;
         let targetSlotIndex = undefined;
+        // Auto-reconcile hedge ledger slots if local position ledger is flat
+        if (this.positionLedger.getSide() === "FLAT" || this.positionLedger.getNetQuantity() === 0) {
+            if (this.hedgeLedger.getCoreLong().isOccupied) {
+                this.hedgeLedger.releaseCoreLong();
+            }
+        }
         // Read Hawkes & Microburst Metrics from SAB
         const hawkesIntensity = this.client.getHawkesIntensity();
         const realizedVol = this.client.getRealizedVolatility();
-        const shortCooldownLock = this.client.getShortCooldownLock();
-        const longCooldownLock = this.client.getLongCooldownLock();
+        const rawShortCooldownLock = this.client.getShortCooldownLock();
+        const rawLongCooldownLock = this.client.getLongCooldownLock();
+        const nowMs = Date.now();
+        // Defensive ceiling guard: if cooldown lock is set to a future timestamp > 60s, reset lock to 0
+        const longCooldownLock = rawLongCooldownLock > nowMs + 60000 ? 0 : rawLongCooldownLock;
+        const shortCooldownLock = rawShortCooldownLock > nowMs + 60000 ? 0 : rawShortCooldownLock;
         let targetSizeDecayCoeff = 1.0;
         // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
         if (obi > this.config.obiBuyThreshold &&
-            cvd > this.config.cvdBuyThreshold &&
+            cvd >= this.config.cvdBuyThreshold &&
             spreadVelocity < this.config.maxSpreadVelocity &&
             askPrice > 0 &&
             aiDirection > 0 &&
             aiConfidence >= this.config.minAiConfidence &&
             !this.hedgeLedger.getCoreLong().isOccupied &&
-            Date.now() >= longCooldownLock) {
+            nowMs >= longCooldownLock) {
             signalType = "BUY";
             targetPosSide = "LONG";
             targetSlotId = "CORE_LONG";
         }
         // SELL -> Short Slot Entry (Evaluated via Tier-1 Dynamic Slot Dispersion Engine)
         else if (obi < this.config.obiSellThreshold &&
-            cvd < this.config.cvdSellThreshold &&
+            cvd <= this.config.cvdSellThreshold &&
             spreadVelocity < this.config.maxSpreadVelocity &&
             bidPrice > 0 &&
             aiDirection < 0 &&
             aiConfidence >= this.config.minAiConfidence) {
-            const slotEval = this.hedgeLedger.evaluateDispersedShortSlotAllocation(bidPrice, this.config.tickSize, realizedVol, hawkesIntensity, shortCooldownLock, Date.now());
+            const slotEval = this.hedgeLedger.evaluateDispersedShortSlotAllocation(bidPrice, this.config.tickSize, realizedVol, hawkesIntensity, shortCooldownLock, nowMs);
             if (slotEval !== null) {
                 signalType = "SELL";
                 targetPosSide = "SHORT";

@@ -70,16 +70,19 @@ async function syncStateOnStartup(executionClient, strategyEngine, riskGuard) {
         // 3. Fetch USDT Account Balance
         const balance = await executionClient.fetchUsdtBalanceAsync();
         console.log(`[StateSync] Binance Wallet Available Balance Synced: $${balance.toFixed(2)} USDT`);
-        // 3. Fetch Position Risk & Sync Active Positions
+        // 4. Fetch Position Risk & Sync Active Positions (Filter explicitly by positionSide LONG and SHORT)
         const symbol = strategyEngine.getConfig().symbol;
         const positions = await executionClient.getPositionRisk(symbol);
         if (Array.isArray(positions)) {
-            const match = positions.find((p) => p.symbol === symbol);
-            if (match) {
-                const amt = parseFloat(match.positionAmt || "0");
-                const entryPx = parseFloat(match.entryPrice || "0");
+            let hasActivePosition = false;
+            for (const pos of positions) {
+                if (pos.symbol !== symbol)
+                    continue;
+                const amt = parseFloat(pos.positionAmt || "0");
+                const entryPx = parseFloat(pos.entryPrice || "0");
+                const posSide = pos.positionSide === "LONG" || (pos.positionSide === "BOTH" && amt > 0) ? "LONG" : "SHORT";
                 if (Math.abs(amt) > 0 && entryPx > 0) {
-                    const posSide = amt > 0 ? "LONG" : "SHORT";
+                    hasActivePosition = true;
                     const qty = Math.abs(amt);
                     strategyEngine.getPositionLedger().syncActivePosition(posSide, qty, entryPx);
                     if (posSide === "LONG") {
@@ -89,11 +92,11 @@ async function syncStateOnStartup(executionClient, strategyEngine, riskGuard) {
                         strategyEngine.getHedgeLedger().occupyShortSlot(0, qty, entryPx, strategyEngine.getConfig().shortTakeProfitPercent, strategyEngine.getConfig().shortStopLossPercent);
                     }
                     riskGuard.updatePositionNotional(qty * entryPx);
-                    console.log(`[StateSync] Open Binance Position Synced: ${posSide} ${qty} ${symbol} @ $${entryPx.toFixed(2)}`);
+                    console.log(`[StateSync] Open Binance Position Synced: ${posSide} (${pos.positionSide || "DEFAULT"}) ${qty} ${symbol} @ $${entryPx.toFixed(2)}`);
                 }
-                else {
-                    console.log(`[StateSync] Binance Position Synced: FLAT (No active open positions for ${symbol})`);
-                }
+            }
+            if (!hasActivePosition) {
+                console.log(`[StateSync] Binance Position Synced: FLAT (No active open positions for ${symbol})`);
             }
         }
     }
