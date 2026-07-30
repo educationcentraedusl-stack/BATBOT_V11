@@ -36,6 +36,7 @@ export class AutoRecalibrationManager {
   private static instance: AutoRecalibrationManager | null = null;
 
   private isRecalibrating = false;
+  private isPromptActive = false;
   private isShadowMode = false;
   private shadowTickCounter = 0;
   private driftTickCounter = 0;
@@ -94,9 +95,13 @@ export class AutoRecalibrationManager {
     return this.isShadowMode;
   }
 
+  public isPromptingUser(): boolean {
+    return this.isPromptActive;
+  }
+
   public getStatus(): RecalibrationStatus {
     return {
-      isRecalibrating: this.isRecalibrating,
+      isRecalibrating: this.isRecalibrating || this.isPromptActive,
       driftTickCounter: this.driftTickCounter,
       lastAttemptTimestamp: this.lastAttemptTimestamp,
       lastSuccessTimestamp: this.lastSuccessTimestamp,
@@ -107,13 +112,14 @@ export class AutoRecalibrationManager {
   }
 
   public evaluateShadowTick(seq: bigint, ic: number): void {
-    if (!this.isShadowMode) return;
+    if (!this.isShadowMode || this.isRecalibrating || this.isPromptActive) return;
 
     this.shadowTickCounter++;
     // Periodically trigger background model retraining in Shadow Mode every 300 ticks (~3 seconds)
     if (
       this.shadowTickCounter >= 300 &&
       !this.isRecalibrating &&
+      !this.isPromptActive &&
       Date.now() - this.lastAttemptTimestamp >= this.cooldownMs
     ) {
       this.shadowTickCounter = 0;
@@ -126,11 +132,16 @@ export class AutoRecalibrationManager {
    * Monitor tick metrics for model drift and programmatically trigger self-healing.
    */
   public evaluateTickDrift(ic: number, isDrifted: boolean): void {
+    if (this.isRecalibrating || this.isPromptActive) {
+      return;
+    }
+
     if (isDrifted || ic < 0.0300) {
       this.driftTickCounter++;
       if (
         this.driftTickCounter >= this.sustainedDriftThreshold &&
         !this.isRecalibrating &&
+        !this.isPromptActive &&
         Date.now() - this.lastAttemptTimestamp >= this.cooldownMs
       ) {
         // Trigger background auto-recalibration pipeline asynchronously
@@ -167,6 +178,11 @@ export class AutoRecalibrationManager {
       return false;
     }
 
+    if (this.isPromptActive) {
+      return false;
+    }
+
+    this.isPromptActive = true;
     CLIDashboard.setPromptActive(true);
 
     const rl = readline.createInterface({
@@ -174,15 +190,19 @@ export class AutoRecalibrationManager {
       output: process.stdout,
     });
 
-    return new Promise<boolean>((resolve) => {
-      const promptMsg = "\n\x1b[33m\x1b[1m[BATBOT_V11] Recalibration triggered. Try Training via Modal Cloud GPU? (Y/N): \x1b[0m";
-      rl.question(promptMsg, (answer) => {
-        rl.close();
-        CLIDashboard.setPromptActive(false);
-        const input = answer.trim().toLowerCase();
-        resolve(input === "y" || input === "yes");
+    try {
+      return await new Promise<boolean>((resolve) => {
+        const promptMsg = "\n\x1b[33m\x1b[1m[BATBOT_V11] Recalibration triggered. Try Training via Modal Cloud GPU? (Y/N): \x1b[0m";
+        rl.question(promptMsg, (answer) => {
+          rl.close();
+          const input = answer.trim().toLowerCase();
+          resolve(input === "y" || input === "yes");
+        });
       });
-    });
+    } finally {
+      CLIDashboard.setPromptActive(false);
+      this.isPromptActive = false;
+    }
   }
 
   /**
@@ -220,7 +240,7 @@ export class AutoRecalibrationManager {
    * Execute autonomous training, hot-swapping, and self-healing pipeline.
    */
   public async runRecalibrationPipeline(currentIc: number): Promise<boolean> {
-    if (this.isRecalibrating) {
+    if (this.isRecalibrating || this.isPromptActive) {
       return false;
     }
 

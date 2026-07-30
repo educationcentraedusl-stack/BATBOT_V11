@@ -48,6 +48,7 @@ const nativeAddon = require("../../index.js");
 class AutoRecalibrationManager {
     static instance = null;
     isRecalibrating = false;
+    isPromptActive = false;
     isShadowMode = false;
     shadowTickCounter = 0;
     driftTickCounter = 0;
@@ -97,9 +98,12 @@ class AutoRecalibrationManager {
     isInShadowMode() {
         return this.isShadowMode;
     }
+    isPromptingUser() {
+        return this.isPromptActive;
+    }
     getStatus() {
         return {
-            isRecalibrating: this.isRecalibrating,
+            isRecalibrating: this.isRecalibrating || this.isPromptActive,
             driftTickCounter: this.driftTickCounter,
             lastAttemptTimestamp: this.lastAttemptTimestamp,
             lastSuccessTimestamp: this.lastSuccessTimestamp,
@@ -109,12 +113,13 @@ class AutoRecalibrationManager {
         };
     }
     evaluateShadowTick(seq, ic) {
-        if (!this.isShadowMode)
+        if (!this.isShadowMode || this.isRecalibrating || this.isPromptActive)
             return;
         this.shadowTickCounter++;
         // Periodically trigger background model retraining in Shadow Mode every 300 ticks (~3 seconds)
         if (this.shadowTickCounter >= 300 &&
             !this.isRecalibrating &&
+            !this.isPromptActive &&
             Date.now() - this.lastAttemptTimestamp >= this.cooldownMs) {
             this.shadowTickCounter = 0;
             console.log("[BATBOT_V11][SHADOW_MODE] Triggering background PyTorch calibration training...");
@@ -125,10 +130,14 @@ class AutoRecalibrationManager {
      * Monitor tick metrics for model drift and programmatically trigger self-healing.
      */
     evaluateTickDrift(ic, isDrifted) {
+        if (this.isRecalibrating || this.isPromptActive) {
+            return;
+        }
         if (isDrifted || ic < 0.0300) {
             this.driftTickCounter++;
             if (this.driftTickCounter >= this.sustainedDriftThreshold &&
                 !this.isRecalibrating &&
+                !this.isPromptActive &&
                 Date.now() - this.lastAttemptTimestamp >= this.cooldownMs) {
                 // Trigger background auto-recalibration pipeline asynchronously
                 void this.runRecalibrationPipeline(ic);
@@ -160,20 +169,29 @@ class AutoRecalibrationManager {
             console.log("[BATBOT_V11] Non-interactive environment detected. Proceeding with default flow.");
             return false;
         }
+        if (this.isPromptActive) {
+            return false;
+        }
+        this.isPromptActive = true;
         dashboard_1.CLIDashboard.setPromptActive(true);
         const rl = readline.createInterface({
             input: process.stdin,
             output: process.stdout,
         });
-        return new Promise((resolve) => {
-            const promptMsg = "\n\x1b[33m\x1b[1m[BATBOT_V11] Recalibration triggered. Try Training via Modal Cloud GPU? (Y/N): \x1b[0m";
-            rl.question(promptMsg, (answer) => {
-                rl.close();
-                dashboard_1.CLIDashboard.setPromptActive(false);
-                const input = answer.trim().toLowerCase();
-                resolve(input === "y" || input === "yes");
+        try {
+            return await new Promise((resolve) => {
+                const promptMsg = "\n\x1b[33m\x1b[1m[BATBOT_V11] Recalibration triggered. Try Training via Modal Cloud GPU? (Y/N): \x1b[0m";
+                rl.question(promptMsg, (answer) => {
+                    rl.close();
+                    const input = answer.trim().toLowerCase();
+                    resolve(input === "y" || input === "yes");
+                });
             });
-        });
+        }
+        finally {
+            dashboard_1.CLIDashboard.setPromptActive(false);
+            this.isPromptActive = false;
+        }
     }
     /**
      * Kill any running local Python training processes (python.exe / train_cfc.py).
@@ -213,7 +231,7 @@ class AutoRecalibrationManager {
      * Execute autonomous training, hot-swapping, and self-healing pipeline.
      */
     async runRecalibrationPipeline(currentIc) {
-        if (this.isRecalibrating) {
+        if (this.isRecalibrating || this.isPromptActive) {
             return false;
         }
         const lockFile = path.join(this.projectRoot, ".training.lock");

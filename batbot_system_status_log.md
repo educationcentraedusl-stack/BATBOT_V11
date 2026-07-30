@@ -471,6 +471,13 @@
 - **HFT/Performance Compliance:** Implemented terminal console user prompt intercepting automatic execution when AI recalibration is triggered or when local training/lock is detected (`[BATBOT_V11] Recalibration triggered. Try Training via Modal Cloud GPU? (Y/N): `). Added static `promptActive` state to `CLIDashboard` to suspend ANSI stdout re-renders during interactive prompt input, eliminating flickering and input corruption. Handled `Y`/`y` override logic: forcibly terminates active local Python/CPU training processes (`python.exe` / `train_cfc.py`), clears `.training.lock` and `.training_progress`, and force-executes `RemoteRecalibrationClient` to upload SafeTensors dataset to `MODAL_TRAINING_URL`. Catching and displaying all network/timeout errors clearly in ANSI terminal output. Handled `N`/`n` logic: allows standard local execution/fallback as before. Verified 100% via TypeScript compilation (`npm run build:ts`, 0 errors) and test suite (`node dist/test_recalibration_pipeline.js`).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-31
+- **Feature/Task:** Fix Runaway Interactive Prompt Spam Loop in Recalibration Worker (`src/ai/recalibrationWorker.ts`)
+- **Artifacts Created/Modified:** `src/ai/recalibrationWorker.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Implemented `isPromptActive` locking state in `AutoRecalibrationManager`. `isPromptActive` is set synchronously upon entering `promptUserForModalGPU` and released in a `try...finally` block. `evaluateTickDrift`, `evaluateShadowTick`, and `runRecalibrationPipeline` now immediately bypass/return if `isPromptActive` or `isRecalibrating` is `true`. Completely eliminated high-frequency (10ms tick) runaway prompt re-triggering and console spam while awaiting user `Y/N` keyboard input. Verified 100% via TypeScript compilation (`npm run build:ts`, 0 errors) and test suite (`node dist/test_recalibration_pipeline.js`).
+- **Status:** ✅ Completed & QA Verified
+
+
 
 
 
