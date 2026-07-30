@@ -465,6 +465,13 @@
 - **HFT/Performance Compliance:** Integrated Remote Cloud Serverless GPU training offloader into Node.js engine (`src/ai/remoteRecalibrationClient.ts`). Configured `MODAL_TRAINING_URL` in `.env`. Step 2 of `AutoRecalibrationManager` (`src/ai/recalibrationWorker.ts`) now offloads PyTorch dataset SafeTensors (`cfc_features.safetensors`, 10.3MB) via HTTP POST binary stream directly to Modal Serverless GPU (`https://educationcentra-edu-sl--batbot-cfc-trainer-train-cfc-webhook.modal.run`), receiving 7,140-byte trained `cfc_weights.safetensors` buffer in 5,218ms, and hot-swapping into Candle Rust engine via zero-lock NAPI `loadAiModel` RCU pointer swap. Seamless automatic local fallback to `train_cfc.py` guaranteed if remote offloading fails. Verified 100% via TypeScript compilation (`npx tsc --noEmit`, 0 errors) and end-to-end Phase 4 integration harness (`npx ts-node src/test_remote_recalibration.ts`, ALL 4 STAGES PASSED).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-31
+- **Feature/Task:** Interactive Modal Cloud GPU Training Prompt & Local Override in Terminal Dashboard
+- **Artifacts Created/Modified:** `src/telemetry/dashboard.ts`, `src/ai/recalibrationWorker.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Implemented terminal console user prompt intercepting automatic execution when AI recalibration is triggered or when local training/lock is detected (`[BATBOT_V11] Recalibration triggered. Try Training via Modal Cloud GPU? (Y/N): `). Added static `promptActive` state to `CLIDashboard` to suspend ANSI stdout re-renders during interactive prompt input, eliminating flickering and input corruption. Handled `Y`/`y` override logic: forcibly terminates active local Python/CPU training processes (`python.exe` / `train_cfc.py`), clears `.training.lock` and `.training_progress`, and force-executes `RemoteRecalibrationClient` to upload SafeTensors dataset to `MODAL_TRAINING_URL`. Catching and displaying all network/timeout errors clearly in ANSI terminal output. Handled `N`/`n` logic: allows standard local execution/fallback as before. Verified 100% via TypeScript compilation (`npm run build:ts`, 0 errors) and test suite (`node dist/test_recalibration_pipeline.js`).
+- **Status:** ✅ Completed & QA Verified
+
+
 
 
 

@@ -47,16 +47,25 @@ export class CLIDashboard {
   private enabled: boolean;
   private lastRenderTimestamp = 0;
   private renderIntervalMs = 200; // 5Hz UI refresh rate to save CPU/GPU
+  private static promptActive = false;
 
   constructor(enabled: boolean = true) {
     this.enabled = enabled;
+  }
+
+  public static setPromptActive(active: boolean): void {
+    CLIDashboard.promptActive = active;
+  }
+
+  public static isPromptActive(): boolean {
+    return CLIDashboard.promptActive;
   }
 
   /**
    * Renders real-time HFT telemetry frame directly to stdout using ANSI control codes.
    */
   public render(frame: TelemetryFrame): void {
-    if (!this.enabled) return;
+    if (!this.enabled || CLIDashboard.promptActive) return;
 
     const now = Date.now();
     if (now - this.lastRenderTimestamp < this.renderIntervalMs) {
