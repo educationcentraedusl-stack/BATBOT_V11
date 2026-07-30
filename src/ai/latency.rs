@@ -19,19 +19,20 @@ impl LatencyMonitor {
 
     pub async fn run_loop(&self) {
         let client = match reqwest::Client::builder()
-            .timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(5))
+            .user_agent("BATBOT_V11-HFT-LatencyMonitor/1.0")
             .build()
         {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("[BATBOT_V11][LatencyMonitor Error] Failed to build HTTP client: {}", e);
+                let _ = e;
                 return;
             }
         };
 
         loop {
             let start = Instant::now();
-            let response = client.head(&self.endpoint).send().await;
+            let response = client.get(&self.endpoint).send().await;
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
             match response {
@@ -45,14 +46,13 @@ impl LatencyMonitor {
                     // Slot 99: Latency Penalty Coefficient
                     self.bridge.store_f64(99, penalty_coeff);
                 }
-                Err(e) => {
+                Err(_) => {
                     // Log error softly and maintain fallback values (e.g. 50ms default if slot was empty)
                     let current_rtt = self.bridge.load_f64(98);
                     if current_rtt == 0.0 {
                         self.bridge.store_f64(98, 50.0);
                         self.bridge.store_f64(99, 1.0);
                     }
-                    eprintln!("[BATBOT_V11][LatencyMonitor Error] Ping to {} failed: {}", self.endpoint, e);
                 }
             }
 

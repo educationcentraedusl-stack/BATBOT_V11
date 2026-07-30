@@ -56,7 +56,7 @@ class RemoteRecalibrationClient {
         const datasetPath = options?.datasetPath || this.defaultDatasetPath;
         const weightsPath = options?.weightsPath || this.defaultWeightsPath;
         const endpointUrl = options?.endpointUrl || process.env.MODAL_TRAINING_URL || this.defaultEndpointUrl;
-        const timeoutMs = options?.timeoutMs || 180000; // 180s (3 min) max timeout for large datasets & network transport
+        const timeoutMs = options?.timeoutMs || 600000; // 600s (10 min) extended timeout for Modal container cold boot & GPU training
         if (!fs.existsSync(datasetPath)) {
             console.warn(`[BATBOT_V11][REMOTE-TRAINING] Dataset file missing at '${datasetPath}'. Cannot offload training.`);
             return false;
@@ -111,7 +111,10 @@ class RemoteRecalibrationClient {
             return true;
         }
         catch (err) {
-            const errorMsg = err instanceof Error ? err.message : String(err);
+            const isAbort = err instanceof Error && (err.name === "AbortError" || err.message.includes("aborted"));
+            const errorMsg = isAbort
+                ? `Request timed out after ${Math.round(timeoutMs / 1000)}s waiting for Modal GPU container cold boot and training.`
+                : (err instanceof Error ? err.message : String(err));
             console.error(`[BATBOT_V11][REMOTE-TRAINING FAILURE] Failed to offload training to Modal: ${errorMsg}`);
             return false;
         }

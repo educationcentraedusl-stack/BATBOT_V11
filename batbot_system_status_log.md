@@ -477,6 +477,13 @@
 - **HFT/Performance Compliance:** Implemented `isPromptActive` locking state in `AutoRecalibrationManager`. `isPromptActive` is set synchronously upon entering `promptUserForModalGPU` and released in a `try...finally` block. `evaluateTickDrift`, `evaluateShadowTick`, and `runRecalibrationPipeline` now immediately bypass/return if `isPromptActive` or `isRecalibrating` is `true`. Completely eliminated high-frequency (10ms tick) runaway prompt re-triggering and console spam while awaiting user `Y/N` keyboard input. Verified 100% via TypeScript compilation (`npm run build:ts`, 0 errors) and test suite (`node dist/test_recalibration_pipeline.js`).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-31
+- **Feature/Task:** Modal Cloud GPU Network Abort & Extended Timeout Remediation (`src/ai/remoteRecalibrationClient.ts`)
+- **Artifacts Created/Modified:** `src/ai/remoteRecalibrationClient.ts`, `src/ai/recalibrationWorker.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Resolved Modal GPU cold-boot HTTP abort timeout (`This operation was aborted`) by expanding `timeoutMs` from 180s (3 minutes) to 600s (10 minutes) in `RemoteRecalibrationClient`. Added explicit `AbortError` detection formatting clear error tracebacks when a remote serverless GPU container takes extended time to spin up. Verified 100% via TypeScript compilation (`npm run build:ts`, 0 errors) and test suite (`node dist/test_recalibration_pipeline.js`).
+- **Status:** ✅ Completed & QA Verified
+
+
 
 
 
