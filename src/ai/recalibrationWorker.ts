@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { RemoteRecalibrationClient } from "./remoteRecalibrationClient";
 
 const execFileAsync = promisify(execFile);
 
@@ -211,17 +212,32 @@ export class AutoRecalibrationManager {
         return false;
       }
 
-      console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Step 2/4: Executing PyTorch CfC neural network trainer (train_cfc.py)...`);
-      const trainScript = path.join(this.projectRoot, "training", "train_cfc.py");
+      console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Step 2/4: Executing PyTorch CfC neural network training...`);
+      let remoteSuccess = false;
 
-      const trainResult = await execFileAsync(pythonCmd, [trainScript], {
-        cwd: this.projectRoot,
-        env: { ...process.env },
-        timeout: 900000, // 15 min extended timeout for deep neural network training
-      });
+      try {
+        console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Attempting primary Modal Serverless GPU offloading...`);
+        const remoteClient = new RemoteRecalibrationClient();
+        remoteSuccess = await remoteClient.trainRemotely();
+      } catch (remoteErr) {
+        console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Remote GPU offloading attempt failed: ${String(remoteErr)}`);
+      }
 
-      if (trainResult.stderr && trainResult.stderr.trim().length > 0) {
-        console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Training stderr log: ${trainResult.stderr.trim()}`);
+      if (!remoteSuccess) {
+        console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Falling back to secondary local PyTorch trainer (train_cfc.py)...`);
+        const trainScript = path.join(this.projectRoot, "training", "train_cfc.py");
+
+        const trainResult = await execFileAsync(pythonCmd, [trainScript], {
+          cwd: this.projectRoot,
+          env: { ...process.env },
+          timeout: 900000, // 15 min extended timeout for deep neural network training
+        });
+
+        if (trainResult.stderr && trainResult.stderr.trim().length > 0) {
+          console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Local training stderr log: ${trainResult.stderr.trim()}`);
+        }
+      } else {
+        console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Primary Modal Serverless GPU training & weights download PASSED!`);
       }
 
       // Step 3: Validate generated SafeTensors weights file

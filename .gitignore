@@ -13,3 +13,6 @@ data/*.log
 # Ignore all safetensors files everywhere
 *.safetensors
 data/*.safetensors
+# Ignore temporary training files and dynamic data logs
+.training_progress
+data/signals.jsonl

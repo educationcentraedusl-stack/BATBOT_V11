@@ -1,0 +1,115 @@
+import * as fs from "fs";
+import * as path from "path";
+
+export interface RemoteTrainingOptions {
+  datasetPath?: string;
+  weightsPath?: string;
+  endpointUrl?: string;
+  timeoutMs?: number;
+}
+
+export class RemoteRecalibrationClient {
+  private projectRoot: string;
+  private defaultDatasetPath: string;
+  private defaultWeightsPath: string;
+  private defaultEndpointUrl: string;
+
+  constructor() {
+    this.projectRoot = process.cwd();
+    this.defaultDatasetPath = path.join(this.projectRoot, "data", "cfc_features.safetensors");
+    this.defaultWeightsPath = path.join(this.projectRoot, "models", "cfc_weights.safetensors");
+    this.defaultEndpointUrl =
+      process.env.MODAL_TRAINING_URL ||
+      "https://educationcentra-edu-sl--batbot-cfc-trainer-train-cfc-webhook.modal.run";
+  }
+
+  /**
+   * Offload PyTorch CfC Neural Network training to remote Modal serverless GPU webhook.
+   */
+  public async trainRemotely(options?: RemoteTrainingOptions): Promise<boolean> {
+    const datasetPath = options?.datasetPath || this.defaultDatasetPath;
+    const weightsPath = options?.weightsPath || this.defaultWeightsPath;
+    const endpointUrl = options?.endpointUrl || process.env.MODAL_TRAINING_URL || this.defaultEndpointUrl;
+    const timeoutMs = options?.timeoutMs || 180000; // 180s (3 min) max timeout for large datasets & network transport
+
+    if (!fs.existsSync(datasetPath)) {
+      console.warn(`[BATBOT_V11][REMOTE-TRAINING] Dataset file missing at '${datasetPath}'. Cannot offload training.`);
+      return false;
+    }
+
+    const datasetStat = fs.statSync(datasetPath);
+    if (datasetStat.size < 100) {
+      console.warn(`[BATBOT_V11][REMOTE-TRAINING] Dataset file at '${datasetPath}' is empty or corrupt (${datasetStat.size} bytes).`);
+      return false;
+    }
+
+    console.log(
+      `[BATBOT_V11][REMOTE-TRAINING] Uploading SafeTensors dataset (${datasetStat.size} bytes) to Modal Serverless GPU (${endpointUrl})...`
+    );
+
+    const startTime = Date.now();
+
+    try {
+      const datasetBuffer = await fs.promises.readFile(datasetPath);
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      const response = await fetch(endpointUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "Content-Length": datasetBuffer.length.toString(),
+          "User-Agent": "BATBOT_V11-HFT-Client/1.0",
+        },
+        body: datasetBuffer,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(
+          `[BATBOT_V11][REMOTE-TRAINING ERROR] Modal GPU returned HTTP ${response.status}: ${errorText}`
+        );
+        return false;
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const weightsBuffer = Buffer.from(arrayBuffer);
+
+      if (weightsBuffer.length < 100) {
+        console.error(
+          `[BATBOT_V11][REMOTE-TRAINING ERROR] Returned SafeTensors buffer is suspiciously small (${weightsBuffer.length} bytes).`
+        );
+        return false;
+      }
+
+      // Atomic write to weights path
+      const dir = path.dirname(weightsPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+
+      const tmpPath = `${weightsPath}.remote.tmp`;
+      await fs.promises.writeFile(tmpPath, weightsBuffer);
+      await fs.promises.rename(tmpPath, weightsPath).catch(async () => {
+        // Fallback for Windows file replace lock
+        await fs.promises.copyFile(tmpPath, weightsPath);
+        await fs.promises.unlink(tmpPath).catch(() => {});
+      });
+
+      const totalMs = Date.now() - startTime;
+      console.log(
+        `[BATBOT_V11][REMOTE-TRAINING SUCCESS] Trained SafeTensors weights received (${weightsBuffer.length} bytes) in ${totalMs}ms!`
+      );
+
+      return true;
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[BATBOT_V11][REMOTE-TRAINING FAILURE] Failed to offload training to Modal: ${errorMsg}`);
+      return false;
+    }
+  }
+}
