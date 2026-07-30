@@ -49,7 +49,7 @@ class CsvTradeLogger {
     }
     ensureHeader() {
         if (!fs.existsSync(this.filePath)) {
-            const headers = "Time,Symbol,Side,Size,Entry Price,Exit Price,Exit Reason,Duration,ROE %,PnL USDT\n";
+            const headers = "Time,Symbol,Side,Size,Entry Price,Exit Price,Exit Reason,Duration,ROE %,PnL USDT,Win/Loss\n";
             try {
                 fs.writeFileSync(this.filePath, headers, "utf8");
             }
@@ -61,11 +61,12 @@ class CsvTradeLogger {
     }
     /**
      * Non-blocking async append of a completely closed trade row.
-     * Format: Time,Symbol,Side,Size,Entry Price,Exit Price,Exit Reason,Duration,ROE %,PnL USDT
+     * Format: Time,Symbol,Side,Size,Entry Price,Exit Price,Exit Reason,Duration,ROE %,PnL USDT,Win/Loss
      */
     logClosedTrade(record) {
         const timeStr = formatDate(record.timestamp ?? Date.now());
         const durationStr = formatDuration(record.durationMs);
+        const winLoss = record.pnlUsdt > 0 ? "Win" : "Loss";
         const row = [
             timeStr,
             record.symbol,
@@ -77,6 +78,7 @@ class CsvTradeLogger {
             durationStr,
             record.roePercent.toFixed(2),
             record.pnlUsdt.toFixed(4),
+            winLoss,
         ].join(",") + "\n";
         // Non-blocking async appendFile to avoid blocking HFT execution loop
         fs.appendFile(this.filePath, row, "utf8", (err) => {

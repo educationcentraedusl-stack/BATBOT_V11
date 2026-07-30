@@ -3,7 +3,8 @@
 BATBOT_V11 SOTA CfC (Closed-Form Continuous-Time) Liquid Neural Network Trainer
 Trains 16 -> 32 -> 1 continuous-time dynamic solver model on 32-step sequence datasets using
 Huber + Pearson Rank Correlation (IC) loss, AdamW optimizer, OneCycleLR scheduler,
-gradient clipping, and exports weights directly to SafeTensors for zero-copy Rust Candle inference.
+gradient clipping, PyTorch 2.0 compilation, AMP FP16, and optimized DataLoaders.
+Exports weights directly to SafeTensors for zero-copy Rust Candle inference.
 """
 
 import os
@@ -16,6 +17,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 from safetensors.torch import load_file, save_file
+
+# Enable cuDNN Benchmarking for optimal convolution/matmul algorithm selection
+torch.backends.cudnn.benchmark = True
 
 # Add training dir to sys.path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -122,10 +126,17 @@ def train_cfc():
     print("BATBOT_V11 SOTA CfC LIQUID NEURAL NETWORK TRAINING PIPELINE")
     print("=" * 75)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # 5. Device Verification: Strictly target CUDA and fatal error on CPU fallback attempt
+    if not torch.cuda.is_available():
+        print("[FATAL ERROR] CUDA is required for PyTorch training pipeline acceleration. CPU fallback is strictly prohibited.", file=sys.stderr)
+        raise RuntimeError("CUDA device unavailable for CfC training.")
+
+    device = torch.device("cuda")
+    print(f"[Device] Strictly targeting CUDA: {torch.cuda.get_device_name(0)}")
+
     num_threads = min(8, os.cpu_count() or 4)
     torch.set_num_threads(num_threads)
-    print(f"[Device] Operating on: {device} (CPU threads: {num_threads})")
+    print(f"[CPU Optimization] Configuring host threads: {num_threads}")
 
     if not os.path.exists(CFC_OUT_PATH):
         raise FileNotFoundError(f"CfC dataset safe tensors not found at: {CFC_OUT_PATH}")
@@ -133,10 +144,10 @@ def train_cfc():
     print(f"[Dataset] Loading SafeTensors from '{CFC_OUT_PATH}'...")
     data = load_file(CFC_OUT_PATH)
 
-    x_train = data["train_inputs"].to(device)
-    y_train = data["train_targets"].to(device)
-    x_val = data["val_inputs"].to(device)
-    y_val = data["val_targets"].to(device)
+    x_train = data["train_inputs"]
+    y_train = data["train_targets"]
+    x_val = data["val_inputs"]
+    y_val = data["val_targets"]
 
     print(f"[Dataset] Train sequences: {x_train.shape[0]} | Val sequences: {x_val.shape[0]}")
 
@@ -147,41 +158,83 @@ def train_cfc():
     train_dataset = TensorDataset(x_train, y_train)
     val_dataset = TensorDataset(x_val, y_val)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    # 3. DataLoader Optimization: pin_memory=True, persistent_workers=True, num_workers tuning
+    num_workers = min(4, os.cpu_count() or 4)
+    use_persistent = num_workers > 0
 
-    model = PyTorchCfCCell(input_dim=16, hidden_dim=32, output_dim=1).to(device)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=use_persistent
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=use_persistent
+    )
+    print(f"[DataLoader] Workers: {num_workers} | Pinned Memory: True | Persistent Workers: {use_persistent}")
+
+    raw_model = PyTorchCfCCell(input_dim=16, hidden_dim=32, output_dim=1).to(device)
+
+    # 1. PyTorch 2.0 Compilation
+    try:
+        model = torch.compile(raw_model, mode="reduce-overhead")
+        print("[PyTorch 2.0] Successfully compiled CfC model with mode='reduce-overhead'.")
+    except Exception as e:
+        print(f"[PyTorch 2.0 Warning] torch.compile fallback to raw model ({e}).")
+        model = raw_model
+
     criterion = HuberICLoss(delta=1e-3, ic_weight=0.5)
 
     epochs = 35
     total_steps = max(1, epochs * len(train_loader))
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4, amsgrad=True)
+    optimizer = torch.optim.AdamW(raw_model.parameters(), lr=1e-3, weight_decay=1e-4, amsgrad=True)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer, max_lr=1e-3, total_steps=total_steps, pct_start=0.1
     )
 
-    print(f"[Training] Starting CfC optimization for {epochs} epochs (Batch Size: {batch_size})...")
+    # 2. Automatic Mixed Precision (AMP)
+    scaler = torch.cuda.amp.GradScaler()
+    print("[AMP] Automatic Mixed Precision (FP16 Tensor Cores + GradScaler) Enabled.")
+
+    print(f"[Training] Starting accelerated CfC optimization for {epochs} epochs (Batch Size: {batch_size})...")
     sys.stdout.flush()
     start_time = time.time()
 
     best_val_ic = -1.0
 
     for epoch in range(1, epochs + 1):
-        model.train()
+        raw_model.train()
         train_loss_sum = 0.0
         train_ic_sum = 0.0
 
         for bx, by in train_loader:
+            bx = bx.to(device, non_blocking=True)
+            by = by.to(device, non_blocking=True)
+
             if bx.shape[1] == 0:
                 continue
-            optimizer.zero_grad()
-            pred = model(bx)
-            loss, h_loss, ic = criterion(pred, by)
-            loss.backward()
 
-            # Gradient Clipping for stiff ODE numerical stability
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+            optimizer.zero_grad()
+
+            with torch.cuda.amp.autocast():
+                pred = model(bx)
+                loss, h_loss, ic = criterion(pred, by)
+
+            scaler.scale(loss).backward()
+
+            # Unscale gradients prior to clipping
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(raw_model.parameters(), max_norm=1.0)
+
+            scaler.step(optimizer)
+            scaler.update()
             scheduler.step()
 
             train_loss_sum += loss.item() * len(bx)
@@ -194,18 +247,21 @@ def train_cfc():
         val_loss = 0.0
         val_ic = 0.0
         if len(val_dataset) > 0:
-            model.eval()
+            raw_model.eval()
             val_loss_sum = 0.0
             val_ic_sum = 0.0
 
             with torch.no_grad():
-                for bx, by in val_loader:
-                    if bx.shape[1] == 0:
-                        continue
-                    pred = model(bx)
-                    loss, h_loss, ic = criterion(pred, by)
-                    val_loss_sum += loss.item() * len(bx)
-                    val_ic_sum += ic.item() * len(bx)
+                with torch.cuda.amp.autocast():
+                    for bx, by in val_loader:
+                        bx = bx.to(device, non_blocking=True)
+                        by = by.to(device, non_blocking=True)
+                        if bx.shape[1] == 0:
+                            continue
+                        pred = model(bx)
+                        loss, h_loss, ic = criterion(pred, by)
+                        val_loss_sum += loss.item() * len(bx)
+                        val_ic_sum += ic.item() * len(bx)
 
             val_loss = val_loss_sum / len(val_dataset)
             val_ic = val_ic_sum / len(val_dataset)
@@ -217,20 +273,19 @@ def train_cfc():
             print(f"Epoch {epoch:02d}/{epochs} | Train Loss: {train_loss:.6f} | Train IC: {train_ic:+.4f} | Val Loss: {val_loss:.6f} | Val IC: {val_ic:+.4f}")
             sys.stdout.flush()
 
-
-    print(f"[Training] Completed in {time.time() - start_time:.2f}s | Best Val IC: {best_val_ic:+.4f}")
+    print(f"[Training] Accelerated training completed in {time.time() - start_time:.2f}s | Best Val IC: {best_val_ic:+.4f}")
 
     # Export SafeTensors for Rust Candle
     print("[Export] Exporting zero-copy SafeTensors weights for Candle Rust...")
     os.makedirs(MODELS_DIR, exist_ok=True)
 
     weight_tensors = {
-        "w_alpha": model.w_alpha.detach().cpu().contiguous(),
-        "b_alpha": model.b_alpha.detach().cpu().contiguous(),
-        "w_beta": model.w_beta.detach().cpu().contiguous(),
-        "b_beta": model.b_beta.detach().cpu().contiguous(),
-        "w_output": model.w_output.detach().cpu().contiguous(),
-        "b_output": model.b_output.detach().cpu().contiguous(),
+        "w_alpha": raw_model.w_alpha.detach().cpu().contiguous(),
+        "b_alpha": raw_model.b_alpha.detach().cpu().contiguous(),
+        "w_beta": raw_model.w_beta.detach().cpu().contiguous(),
+        "b_beta": raw_model.b_beta.detach().cpu().contiguous(),
+        "w_output": raw_model.w_output.detach().cpu().contiguous(),
+        "b_output": raw_model.b_output.detach().cpu().contiguous(),
     }
 
     save_file(weight_tensors, CFC_WEIGHTS_PATH)
@@ -238,7 +293,7 @@ def train_cfc():
     print(f"         Exported SafeTensors: '{CFC_WEIGHTS_PATH}' ({file_bytes} bytes)")
 
     print("=" * 75)
-    print("CfC TRAINING & SAFETENSORS EXPORT COMPLETED SUCCESSFULLY [SUCCESS]")
+    print("CfC ACCELERATED TRAINING & SAFETENSORS EXPORT COMPLETED SUCCESSFULLY [SUCCESS]")
     print("=" * 75)
 
 if __name__ == "__main__":

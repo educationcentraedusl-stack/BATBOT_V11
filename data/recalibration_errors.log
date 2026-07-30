@@ -1065,3 +1065,75 @@ BATBOT_V11 SOTA CfC LIQUID NEURAL NETWORK TRAINING PIPELINE
 [Training] Starting CfC optimization for 35 epochs (Batch Size: 256)...
 Epoch 05/35 | Train Loss: 0.297540 | Train IC: +0.4049 | Val Loss: 0.479815 | Val IC: +0.0404
 Epoch 10/35 | Train Loss: 0.230739 | Train IC: +0.5385 | Val Loss: 0.485784 | Val IC: +0.0284
+[2026-07-30T10:14:26.291Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDOUT LOG ---
+===========================================================================
+BATBOT_V11 SOTA CfC LIQUID NEURAL NETWORK TRAINING PIPELINE
+===========================================================================
+[Device] Operating on: cpu (CPU threads: 8)
+[Dataset] Loading SafeTensors from 'D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\data\cfc_features.safetensors'...
+[Dataset] Train sequences: 83633 | Val sequences: 20835
+[Training] Starting CfC optimization for 35 epochs (Batch Size: 256)...
+Epoch 05/35 | Train Loss: 0.297537 | Train IC: +0.4049 | Val Loss: 0.494425 | Val IC: +0.0112
+Epoch 10/35 | Train Loss: 0.225628 | Train IC: +0.5488 | Val Loss: 0.480908 | Val IC: +0.0382
+[2026-07-30T10:40:26.134Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDOUT LOG ---
+===========================================================================
+BATBOT_V11 SOTA CfC LIQUID NEURAL NETWORK TRAINING PIPELINE
+===========================================================================
+[Device] Operating on: cpu (CPU threads: 8)
+[Dataset] Loading SafeTensors from 'D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\data\cfc_features.safetensors'...
+[Dataset] Train sequences: 84896 | Val sequences: 21151
+[Training] Starting CfC optimization for 35 epochs (Batch Size: 256)...
+Epoch 05/35 | Train Loss: 0.289894 | Train IC: +0.4202 | Val Loss: 0.491214 | Val IC: +0.0176
+Epoch 10/35 | Train Loss: 0.218074 | Train IC: +0.5639 | Val Loss: 0.481270 | Val IC: +0.0375
+[2026-07-30T10:41:21.731Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+[FATAL ERROR] CUDA is required for PyTorch training pipeline acceleration. CPU fallback is strictly prohibited.
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 300, in <module>
+    train_cfc()
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 132, in train_cfc
+    raise RuntimeError("CUDA device unavailable for CfC training.")
+RuntimeError: CUDA device unavailable for CfC training.
+--- PYTHON STDERR TRACEBACK ---
+[FATAL ERROR] CUDA is required for PyTorch training pipeline acceleration. CPU fallback is strictly prohibited.
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 300, in <module>
+    train_cfc()
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 132, in train_cfc
+    raise RuntimeError("CUDA device unavailable for CfC training.")
+RuntimeError: CUDA device unavailable for CfC training.
+[2026-07-30T10:42:25.611Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+[FATAL ERROR] CUDA is required for PyTorch training pipeline acceleration. CPU fallback is strictly prohibited.
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 300, in <module>
+    train_cfc()
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 132, in train_cfc
+    raise RuntimeError("CUDA device unavailable for CfC training.")
+RuntimeError: CUDA device unavailable for CfC training.
+--- PYTHON STDERR TRACEBACK ---
+[FATAL ERROR] CUDA is required for PyTorch training pipeline acceleration. CPU fallback is strictly prohibited.
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 300, in <module>
+    train_cfc()
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 132, in train_cfc
+    raise RuntimeError("CUDA device unavailable for CfC training.")
+RuntimeError: CUDA device unavailable for CfC training.
+[2026-07-30T10:43:22.562Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+[FATAL ERROR] CUDA is required for PyTorch training pipeline acceleration. CPU fallback is strictly prohibited.
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 300, in <module>
+    train_cfc()
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 132, in train_cfc
+    raise RuntimeError("CUDA device unavailable for CfC training.")
+RuntimeError: CUDA device unavailable for CfC training.
+--- PYTHON STDERR TRACEBACK ---
+[FATAL ERROR] CUDA is required for PyTorch training pipeline acceleration. CPU fallback is strictly prohibited.
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 300, in <module>
+    train_cfc()
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 132, in train_cfc
+    raise RuntimeError("CUDA device unavailable for CfC training.")
+RuntimeError: CUDA device unavailable for CfC training.
