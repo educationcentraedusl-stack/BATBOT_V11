@@ -302,10 +302,10 @@ mod tests {
         bridge.store_f64(4, 50000.0); // bid
         bridge.store_f64(6, 50010.0); // ask
 
-        // Populate LOB slots 11..30 & 51..70
+        // Populate LOB slots 11..50 & 51..90
         for i in 0..20 {
-            bridge.store_f64(11 + i, 50000.0 + i as f64);
-            bridge.store_f64(51 + i, 50010.0 + i as f64);
+            bridge.store_f64(11 + i * 2, 50000.0 + i as f64);
+            bridge.store_f64(51 + i * 2, 50010.0 + i as f64);
         }
 
         let engine = AIEngine::load_from_paths("./models/cfc_weights.safetensors", "./models/tkan_luts.bin");

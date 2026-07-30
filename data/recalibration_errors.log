@@ -1137,3 +1137,654 @@ Traceback (most recent call last):
   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py", line 132, in train_cfc
     raise RuntimeError("CUDA device unavailable for CfC training.")
 RuntimeError: CUDA device unavailable for CfC training.
+[2026-07-30T12:06:23.799Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] WON'T CONVERT forward D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py line 55 
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] due to: 
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] Traceback (most recent call last):
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 948, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     result = self._inner_convert(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]              ^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 472, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return _compile(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_utils_internal.py", line 84, in wrapper_function
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return StrobelightCompileTimeProfiler.profile_compile_time(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_strobelight\compile_time_profiler.py", line 129, in profile_compile_time
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 817, in _compile
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     guarded_code = compile_inner(code, one_graph, hooks, transform)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 636, in compile_inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     out_code = transform_code_object(code, transform)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\bytecode_transformation.py", line 1185, in transform_code_object
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     transformations(instructions, code_options)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 178, in _fn
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return fn(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 582, in transform
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     tracer.run()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 2451, in run
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     super().run()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 893, in run
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     while self.step():
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]           ^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 805, in step
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.dispatch_table[inst.opcode](self, inst)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 2642, in RETURN_VALUE
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self._return(inst)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 2627, in _return
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.output.compile_subgraph(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\output_graph.py", line 1098, in compile_subgraph
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.compile_and_call_fx_graph(tx, list(reversed(stack_values)), root)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\output_graph.py", line 1318, in compile_and_call_fx_graph
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn = self.call_user_compiler(gm)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\output_graph.py", line 1409, in call_user_compiler
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     raise BackendCompilerFailed(self.compiler_fn, e).with_traceback(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\output_graph.py", line 1390, in call_user_compiler
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn = compiler_fn(gm, self.example_inputs())
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\repro\after_dynamo.py", line 129, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_gm = compiler_fn(gm, example_inputs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\__init__.py", line 1951, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return compile_fx(model_, inputs_, config_patches=self.config)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 1505, in compile_fx
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return aot_autograd(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\backends\common.py", line 69, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     cg = aot_module_simplified(gm, example_inputs, **self.kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_functorch\aot_autograd.py", line 954, in aot_module_simplified
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn, _ = create_aot_dispatcher_function(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_functorch\aot_autograd.py", line 687, in create_aot_dispatcher_function
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn, fw_metadata = compiler_fn(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                ^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_functorch\_aot_autograd\jit_compile_runtime_wrappers.py", line 461, in aot_dispatch_autograd
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fw_func = aot_config.fw_compiler(fw_module, adjusted_flat_args)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 1410, in fw_compiler_base
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return inner_compile(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\repro\after_aot.py", line 84, in debug_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     inner_compiled_fn = compiler_fn(gm, example_inputs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\debug.py", line 304, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return fn(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 527, in compile_fx_inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_graph = fx_codegen_and_compile(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                      ^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 831, in fx_codegen_and_compile
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn = graph.compile_to_fn()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                   ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\graph.py", line 1751, in compile_to_fn
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return self.compile_to_module().call
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\graph.py", line 1680, in compile_to_module
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.codegen_with_cpp_wrapper() if self.cpp_wrapper else self.codegen()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                                              ^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\graph.py", line 1640, in codegen
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.scheduler.codegen()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\scheduler.py", line 2741, in codegen
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.get_backend(device).codegen_node(node)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codegen\cpp.py", line 3792, in codegen_node
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     cpp_kernel_proxy = CppKernelProxy(kernel_group)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codegen\cpp.py", line 3021, in __init__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.picked_vec_isa: codecache.VecISA = codecache.pick_vec_isa()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                             ^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1511, in pick_vec_isa
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     _valid_vec_isa_list: List[VecISA] = valid_vec_isa_list()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                         ^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1501, in valid_vec_isa_list
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     if str(isa) in _cpu_supported_x86_isa and isa:
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1321, in __bool__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     extra=_get_isa_dry_compile_fingerprint(self._arch_flags),
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1245, in _get_isa_dry_compile_fingerprint
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiler_info = get_compiler_version_info(cpp_compiler())
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                               ^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1141, in cpp_compiler
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return cpp_compiler_search(search)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1168, in cpp_compiler_search
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     raise exc.InvalidCxxCompiler
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] torch._dynamo.exc.BackendCompilerFailed: backend='inductor' raised:
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] InvalidCxxCompiler: No working C++ compiler found in torch._inductor.config.cpp.cxx: (None, 'g++')
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] 
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] Set TORCH_LOGS="+dynamo" and TORCHDYNAMO_VERBOSE=1 for more information
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] 
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] Traceback (most recent call last):
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 948, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     result = self._inner_convert(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]              ^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 472, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return _compile(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_utils_internal.py", line 84, in wrapper_function
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return StrobelightCompileTimeProfiler.profile_compile_time(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_strobelight\compile_time_profiler.py", line 129, in profile_compile_time
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 817, in _compile
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     guarded_code = compile_inner(code, one_graph, hooks, transform)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 636, in compile_inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     out_code = transform_code_object(code, transform)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\bytecode_transformation.py", line 1185, in transform_code_object
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     transformations(instructions, code_options)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 178, in _fn
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return fn(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 582, in transform
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     tracer.run()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 2451, in run
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     super().run()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 893, in run
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     while self.step():
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]           ^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 805, in step
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.dispatch_table[inst.opcode](self, inst)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 2642, in RETURN_VALUE
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self._return(inst)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 2627, in _return
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.output.compile_subgraph(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\output_graph.py", line 1098, in compile_subgraph
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.compile_and_call_fx_graph(tx, list(reversed(stack_values)), root)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\output_graph.py", line 1318, in compile_and_call_fx_graph
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn = self.call_user_compiler(gm)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\output_graph.py", line 1409, in call_user_compiler
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     raise BackendCompilerFailed(self.compiler_fn, e).with_traceback(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\output_graph.py", line 1390, in call_user_compiler
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn = compiler_fn(gm, self.example_inputs())
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\repro\after_dynamo.py", line 129, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_gm = compiler_fn(gm, example_inputs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\__init__.py", line 1951, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return compile_fx(model_, inputs_, config_patches=self.config)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 1505, in compile_fx
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return aot_autograd(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\backends\common.py", line 69, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     cg = aot_module_simplified(gm, example_inputs, **self.kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_functorch\aot_autograd.py", line 954, in aot_module_simplified
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn, _ = create_aot_dispatcher_function(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_functorch\aot_autograd.py", line 687, in create_aot_dispatcher_function
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn, fw_metadata = compiler_fn(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                ^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_functorch\_aot_autograd\jit_compile_runtime_wrappers.py", line 461, in aot_dispatch_autograd
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fw_func = aot_config.fw_compiler(fw_module, adjusted_flat_args)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 1410, in fw_compiler_base
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return inner_compile(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\repro\after_aot.py", line 84, in debug_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     inner_compiled_fn = compiler_fn(gm, example_inputs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\debug.py", line 304, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return fn(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 527, in compile_fx_inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_graph = fx_codegen_and_compile(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                      ^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 831, in fx_codegen_and_compile
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn = graph.compile_to_fn()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                   ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\graph.py", line 1751, in compile_to_fn
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return self.compile_to_module().call
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\graph.py", line 1680, in compile_to_module
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.codegen_with_cpp_wrapper() if self.cpp_wrapper else self.codegen()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                                              ^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\graph.py", line 1640, in codegen
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.scheduler.codegen()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\scheduler.py", line 2741, in codegen
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.get_backend(device).codegen_node(node)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codegen\cpp.py", line 3792, in codegen_node
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     cpp_kernel_proxy = CppKernelProxy(kernel_group)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codegen\cpp.py", line 3021, in __init__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.picked_vec_isa: codecache.VecISA = codecache.pick_vec_isa()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                             ^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1511, in pick_vec_isa
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     _valid_vec_isa_list: List[VecISA] = valid_vec_isa_list()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                         ^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1501, in valid_vec_isa_list
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     if str(isa) in _cpu_supported_x86_isa and isa:
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1321, in __bool__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     extra=_get_isa_dry_compile_fingerprint(self._arch_flags),
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1245, in _get_isa_dry_compile_fingerprint
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiler_info = get_compiler_version_info(cpp_compiler())
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                               ^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1141, in cpp_compiler
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return cpp_compiler_search(search)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1168, in cpp_compiler_search
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     raise exc.InvalidCxxCompiler
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] torch._dynamo.exc.BackendCompilerFailed: backend='inductor' raised:
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] InvalidCxxCompiler: No working C++ compiler found in torch._inductor.config.cpp.cxx: (None, 'g++')
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] 
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] Set TORCH_LOGS="+dynamo" and TORCHDYNAMO_VERBOSE=1 for more information
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] 
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDERR TRACEBACK ---
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] WON'T CONVERT forward D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py line 55 
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] due to: 
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] Traceback (most recent call last):
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 948, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     result = self._inner_convert(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]              ^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 472, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return _compile(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_utils_internal.py", line 84, in wrapper_function
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return StrobelightCompileTimeProfiler.profile_compile_time(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_strobelight\compile_time_profiler.py", line 129, in profile_compile_time
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 817, in _compile
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     guarded_code = compile_inner(code, one_graph, hooks, transform)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 636, in compile_inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     out_code = transform_code_object(code, transform)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\bytecode_transformation.py", line 1185, in transform_code_object
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     transformations(instructions, code_options)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 178, in _fn
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return fn(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 582, in transform
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     tracer.run()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 2451, in run
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     super().run()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 893, in run
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     while self.step():
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]           ^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 805, in step
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.dispatch_table[inst.opcode](self, inst)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 2642, in RETURN_VALUE
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self._return(inst)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 2627, in _return
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.output.compile_subgraph(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\output_graph.py", line 1098, in compile_subgraph
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.compile_and_call_fx_graph(tx, list(reversed(stack_values)), root)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\output_graph.py", line 1318, in compile_and_call_fx_graph
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn = self.call_user_compiler(gm)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\output_graph.py", line 1409, in call_user_compiler
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     raise BackendCompilerFailed(self.compiler_fn, e).with_traceback(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\output_graph.py", line 1390, in call_user_compiler
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn = compiler_fn(gm, self.example_inputs())
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\repro\after_dynamo.py", line 129, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_gm = compiler_fn(gm, example_inputs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\__init__.py", line 1951, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return compile_fx(model_, inputs_, config_patches=self.config)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 1505, in compile_fx
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return aot_autograd(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\backends\common.py", line 69, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     cg = aot_module_simplified(gm, example_inputs, **self.kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_functorch\aot_autograd.py", line 954, in aot_module_simplified
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn, _ = create_aot_dispatcher_function(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_functorch\aot_autograd.py", line 687, in create_aot_dispatcher_function
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn, fw_metadata = compiler_fn(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                ^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_functorch\_aot_autograd\jit_compile_runtime_wrappers.py", line 461, in aot_dispatch_autograd
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fw_func = aot_config.fw_compiler(fw_module, adjusted_flat_args)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 1410, in fw_compiler_base
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return inner_compile(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\repro\after_aot.py", line 84, in debug_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     inner_compiled_fn = compiler_fn(gm, example_inputs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\debug.py", line 304, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return fn(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 527, in compile_fx_inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_graph = fx_codegen_and_compile(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                      ^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 831, in fx_codegen_and_compile
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn = graph.compile_to_fn()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                   ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\graph.py", line 1751, in compile_to_fn
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return self.compile_to_module().call
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\graph.py", line 1680, in compile_to_module
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.codegen_with_cpp_wrapper() if self.cpp_wrapper else self.codegen()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                                              ^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\graph.py", line 1640, in codegen
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.scheduler.codegen()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\scheduler.py", line 2741, in codegen
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.get_backend(device).codegen_node(node)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codegen\cpp.py", line 3792, in codegen_node
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     cpp_kernel_proxy = CppKernelProxy(kernel_group)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codegen\cpp.py", line 3021, in __init__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.picked_vec_isa: codecache.VecISA = codecache.pick_vec_isa()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                             ^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1511, in pick_vec_isa
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     _valid_vec_isa_list: List[VecISA] = valid_vec_isa_list()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                         ^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1501, in valid_vec_isa_list
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     if str(isa) in _cpu_supported_x86_isa and isa:
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1321, in __bool__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     extra=_get_isa_dry_compile_fingerprint(self._arch_flags),
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1245, in _get_isa_dry_compile_fingerprint
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiler_info = get_compiler_version_info(cpp_compiler())
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                               ^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1141, in cpp_compiler
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return cpp_compiler_search(search)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1168, in cpp_compiler_search
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     raise exc.InvalidCxxCompiler
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] torch._dynamo.exc.BackendCompilerFailed: backend='inductor' raised:
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] InvalidCxxCompiler: No working C++ compiler found in torch._inductor.config.cpp.cxx: (None, 'g++')
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] 
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] Set TORCH_LOGS="+dynamo" and TORCHDYNAMO_VERBOSE=1 for more information
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] 
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] Traceback (most recent call last):
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 948, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     result = self._inner_convert(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]              ^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 472, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return _compile(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_utils_internal.py", line 84, in wrapper_function
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return StrobelightCompileTimeProfiler.profile_compile_time(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_strobelight\compile_time_profiler.py", line 129, in profile_compile_time
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 817, in _compile
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     guarded_code = compile_inner(code, one_graph, hooks, transform)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 636, in compile_inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     out_code = transform_code_object(code, transform)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\bytecode_transformation.py", line 1185, in transform_code_object
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     transformations(instructions, code_options)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 178, in _fn
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return fn(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\convert_frame.py", line 582, in transform
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     tracer.run()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 2451, in run
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     super().run()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 893, in run
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     while self.step():
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]           ^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 805, in step
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.dispatch_table[inst.opcode](self, inst)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 2642, in RETURN_VALUE
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self._return(inst)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\symbolic_convert.py", line 2627, in _return
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.output.compile_subgraph(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\output_graph.py", line 1098, in compile_subgraph
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.compile_and_call_fx_graph(tx, list(reversed(stack_values)), root)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\output_graph.py", line 1318, in compile_and_call_fx_graph
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn = self.call_user_compiler(gm)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\output_graph.py", line 1409, in call_user_compiler
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     raise BackendCompilerFailed(self.compiler_fn, e).with_traceback(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\output_graph.py", line 1390, in call_user_compiler
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn = compiler_fn(gm, self.example_inputs())
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\repro\after_dynamo.py", line 129, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_gm = compiler_fn(gm, example_inputs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\__init__.py", line 1951, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return compile_fx(model_, inputs_, config_patches=self.config)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 1505, in compile_fx
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return aot_autograd(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\backends\common.py", line 69, in __call__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     cg = aot_module_simplified(gm, example_inputs, **self.kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_functorch\aot_autograd.py", line 954, in aot_module_simplified
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn, _ = create_aot_dispatcher_function(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_functorch\aot_autograd.py", line 687, in create_aot_dispatcher_function
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn, fw_metadata = compiler_fn(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                ^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_functorch\_aot_autograd\jit_compile_runtime_wrappers.py", line 461, in aot_dispatch_autograd
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fw_func = aot_config.fw_compiler(fw_module, adjusted_flat_args)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 1410, in fw_compiler_base
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return inner_compile(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\repro\after_aot.py", line 84, in debug_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     inner_compiled_fn = compiler_fn(gm, example_inputs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\debug.py", line 304, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return fn(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 527, in compile_fx_inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_graph = fx_codegen_and_compile(
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                      ^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "C:\Users\SMART PLUS\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 81, in inner
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return func(*args, **kwds)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\compile_fx.py", line 831, in fx_codegen_and_compile
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiled_fn = graph.compile_to_fn()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                   ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\graph.py", line 1751, in compile_to_fn
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return self.compile_to_module().call
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\graph.py", line 1680, in compile_to_module
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.codegen_with_cpp_wrapper() if self.cpp_wrapper else self.codegen()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                                              ^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\graph.py", line 1640, in codegen
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.scheduler.codegen()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_dynamo\utils.py", line 231, in time_wrapper
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     r = func(*args, **kwargs)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]         ^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\scheduler.py", line 2741, in codegen
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.get_backend(device).codegen_node(node)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codegen\cpp.py", line 3792, in codegen_node
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     cpp_kernel_proxy = CppKernelProxy(kernel_group)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codegen\cpp.py", line 3021, in __init__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     self.picked_vec_isa: codecache.VecISA = codecache.pick_vec_isa()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                             ^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1511, in pick_vec_isa
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     _valid_vec_isa_list: List[VecISA] = valid_vec_isa_list()
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                         ^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1501, in valid_vec_isa_list
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     if str(isa) in _cpu_supported_x86_isa and isa:
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1321, in __bool__
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     extra=_get_isa_dry_compile_fingerprint(self._arch_flags),
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1245, in _get_isa_dry_compile_fingerprint
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     compiler_info = get_compiler_version_info(cpp_compiler())
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]                                               ^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1141, in cpp_compiler
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     return cpp_compiler_search(search)
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]   File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\_inductor\codecache.py", line 1168, in cpp_compiler_search
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]     raise exc.InvalidCxxCompiler
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] torch._dynamo.exc.BackendCompilerFailed: backend='inductor' raised:
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] InvalidCxxCompiler: No working C++ compiler found in torch._inductor.config.cpp.cxx: (None, 'g++')
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] 
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009] Set TORCH_LOGS="+dynamo" and TORCHDYNAMO_VERBOSE=1 for more information
+W0730 17:22:21.330000 12944 torch\_dynamo\convert_frame.py:1009]
+[2026-07-30T12:25:32.680Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\prepare_data.py
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]

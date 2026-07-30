@@ -88,10 +88,10 @@ impl AIEngine {
 
         // 1. Read 40 LOB features from SAB slots 11..90
         let mut lob_features = [0.0f64; 40];
-        // Read 20 bid features (slots 11..30) & 20 ask features (slots 51..70)
+        // Read 20 bid features (slots 11, 13..49) & 20 ask features (slots 51, 53..89)
         for i in 0..20 {
-            lob_features[i] = sab.load_f64(11 + i);
-            lob_features[20 + i] = sab.load_f64(51 + i);
+            lob_features[i] = sab.load_f64(11 + i * 2);
+            lob_features[20 + i] = sab.load_f64(51 + i * 2);
         }
 
         // Calculate current mid price for IC tracking realized return calculation
@@ -204,8 +204,8 @@ impl AIEngine {
         // 1. Read 40 LOB features from SAB slots 11..90
         let mut lob_features = [0.0f64; 40];
         for i in 0..20 {
-            lob_features[i] = sab.load_f64(11 + i);
-            lob_features[20 + i] = sab.load_f64(51 + i);
+            lob_features[i] = sab.load_f64(11 + i * 2);
+            lob_features[20 + i] = sab.load_f64(51 + i * 2);
         }
 
         // 2. Execute T-KAN forward pass (40 -> 16 spatial encoding)

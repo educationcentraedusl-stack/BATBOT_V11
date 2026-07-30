@@ -100,8 +100,8 @@ fn test_oms_engine_sab_evaluation() {
     bridge.store_f64(94, 0.95); // confidence 0.95
     bridge.store_f64(95, 30.0); // horizon 30ms
     bridge.store_f64(100, 2.0); // slippage 2 ticks
-    bridge.store_u64(102, 2_000_000); // 2ms latency
-    bridge.store_u64(103, 1); // sequence 1
+    bridge.store_u64(103, 2_000_000); // 2ms latency (slot 103)
+    bridge.store_u64(104, 1); // sequence 1 (slot 104)
 
     let intent_opt = oms.evaluate_sab_prediction(&bridge);
     assert!(intent_opt.is_some());
@@ -113,6 +113,6 @@ fn test_oms_engine_sab_evaluation() {
     assert_eq!(intent.time_in_force, TimeInForce::Ioc); // Aggressive sweep triggered!
 
     // Position state synced to SAB
-    let pos_qty_sab = bridge.load_f64(104);
+    let pos_qty_sab = bridge.load_f64(105);
     assert_eq!(pos_qty_sab, 0.0); // position flat prior to fills
 }

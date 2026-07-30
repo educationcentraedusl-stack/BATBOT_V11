@@ -202,11 +202,8 @@ def train_cfc():
             print(f"[PyTorch 2.0 Warning] torch.compile fallback to raw model ({e}).")
             model = raw_model
     else:
-        try:
-            model = torch.compile(raw_model)
-            print("[PyTorch 2.0] Compiled CfC model for CPU.")
-        except Exception as e:
-            model = raw_model
+        model = raw_model
+        print("[PyTorch Eager] Operating CfC model on CPU (Eager Mode).")
 
     criterion = HuberICLoss(delta=1e-3, ic_weight=0.5)
 

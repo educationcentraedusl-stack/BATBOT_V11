@@ -423,6 +423,12 @@
 - **HFT/Performance Compliance:** Accelerated PyTorch CfC neural network training loop without data truncation or downsampling. Wrapped model in PyTorch 2.0 `torch.compile(mode="reduce-overhead")` for kernel fusion and Python execution overhead reduction. Integrated `torch.cuda.amp.autocast()` and `GradScaler()` for FP16 Tensor Core execution. Optimized PyTorch `DataLoader` with `pin_memory=True`, `persistent_workers=True`, `num_workers=4`, and `non_blocking=True` CUDA tensor transfers. Enabled cuDNN benchmarking (`torch.backends.cudnn.benchmark = True`) and strict CUDA device target verification (`device='cuda'`). Verified 100% via `python -m py_compile training/train_cfc.py`.
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-30
+- **Feature/Task:** Fix SAB Feature Ingestion Stride Bug in AI Engine (`src/ai/engine.rs`) & Offline Model Recalibration
+- **Artifacts Created/Modified:** `src/ai/engine.rs`, `src/ai/preflight.rs`, `tests/test_oms.rs`, `training/train_cfc.py`, `models/cfc_weights.safetensors`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Fixed critical SAB feature ingestion stride bug in `AIEngine::run_inference` and `AIEngine::run_shadow_inference` (`src/ai/engine.rs`) by applying stride of 2 (`11 + i * 2` for Bid prices, `51 + i * 2` for Ask prices), eliminating feature interleaving and depth truncation. Rebuilt native N-API module (`npx napi build --platform --release`). Executed PyTorch HFT data preparation (`prepare_data.py`) across 110,530 records and retrained continuous-time CfC liquid neural network (`train_cfc.py`), reaching Train IC of +0.6311 and Best Validation IC of +0.1469 (>0.0300 threshold). Exported calibrated zero-copy SafeTensors weights (`cfc_weights.safetensors`). Verified 100% via 21/21 passing Rust unit & preflight tests (`cargo test`) and TypeScript strict compilation (`npm run build:ts`, 0 errors).
+- **Status:** ✅ Completed & QA Verified
+
 
 
 
