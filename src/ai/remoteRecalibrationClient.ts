@@ -108,9 +108,10 @@ export class RemoteRecalibrationClient {
       return true;
     } catch (err: unknown) {
       const isAbort = err instanceof Error && (err.name === "AbortError" || err.message.includes("aborted"));
+      const causeStr = (err as any)?.cause ? ` (Cause: ${String((err as any).cause.message || (err as any).cause.code || (err as any).cause)})` : "";
       const errorMsg = isAbort
         ? `Request timed out after ${Math.round(timeoutMs / 1000)}s waiting for Modal GPU container cold boot and training.`
-        : (err instanceof Error ? err.message : String(err));
+        : `${err instanceof Error ? err.message : String(err)}${causeStr}`;
       console.error(`[BATBOT_V11][REMOTE-TRAINING FAILURE] Failed to offload training to Modal: ${errorMsg}`);
       return false;
     }

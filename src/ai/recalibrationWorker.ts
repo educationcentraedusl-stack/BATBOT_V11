@@ -298,20 +298,20 @@ export class AutoRecalibrationManager {
 
       if (useModal) {
         // User explicitly chose Modal Cloud GPU training
-        console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Step 2/4: Force-executing Modal Serverless GPU offloading...`);
+        console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Step 2/4: Executing Modal Serverless GPU offloading...`);
         try {
           const remoteClient = new RemoteRecalibrationClient();
           remoteSuccess = await remoteClient.trainRemotely();
           if (!remoteSuccess) {
-            throw new Error(
-              `Modal GPU returned failure. Check endpoint URL (${process.env.MODAL_TRAINING_URL || "default"}) or server logs.`
+            console.warn(
+              `\x1b[33m[BATBOT_V11][MODAL GPU WARNING] Modal GPU offloading failed. Automatically falling back to secondary local PyTorch trainer (train_cfc.py)...\x1b[0m`
             );
           }
         } catch (remoteErr: unknown) {
           const errorMsg = remoteErr instanceof Error ? remoteErr.message : String(remoteErr);
-          const formattedErr = `[MODAL GPU OVERRIDE FAILURE] ${errorMsg}`;
-          console.error(`\x1b[31m\x1b[1m[BATBOT_V11][MODAL GPU ERROR] ${formattedErr}\x1b[0m`);
-          throw new Error(formattedErr);
+          console.warn(
+            `\x1b[33m[BATBOT_V11][MODAL GPU WARNING] Remote GPU offloading error: ${errorMsg}. Falling back to local PyTorch trainer...\x1b[0m`
+          );
         }
       } else {
         // User chose N (standard fallback flow)
@@ -323,23 +323,23 @@ export class AutoRecalibrationManager {
         } catch (remoteErr) {
           console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Remote GPU offloading attempt failed: ${String(remoteErr)}`);
         }
+      }
 
-        if (!remoteSuccess) {
-          console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Falling back to secondary local PyTorch trainer (train_cfc.py)...`);
-          const trainScript = path.join(this.projectRoot, "training", "train_cfc.py");
+      if (!remoteSuccess) {
+        console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Executing secondary local PyTorch trainer (train_cfc.py)...`);
+        const trainScript = path.join(this.projectRoot, "training", "train_cfc.py");
 
-          const trainResult = await execFileAsync(pythonCmd, [trainScript], {
-            cwd: this.projectRoot,
-            env: { ...process.env },
-            timeout: 900000, // 15 min extended timeout for deep neural network training
-          });
+        const trainResult = await execFileAsync(pythonCmd, [trainScript], {
+          cwd: this.projectRoot,
+          env: { ...process.env },
+          timeout: 900000, // 15 min extended timeout for deep neural network training
+        });
 
-          if (trainResult.stderr && trainResult.stderr.trim().length > 0) {
-            console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Local training stderr log: ${trainResult.stderr.trim()}`);
-          }
-        } else {
-          console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Primary Modal Serverless GPU training & weights download PASSED!`);
+        if (trainResult.stderr && trainResult.stderr.trim().length > 0) {
+          console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Local training stderr log: ${trainResult.stderr.trim()}`);
         }
+      } else {
+        console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Primary Modal Serverless GPU training & weights download PASSED!`);
       }
 
       // Step 3: Validate generated SafeTensors weights file

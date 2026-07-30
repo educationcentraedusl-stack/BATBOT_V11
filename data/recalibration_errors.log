@@ -2129,3 +2129,4 @@ Training already in progress.
 --- PYTHON STDERR TRACEBACK ---
 [FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
 [2026-07-30T21:29:12.187Z] [RECALIBRATION_FAILURE] [MODAL GPU OVERRIDE FAILURE] Modal GPU returned failure. Check endpoint URL (https://educationcentra-edu-sl--batbot-cfc-trainer-train-cfc-webhook.modal.run) or server logs.
+[2026-07-30T21:40:53.223Z] [RECALIBRATION_FAILURE] [MODAL GPU OVERRIDE FAILURE] Modal GPU returned failure. Check endpoint URL (https://educationcentra-edu-sl--batbot-cfc-trainer-train-cfc-webhook.modal.run) or server logs.

@@ -483,6 +483,13 @@
 - **HFT/Performance Compliance:** Resolved Modal GPU cold-boot HTTP abort timeout (`This operation was aborted`) by expanding `timeoutMs` from 180s (3 minutes) to 600s (10 minutes) in `RemoteRecalibrationClient`. Added explicit `AbortError` detection formatting clear error tracebacks when a remote serverless GPU container takes extended time to spin up. Verified 100% via TypeScript compilation (`npm run build:ts`, 0 errors) and test suite (`node dist/test_recalibration_pipeline.js`).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-31
+- **Feature/Task:** Fetch Error Cause Formatting & Fault-Tolerant Local PyTorch Fallback Remediation
+- **Artifacts Created/Modified:** `src/ai/remoteRecalibrationClient.ts`, `src/ai/recalibrationWorker.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Formatted underlying Node.js `fetch` network failure cause (`err.cause`, e.g., `ENOTFOUND` / socket disconnect) in `RemoteRecalibrationClient` to expose exact network diagnostics. Refactored `runRecalibrationPipeline` in `src/ai/recalibrationWorker.ts` so that if Modal Cloud GPU offloading encounters a network error or endpoint failure, the engine automatically logs a non-fatal warning and seamlessly executes the secondary local PyTorch trainer (`train_cfc.py`). Ensures model auto-recalibration ALWAYS completes and hot-swaps without remaining stuck in an `IDLE_ACTIVE` safety clamp. Verified 100% via TypeScript compilation (`npm run build:ts`, 0 errors) and test suite (`node dist/test_recalibration_pipeline.js`).
+- **Status:** ✅ Completed & QA Verified
+
+
 
 
 
