@@ -27,7 +27,7 @@ async function runCsvLoggerTests() {
   }
 
   const initialContent = fs.readFileSync(testCsvFile, "utf8");
-  const expectedHeader = "Time,Symbol,Side,Size,Entry Price,Exit Price,Exit Reason,Duration,ROE %,PnL USDT\n";
+  const expectedHeader = "Time,Symbol,Side,Size,Entry Price,Exit Price,Exit Reason,Duration,ROE %,PnL USDT,Win/Loss\n";
   if (initialContent !== expectedHeader) {
     throw new Error(`FAIL: Header mismatch.\nExpected: ${expectedHeader}\nReceived: ${initialContent}`);
   }
@@ -93,19 +93,19 @@ async function runCsvLoggerTests() {
   }
 
   const row = lines[1].split(",");
-  if (row.length !== 10) {
-    throw new Error(`FAIL: CSV row column count mismatch. Expected 10 columns, got ${row.length}: ${lines[1]}`);
+  if (row.length !== 11) {
+    throw new Error(`FAIL: CSV row column count mismatch. Expected 11 columns, got ${row.length}: ${lines[1]}`);
   }
 
-  // Check columns: Time,Symbol,Side,Size,Entry Price,Exit Price,Exit Reason,Duration,ROE %,PnL USDT
+  // Check columns: Time,Symbol,Side,Size,Entry Price,Exit Price,Exit Reason,Duration,ROE %,PnL USDT,Win/Loss
   if (row[1] !== "BTCUSDT" || row[2] !== "LONG" || row[3] !== "0.0020") {
     throw new Error(`FAIL: CSV column values invalid: Symbol=${row[1]}, Side=${row[2]}, Size=${row[3]}`);
   }
   if (row[4] !== "65000.00" || row[5] !== "66000.00" || row[6] !== "TAKE_PROFIT") {
     throw new Error(`FAIL: CSV price/reason invalid: Entry=${row[4]}, Exit=${row[5]}, Reason=${row[6]}`);
   }
-  if (row[8] !== "1.54" || row[9] !== "1.9472") {
-    throw new Error(`FAIL: CSV ROE/PnL invalid: ROE=${row[8]}, PnL=${row[9]}`);
+  if (row[8] !== "1.54" || row[9] !== "1.9472" || row[10] !== "Win") {
+    throw new Error(`FAIL: CSV ROE/PnL/WinLoss invalid: ROE=${row[8]}, PnL=${row[9]}, WinLoss=${row[10]}`);
   }
   console.log(`  ✓ CSV Non-blocking async row logged correctly: "${lines[1]}"`);
 
@@ -133,7 +133,11 @@ async function runCsvLoggerTests() {
   if (finalLines.length !== 3) {
     throw new Error(`FAIL: Expected 3 lines in CSV, found ${finalLines.length}`);
   }
-  console.log(`  ✓ Short STOP_LOSS trade logged correctly: "${finalLines[2]}"`);
+  const shortRow = finalLines[2].split(",");
+  if (shortRow.length !== 11 || shortRow[10] !== "Loss") {
+    throw new Error(`FAIL: Short loss trade Win/Loss column invalid: Expected Loss, got ${shortRow[10]}`);
+  }
+  console.log(`  ✓ Short STOP_LOSS trade logged correctly with Loss tag: "${finalLines[2]}"`);
 
   // Clean up test directory
   try {
