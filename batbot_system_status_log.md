@@ -433,6 +433,13 @@
 - **HFT/Performance Compliance:** Resolved unconfigured default `cvdBuyThreshold` (50.0) blocking valid AI entry signals by defaulting to `0.0` in `StrategyEngine` constructor and adding explicit `CVD_BUY_THRESHOLD=0.0` / `CVD_SELL_THRESHOLD=0.0` in `.env`. Added auto-reconciliation of `hedgeLedger` slot occupation states when local position is flat. Added defensive ceiling guard to `longCooldownLock` and `shortCooldownLock` to suppress stale/corrupt future timestamps in SharedArrayBuffer. Fixed `syncStateOnStartup` in `src/index.ts` to explicitly iterate and filter Binance Futures position records by `positionSide: "LONG"` and `positionSide: "SHORT"`. Verified 100% via TypeScript compilation (`npm run build:ts`, 0 errors), strategy execution verification test suite (`node dist/test_strategy_execution.js`, ALL PASSED, 1.768 µs latency), and dynamic risk test suite (`node dist/test_dynamic_risk_and_traps.js`, ALL PASSED).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-30
+- **Feature/Task:** Dynamic `MAX_SPREAD_VELOCITY` Environment Configuration & Strategy Engine Threshold Binding
+- **Artifacts Created/Modified:** `.env`, `src/strategy/engine.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Made `MAX_SPREAD_VELOCITY` dynamically configurable via `.env` (set to `5.0`) with strict `isNaN` fallback in `StrategyEngine` constructor. Removed hardcoded `0.1` limit, enabling trade signal evaluation under realistic microsecond spread volatility conditions. Verified 100% via `npx tsc --noEmit` (0 errors) and `npm test` (0 errors).
+- **Status:** ✅ Completed & QA Verified
+
+
 
 
 
