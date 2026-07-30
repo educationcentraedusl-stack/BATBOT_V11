@@ -52,9 +52,8 @@ export class StrategyEngine {
   private dynamicRiskEngine: DynamicRiskEngine = new DynamicRiskEngine();
   private lastProcessedSequence: bigint = -1n;
 
-  // Pre-allocated order intent structure to avoid GC-thrashing on signal triggers
   private reusableOrderIntent: OrderIntent = {
-    symbol: "BTCUSDT",
+    symbol: process.env.SYMBOL ?? "BTCUSDT",
     side: "BUY",
     quantity: 0.001,
     price: 0,
@@ -116,7 +115,7 @@ export class StrategyEngine {
     const defaultLeverage = !isNaN(envLeverage) ? envLeverage : 10;
 
     this.config = {
-      symbol: config?.symbol ?? "BTCUSDT",
+      symbol: config?.symbol ?? process.env.SYMBOL ?? "BTCUSDT",
       orderQuantity: config?.orderQuantity ?? defaultOrderQty,
       obiBuyThreshold: config?.obiBuyThreshold ?? defaultObiBuy,
       obiSellThreshold: config?.obiSellThreshold ?? defaultObiSell,

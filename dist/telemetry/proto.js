@@ -172,7 +172,7 @@ function decodeTelemetryFrame(buffer) {
     const obj = TelemetryFrameMsg.toObject(decoded, { longs: Number, enums: String, defaults: true });
     const statsObj = obj.stats || {};
     return {
-        symbol: obj.symbol || "BTCUSDT",
+        symbol: obj.symbol || process.env.SYMBOL || "BTCUSDT",
         sequenceNum: BigInt(obj.sequenceNum || 0),
         bidPrice: obj.bidPrice || 0,
         askPrice: obj.askPrice || 0,

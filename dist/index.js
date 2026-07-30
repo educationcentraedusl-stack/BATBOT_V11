@@ -110,7 +110,8 @@ async function initializeSystem() {
     const client = new marketDataClient_1.MarketDataClient(sab);
     const riskGuard = new risk_1.RiskGuard();
     const executionClient = new binance_1.BinanceExecutionClient();
-    const strategyEngine = new engine_1.StrategyEngine(client, riskGuard, executionClient);
+    const symbol = process.env.SYMBOL ?? "BTCUSDT";
+    const strategyEngine = new engine_1.StrategyEngine(client, riskGuard, executionClient, { symbol });
     const logger = new logger_1.TradeLogger("data");
     const csvLogger = new csvLogger_1.CsvTradeLogger("data", "trade_history.csv");
     const dashboard = new dashboard_1.CLIDashboard(true);

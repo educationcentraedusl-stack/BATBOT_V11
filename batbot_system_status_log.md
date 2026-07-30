@@ -439,6 +439,13 @@
 - **HFT/Performance Compliance:** Made `MAX_SPREAD_VELOCITY` dynamically configurable via `.env` (set to `5.0`) with strict `isNaN` fallback in `StrategyEngine` constructor. Removed hardcoded `0.1` limit, enabling trade signal evaluation under realistic microsecond spread volatility conditions. Verified 100% via `npx tsc --noEmit` (0 errors) and `npm test` (0 errors).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-30
+- **Feature/Task:** Dynamic Symbol Configuration & Telemetry Header Wiring Fix (`process.env.SYMBOL`)
+- **Artifacts Created/Modified:** `src/index.ts`, `src/strategy/engine.ts`, `src/telemetry/proto.ts`, `src/dashboard/store.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Resolved hardcoded `"BTCUSDT"` in `StrategyEngine` constructor by binding `symbol` dynamically to `process.env.SYMBOL ?? "BTCUSDT"`. Passed `{ symbol }` config from `src/index.ts` upon engine initialization. Updated fallbacks in `src/telemetry/proto.ts` and `src/dashboard/store.ts` to utilize `process.env.SYMBOL`. Verified 100% via TypeScript compilation (`npm run build:ts`, 0 errors).
+- **Status:** ✅ Completed & QA Verified
+
+
 
 
 

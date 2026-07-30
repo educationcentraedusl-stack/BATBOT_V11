@@ -12,9 +12,8 @@ class StrategyEngine {
     config;
     dynamicRiskEngine = new dynamicRiskEngine_1.DynamicRiskEngine();
     lastProcessedSequence = -1n;
-    // Pre-allocated order intent structure to avoid GC-thrashing on signal triggers
     reusableOrderIntent = {
-        symbol: "BTCUSDT",
+        symbol: process.env.SYMBOL ?? "BTCUSDT",
         side: "BUY",
         quantity: 0.001,
         price: 0,
@@ -45,6 +44,7 @@ class StrategyEngine {
         const envObiSell = process.env.OBI_SELL_THRESHOLD ? parseFloat(process.env.OBI_SELL_THRESHOLD) : NaN;
         const envCvdBuy = process.env.CVD_BUY_THRESHOLD ? parseFloat(process.env.CVD_BUY_THRESHOLD) : NaN;
         const envCvdSell = process.env.CVD_SELL_THRESHOLD ? parseFloat(process.env.CVD_SELL_THRESHOLD) : NaN;
+        const envMaxSpreadVelocity = process.env.MAX_SPREAD_VELOCITY ? parseFloat(process.env.MAX_SPREAD_VELOCITY) : NaN;
         const envOrderQty = process.env.ORDER_QUANTITY ? parseFloat(process.env.ORDER_QUANTITY) : NaN;
         const envLeverage = process.env.LEVERAGE ? parseInt(process.env.LEVERAGE, 10) : NaN;
         const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 2.5;
@@ -59,16 +59,17 @@ class StrategyEngine {
         const defaultObiSell = !isNaN(envObiSell) ? envObiSell : -0.25;
         const defaultCvdBuy = !isNaN(envCvdBuy) ? envCvdBuy : 0.0;
         const defaultCvdSell = !isNaN(envCvdSell) ? envCvdSell : 0.0;
+        const defaultMaxSpreadVelocity = !isNaN(envMaxSpreadVelocity) ? envMaxSpreadVelocity : 5.0;
         const defaultOrderQty = !isNaN(envOrderQty) ? envOrderQty : 0.001;
         const defaultLeverage = !isNaN(envLeverage) ? envLeverage : 10;
         this.config = {
-            symbol: config?.symbol ?? "BTCUSDT",
+            symbol: config?.symbol ?? process.env.SYMBOL ?? "BTCUSDT",
             orderQuantity: config?.orderQuantity ?? defaultOrderQty,
             obiBuyThreshold: config?.obiBuyThreshold ?? defaultObiBuy,
             obiSellThreshold: config?.obiSellThreshold ?? defaultObiSell,
             cvdBuyThreshold: config?.cvdBuyThreshold ?? defaultCvdBuy,
             cvdSellThreshold: config?.cvdSellThreshold ?? defaultCvdSell,
-            maxSpreadVelocity: config?.maxSpreadVelocity ?? 0.1,
+            maxSpreadVelocity: config?.maxSpreadVelocity ?? defaultMaxSpreadVelocity,
             minAiConfidence: config?.minAiConfidence ?? defaultMinAiConfidence,
             aggressiveConfidenceThreshold: config?.aggressiveConfidenceThreshold ?? defaultAggressiveConfidence,
             tickSize: config?.tickSize ?? 0.1,

@@ -156,7 +156,7 @@ export function initTelemetryWorker(wsUrl: string = "ws://localhost:8080") {
           const newExec: SystemExecution = {
             id: `EXEC-${frame.sequenceNum}-${Date.now().toString().slice(-4)}`,
             timestamp: frame.timestamp || Date.now(),
-            symbol: frame.symbol || "BTCUSDT",
+            symbol: frame.symbol || process.env.SYMBOL || "BTCUSDT",
             side: execSide,
             price: execSide === "BUY" ? (frame.askPrice || frame.bidPrice) : (frame.bidPrice || frame.askPrice),
             qty: execQty,
