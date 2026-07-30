@@ -266,3 +266,20 @@ pub fn start_ingestion(sab_buffer: Buffer) -> napi::Result<bool> {
 
     Ok(true)
 }
+
+#[napi]
+pub fn get_microstructure_metrics() -> String {
+    let lob_guard = GLOBAL_LOB.read().unwrap_or_else(|e| e.into_inner());
+    let m = &lob_guard.metrics;
+    format!(
+        "{{\"obi\":{:.6},\"cvd\":{:.4},\"rv_gk\":{:.6},\"vpin\":{:.4},\"hurst\":{:.4},\"lob_entropy\":{:.4},\"regime\":{},\"is_sweep_detected\":{}}}",
+        m.obi, m.cvd, m.rv_gk, m.vpin, m.hurst, m.lob_entropy, m.regime, m.is_sweep_detected
+    )
+}
+
+#[napi]
+pub fn get_dynamic_collars(entry_price: f64, position_side: String) -> String {
+    let lob_guard = GLOBAL_LOB.read().unwrap_or_else(|e| e.into_inner());
+    let (sl, tp) = lob_guard.calculate_dynamic_collars(entry_price, &position_side);
+    format!("{{\"stop_loss\":{:.4},\"take_profit\":{:.4}}}", sl, tp)
+}

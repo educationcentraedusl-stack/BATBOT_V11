@@ -200,5 +200,42 @@ class MarketDataClient {
     setLongCooldownLock(expiryMs) {
         this.writeAtomicFloat64(120, expiryMs);
     }
+    // --- Slots 121 to 126: Dynamic Microstructure & Trap Metrics ---
+    getGarmanKlassRV() {
+        return this.readAtomicFloat64(121);
+    }
+    setGarmanKlassRV(val) {
+        this.writeAtomicFloat64(121, val);
+    }
+    getVPIN() {
+        return this.readAtomicFloat64(122);
+    }
+    setVPIN(val) {
+        this.writeAtomicFloat64(122, val);
+    }
+    getHurstExponent() {
+        return this.readAtomicFloat64(123);
+    }
+    setHurstExponent(val) {
+        this.writeAtomicFloat64(123, val);
+    }
+    getLOBEntropy() {
+        return this.readAtomicFloat64(124);
+    }
+    setLOBEntropy(val) {
+        this.writeAtomicFloat64(124, val);
+    }
+    getRegimeStateCode() {
+        return this.readAtomicFloat64(125);
+    }
+    setRegimeStateCode(code) {
+        this.writeAtomicFloat64(125, code);
+    }
+    getIsSweepDetected() {
+        return this.readAtomicFloat64(126) > 0.5;
+    }
+    setIsSweepDetected(isSweep) {
+        this.writeAtomicFloat64(126, isSweep ? 1.0 : 0.0);
+    }
 }
 exports.MarketDataClient = MarketDataClient;

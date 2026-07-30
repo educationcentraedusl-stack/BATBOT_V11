@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.StrategyEngine = void 0;
 const positionLedger_1 = require("./positionLedger");
+const dynamicRiskEngine_1 = require("./dynamicRiskEngine");
 class StrategyEngine {
     client;
     riskGuard;
@@ -9,6 +10,7 @@ class StrategyEngine {
     positionLedger;
     hedgeLedger;
     config;
+    dynamicRiskEngine = new dynamicRiskEngine_1.DynamicRiskEngine();
     lastProcessedSequence = -1n;
     // Pre-allocated order intent structure to avoid GC-thrashing on signal triggers
     reusableOrderIntent = {
@@ -276,6 +278,18 @@ class StrategyEngine {
                 finalQuantity = Number((minNotionalUsdt / basePrice).toFixed(4));
             }
         }
+        // Evaluate Dynamic Risk & Microstructure Trap Avoidance Profile
+        const microMetrics = {
+            obi,
+            cvd,
+            rvGk: this.client.getGarmanKlassRV(),
+            vpin: this.client.getVPIN(),
+            hurst: this.client.getHurstExponent(),
+            lobEntropy: this.client.getLOBEntropy(),
+            regime: this.client.getRegimeStateCode(),
+            isSweepDetected: this.client.getIsSweepDetected(),
+        };
+        const riskProfile = this.dynamicRiskEngine.evaluateDynamicRisk(basePrice, targetPosSide === "LONG" ? "LONG" : "SHORT", microMetrics, Math.abs(askPrice - bidPrice));
         // Populate pre-allocated intent
         this.reusableOrderIntent.symbol = this.config.symbol;
         this.reusableOrderIntent.side = signalType;
@@ -283,6 +297,9 @@ class StrategyEngine {
         this.reusableOrderIntent.price = Number(targetPrice.toFixed(2));
         this.reusableOrderIntent.currentPositionSide = targetPosSide;
         this.reusableOrderIntent.isCloseOrder = false;
+        this.reusableOrderIntent.riskProfile = riskProfile;
+        this.reusableOrderIntent.stopLossPrice = riskProfile.stopLossPrice;
+        this.reusableOrderIntent.takeProfitPrice = riskProfile.takeProfitPrice;
         // Pass through Risk Management Guard with target position side
         const isConfigured = this.executionClient.isConfigured();
         const riskResult = this.riskGuard.validateOrder(this.reusableOrderIntent, isConfigured, targetPosSide);

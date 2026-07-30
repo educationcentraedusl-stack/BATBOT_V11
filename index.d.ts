@@ -16,3 +16,5 @@ export declare function evaluateOmsTick(sabBuffer: Buffer): string
 export declare function getOmsMetrics(): string
 export declare function getPositionSnapshot(): string
 export declare function startIngestion(sabBuffer: Buffer): boolean
+export declare function getMicrostructureMetrics(): string
+export declare function getDynamicCollars(entryPrice: number, positionSide: string): string

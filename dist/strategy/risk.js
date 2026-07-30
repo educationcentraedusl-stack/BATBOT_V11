@@ -60,11 +60,38 @@ class RiskGuard {
         if (this.isProfitLocked && !intent.isCloseOrder) {
             return exports.RISK_REJECTED_PROFIT_LOCKED;
         }
-        // 3. Daily Loss Threshold
+        // 3. Dynamic Microstructure Trap & Toxic Flow Enforcement
+        if (intent.riskProfile && !intent.isCloseOrder) {
+            if (intent.riskProfile.isTrapDetected) {
+                const reason = intent.riskProfile.trapReason ?? "TRAP_DETECTED";
+                if (reason.includes("SWEEP")) {
+                    return {
+                        passed: false,
+                        reasonCode: "REJECTED_LIQUIDITY_SWEEP_TRAP",
+                        message: `Order rejected: ${reason}`,
+                    };
+                }
+                else if (reason.includes("VPIN") || reason.includes("TOXIC")) {
+                    return {
+                        passed: false,
+                        reasonCode: "REJECTED_TOXIC_FLOW",
+                        message: `Order rejected: ${reason}`,
+                    };
+                }
+                else {
+                    return {
+                        passed: false,
+                        reasonCode: "REJECTED_COUNTER_TREND_REGIME",
+                        message: `Order rejected due to unstable regime: ${reason}`,
+                    };
+                }
+            }
+        }
+        // 4. Daily Loss Threshold
         if (this.cumulativeDailyLossUsdt >= this.config.maxDailyLossUsdt) {
             return exports.RISK_REJECTED_DAILY_LOSS;
         }
-        // 4. Price & Quantity Sanity
+        // 5. Price & Quantity Sanity
         if (intent.price <= 0 || intent.quantity <= 0) {
             return {
                 passed: false,
@@ -72,7 +99,7 @@ class RiskGuard {
                 message: `Invalid order price (${intent.price}) or quantity (${intent.quantity}).`,
             };
         }
-        // 4. Max Position Size Limit (Evaluated on net resulting position size)
+        // 6. Max Position Size Limit
         const proposedOrderNotional = intent.price * intent.quantity;
         const posSide = intent.currentPositionSide ?? currentPositionSide;
         let netResultingNotional = proposedOrderNotional;
@@ -102,7 +129,7 @@ class RiskGuard {
                 message: `Proposed net position value ($${netResultingNotional.toFixed(2)}) exceeds max position size limit ($${this.config.maxPositionSizeUsdt.toFixed(2)}).`,
             };
         }
-        // 5. Stop Loss Sanity Check
+        // 7. Stop Loss Sanity Check
         if (intent.stopLossPrice !== undefined) {
             if (intent.side === "BUY" && intent.stopLossPrice >= intent.price) {
                 return {

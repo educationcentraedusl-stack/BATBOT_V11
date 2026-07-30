@@ -5,6 +5,7 @@ use std::sync::Arc;
 use super::metrics::{
     calculate_obi, calculate_spread_velocity, update_cvd, update_liquidation, MicrostructureMetrics,
 };
+use super::microstructure::MicrostructureAnalyzer;
 
 pub const LOB_DEPTH: usize = 20;
 
@@ -118,6 +119,7 @@ pub struct LimitOrderBook {
     pub bids: [(f64, f64); LOB_DEPTH],
     pub asks: [(f64, f64); LOB_DEPTH],
     pub metrics: MicrostructureMetrics,
+    pub analyzer: MicrostructureAnalyzer,
     pub last_update_ns: u64,
 }
 
@@ -127,6 +129,7 @@ impl LimitOrderBook {
             bids: [(0.0, 0.0); LOB_DEPTH],
             asks: [(0.0, 0.0); LOB_DEPTH],
             metrics: MicrostructureMetrics::default(),
+            analyzer: MicrostructureAnalyzer::new(50.0),
             last_update_ns: 0,
         }
     }
@@ -156,15 +159,29 @@ impl LimitOrderBook {
         let spread_vel = calculate_spread_velocity(current_spread, previous_spread, elapsed_seconds);
         let obi_val = calculate_obi(&self.bids, &self.asks);
 
+        self.analyzer.on_depth_update(&self.bids, &self.asks, timestamp_ns);
+
         self.metrics.obi = obi_val;
         self.metrics.spread_velocity = spread_vel;
         self.metrics.last_spread = current_spread;
         self.metrics.last_timestamp_ns = timestamp_ns;
+        self.metrics.rv_gk = self.analyzer.get_rv_gk();
+        self.metrics.vpin = self.analyzer.get_vpin();
+        self.metrics.hurst = self.analyzer.get_hurst();
+        self.metrics.lob_entropy = self.analyzer.get_lob_entropy();
+        self.metrics.regime = self.analyzer.get_regime() as u8;
+        self.metrics.is_sweep_detected = self.analyzer.is_sweep_detected();
         self.last_update_ns = timestamp_ns;
     }
 
     pub fn process_trade(&mut self, price: f64, quantity: f64, is_buyer_maker: bool) {
         self.metrics.cvd = update_cvd(self.metrics.cvd, price, quantity, is_buyer_maker);
+        self.analyzer.on_trade(price, quantity, is_buyer_maker);
+
+        self.metrics.rv_gk = self.analyzer.get_rv_gk();
+        self.metrics.vpin = self.analyzer.get_vpin();
+        self.metrics.hurst = self.analyzer.get_hurst();
+        self.metrics.regime = self.analyzer.get_regime() as u8;
     }
 
     pub fn process_event(&mut self, event: MarketUpdateEvent) {
@@ -197,5 +214,12 @@ impl LimitOrderBook {
             }
         }
     }
-}
 
+    pub fn calculate_dynamic_collars(
+        &self,
+        entry_price: f64,
+        position_side: &str,
+    ) -> (f64, f64) {
+        self.analyzer.calculate_dynamic_collars(entry_price, position_side, self.metrics.obi, self.metrics.last_spread)
+    }
+}

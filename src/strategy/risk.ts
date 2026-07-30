@@ -1,3 +1,5 @@
+import { DynamicRiskProfile } from "./dynamicRiskEngine";
+
 export interface RiskConfig {
   maxPositionSizeUsdt: number;
   minCooldownMs: number;
@@ -15,11 +17,23 @@ export interface OrderIntent {
   takeProfitPrice?: number;
   currentPositionSide?: "FLAT" | "LONG" | "SHORT";
   isCloseOrder?: boolean;
+  riskProfile?: DynamicRiskProfile;
 }
 
 export interface RiskCheckResult {
   passed: boolean;
-  reasonCode: "APPROVED" | "COOLDOWN_ACTIVE" | "EXCEEDS_MAX_POSITION" | "EXCEEDS_DAILY_LOSS" | "PROFIT_LOCKED_ACTIVE" | "INVALID_PRICE" | "UNCONFIGURED_CREDENTIALS" | "INVALID_STOP_LOSS";
+  reasonCode:
+    | "APPROVED"
+    | "COOLDOWN_ACTIVE"
+    | "EXCEEDS_MAX_POSITION"
+    | "EXCEEDS_DAILY_LOSS"
+    | "PROFIT_LOCKED_ACTIVE"
+    | "INVALID_PRICE"
+    | "UNCONFIGURED_CREDENTIALS"
+    | "INVALID_STOP_LOSS"
+    | "REJECTED_TOXIC_FLOW"
+    | "REJECTED_LIQUIDITY_SWEEP_TRAP"
+    | "REJECTED_COUNTER_TREND_REGIME";
   message: string;
 }
 
@@ -99,12 +113,38 @@ export class RiskGuard {
       return RISK_REJECTED_PROFIT_LOCKED;
     }
 
-    // 3. Daily Loss Threshold
+    // 3. Dynamic Microstructure Trap & Toxic Flow Enforcement
+    if (intent.riskProfile && !intent.isCloseOrder) {
+      if (intent.riskProfile.isTrapDetected) {
+        const reason = intent.riskProfile.trapReason ?? "TRAP_DETECTED";
+        if (reason.includes("SWEEP")) {
+          return {
+            passed: false,
+            reasonCode: "REJECTED_LIQUIDITY_SWEEP_TRAP",
+            message: `Order rejected: ${reason}`,
+          };
+        } else if (reason.includes("VPIN") || reason.includes("TOXIC")) {
+          return {
+            passed: false,
+            reasonCode: "REJECTED_TOXIC_FLOW",
+            message: `Order rejected: ${reason}`,
+          };
+        } else {
+          return {
+            passed: false,
+            reasonCode: "REJECTED_COUNTER_TREND_REGIME",
+            message: `Order rejected due to unstable regime: ${reason}`,
+          };
+        }
+      }
+    }
+
+    // 4. Daily Loss Threshold
     if (this.cumulativeDailyLossUsdt >= this.config.maxDailyLossUsdt) {
       return RISK_REJECTED_DAILY_LOSS;
     }
 
-    // 4. Price & Quantity Sanity
+    // 5. Price & Quantity Sanity
     if (intent.price <= 0 || intent.quantity <= 0) {
       return {
         passed: false,
@@ -113,7 +153,7 @@ export class RiskGuard {
       };
     }
 
-    // 4. Max Position Size Limit (Evaluated on net resulting position size)
+    // 6. Max Position Size Limit
     const proposedOrderNotional = intent.price * intent.quantity;
     const posSide = intent.currentPositionSide ?? currentPositionSide;
 
@@ -142,7 +182,7 @@ export class RiskGuard {
       };
     }
 
-    // 5. Stop Loss Sanity Check
+    // 7. Stop Loss Sanity Check
     if (intent.stopLossPrice !== undefined) {
       if (intent.side === "BUY" && intent.stopLossPrice >= intent.price) {
         return {
@@ -202,4 +242,3 @@ export class RiskGuard {
     this.isProfitLocked = false;
   }
 }
-

@@ -255,5 +255,56 @@ export class MarketDataClient {
   public setLongCooldownLock(expiryMs: number): void {
     this.writeAtomicFloat64(120, expiryMs);
   }
+
+  // --- Slots 121 to 126: Dynamic Microstructure & Trap Metrics ---
+
+  public getGarmanKlassRV(): number {
+    return this.readAtomicFloat64(121);
+  }
+
+  public setGarmanKlassRV(val: number): void {
+    this.writeAtomicFloat64(121, val);
+  }
+
+  public getVPIN(): number {
+    return this.readAtomicFloat64(122);
+  }
+
+  public setVPIN(val: number): void {
+    this.writeAtomicFloat64(122, val);
+  }
+
+  public getHurstExponent(): number {
+    return this.readAtomicFloat64(123);
+  }
+
+  public setHurstExponent(val: number): void {
+    this.writeAtomicFloat64(123, val);
+  }
+
+  public getLOBEntropy(): number {
+    return this.readAtomicFloat64(124);
+  }
+
+  public setLOBEntropy(val: number): void {
+    this.writeAtomicFloat64(124, val);
+  }
+
+  public getRegimeStateCode(): number {
+    return this.readAtomicFloat64(125);
+  }
+
+  public setRegimeStateCode(code: number): void {
+    this.writeAtomicFloat64(125, code);
+  }
+
+  public getIsSweepDetected(): boolean {
+    return this.readAtomicFloat64(126) > 0.5;
+  }
+
+  public setIsSweepDetected(isSweep: boolean): void {
+    this.writeAtomicFloat64(126, isSweep ? 1.0 : 0.0);
+  }
 }
+
 

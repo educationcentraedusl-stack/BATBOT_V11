@@ -308,7 +308,7 @@ mod tests {
             bridge.store_f64(51 + i, 50010.0 + i as f64);
         }
 
-        let engine = AIEngine::new();
+        let engine = AIEngine::load_from_paths("./models/cfc_weights.safetensors", "./models/tkan_luts.bin");
         let mut validator = PreflightValidator::new(engine, 5, 5, -1.0);
 
         if validator.phase() == PreflightPhase::Warming {

@@ -2,6 +2,7 @@ import { MarketDataClient } from "../marketDataClient";
 import { RiskGuard, OrderIntent, RiskCheckResult } from "./risk";
 import { BinanceExecutionClient, BinanceOrderResponse } from "../execution/binance";
 import { PositionLedger, HedgePositionLedger, PositionSlot, SlotExitTrigger, ActiveTradeSlot } from "./positionLedger";
+import { DynamicRiskEngine, DynamicMicrostructureMetrics } from "./dynamicRiskEngine";
 
 export interface StrategyConfig {
   symbol: string;
@@ -48,6 +49,7 @@ export class StrategyEngine {
   private positionLedger: PositionLedger;
   private hedgeLedger: HedgePositionLedger;
   private config: StrategyConfig;
+  private dynamicRiskEngine: DynamicRiskEngine = new DynamicRiskEngine();
   private lastProcessedSequence: bigint = -1n;
 
   // Pre-allocated order intent structure to avoid GC-thrashing on signal triggers
@@ -383,6 +385,25 @@ export class StrategyEngine {
       }
     }
 
+    // Evaluate Dynamic Risk & Microstructure Trap Avoidance Profile
+    const microMetrics: DynamicMicrostructureMetrics = {
+      obi,
+      cvd,
+      rvGk: this.client.getGarmanKlassRV(),
+      vpin: this.client.getVPIN(),
+      hurst: this.client.getHurstExponent(),
+      lobEntropy: this.client.getLOBEntropy(),
+      regime: this.client.getRegimeStateCode(),
+      isSweepDetected: this.client.getIsSweepDetected(),
+    };
+
+    const riskProfile = this.dynamicRiskEngine.evaluateDynamicRisk(
+      basePrice,
+      targetPosSide === "LONG" ? "LONG" : "SHORT",
+      microMetrics,
+      Math.abs(askPrice - bidPrice)
+    );
+
     // Populate pre-allocated intent
     this.reusableOrderIntent.symbol = this.config.symbol;
     this.reusableOrderIntent.side = signalType;
@@ -390,6 +411,9 @@ export class StrategyEngine {
     this.reusableOrderIntent.price = Number(targetPrice.toFixed(2));
     this.reusableOrderIntent.currentPositionSide = targetPosSide;
     this.reusableOrderIntent.isCloseOrder = false;
+    this.reusableOrderIntent.riskProfile = riskProfile;
+    this.reusableOrderIntent.stopLossPrice = riskProfile.stopLossPrice;
+    this.reusableOrderIntent.takeProfitPrice = riskProfile.takeProfitPrice;
 
     // Pass through Risk Management Guard with target position side
     const isConfigured = this.executionClient.isConfigured();

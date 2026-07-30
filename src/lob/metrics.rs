@@ -8,6 +8,12 @@ pub struct MicrostructureMetrics {
     pub total_liquidation_vol: f64,
     pub buy_liquidation_vol: f64,
     pub sell_liquidation_vol: f64,
+    pub rv_gk: f64,
+    pub vpin: f64,
+    pub hurst: f64,
+    pub lob_entropy: f64,
+    pub regime: u8,
+    pub is_sweep_detected: bool,
 }
 
 impl Default for MicrostructureMetrics {
@@ -21,6 +27,12 @@ impl Default for MicrostructureMetrics {
             total_liquidation_vol: 0.0,
             buy_liquidation_vol: 0.0,
             sell_liquidation_vol: 0.0,
+            rv_gk: 0.0,
+            vpin: 0.0,
+            hurst: 0.5,
+            lob_entropy: 0.0,
+            regime: 0,
+            is_sweep_detected: false,
         }
     }
 }
@@ -45,8 +57,6 @@ pub fn calculate_obi(bids: &[(f64, f64); 20], asks: &[(f64, f64); 20]) -> f64 {
 }
 
 pub fn update_cvd(current_cvd: f64, trade_price: f64, trade_qty: f64, is_buyer_maker: bool) -> f64 {
-    // If buyer is maker, then the taker was a seller (aggressive sell).
-    // If buyer is not maker, taker was a buyer (aggressive buy).
     if is_buyer_maker {
         current_cvd - (trade_price * trade_qty)
     } else {
@@ -80,4 +90,3 @@ pub fn update_liquidation(
         metrics.sell_liquidation_vol += vol;
     }
 }
-
