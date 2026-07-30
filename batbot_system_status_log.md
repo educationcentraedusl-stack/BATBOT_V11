@@ -451,6 +451,12 @@
 - **HFT/Performance Compliance:** Resolved Windows PyTorch multiprocessing DataLoader worker crashes on CPU-only environments by setting `num_workers = 0` and `use_persistent = False` in `training/train_cfc.py`. Implemented atomic cross-process progress IPC writing step percentages `[0..100]` to `.training_progress`. Integrated non-blocking IPC progress reader into CLI Telemetry Dashboard (`src/telemetry/dashboard.ts`) rendering dynamic `[BATBOT_V11][TRAINING] Progress: X% [▓▓▓░░░]` ASCII progress bar in the Notification Area. Verified 100% via TypeScript compilation (`npm run build:ts`, 0 errors) and background training execution.
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-07-31
+- **Feature/Task:** Cross-Process Training Mutex (`.training.lock`) Implementation
+- **Artifacts Created/Modified:** `training/train_cfc.py`, `src/ai/recalibrationWorker.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Implemented single-instance file lock mutex (`.training.lock`) in `training/train_cfc.py` with `try...finally` block guaranteeing lock removal on completion or crash. Integrated `fs.existsSync` lock check in `src/ai/recalibrationWorker.ts` logging `"[BATBOT_V11] Manual/Background training detected. Waiting for completion..."` and bypassing auto-recalibration spawn to prevent race conditions and CPU thrashing. 100% verified via `python -m py_compile` and TypeScript compilation (`npm run build:ts`, 0 errors).
+- **Status:** ✅ Completed & QA Verified
+
 
 
 

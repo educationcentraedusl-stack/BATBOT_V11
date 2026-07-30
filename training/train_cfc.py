@@ -28,6 +28,7 @@ from data_config import (
 )
 
 PROGRESS_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".training_progress"))
+LOCK_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".training.lock"))
 
 def update_training_progress(pct: int):
     try:
@@ -352,4 +353,17 @@ def train_cfc():
     print("=" * 75)
 
 if __name__ == "__main__":
-    train_cfc()
+    if os.path.exists(LOCK_FILE):
+        print("Training already in progress.")
+        sys.exit(1)
+
+    try:
+        with open(LOCK_FILE, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+        train_cfc()
+    finally:
+        if os.path.exists(LOCK_FILE):
+            try:
+                os.remove(LOCK_FILE)
+            except Exception:
+                pass

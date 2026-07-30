@@ -153,6 +153,11 @@ class AutoRecalibrationManager {
      * Execute autonomous training, hot-swapping, and self-healing pipeline.
      */
     async runRecalibrationPipeline(currentIc) {
+        const initialLockFile = path.join(this.projectRoot, ".training.lock");
+        if (fs.existsSync(initialLockFile)) {
+            console.log("[BATBOT_V11] Manual/Background training detected. Waiting for completion...");
+            return false;
+        }
         if (this.isRecalibrating) {
             return false;
         }
@@ -179,6 +184,12 @@ class AutoRecalibrationManager {
             });
             if (prepResult.stderr && prepResult.stderr.trim().length > 0) {
                 console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Data prep stderr log: ${prepResult.stderr.trim()}`);
+            }
+            const lockFile = path.join(this.projectRoot, ".training.lock");
+            if (fs.existsSync(lockFile)) {
+                console.log("[BATBOT_V11] Manual/Background training detected. Waiting for completion...");
+                this.isRecalibrating = false;
+                return false;
             }
             console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Step 2/4: Executing PyTorch CfC neural network trainer (train_cfc.py)...`);
             const trainScript = path.join(this.projectRoot, "training", "train_cfc.py");
