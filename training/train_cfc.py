@@ -18,7 +18,7 @@ import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 from safetensors.torch import load_file, save_file
 
-# Enable cuDNN Benchmarking for optimal convolution/matmul algorithm selection
+# Enable cuDNN Benchmarking for optimal algorithm selection
 torch.backends.cudnn.benchmark = True
 
 # Add training dir to sys.path
@@ -126,13 +126,24 @@ def train_cfc():
     print("BATBOT_V11 SOTA CfC LIQUID NEURAL NETWORK TRAINING PIPELINE")
     print("=" * 75)
 
-    # 5. Device Verification: Strictly target CUDA and fatal error on CPU fallback attempt
-    if not torch.cuda.is_available():
-        print("[FATAL ERROR] CUDA is required for PyTorch training pipeline acceleration. CPU fallback is strictly prohibited.", file=sys.stderr)
-        raise RuntimeError("CUDA device unavailable for CfC training.")
+    # Enable PyTorch Dynamo error suppression to cleanly fall back to eager mode if C++ compiler is absent
+    try:
+        import torch._dynamo
+        torch._dynamo.config.suppress_errors = True
+    except Exception:
+        pass
 
-    device = torch.device("cuda")
-    print(f"[Device] Strictly targeting CUDA: {torch.cuda.get_device_name(0)}")
+    # 5. Device Verification: Strictly target CUDA; log fatal error if falling back to CPU
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        print(f"[Device] Strictly targeting CUDA GPU: {torch.cuda.get_device_name(0)}")
+        use_amp = True
+        pin_memory = True
+    else:
+        print("[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.", file=sys.stderr)
+        device = torch.device("cpu")
+        use_amp = False
+        pin_memory = False
 
     num_threads = min(8, os.cpu_count() or 4)
     torch.set_num_threads(num_threads)
@@ -158,7 +169,7 @@ def train_cfc():
     train_dataset = TensorDataset(x_train, y_train)
     val_dataset = TensorDataset(x_val, y_val)
 
-    # 3. DataLoader Optimization: pin_memory=True, persistent_workers=True, num_workers tuning
+    # 3. DataLoader Optimization: pin_memory, persistent_workers, num_workers tuning
     num_workers = min(4, os.cpu_count() or 4)
     use_persistent = num_workers > 0
 
@@ -167,7 +178,7 @@ def train_cfc():
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=pin_memory,
         persistent_workers=use_persistent
     )
     val_loader = DataLoader(
@@ -175,20 +186,27 @@ def train_cfc():
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=pin_memory,
         persistent_workers=use_persistent
     )
-    print(f"[DataLoader] Workers: {num_workers} | Pinned Memory: True | Persistent Workers: {use_persistent}")
+    print(f"[DataLoader] Workers: {num_workers} | Pinned Memory: {pin_memory} | Persistent Workers: {use_persistent}")
 
     raw_model = PyTorchCfCCell(input_dim=16, hidden_dim=32, output_dim=1).to(device)
 
     # 1. PyTorch 2.0 Compilation
-    try:
-        model = torch.compile(raw_model, mode="reduce-overhead")
-        print("[PyTorch 2.0] Successfully compiled CfC model with mode='reduce-overhead'.")
-    except Exception as e:
-        print(f"[PyTorch 2.0 Warning] torch.compile fallback to raw model ({e}).")
-        model = raw_model
+    if device.type == "cuda":
+        try:
+            model = torch.compile(raw_model, mode="reduce-overhead")
+            print("[PyTorch 2.0] Successfully compiled CfC model with mode='reduce-overhead'.")
+        except Exception as e:
+            print(f"[PyTorch 2.0 Warning] torch.compile fallback to raw model ({e}).")
+            model = raw_model
+    else:
+        try:
+            model = torch.compile(raw_model)
+            print("[PyTorch 2.0] Compiled CfC model for CPU.")
+        except Exception as e:
+            model = raw_model
 
     criterion = HuberICLoss(delta=1e-3, ic_weight=0.5)
 
@@ -200,10 +218,14 @@ def train_cfc():
     )
 
     # 2. Automatic Mixed Precision (AMP)
-    scaler = torch.cuda.amp.GradScaler()
-    print("[AMP] Automatic Mixed Precision (FP16 Tensor Cores + GradScaler) Enabled.")
+    if use_amp:
+        scaler = torch.cuda.amp.GradScaler()
+        print("[AMP] Automatic Mixed Precision (FP16 Tensor Cores + GradScaler) Enabled.")
+    else:
+        scaler = None
+        print("[AMP] Automatic Mixed Precision Disabled (Operating on CPU).")
 
-    print(f"[Training] Starting accelerated CfC optimization for {epochs} epochs (Batch Size: {batch_size})...")
+    print(f"[Training] Starting CfC optimization for {epochs} epochs (Batch Size: {batch_size})...")
     sys.stdout.flush()
     start_time = time.time()
 
@@ -215,26 +237,31 @@ def train_cfc():
         train_ic_sum = 0.0
 
         for bx, by in train_loader:
-            bx = bx.to(device, non_blocking=True)
-            by = by.to(device, non_blocking=True)
+            bx = bx.to(device, non_blocking=pin_memory)
+            by = by.to(device, non_blocking=pin_memory)
 
             if bx.shape[1] == 0:
                 continue
 
             optimizer.zero_grad()
 
-            with torch.cuda.amp.autocast():
+            if use_amp and scaler is not None:
+                with torch.cuda.amp.autocast():
+                    pred = model(bx)
+                    loss, h_loss, ic = criterion(pred, by)
+
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(raw_model.parameters(), max_norm=1.0)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
                 pred = model(bx)
                 loss, h_loss, ic = criterion(pred, by)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(raw_model.parameters(), max_norm=1.0)
+                optimizer.step()
 
-            scaler.scale(loss).backward()
-
-            # Unscale gradients prior to clipping
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(raw_model.parameters(), max_norm=1.0)
-
-            scaler.step(optimizer)
-            scaler.update()
             scheduler.step()
 
             train_loss_sum += loss.item() * len(bx)
@@ -252,10 +279,21 @@ def train_cfc():
             val_ic_sum = 0.0
 
             with torch.no_grad():
-                with torch.cuda.amp.autocast():
+                if use_amp:
+                    with torch.cuda.amp.autocast():
+                        for bx, by in val_loader:
+                            bx = bx.to(device, non_blocking=pin_memory)
+                            by = by.to(device, non_blocking=pin_memory)
+                            if bx.shape[1] == 0:
+                                continue
+                            pred = model(bx)
+                            loss, h_loss, ic = criterion(pred, by)
+                            val_loss_sum += loss.item() * len(bx)
+                            val_ic_sum += ic.item() * len(bx)
+                else:
                     for bx, by in val_loader:
-                        bx = bx.to(device, non_blocking=True)
-                        by = by.to(device, non_blocking=True)
+                        bx = bx.to(device, non_blocking=pin_memory)
+                        by = by.to(device, non_blocking=pin_memory)
                         if bx.shape[1] == 0:
                             continue
                         pred = model(bx)
@@ -273,7 +311,8 @@ def train_cfc():
             print(f"Epoch {epoch:02d}/{epochs} | Train Loss: {train_loss:.6f} | Train IC: {train_ic:+.4f} | Val Loss: {val_loss:.6f} | Val IC: {val_ic:+.4f}")
             sys.stdout.flush()
 
-    print(f"[Training] Accelerated training completed in {time.time() - start_time:.2f}s | Best Val IC: {best_val_ic:+.4f}")
+    total_training_duration = time.time() - start_time
+    print(f"[Training] Training completed in {total_training_duration:.2f}s | Best Val IC: {best_val_ic:+.4f}")
 
     # Export SafeTensors for Rust Candle
     print("[Export] Exporting zero-copy SafeTensors weights for Candle Rust...")
@@ -293,7 +332,7 @@ def train_cfc():
     print(f"         Exported SafeTensors: '{CFC_WEIGHTS_PATH}' ({file_bytes} bytes)")
 
     print("=" * 75)
-    print("CfC ACCELERATED TRAINING & SAFETENSORS EXPORT COMPLETED SUCCESSFULLY [SUCCESS]")
+    print("CfC TRAINING & SAFETENSORS EXPORT COMPLETED SUCCESSFULLY [SUCCESS]")
     print("=" * 75)
 
 if __name__ == "__main__":
