@@ -89,9 +89,6 @@ class RemoteRecalibrationClient {
             }
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-            // Create Web ReadableStream from Node Readable stream for chunked upload streaming (duplex: 'half')
-            const datasetReadStream = fs.createReadStream(datasetPath);
-            const webDatasetStream = stream_1.Readable.toWeb(datasetReadStream);
             const headers = {
                 "Content-Type": "application/octet-stream",
                 "Content-Length": datasetStat.size.toString(),
@@ -100,13 +97,20 @@ class RemoteRecalibrationClient {
             if (process.env.HFT_SECRET_TOKEN) {
                 headers["Authorization"] = `Bearer ${process.env.HFT_SECRET_TOKEN}`;
             }
+            // Read directly into Buffer for payload < 50MB to prevent stream backpressure stalls on Node fetch
+            const isLargeFile = datasetStat.size > 50 * 1024 * 1024;
+            const bodyPayload = isLargeFile
+                ? stream_1.Readable.toWeb(fs.createReadStream(datasetPath))
+                : fs.readFileSync(datasetPath);
             const fetchOptions = {
                 method: "POST",
                 headers,
-                body: webDatasetStream,
-                duplex: "half",
+                body: bodyPayload,
                 signal: controller.signal,
             };
+            if (isLargeFile) {
+                fetchOptions.duplex = "half";
+            }
             if (customAgent) {
                 fetchOptions.dispatcher = customAgent;
             }

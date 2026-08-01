@@ -2141,3 +2141,4 @@ Training already in progress.
 --- PYTHON STDERR TRACEBACK ---
 [FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
 [2026-08-01T12:18:59.520Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-01T13:14:00.304Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.

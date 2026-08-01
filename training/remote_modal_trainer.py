@@ -180,7 +180,7 @@ def execute_training_pipeline(body_bytes: bytes) -> bytes:
     if train_samples == 0:
         raise ValueError("Dataset contains 0 train sequences.")
 
-    batch_size = 2048
+    batch_size = 8192
     train_dataset = TensorDataset(x_train, y_train)
     val_dataset = TensorDataset(x_val, y_val)
 
@@ -188,21 +188,12 @@ def execute_training_pipeline(body_bytes: bytes) -> bytes:
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
     raw_model = RemoteCfCCell(input_dim=16, hidden_dim=32, output_dim=1).to(device)
-
-    # Enable PyTorch 2.6 kernel fusion and CUDA compilation (mode="default" to avoid heavy Triton autotuning delay)
-    if device.type == "cuda":
-        try:
-            model = torch.compile(raw_model, mode="default", dynamic=False)
-            print("[PyTorch 2.6] Successfully compiled CfC model with mode='default', dynamic=False.")
-        except Exception as e:
-            print(f"[PyTorch 2.6 Compile Warning] torch.compile fallback to raw model ({e}).")
-            model = raw_model
-    else:
-        model = raw_model
+    # Eager mode execution eliminates 20s graph compilation overhead on serverless GPU containers
+    model = raw_model
 
     criterion = HuberICLoss(delta=1e-3, ic_weight=0.5)
 
-    epochs = 35
+    epochs = 20
     total_steps = max(1, epochs * len(train_loader))
     optimizer = torch.optim.AdamW(raw_model.parameters(), lr=2e-3, weight_decay=1e-4, amsgrad=True)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
