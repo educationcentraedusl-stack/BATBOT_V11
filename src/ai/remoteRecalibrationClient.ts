@@ -50,12 +50,27 @@ export class RemoteRecalibrationClient {
     const startTime = Date.now();
 
     try {
+      let customAgent: any = undefined;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const undici = require("undici");
+        if (typeof undici.Agent === "function") {
+          customAgent = new undici.Agent({
+            headersTimeout: 0,
+            bodyTimeout: 0,
+            connectTimeout: 300000,
+          });
+        }
+      } catch {
+        // ignore if undici not loadable
+      }
+
       const datasetBuffer = await fs.promises.readFile(datasetPath);
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-      const response = await fetch(endpointUrl, {
+      const fetchOptions: any = {
         method: "POST",
         headers: {
           "Content-Type": "application/octet-stream",
@@ -64,7 +79,13 @@ export class RemoteRecalibrationClient {
         },
         body: datasetBuffer,
         signal: controller.signal,
-      });
+      };
+
+      if (customAgent) {
+        fetchOptions.dispatcher = customAgent;
+      }
+
+      const response = await fetch(endpointUrl, fetchOptions);
 
       clearTimeout(timeoutId);
 

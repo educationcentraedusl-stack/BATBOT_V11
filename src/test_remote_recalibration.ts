@@ -48,7 +48,7 @@ async function runRemoteRecalibrationTest() {
   const success = await remoteClient.trainRemotely({
     datasetPath,
     weightsPath,
-    timeoutMs: 180000,
+    timeoutMs: 600000,
   });
 
   const remoteTime = Date.now() - remoteStart;

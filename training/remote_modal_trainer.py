@@ -135,56 +135,25 @@ class HuberICLoss(nn.Module):
         return loss, h_loss, ic
 
 
-# 4. Serverless GPU Webhook Function
-@app.function(gpu="T4", image=image, timeout=300)
-@modal.fastapi_endpoint(method="POST")
-async def train_cfc_webhook(request: fastapi.Request) -> Response:
-    """
-    High-Speed Serverless Training Webhook:
-    - Receives dataset SafeTensors binary payload via HTTP POST body.
-    - Trains PyTorch CfC cell on NVIDIA GPU using CUDA + AMP FP16.
-    - Returns serialized SafeTensors weight buffer.
-    """
+def execute_training_pipeline(body_bytes: bytes) -> bytes:
     start_time = time.time()
-
-    # Read incoming binary payload
-    body_bytes = await request.body()
-    if not body_bytes or len(body_bytes) < 64:
-        return Response(
-            content=b"Error: Invalid or empty SafeTensors dataset payload.",
-            status_code=400,
-            media_type="text/plain",
-        )
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[Modal Worker] Device target: {device} ({torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'})")
 
-    # Deserialize dataset SafeTensors directly from memory
-    try:
-        dataset_tensors = load(body_bytes)
-        x_train = dataset_tensors["train_inputs"].to(device, non_blocking=True)
-        y_train = dataset_tensors["train_targets"].to(device, non_blocking=True)
-        x_val = dataset_tensors["val_inputs"].to(device, non_blocking=True)
-        y_val = dataset_tensors["val_targets"].to(device, non_blocking=True)
-    except Exception as e:
-        return Response(
-            content=f"Error parsing SafeTensors dataset payload: {str(e)}".encode("utf-8"),
-            status_code=400,
-            media_type="text/plain",
-        )
+    dataset_tensors = load(body_bytes)
+    x_train = dataset_tensors["train_inputs"].to(device, non_blocking=True)
+    y_train = dataset_tensors["train_targets"].to(device, non_blocking=True)
+    x_val = dataset_tensors["val_inputs"].to(device, non_blocking=True)
+    y_val = dataset_tensors["val_targets"].to(device, non_blocking=True)
 
     train_samples = x_train.shape[0]
     val_samples = x_val.shape[0]
     print(f"[Modal Worker] Dataset received: {train_samples} train sequences, {val_samples} val sequences.")
 
     if train_samples == 0:
-        return Response(
-            content=b"Error: Dataset contains 0 train sequences.",
-            status_code=400,
-            media_type="text/plain",
-        )
+        raise ValueError("Dataset contains 0 train sequences.")
 
-    batch_size = 256
+    batch_size = 2048
     train_dataset = TensorDataset(x_train, y_train)
     val_dataset = TensorDataset(x_val, y_val)
 
@@ -196,18 +165,18 @@ async def train_cfc_webhook(request: fastapi.Request) -> Response:
 
     epochs = 35
     total_steps = max(1, epochs * len(train_loader))
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4, amsgrad=True)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=2e-3, weight_decay=1e-4, amsgrad=True)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=1e-3, total_steps=total_steps, pct_start=0.1
+        optimizer, max_lr=2e-3, total_steps=total_steps, pct_start=0.1
     )
 
     use_amp = device.type == "cuda"
-    scaler = torch.cuda.amp.GradScaler() if use_amp else None
+    scaler = torch.amp.GradScaler('cuda') if use_amp else None
 
-    # High-Performance Training Loop
     best_val_ic = -1.0
     for epoch in range(1, epochs + 1):
         model.train()
+        last_loss = 0.0
         for bx, by in train_loader:
             if bx.shape[1] == 0:
                 continue
@@ -215,7 +184,7 @@ async def train_cfc_webhook(request: fastapi.Request) -> Response:
             optimizer.zero_grad()
 
             if use_amp and scaler is not None:
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     pred = model(bx)
                     loss, h_loss, ic = criterion(pred, by)
 
@@ -231,9 +200,9 @@ async def train_cfc_webhook(request: fastapi.Request) -> Response:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
 
+            last_loss = loss.item()
             scheduler.step()
 
-        # Quick validation evaluation
         if val_samples > 0:
             model.eval()
             val_ic_sum = 0.0
@@ -243,7 +212,7 @@ async def train_cfc_webhook(request: fastapi.Request) -> Response:
                     if bx.shape[1] == 0:
                         continue
                     if use_amp:
-                        with torch.cuda.amp.autocast():
+                        with torch.amp.autocast('cuda'):
                             pred = model(bx)
                             _, _, ic = criterion(pred, by)
                     else:
@@ -257,10 +226,12 @@ async def train_cfc_webhook(request: fastapi.Request) -> Response:
             if val_ic > best_val_ic:
                 best_val_ic = val_ic
 
+        if epoch % 5 == 0 or epoch == epochs:
+            print(f"[Modal GPU Epoch {epoch:02d}/{epochs}] Loss: {last_loss:.6f} | Best Val IC: {best_val_ic:+.4f}")
+
     exec_duration = time.time() - start_time
     print(f"[Modal Worker] Training complete in {exec_duration:.3f}s | Best Val IC: {best_val_ic:+.4f}")
 
-    # Serialize trained weights into SafeTensors byte buffer
     weight_tensors = {
         "w_alpha": model.w_alpha.detach().cpu().contiguous(),
         "b_alpha": model.b_alpha.detach().cpu().contiguous(),
@@ -270,7 +241,64 @@ async def train_cfc_webhook(request: fastapi.Request) -> Response:
         "b_output": model.b_output.detach().cpu().contiguous(),
     }
 
-    serialized_weights = save(weight_tensors)
-    print(f"[Modal Worker] Exported SafeTensors binary stream ({len(serialized_weights)} bytes). Returning HTTP 200.")
+    return save(weight_tensors)
 
-    return Response(content=serialized_weights, media_type="application/octet-stream")
+
+# 4. Modal Functions & Webhook Entrypoints
+@app.function(gpu="T4", image=image, timeout=900)
+def train_cfc_direct(body_bytes: bytes) -> bytes:
+    """
+    Direct Modal Function for Python SDK invocation over gRPC.
+    """
+    return execute_training_pipeline(body_bytes)
+
+
+@app.function(gpu="T4", image=image, timeout=900)
+@modal.fastapi_endpoint(method="POST")
+async def train_cfc_webhook(request: fastapi.Request) -> Response:
+    """
+    High-Speed Serverless Training Webhook for HTTP POST invocation.
+    """
+    body_bytes = await request.body()
+    if not body_bytes or len(body_bytes) < 64:
+        return Response(
+            content=b"Error: Invalid or empty SafeTensors dataset payload.",
+            status_code=400,
+            media_type="text/plain",
+        )
+
+    try:
+        serialized_weights = execute_training_pipeline(body_bytes)
+        return Response(content=serialized_weights, media_type="application/octet-stream")
+    except Exception as e:
+        return Response(
+            content=f"Error in training pipeline: {str(e)}".encode("utf-8"),
+            status_code=500,
+            media_type="text/plain",
+        )
+
+
+@app.local_entrypoint()
+def main():
+    import os
+    project_root = os.getcwd()
+    dataset_path = os.path.join(project_root, "data", "cfc_features.safetensors")
+    weights_path = os.path.join(project_root, "models", "cfc_weights.safetensors")
+
+    if not os.path.exists(dataset_path):
+        print(f"❌ Dataset file missing at '{dataset_path}'")
+        return
+
+    print(f"[Local Entrypoint] Reading dataset from '{dataset_path}' ({os.path.getsize(dataset_path)} bytes)...")
+    with open(dataset_path, "rb") as f:
+        dataset_bytes = f.read()
+
+    print("[Local Entrypoint] Offloading to Modal Serverless Cloud GPU (NVIDIA T4)...")
+    weights_bytes = train_cfc_direct.remote(dataset_bytes)
+
+    os.makedirs(os.path.dirname(weights_path), exist_ok=True)
+    with open(weights_path, "wb") as f:
+        f.write(weights_bytes)
+
+    print(f"[Local Entrypoint] SUCCESS: SafeTensors weights saved ({len(weights_bytes)} bytes) to '{weights_path}'!")
+

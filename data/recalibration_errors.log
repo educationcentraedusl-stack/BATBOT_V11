@@ -2130,3 +2130,13 @@ Training already in progress.
 [FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
 [2026-07-30T21:29:12.187Z] [RECALIBRATION_FAILURE] [MODAL GPU OVERRIDE FAILURE] Modal GPU returned failure. Check endpoint URL (https://educationcentra-edu-sl--batbot-cfc-trainer-train-cfc-webhook.modal.run) or server logs.
 [2026-07-30T21:40:53.223Z] [RECALIBRATION_FAILURE] [MODAL GPU OVERRIDE FAILURE] Modal GPU returned failure. Check endpoint URL (https://educationcentra-edu-sl--batbot-cfc-trainer-train-cfc-webhook.modal.run) or server logs.
+[2026-08-01T08:44:18.451Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDERR TRACEBACK ---
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
+[2026-08-01T10:27:38.967Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\train_cfc.py
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDERR TRACEBACK ---
+[FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.

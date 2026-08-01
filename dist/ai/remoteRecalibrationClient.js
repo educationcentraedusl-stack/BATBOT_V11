@@ -69,10 +69,25 @@ class RemoteRecalibrationClient {
         console.log(`[BATBOT_V11][REMOTE-TRAINING] Uploading SafeTensors dataset (${datasetStat.size} bytes) to Modal Serverless GPU (${endpointUrl})...`);
         const startTime = Date.now();
         try {
+            let customAgent = undefined;
+            try {
+                // eslint-disable-next-line @typescript-eslint/no-var-requires
+                const undici = require("undici");
+                if (typeof undici.Agent === "function") {
+                    customAgent = new undici.Agent({
+                        headersTimeout: 0,
+                        bodyTimeout: 0,
+                        connectTimeout: 300000,
+                    });
+                }
+            }
+            catch {
+                // ignore if undici not loadable
+            }
             const datasetBuffer = await fs.promises.readFile(datasetPath);
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-            const response = await fetch(endpointUrl, {
+            const fetchOptions = {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/octet-stream",
@@ -81,7 +96,11 @@ class RemoteRecalibrationClient {
                 },
                 body: datasetBuffer,
                 signal: controller.signal,
-            });
+            };
+            if (customAgent) {
+                fetchOptions.dispatcher = customAgent;
+            }
+            const response = await fetch(endpointUrl, fetchOptions);
             clearTimeout(timeoutId);
             if (!response.ok) {
                 const errorText = await response.text();
