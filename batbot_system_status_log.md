@@ -517,6 +517,10 @@
 - **Feature/Task:** Modal Cloud GPU Deployment Environment Variable Update
 - **Artifacts Created/Modified:** `.env`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Updated `MODAL_TRAINING_URL` to point to newly deployed web function (`https://dhanushka-stu-kcc1993--batbot-cfc-trainer-train-cfc-webhook.modal.run`) and configured `HFT_SECRET_TOKEN` (`batbot_dhanushka_123`) for authenticating remote GPU recalibration requests.
+- **Date:** 2026-08-01
+- **Feature/Task:** 2026 SOTA Recalibration State Machine Lock & CLI Prompt Isolation
+- **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/strategy/risk.ts`, `src/ai/recalibrationWorker.ts`, `src/telemetry/terminalMux.ts`, `src/telemetry/dashboard.ts`, `src/index.ts`, `src/test_recalibration_pipeline.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Implemented 2026 SOTA Finite State Machine (`EngineState`: `LIVE_ACTIVE`, `TRAINING_LOCK`, `RECALIBRATING`, `PAUSED`, `EMERGENCY_HALT`) in `StrategyEngine`. When model drift occurs, the engine enters `TRAINING_LOCK` to continuously drain SAB ticks into telemetry metrics while imposing a strict Safety Clamp that suppresses entry signals (`TRAINING_LOCK_ACTIVE`) and log output. Built `TerminalOutputMux` to intercept and buffer `process.stdout.write` during interactive Readline prompt sessions, preventing log bleeding over CLI prompts. Implemented atomic single-flight mutex lock and state transition callbacks in `AutoRecalibrationManager` with 15-second prompt auto-timeout fallback. Updated `CLIDashboard` to render `[TRAINING_LOCK]` state in telemetry header. Verified 100% via TypeScript compilation (`npx tsc --noEmit`, 0 errors) and automated pipeline test suite (`npx ts-node src/test_recalibration_pipeline.ts` passing all 5 tests).
 - **Status:** ✅ Completed & QA Verified
 
 

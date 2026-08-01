@@ -104,10 +104,18 @@ export class CLIDashboard {
     let output = "";
     output += "\x1b[H"; // Move cursor to top-left (0,0) without full screen erase to eliminate flicker
 
+    const engineStatusStr = frame.riskStatus.includes("TRAINING_LOCK")
+      ? "\x1b[33m\x1b[1m[TRAINING_LOCK]\x1b[0m"
+      : frame.riskStatus.includes("RECALIBRATING")
+      ? "\x1b[33m\x1b[1m[RECALIBRATING]\x1b[0m"
+      : frame.isEngineActive
+      ? "\x1b[32m[LIVE ACTIVE]\x1b[0m"
+      : "\x1b[33m[IDLE/PAUSED]\x1b[0m";
+
     output += borderLine;
     output += `${cyan}${bold}                               BATBOT_V11 HFT ENGINE TELEMETRY & COMMAND MONITOR                                      ${reset}${clearLine}\n`;
     output += borderLine;
-    output += ` Status: ${frame.isEngineActive ? "\x1b[32m[LIVE ACTIVE]\x1b[0m" : "\x1b[33m[IDLE/PAUSED]\x1b[0m"}  |  Memory: ${memMb} MB  |  Sequence: #${frame.sequenceNum.toString()}${clearLine}\n`;
+    output += ` Status: ${engineStatusStr}  |  Memory: ${memMb} MB  |  Sequence: #${frame.sequenceNum.toString()}${clearLine}\n`;
     output += ` Tick Latency: ${yellow}${frame.tickEvaluationLatencyUs.toFixed(3)} µs${reset}  |  Avg Latency: ${frame.stats.avgTickLatencyUs.toFixed(3)} µs  |  Queue Depth: ${frame.stats.bufferQueueDepth}${clearLine}\n`;
     output += subDivider;
     output += `${bold}--- ORDER BOOK & MICROSTRUCTURE METRICS (${frame.symbol}) ---${reset}${clearLine}\n`;

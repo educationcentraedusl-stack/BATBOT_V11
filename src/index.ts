@@ -119,6 +119,9 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
   const telemetryServer = new TelemetryWSServer(telemetryPort);
   const recalibrationManager = AutoRecalibrationManager.getInstance();
   recalibrationManager.setSustainedDriftThreshold(50);
+  recalibrationManager.setOnStateChangeCallback((state) => {
+    strategyEngine.setEngineState(state);
+  });
 
   let isRunning = true;
   let tickInterval: NodeJS.Timeout | null = null;
@@ -271,7 +274,9 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
         winningTrades: posSummary.winningTrades,
         losingTrades: posSummary.losingTrades,
       }),
-      riskStatus: tickResult.riskResult
+      riskStatus: strategyEngine.getEngineState() !== "LIVE_ACTIVE"
+        ? `[${strategyEngine.getEngineState()}]`
+        : tickResult.riskResult
         ? tickResult.riskResult.passed
           ? "PASSED"
           : `REJECTED (${tickResult.riskResult.reasonCode})`

@@ -26,6 +26,8 @@ export interface StrategyConfig {
   leverageMultiplier: number;
 }
 
+export type EngineState = "LIVE_ACTIVE" | "TRAINING_LOCK" | "RECALIBRATING" | "PAUSED" | "EMERGENCY_HALT";
+
 export interface StrategySignalResult {
   sequenceNum: bigint;
   signalType: "NONE" | "BUY" | "SELL";
@@ -51,6 +53,7 @@ export class StrategyEngine {
   private config: StrategyConfig;
   private dynamicRiskEngine: DynamicRiskEngine = new DynamicRiskEngine();
   private lastProcessedSequence: bigint = -1n;
+  private state: EngineState = "LIVE_ACTIVE";
 
   private reusableOrderIntent: OrderIntent = {
     symbol: process.env.SYMBOL ?? "BTCUSDT",
@@ -144,6 +147,18 @@ export class StrategyEngine {
     this.positionLedger = positionLedger ?? this.hedgeLedger.getLegacyLedger();
     this.reusableOrderIntent.symbol = this.config.symbol;
     this.reusableOrderIntent.quantity = this.config.orderQuantity;
+  }
+
+  public getEngineState(): EngineState {
+    return this.state;
+  }
+
+  public setEngineState(newState: EngineState): void {
+    const oldState = this.state;
+    this.state = newState;
+    if (oldState !== newState) {
+      console.log(`[ENGINE_STATE] State Transition: ${oldState} -> ${newState}`);
+    }
   }
 
   public getPositionLedger(): PositionLedger {
@@ -280,6 +295,30 @@ export class StrategyEngine {
           exitReason: trigger.reason,
         };
       }
+    }
+
+    // Safety Clamp: Suppress new signal generation when engine is not in LIVE_ACTIVE state
+    if (this.state !== "LIVE_ACTIVE") {
+      const reasonCode =
+        this.state === "TRAINING_LOCK"
+          ? "TRAINING_LOCK_ACTIVE"
+          : this.state === "RECALIBRATING"
+          ? "RECALIBRATING_ACTIVE"
+          : "ENGINE_PAUSED";
+
+      this.staticResult.sequenceNum = seq;
+      this.staticResult.signalType = "NONE";
+      this.staticResult.obi = obi;
+      this.staticResult.cvd = cvd;
+      this.staticResult.spreadVelocity = spreadVelocity;
+      this.staticResult.bidPrice = bidPrice;
+      this.staticResult.askPrice = askPrice;
+      this.staticResult.riskResult = {
+        passed: false,
+        reasonCode: reasonCode,
+        message: `Engine signal evaluation paused due to state: ${this.state}`,
+      };
+      return this.staticResult;
     }
 
     let signalType: "NONE" | "BUY" | "SELL" = "NONE";

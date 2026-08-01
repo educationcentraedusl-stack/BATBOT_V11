@@ -5,6 +5,7 @@ import { promisify } from "util";
 import * as readline from "readline";
 import { RemoteRecalibrationClient } from "./remoteRecalibrationClient";
 import { CLIDashboard } from "../telemetry/dashboard";
+import { TerminalOutputMux } from "../telemetry/terminalMux";
 
 const execFileAsync = promisify(execFile);
 
@@ -23,6 +24,7 @@ export interface RecalibrationStatus {
 }
 
 export type RecalibrationSuccessCallback = () => void;
+export type RecalibrationStateChangeCallback = (state: "TRAINING_LOCK" | "RECALIBRATING" | "LIVE_ACTIVE") => void;
 
 interface ChildProcessError extends Error {
   code?: number | string;
@@ -47,6 +49,7 @@ export class AutoRecalibrationManager {
   private totalRecalibrations = 0;
   private lastError: string | null = null;
   private onSuccessCallback: RecalibrationSuccessCallback | null = null;
+  private onStateChangeCallback: RecalibrationStateChangeCallback | null = null;
 
   private projectRoot: string;
   private dataDir: string;
@@ -71,6 +74,10 @@ export class AutoRecalibrationManager {
 
   public setOnSuccessCallback(callback: RecalibrationSuccessCallback): void {
     this.onSuccessCallback = callback;
+  }
+
+  public setOnStateChangeCallback(callback: RecalibrationStateChangeCallback): void {
+    this.onStateChangeCallback = callback;
   }
 
   public setSustainedDriftThreshold(ticks: number): void {
@@ -115,7 +122,6 @@ export class AutoRecalibrationManager {
     if (!this.isShadowMode || this.isRecalibrating || this.isPromptActive) return;
 
     this.shadowTickCounter++;
-    // Periodically trigger background model retraining in Shadow Mode every 300 ticks (~3 seconds)
     if (
       this.shadowTickCounter >= 300 &&
       !this.isRecalibrating &&
@@ -128,9 +134,6 @@ export class AutoRecalibrationManager {
     }
   }
 
-  /**
-   * Monitor tick metrics for model drift and programmatically trigger self-healing.
-   */
   public evaluateTickDrift(ic: number, isDrifted: boolean): void {
     if (this.isRecalibrating || this.isPromptActive) {
       return;
@@ -144,7 +147,6 @@ export class AutoRecalibrationManager {
         !this.isPromptActive &&
         Date.now() - this.lastAttemptTimestamp >= this.cooldownMs
       ) {
-        // Trigger background auto-recalibration pipeline asynchronously
         void this.runRecalibrationPipeline(ic);
       }
     } else {
@@ -152,9 +154,6 @@ export class AutoRecalibrationManager {
     }
   }
 
-  /**
-   * Resolve the Python binary executable path, prioritizing the project's virtual environment.
-   */
   private getPythonExecutable(): string {
     const venvPythonWin = path.join(this.projectRoot, "training", ".venv", "Scripts", "python.exe");
     const venvPythonPosix = path.join(this.projectRoot, "training", ".venv", "bin", "python");
@@ -169,13 +168,10 @@ export class AutoRecalibrationManager {
     return process.platform === "win32" ? "python" : "python3";
   }
 
-  /**
-   * Prompt user interactively via console whether to use Modal Cloud GPU.
-   */
   private async promptUserForModalGPU(): Promise<boolean> {
     if (!process.stdin.isTTY) {
-      console.log("[BATBOT_V11] Non-interactive environment detected. Proceeding with default flow.");
-      return false;
+      console.log("[BATBOT_V11] Non-interactive environment detected. Proceeding with default Modal Cloud GPU flow.");
+      return true;
     }
 
     if (this.isPromptActive) {
@@ -183,7 +179,7 @@ export class AutoRecalibrationManager {
     }
 
     this.isPromptActive = true;
-    CLIDashboard.setPromptActive(true);
+    TerminalOutputMux.getInstance().startPromptSession();
 
     const rl = readline.createInterface({
       input: process.stdin,
@@ -192,22 +188,33 @@ export class AutoRecalibrationManager {
 
     try {
       return await new Promise<boolean>((resolve) => {
-        const promptMsg = "\n\x1b[33m\x1b[1m[BATBOT_V11] Recalibration triggered. Try Training via Modal Cloud GPU? (Y/N): \x1b[0m";
+        let isAnswered = false;
+        const timeout = setTimeout(() => {
+          if (!isAnswered) {
+            isAnswered = true;
+            rl.close();
+            process.stdout.write("\n\x1b[33m[BATBOT_V11] Prompt timeout (15s elapsed). Defaulting to Modal Cloud GPU training.\x1b[0m\n");
+            resolve(true);
+          }
+        }, 15000);
+
+        const promptMsg = "\n\x1b[33m\x1b[1m[BATBOT_V11] Recalibration triggered. Try Training via Modal Cloud GPU? (Y/N) [Auto-Y in 15s]: \x1b[0m";
         rl.question(promptMsg, (answer) => {
-          rl.close();
-          const input = answer.trim().toLowerCase();
-          resolve(input === "y" || input === "yes");
+          if (!isAnswered) {
+            isAnswered = true;
+            clearTimeout(timeout);
+            rl.close();
+            const input = answer.trim().toLowerCase();
+            resolve(input === "" || input === "y" || input === "yes");
+          }
         });
       });
     } finally {
-      CLIDashboard.setPromptActive(false);
+      TerminalOutputMux.getInstance().endPromptSession();
       this.isPromptActive = false;
     }
   }
 
-  /**
-   * Kill any running Python data prep processes.
-   */
   private killLocalPythonProcesses(): void {
     try {
       if (process.platform === "win32") {
@@ -221,9 +228,6 @@ export class AutoRecalibrationManager {
     }
   }
 
-  /**
-   * Clean up leftover lock files and stale progress indicators.
-   */
   private cleanupLockAndProgressFiles(): void {
     const lockFile = path.join(this.projectRoot, ".training.lock");
     const progressFile = path.join(this.projectRoot, ".training_progress");
@@ -236,38 +240,43 @@ export class AutoRecalibrationManager {
     }
   }
 
-  /**
-   * Execute autonomous training, hot-swapping, and self-healing pipeline.
-   */
   public async runRecalibrationPipeline(currentIc: number): Promise<boolean> {
     if (this.isRecalibrating || this.isPromptActive) {
       return false;
     }
 
+    // Single-Flight Atomic Mutex Acquisition
+    this.isRecalibrating = true;
+    if (this.onStateChangeCallback) {
+      this.onStateChangeCallback("TRAINING_LOCK");
+    }
+
     const lockFile = path.join(this.projectRoot, ".training.lock");
     const isLockDetected = fs.existsSync(lockFile);
 
-    console.log(
-      `[BATBOT_V11][AUTO-RECALIBRATION] Triggered auto-recalibration due to sustained MODEL_DRIFT (IC: ${currentIc.toFixed(4)}, Drift Ticks: ${this.driftTickCounter}).`
-    );
-
-    // Intercept automatic execution: Prompt user interactively
-    const useModal = await this.promptUserForModalGPU();
-
-    if (useModal) {
-      console.log("[BATBOT_V11][MODAL GPU OVERRIDE] User requested Modal Cloud GPU training. Clearing local locks...");
-      this.killLocalPythonProcesses();
-      this.cleanupLockAndProgressFiles();
-    } else if (isLockDetected) {
-      console.log("[BATBOT_V11] Manual/Background training detected. Waiting for completion...");
-      return false;
-    }
-
-    this.isRecalibrating = true;
-    this.lastAttemptTimestamp = Date.now();
-    this.lastError = null;
-
     try {
+      console.log(
+        `[BATBOT_V11][AUTO-RECALIBRATION] Triggered auto-recalibration due to sustained MODEL_DRIFT (IC: ${currentIc.toFixed(4)}, Drift Ticks: ${this.driftTickCounter}).`
+      );
+
+      const useModal = await this.promptUserForModalGPU();
+
+      if (useModal) {
+        console.log("[BATBOT_V11][MODAL GPU OVERRIDE] User requested Modal Cloud GPU training. Clearing local locks...");
+        this.killLocalPythonProcesses();
+        this.cleanupLockAndProgressFiles();
+      } else if (isLockDetected) {
+        console.log("[BATBOT_V11] Manual/Background training detected. Waiting for completion...");
+        return false;
+      }
+
+      if (this.onStateChangeCallback) {
+        this.onStateChangeCallback("RECALIBRATING");
+      }
+
+      this.lastAttemptTimestamp = Date.now();
+      this.lastError = null;
+
       // Step 1: Ensure dataset signals log exists and has data
       if (!fs.existsSync(this.signalsPath)) {
         throw new Error(`Telemetry signals file missing at '${this.signalsPath}'. Cannot extract LOB tick features.`);
@@ -287,7 +296,7 @@ export class AutoRecalibrationManager {
       const prepResult = await execFileAsync(pythonCmd, [prepScript], {
         cwd: this.projectRoot,
         env: { ...process.env },
-        timeout: 300000, // 5 min timeout for data preparation
+        timeout: 300000,
       });
 
       if (prepResult.stderr && prepResult.stderr.trim().length > 0) {
@@ -333,7 +342,6 @@ export class AutoRecalibrationManager {
       this.driftTickCounter = 0;
       this.lastSuccessTimestamp = Date.now();
       this.totalRecalibrations++;
-      this.isRecalibrating = false;
 
       console.log(
         `[BATBOT_V11][AUTO-RECALIBRATION] Step 4/4: Self-healing pipeline COMPLETED SUCCESSFULLY! Model hot-swapped & IC tracking window reset.`
@@ -360,7 +368,6 @@ export class AutoRecalibrationManager {
       }
 
       this.lastError = errorMsg;
-      this.isRecalibrating = false;
 
       const logPayload = `[${new Date().toISOString()}] [RECALIBRATION_FAILURE] ${errorMsg}\n`;
       try {
@@ -374,8 +381,11 @@ export class AutoRecalibrationManager {
       );
 
       return false;
+    } finally {
+      this.isRecalibrating = false;
+      if (this.onStateChangeCallback) {
+        this.onStateChangeCallback("LIVE_ACTIVE");
+      }
     }
   }
 }
-
-
