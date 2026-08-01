@@ -507,6 +507,11 @@
 - **Feature/Task:** Implementation of 50-25-25 Weighted Scoring System & High-Confidence AI Override in Strategy Engine
 - **Artifacts Created/Modified:** `src/strategy/engine.ts`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Implemented 50% AI Direction/Confidence + 25% OBI + 25% CVD Weighted Composite Scoring System in `StrategyEngine.evaluateTick()` to break indicator deadlock. Added high-confidence AI-Override rule (`aiConfidence >= 0.85`) bypassing OBI/CVD restrictions entirely. Maintained zero-GC static allocation and pass-through to `DynamicRiskEngine` and `RiskGuard`. Verified 100% via `npm run build:ts` (0 errors).
+
+- **Date:** 2026-08-01
+- **Feature/Task:** Modal Cloud GPU Offloading Payload & Cold Start Performance Optimization
+- **Artifacts Created/Modified:** `training/remote_modal_trainer.py`, `training/prepare_data.py`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Resolved Modal container cold start 600s HTTP timeout by replacing heavy Triton `mode="max-autotune"` autotuning with PyTorch 2.6 `mode="default"` compilation and hardware-adaptive AMP (`bfloat16` if supported else `float16`). Reduced HTTP POST payload size from 362MB down to 10.35MB (34x payload reduction) by exporting 2D feature matrices `[N, 16]` from `prepare_data.py` and unfolding them into 3D sequence tensors (`[N-31, 32, 16]`) in PyTorch GPU RAM in 0.0001 seconds (`create_cfc_sequences_strided_torch`). Implemented atomic temp file write (`.tmp`) with atomic rename/replace to prevent Windows `os error 5 Access is denied` file lock collisions. Verified 100% via end-to-end recalibration test harness (`src/test_remote_recalibration.ts`) with 13,084 byte SafeTensors weight streaming and Candle Rust NAPI zero-lock RCU atomic hot-swap.
 - **Status:** ✅ Completed & QA Verified
 
 

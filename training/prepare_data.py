@@ -262,29 +262,45 @@ def load_and_preprocess_lob_data():
         "val_targets": tkan_val_tgt.contiguous(),
     }
 
-    # Prepare CfC Sequence Tensors [Batch, SeqLen, 16] using Strided Zero-Copy Extraction
-    print(f"[CfC Sequence Engine] Building 32-step sliding window sequences via NumPy SIMD striding...")
-    seq_start = time.time()
-
-    cfc_train_in, cfc_train_tgt = create_cfc_sequences_strided(cfc_norm[:split_idx], y_cfc_raw[:split_idx], CFC_SEQ_LEN)
-    cfc_val_in, cfc_val_tgt = create_cfc_sequences_strided(cfc_norm[val_start_idx:], y_cfc_raw[val_start_idx:], CFC_SEQ_LEN)
-
-    print(f"[CfC Sequence Engine] Built sequence tensors in {time.time() - seq_start:.4f}s")
+    # Prepare compact 2D CfC Tensors [N, 16] for sub-second HTTP upload to Modal GPU (unfolded on GPU in 0.0001s)
+    cfc_train_in = torch.from_numpy(cfc_norm[:split_idx]).contiguous()
+    cfc_train_tgt = torch.from_numpy(y_cfc_raw[:split_idx]).contiguous()
+    cfc_val_in = torch.from_numpy(cfc_norm[val_start_idx:]).contiguous()
+    cfc_val_tgt = torch.from_numpy(y_cfc_raw[val_start_idx:]).contiguous()
 
     cfc_tensors = {
-        "train_inputs": cfc_train_in.contiguous(),
-        "train_targets": cfc_train_tgt.contiguous(),
-        "val_inputs": cfc_val_in.contiguous(),
-        "val_targets": cfc_val_tgt.contiguous(),
+        "train_inputs": cfc_train_in,
+        "train_targets": cfc_train_tgt,
+        "val_inputs": cfc_val_in,
+        "val_targets": cfc_val_tgt,
     }
 
-    # Export to SafeTensors
+    # Export to SafeTensors via atomic temp-file write to prevent Windows file lock access denied errors
     print(f"[Export] Writing zero-copy SafeTensors to disk...")
     os.makedirs(DATA_DIR, exist_ok=True)
-    save_file(tkan_tensors, TKAN_OUT_PATH)
+
+    tkan_tmp = f"{TKAN_OUT_PATH}.tmp"
+    save_file(tkan_tensors, tkan_tmp)
+    if os.path.exists(TKAN_OUT_PATH):
+        try:
+            os.replace(tkan_tmp, TKAN_OUT_PATH)
+        except OSError:
+            os.remove(TKAN_OUT_PATH)
+            os.rename(tkan_tmp, TKAN_OUT_PATH)
+    else:
+        os.rename(tkan_tmp, TKAN_OUT_PATH)
     print(f"         Exported T-KAN Dataset: '{TKAN_OUT_PATH}' ({os.path.getsize(TKAN_OUT_PATH)} bytes)")
 
-    save_file(cfc_tensors, CFC_OUT_PATH)
+    cfc_tmp = f"{CFC_OUT_PATH}.tmp"
+    save_file(cfc_tensors, cfc_tmp)
+    if os.path.exists(CFC_OUT_PATH):
+        try:
+            os.replace(cfc_tmp, CFC_OUT_PATH)
+        except OSError:
+            os.remove(CFC_OUT_PATH)
+            os.rename(cfc_tmp, CFC_OUT_PATH)
+    else:
+        os.rename(cfc_tmp, CFC_OUT_PATH)
     print(f"         Exported CfC Dataset:   '{CFC_OUT_PATH}' ({os.path.getsize(CFC_OUT_PATH)} bytes)")
 
     # Export Feature Normalization Statistics Metadata

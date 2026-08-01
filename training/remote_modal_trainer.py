@@ -138,16 +138,40 @@ class HuberICLoss(nn.Module):
         return loss, h_loss, ic
 
 
+def create_cfc_sequences_strided_torch(features: torch.Tensor, targets: torch.Tensor, seq_len: int = 32):
+    """
+    Zero-copy PyTorch tensor unfolding for 32-step sliding window sequence extraction on GPU.
+    Converts 2D [N, 16] features into 3D [N-31, 32, 16] sequence tensors in microseconds.
+    """
+    num_samples = features.shape[0] - seq_len + 1
+    if num_samples <= 0:
+        return features.unsqueeze(0), targets.unsqueeze(0)
+    in_sw = features.unfold(0, seq_len, 1)  # [num_samples, 16, 32]
+    tgt_sw = targets.unfold(0, seq_len, 1) # [num_samples, 1, 32]
+    seq_inputs = in_sw.transpose(1, 2).contiguous() # [num_samples, 32, 16]
+    seq_targets = tgt_sw.transpose(1, 2).contiguous() # [num_samples, 32, 1]
+    return seq_inputs, seq_targets
+
+
 def execute_training_pipeline(body_bytes: bytes) -> bytes:
     start_time = time.time()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[Modal Worker] Device target: {device} ({torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'})")
 
     dataset_tensors = load(body_bytes)
-    x_train = dataset_tensors["train_inputs"].to(device, non_blocking=True)
-    y_train = dataset_tensors["train_targets"].to(device, non_blocking=True)
-    x_val = dataset_tensors["val_inputs"].to(device, non_blocking=True)
-    y_val = dataset_tensors["val_targets"].to(device, non_blocking=True)
+    x_train_raw = dataset_tensors["train_inputs"].to(device, non_blocking=True)
+    y_train_raw = dataset_tensors["train_targets"].to(device, non_blocking=True)
+    x_val_raw = dataset_tensors["val_inputs"].to(device, non_blocking=True)
+    y_val_raw = dataset_tensors["val_targets"].to(device, non_blocking=True)
+
+    # Automatically unfold 2D [N, 16] feature matrices into 3D [Batch, 32, 16] sequence tensors on GPU
+    if x_train_raw.dim() == 2:
+        x_train, y_train = create_cfc_sequences_strided_torch(x_train_raw, y_train_raw, 32)
+        x_val, y_val = create_cfc_sequences_strided_torch(x_val_raw, y_val_raw, 32)
+        print(f"[Modal Worker] Unfolded 2D feature matrix into 3D sequences: train={x_train.shape}, val={x_val.shape}")
+    else:
+        x_train, y_train = x_train_raw, y_train_raw
+        x_val, y_val = x_val_raw, y_val_raw
 
     train_samples = x_train.shape[0]
     val_samples = x_val.shape[0]
@@ -165,11 +189,11 @@ def execute_training_pipeline(body_bytes: bytes) -> bytes:
 
     raw_model = RemoteCfCCell(input_dim=16, hidden_dim=32, output_dim=1).to(device)
 
-    # Enable PyTorch 2.6 kernel fusion and CUDA graphs compilation with max-autotune
+    # Enable PyTorch 2.6 kernel fusion and CUDA compilation (mode="default" to avoid heavy Triton autotuning delay)
     if device.type == "cuda":
         try:
-            model = torch.compile(raw_model, mode="max-autotune", dynamic=False)
-            print("[PyTorch 2.6] Successfully compiled CfC model with mode='max-autotune', dynamic=False.")
+            model = torch.compile(raw_model, mode="default", dynamic=False)
+            print("[PyTorch 2.6] Successfully compiled CfC model with mode='default', dynamic=False.")
         except Exception as e:
             print(f"[PyTorch 2.6 Compile Warning] torch.compile fallback to raw model ({e}).")
             model = raw_model
@@ -186,6 +210,7 @@ def execute_training_pipeline(body_bytes: bytes) -> bytes:
     )
 
     use_amp = device.type == "cuda"
+    amp_dtype = torch.bfloat16 if (use_amp and torch.cuda.is_bf16_supported()) else torch.float16
     best_val_ic = -1.0
 
     for epoch in range(1, epochs + 1):
@@ -198,8 +223,8 @@ def execute_training_pipeline(body_bytes: bytes) -> bytes:
             optimizer.zero_grad()
 
             if use_amp:
-                # Enforce Bfloat16 (BF16) Automatic Mixed Precision to preserve continuous-time numerical stability
-                with torch.autocast('cuda', dtype=torch.bfloat16):
+                # Automatic Mixed Precision preserving continuous-time numerical stability
+                with torch.autocast('cuda', dtype=amp_dtype):
                     pred = model(bx)
                     loss, h_loss, ic = criterion(pred, by)
             else:
@@ -223,7 +248,7 @@ def execute_training_pipeline(body_bytes: bytes) -> bytes:
                     if bx.shape[1] == 0:
                         continue
                     if use_amp:
-                        with torch.autocast('cuda', dtype=torch.bfloat16):
+                        with torch.autocast('cuda', dtype=amp_dtype):
                             pred = model(bx)
                             _, _, ic = criterion(pred, by)
                     else:
