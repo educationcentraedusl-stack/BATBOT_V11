@@ -27,7 +27,14 @@ export class TerminalOutputMux {
 
     // Override process.stdout.write to pass prompt and readline input echoes, buffering background logs
     (process.stdout as any).write = (chunk: any, encoding?: any, callback?: any): boolean => {
-      const str = typeof chunk === "string" ? chunk : chunk.toString(encoding || "utf8");
+      let cb = callback;
+      let enc = encoding;
+      if (typeof encoding === "function") {
+        cb = encoding;
+        enc = undefined;
+      }
+
+      const str = typeof chunk === "string" ? chunk : chunk.toString(enc || "utf8");
 
       // Allow prompt text, readline control codes, and user keypress echoes to pass through
       const isPromptString =
@@ -35,27 +42,33 @@ export class TerminalOutputMux {
         str.includes("Modal Cloud GPU") ||
         str.includes("(Y/N)") ||
         str.includes("[BATBOT_V11]") ||
-        !str.includes("\n") ||
         str.trim() === "y" ||
         str.trim() === "n" ||
         str.trim() === "yes" ||
         str.trim() === "no";
 
       if (isPromptString && this.originalStdoutWrite) {
-        return this.originalStdoutWrite(chunk, encoding, callback);
+        return this.originalStdoutWrite(chunk, enc, cb);
       }
 
       // Buffer background logs so they don't break the CLI prompt line
       this.logBuffer.push(str);
-      if (typeof callback === "function") callback();
+      if (typeof cb === "function") cb();
       return true;
     };
 
     // Override process.stderr.write to buffer background error/warning logs during prompt session
     (process.stderr as any).write = (chunk: any, encoding?: any, callback?: any): boolean => {
-      const str = typeof chunk === "string" ? chunk : chunk.toString(encoding || "utf8");
+      let cb = callback;
+      let enc = encoding;
+      if (typeof encoding === "function") {
+        cb = encoding;
+        enc = undefined;
+      }
+
+      const str = typeof chunk === "string" ? chunk : chunk.toString(enc || "utf8");
       this.logBuffer.push(str);
-      if (typeof callback === "function") callback();
+      if (typeof cb === "function") cb();
       return true;
     };
   }

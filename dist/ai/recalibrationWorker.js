@@ -49,6 +49,7 @@ class AutoRecalibrationManager {
     static instance = null;
     isRecalibrating = false;
     isPromptActive = false;
+    recalibrationFailed = false;
     isShadowMode = false;
     shadowTickCounter = 0;
     driftTickCounter = 0;
@@ -132,6 +133,7 @@ class AutoRecalibrationManager {
     resetStateToLive() {
         this.isRecalibrating = false;
         this.isPromptActive = false;
+        this.recalibrationFailed = false;
         this.driftTickCounter = 0;
         if (this.onStateChangeCallback) {
             this.onStateChangeCallback("LIVE_ACTIVE");
@@ -152,7 +154,10 @@ class AutoRecalibrationManager {
         }
         else if (ic >= 0.0500) {
             this.driftTickCounter = 0;
-            if (this.onStateChangeCallback && !this.isRecalibrating && !this.isPromptActive) {
+            if (this.onStateChangeCallback &&
+                !this.isRecalibrating &&
+                !this.isPromptActive &&
+                !this.recalibrationFailed) {
                 this.onStateChangeCallback("LIVE_ACTIVE");
             }
         }
@@ -244,6 +249,7 @@ class AutoRecalibrationManager {
         }
         // Set attempt timestamp IMMEDIATELY at entry to enforce 60s cooldown on all execution paths
         this.lastAttemptTimestamp = Date.now();
+        this.recalibrationFailed = false;
         // Single-Flight Atomic Mutex Acquisition
         this.isRecalibrating = true;
         if (this.onStateChangeCallback) {
@@ -340,6 +346,7 @@ class AutoRecalibrationManager {
                 errorMsg += `\n--- PYTHON STDOUT LOG ---\n${rawStdout}`;
             }
             this.lastError = errorMsg;
+            this.recalibrationFailed = true;
             const logPayload = `[${new Date().toISOString()}] [RECALIBRATION_FAILURE] ${errorMsg}\n`;
             try {
                 fs.appendFileSync(this.errorLogPath, logPayload, { encoding: "utf-8" });
@@ -352,9 +359,12 @@ class AutoRecalibrationManager {
         }
         finally {
             this.isRecalibrating = false;
-            if (!isSuccess && this.onStateChangeCallback) {
-                // Enforce TRAINING_LOCK when recalibration failed or was skipped
-                this.onStateChangeCallback("TRAINING_LOCK");
+            if (!isSuccess) {
+                this.recalibrationFailed = true;
+                if (this.onStateChangeCallback) {
+                    // Enforce TRAINING_LOCK when recalibration failed or was skipped
+                    this.onStateChangeCallback("TRAINING_LOCK");
+                }
             }
         }
     }
