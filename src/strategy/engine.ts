@@ -306,6 +306,10 @@ export class StrategyEngine {
           ? "RECALIBRATING_ACTIVE"
           : "ENGINE_PAUSED";
 
+      if (seq % 500n === 0n) {
+        console.log(`[StrategyEngine][StateLock] Seq #${seq} | Engine locked in [${this.state}] state. Signal evaluation suppressed.`);
+      }
+
       this.staticResult.sequenceNum = seq;
       this.staticResult.signalType = "NONE";
       this.staticResult.obi = obi;

@@ -12,6 +12,7 @@ class StrategyEngine {
     config;
     dynamicRiskEngine = new dynamicRiskEngine_1.DynamicRiskEngine();
     lastProcessedSequence = -1n;
+    state = "LIVE_ACTIVE";
     reusableOrderIntent = {
         symbol: process.env.SYMBOL ?? "BTCUSDT",
         side: "BUY",
@@ -90,6 +91,16 @@ class StrategyEngine {
         this.positionLedger = positionLedger ?? this.hedgeLedger.getLegacyLedger();
         this.reusableOrderIntent.symbol = this.config.symbol;
         this.reusableOrderIntent.quantity = this.config.orderQuantity;
+    }
+    getEngineState() {
+        return this.state;
+    }
+    setEngineState(newState) {
+        const oldState = this.state;
+        this.state = newState;
+        if (oldState !== newState) {
+            console.log(`[ENGINE_STATE] State Transition: ${oldState} -> ${newState}`);
+        }
     }
     getPositionLedger() {
         return this.positionLedger;
@@ -197,6 +208,30 @@ class StrategyEngine {
                     exitReason: trigger.reason,
                 };
             }
+        }
+        // Safety Clamp: Suppress new signal generation when engine is not in LIVE_ACTIVE state
+        if (this.state !== "LIVE_ACTIVE") {
+            const reasonCode = this.state === "TRAINING_LOCK"
+                ? "TRAINING_LOCK_ACTIVE"
+                : this.state === "RECALIBRATING"
+                    ? "RECALIBRATING_ACTIVE"
+                    : "ENGINE_PAUSED";
+            if (seq % 500n === 0n) {
+                console.log(`[StrategyEngine][StateLock] Seq #${seq} | Engine locked in [${this.state}] state. Signal evaluation suppressed.`);
+            }
+            this.staticResult.sequenceNum = seq;
+            this.staticResult.signalType = "NONE";
+            this.staticResult.obi = obi;
+            this.staticResult.cvd = cvd;
+            this.staticResult.spreadVelocity = spreadVelocity;
+            this.staticResult.bidPrice = bidPrice;
+            this.staticResult.askPrice = askPrice;
+            this.staticResult.riskResult = {
+                passed: false,
+                reasonCode: reasonCode,
+                message: `Engine signal evaluation paused due to state: ${this.state}`,
+            };
+            return this.staticResult;
         }
         let signalType = "NONE";
         let targetPosSide = undefined;

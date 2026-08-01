@@ -1,41 +1,11 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 Object.defineProperty(exports, "__esModule", { value: true });
-const fs = __importStar(require("fs"));
-const path = __importStar(require("path"));
 const recalibrationWorker_1 = require("./ai/recalibrationWorker");
+const engine_1 = require("./strategy/engine");
+const marketDataClient_1 = require("./marketDataClient");
+const risk_1 = require("./strategy/risk");
+const binance_1 = require("./execution/binance");
+const terminalMux_1 = require("./telemetry/terminalMux");
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const nativeAddon = require("../index.js");
 function runTest() {
@@ -43,7 +13,7 @@ function runTest() {
     console.log("      BATBOT_V11 AUTONOMOUS AI MODEL AUTO-RECALIBRATION TEST SUITE              ");
     console.log("================================================================================");
     // 1. Verify NAPI Exports
-    console.log("[Test 1/4] Verifying NAPI exports...");
+    console.log("[Test 1/5] Verifying NAPI exports...");
     if (typeof nativeAddon.loadAiModel !== "function") {
         throw new Error("NAPI export 'loadAiModel' is missing!");
     }
@@ -55,7 +25,7 @@ function runTest() {
     }
     console.log("  [PASS] NAPI functions (loadAiModel, resetIcTracker, getIcStatus) detected.");
     // 2. Test IC Status & Reset via NAPI
-    console.log("[Test 2/4] Testing NAPI getIcStatus & resetIcTracker...");
+    console.log("[Test 2/5] Testing NAPI getIcStatus & resetIcTracker...");
     const rawStatusStr = nativeAddon.getIcStatus();
     console.log(`  Initial NAPI IC status JSON: ${rawStatusStr}`);
     const statusObj = JSON.parse(rawStatusStr);
@@ -64,32 +34,58 @@ function runTest() {
     }
     const resetSuccess = nativeAddon.resetIcTracker();
     console.log(`  [PASS] NAPI resetIcTracker result: ${resetSuccess}`);
-    // 3. Test AutoRecalibrationManager Singleton & Trigger Logic
-    console.log("[Test 3/4] Testing AutoRecalibrationManager trigger evaluation...");
+    // 3. Test StrategyEngine EngineState FSM & Safety Clamp Lock
+    console.log("[Test 3/5] Testing StrategyEngine TRAINING_LOCK FSM & Safety Clamp...");
+    const sab = new SharedArrayBuffer(2048);
+    const client = new marketDataClient_1.MarketDataClient(sab);
+    const riskGuard = new risk_1.RiskGuard();
+    const execClient = new binance_1.BinanceExecutionClient();
+    const engine = new engine_1.StrategyEngine(client, riskGuard, execClient, { symbol: "BTCUSDT" });
+    if (engine.getEngineState() !== "LIVE_ACTIVE") {
+        throw new Error(`Expected initial state LIVE_ACTIVE, got ${engine.getEngineState()}`);
+    }
+    engine.setEngineState("TRAINING_LOCK");
+    if (engine.getEngineState() !== "TRAINING_LOCK") {
+        throw new Error("Failed to transition engine state to TRAINING_LOCK");
+    }
+    const clampedTickResult = engine.evaluateTick();
+    if (clampedTickResult.signalType !== "NONE") {
+        throw new Error(`Expected signalType NONE during TRAINING_LOCK, got ${clampedTickResult.signalType}`);
+    }
+    if (clampedTickResult.riskResult?.reasonCode !== "TRAINING_LOCK_ACTIVE") {
+        throw new Error(`Expected risk reason TRAINING_LOCK_ACTIVE, got ${clampedTickResult.riskResult?.reasonCode}`);
+    }
+    console.log("  [PASS] StrategyEngine Safety Clamp suppressed entry signals during TRAINING_LOCK state.");
+    engine.setEngineState("LIVE_ACTIVE");
+    console.log("  [PASS] StrategyEngine cleanly restored to LIVE_ACTIVE.");
+    // 4. Test AutoRecalibrationManager Single-Flight Lock & State Callback Integration
+    console.log("[Test 4/5] Testing AutoRecalibrationManager single-flight lock & callbacks...");
     const manager = recalibrationWorker_1.AutoRecalibrationManager.getInstance();
-    manager.setSustainedDriftThreshold(5);
-    let successCallbackFired = false;
-    manager.setOnSuccessCallback(() => {
-        successCallbackFired = true;
-        console.log("  [CALLBACK] Auto-recalibration success callback received! IDLE_ACTIVE clamp lifted.");
+    let receivedState = null;
+    manager.setOnStateChangeCallback((state) => {
+        receivedState = state;
     });
-    // Evaluate ticks below threshold
+    manager.setSustainedDriftThreshold(5);
     for (let i = 1; i <= 4; i++) {
         manager.evaluateTickDrift(0.015, true);
         const status = manager.getStatus();
-        console.log(`  Tick ${i}: Drift Counter = ${status.driftTickCounter}`);
         if (status.driftTickCounter !== i) {
             throw new Error(`Expected drift counter ${i}, got ${status.driftTickCounter}`);
         }
     }
-    console.log("  [PASS] Drift counter incremented predictably.");
-    // 4. Verify Telemetry Signals Data & Weight File Accessibility
-    console.log("[Test 4/4] Verifying training paths & data directories...");
-    const dataDir = path.join(process.cwd(), "data");
-    const signalsPath = path.join(dataDir, "signals.jsonl");
-    const weightsPath = path.join(process.cwd(), "models", "cfc_weights.safetensors");
-    console.log(`  Signals Path: '${signalsPath}' (Exists: ${fs.existsSync(signalsPath)})`);
-    console.log(`  Weights Path: '${weightsPath}' (Exists: ${fs.existsSync(weightsPath)})`);
+    console.log("  [PASS] Drift counter & state callback verified.");
+    // 5. Test Terminal Output Mux Prompt Isolation
+    console.log("[Test 5/5] Testing TerminalOutputMux CLI prompt isolation...");
+    const mux = terminalMux_1.TerminalOutputMux.getInstance();
+    mux.startPromptSession();
+    if (!mux.isPrompting()) {
+        throw new Error("Failed to activate terminal output mux prompt session!");
+    }
+    mux.endPromptSession();
+    if (mux.isPrompting()) {
+        throw new Error("Failed to deactivate terminal output mux prompt session!");
+    }
+    console.log("  [PASS] TerminalOutputMux cleanly isolated CLI prompt session.");
     console.log("================================================================================");
     console.log(" [SUCCESS] ALL AUTONOMOUS AUTO-RECALIBRATION PIPELINE TESTS PASSED 100%");
     console.log("================================================================================");

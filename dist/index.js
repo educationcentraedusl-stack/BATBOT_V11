@@ -119,6 +119,9 @@ async function initializeSystem() {
     const telemetryServer = new server_1.TelemetryWSServer(telemetryPort);
     const recalibrationManager = recalibrationWorker_1.AutoRecalibrationManager.getInstance();
     recalibrationManager.setSustainedDriftThreshold(50);
+    recalibrationManager.setOnStateChangeCallback((state) => {
+        strategyEngine.setEngineState(state);
+    });
     let isRunning = true;
     let tickInterval = null;
     // Physically await Binance Server Time & State Synchronization BEFORE starting tick loop
@@ -241,11 +244,13 @@ async function initializeSystem() {
                 winningTrades: posSummary.winningTrades,
                 losingTrades: posSummary.losingTrades,
             }),
-            riskStatus: tickResult.riskResult
-                ? tickResult.riskResult.passed
-                    ? "PASSED"
-                    : `REJECTED (${tickResult.riskResult.reasonCode})`
-                : "IDLE_ACTIVE",
+            riskStatus: strategyEngine.getEngineState() !== "LIVE_ACTIVE"
+                ? `[${strategyEngine.getEngineState()}]`
+                : tickResult.riskResult
+                    ? tickResult.riskResult.passed
+                        ? "PASSED"
+                        : `REJECTED (${tickResult.riskResult.reasonCode})`
+                    : "IDLE_ACTIVE",
             isEngineActive: isRunning,
             usdtBalance: executionClient.getUsdtAvailableBalance(),
             aiDirection: client.getAIPredictionDirection(),

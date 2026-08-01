@@ -523,6 +523,12 @@
 - **HFT/Performance Compliance:** Implemented 2026 SOTA Finite State Machine (`EngineState`: `LIVE_ACTIVE`, `TRAINING_LOCK`, `RECALIBRATING`, `PAUSED`, `EMERGENCY_HALT`) in `StrategyEngine`. When model drift occurs, the engine enters `TRAINING_LOCK` to continuously drain SAB ticks into telemetry metrics while imposing a strict Safety Clamp that suppresses entry signals (`TRAINING_LOCK_ACTIVE`) and log output. Built `TerminalOutputMux` to intercept and buffer `process.stdout.write` during interactive Readline prompt sessions, preventing log bleeding over CLI prompts. Implemented atomic single-flight mutex lock and state transition callbacks in `AutoRecalibrationManager` with 15-second prompt auto-timeout fallback. Updated `CLIDashboard` to render `[TRAINING_LOCK]` state in telemetry header. Verified 100% via TypeScript compilation (`npx tsc --noEmit`, 0 errors) and automated pipeline test suite (`npx ts-node src/test_recalibration_pipeline.ts` passing all 5 tests).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-08-01
+- **Feature/Task:** Live Environment Concurrency Lock & Terminal Mux Hardening
+- **Artifacts Created/Modified:** `src/ai/ic_tracker.rs`, `src/telemetry/terminalMux.ts`, `src/ai/recalibrationWorker.ts`, `src/strategy/engine.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Implemented Rust IC Tracker hysteresis recovery (+0.02 buffer, `ic >= 0.0500`) eliminating continuous model drift log spamming. Upgraded `TerminalOutputMux` to intercept and buffer both `stdout` and `stderr` streams while passing prompt formatting and user keypress echoes, flushing buffered logs cleanly on prompt session exit. Enforced strict 60s cooldown block and persistent `TRAINING_LOCK` state retention in `AutoRecalibrationManager` on skipped/failed recalibration pipelines to eliminate state flickering and live tick signal leakage. 100% verified via native Rust N-API build (`npx napi build --platform --release`), TypeScript compilation (`npm run build:ts`), and 5/5 passing recalibration pipeline tests (`npx ts-node src/test_recalibration_pipeline.ts`).
+- **Status:** ✅ Completed & QA Verified
+
 
 
 

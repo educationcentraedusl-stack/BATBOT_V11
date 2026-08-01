@@ -49,7 +49,7 @@ impl ICTracker {
                     ic, MODEL_DRIFT_THRESHOLD, self.pairs.len()
                 );
             }
-        } else {
+        } else if ic >= MODEL_DRIFT_THRESHOLD + 0.02 {
             self.is_drifted = false;
         }
 

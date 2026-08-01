@@ -134,6 +134,15 @@ export class AutoRecalibrationManager {
     }
   }
 
+  public resetStateToLive(): void {
+    this.isRecalibrating = false;
+    this.isPromptActive = false;
+    this.driftTickCounter = 0;
+    if (this.onStateChangeCallback) {
+      this.onStateChangeCallback("LIVE_ACTIVE");
+    }
+  }
+
   public evaluateTickDrift(ic: number, isDrifted: boolean): void {
     if (this.isRecalibrating || this.isPromptActive) {
       return;
@@ -149,8 +158,11 @@ export class AutoRecalibrationManager {
       ) {
         void this.runRecalibrationPipeline(ic);
       }
-    } else {
+    } else if (ic >= 0.0500) {
       this.driftTickCounter = 0;
+      if (this.onStateChangeCallback && !this.isRecalibrating && !this.isPromptActive) {
+        this.onStateChangeCallback("LIVE_ACTIVE");
+      }
     }
   }
 
@@ -245,12 +257,16 @@ export class AutoRecalibrationManager {
       return false;
     }
 
+    // Set attempt timestamp IMMEDIATELY at entry to enforce 60s cooldown on all execution paths
+    this.lastAttemptTimestamp = Date.now();
+
     // Single-Flight Atomic Mutex Acquisition
     this.isRecalibrating = true;
     if (this.onStateChangeCallback) {
       this.onStateChangeCallback("TRAINING_LOCK");
     }
 
+    let isSuccess = false;
     const lockFile = path.join(this.projectRoot, ".training.lock");
     const isLockDetected = fs.existsSync(lockFile);
 
@@ -266,7 +282,7 @@ export class AutoRecalibrationManager {
         this.killLocalPythonProcesses();
         this.cleanupLockAndProgressFiles();
       } else if (isLockDetected) {
-        console.log("[BATBOT_V11] Manual/Background training detected. Waiting for completion...");
+        console.log("[BATBOT_V11] Manual/Background training detected. Waiting for completion in TRAINING_LOCK...");
         return false;
       }
 
@@ -274,7 +290,6 @@ export class AutoRecalibrationManager {
         this.onStateChangeCallback("RECALIBRATING");
       }
 
-      this.lastAttemptTimestamp = Date.now();
       this.lastError = null;
 
       // Step 1: Ensure dataset signals log exists and has data
@@ -342,6 +357,7 @@ export class AutoRecalibrationManager {
       this.driftTickCounter = 0;
       this.lastSuccessTimestamp = Date.now();
       this.totalRecalibrations++;
+      isSuccess = true;
 
       console.log(
         `[BATBOT_V11][AUTO-RECALIBRATION] Step 4/4: Self-healing pipeline COMPLETED SUCCESSFULLY! Model hot-swapped & IC tracking window reset.`
@@ -349,6 +365,10 @@ export class AutoRecalibrationManager {
 
       if (this.onSuccessCallback) {
         this.onSuccessCallback();
+      }
+
+      if (this.onStateChangeCallback) {
+        this.onStateChangeCallback("LIVE_ACTIVE");
       }
 
       return true;
@@ -377,14 +397,15 @@ export class AutoRecalibrationManager {
       }
 
       console.error(
-        `\x1b[31m[BATBOT_V11][AUTO-RECALIBRATION ERROR] Pipeline execution failed! Remaining in IDLE_ACTIVE safety clamp.\nReason: ${errorMsg}\x1b[0m`
+        `\x1b[31m[BATBOT_V11][AUTO-RECALIBRATION ERROR] Pipeline execution failed! Engine locked in TRAINING_LOCK safety state.\nReason: ${errorMsg}\x1b[0m`
       );
 
       return false;
     } finally {
       this.isRecalibrating = false;
-      if (this.onStateChangeCallback) {
-        this.onStateChangeCallback("LIVE_ACTIVE");
+      if (!isSuccess && this.onStateChangeCallback) {
+        // Enforce TRAINING_LOCK when recalibration failed or was skipped
+        this.onStateChangeCallback("TRAINING_LOCK");
       }
     }
   }
