@@ -307,20 +307,28 @@ export class StrategyEngine {
 
     let targetSizeDecayCoeff = 1.0;
 
-    // Weighted Composite Signal Engine (Fix #1)
+    // 50-25-25 Weighted Composite Signal Engine & High-Confidence AI Override
     const obiScore = Math.max(-1.0, Math.min(1.0, obi));
     const cvdScore = cvd > 0 ? 1.0 : cvd < 0 ? -1.0 : 0.0;
-    const aiScore = Math.max(-1.0, Math.min(1.0, aiDirection * (aiConfidence > 0 ? aiConfidence : 1.0)));
+    const aiScore = Math.max(-1.0, Math.min(1.0, aiDirection * aiConfidence));
 
-    // Weights: AI Model = 0.50, Order Book Imbalance (OBI) = 0.30, CVD = 0.20
-    const compositeScore = 0.50 * aiScore + 0.30 * obiScore + 0.20 * cvdScore;
+    // Weights: AI Model = 50% (0.50), OBI = 25% (0.25), CVD = 25% (0.25)
+    const compositeScore = 0.50 * aiScore + 0.25 * obiScore + 0.25 * cvdScore;
 
-    const isHighConfidenceAi = aiConfidence >= this.config.aggressiveConfidenceThreshold;
-    const isAiBullish = aiDirection > 0 && aiConfidence >= this.config.minAiConfidence;
-    const isAiBearish = aiDirection < 0 && aiConfidence >= this.config.minAiConfidence;
+    const isHighConfidenceAi = aiConfidence >= 0.85 || aiConfidence >= this.config.aggressiveConfidenceThreshold;
 
-    const isBuySignal = (isHighConfidenceAi && isAiBullish) || (compositeScore > 0.25 && aiConfidence >= this.config.minAiConfidence);
-    const isSellSignal = (isHighConfidenceAi && isAiBearish) || (compositeScore < -0.25 && aiConfidence >= this.config.minAiConfidence);
+    let isBuySignal = false;
+    let isSellSignal = false;
+
+    if (isHighConfidenceAi) {
+      // AI-Override Rule: High-confidence AI bypasses OBI/CVD restrictions entirely
+      isBuySignal = aiDirection > 0;
+      isSellSignal = aiDirection < 0;
+    } else {
+      // Weighted Composite Rule
+      isBuySignal = compositeScore > 0.25 && aiConfidence >= this.config.minAiConfidence;
+      isSellSignal = compositeScore < -0.25 && aiConfidence >= this.config.minAiConfidence;
+    }
 
     // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
     if (
