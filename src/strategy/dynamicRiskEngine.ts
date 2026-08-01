@@ -66,7 +66,7 @@ export class DynamicRiskEngine {
     } else if (metrics.hurst < this.maxHurstMeanReversion) {
       regimeState = "MEAN_REVERTING";
     } else {
-      regimeState = "TOXIC_CHOP_TRAP";
+      regimeState = "MEAN_REVERTING";
     }
 
     // 2. Trap Detection Checks

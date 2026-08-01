@@ -1,5 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
+import { Readable } from "stream";
+import { pipeline } from "stream/promises";
 
 export interface RemoteTrainingOptions {
   datasetPath?: string;
@@ -24,7 +26,8 @@ export class RemoteRecalibrationClient {
   }
 
   /**
-   * Offload PyTorch CfC Neural Network training to remote Modal serverless GPU webhook.
+   * Offload PyTorch CfC Neural Network training to remote Modal serverless GPU webhook
+   * using chunked HTTP upload streaming and direct-to-disk weight download streaming.
    */
   public async trainRemotely(options?: RemoteTrainingOptions): Promise<boolean> {
     const datasetPath = options?.datasetPath || this.defaultDatasetPath;
@@ -44,7 +47,7 @@ export class RemoteRecalibrationClient {
     }
 
     console.log(
-      `[BATBOT_V11][REMOTE-TRAINING] Uploading SafeTensors dataset (${datasetStat.size} bytes) to Modal Serverless GPU (${endpointUrl})...`
+      `[BATBOT_V11][REMOTE-TRAINING] Uploading SafeTensors dataset (${datasetStat.size} bytes) via chunked stream to Modal Serverless GPU (${endpointUrl})...`
     );
 
     const startTime = Date.now();
@@ -65,19 +68,28 @@ export class RemoteRecalibrationClient {
         // ignore if undici not loadable
       }
 
-      const datasetBuffer = await fs.promises.readFile(datasetPath);
-
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
+      // Create Web ReadableStream from Node Readable stream for chunked upload streaming (duplex: 'half')
+      const datasetReadStream = fs.createReadStream(datasetPath);
+      const webDatasetStream = Readable.toWeb(datasetReadStream);
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": datasetStat.size.toString(),
+        "User-Agent": "BATBOT_V11-HFT-Client/1.0",
+      };
+
+      if (process.env.HFT_SECRET_TOKEN) {
+        headers["Authorization"] = `Bearer ${process.env.HFT_SECRET_TOKEN}`;
+      }
+
       const fetchOptions: any = {
         method: "POST",
-        headers: {
-          "Content-Type": "application/octet-stream",
-          "Content-Length": datasetBuffer.length.toString(),
-          "User-Agent": "BATBOT_V11-HFT-Client/1.0",
-        },
-        body: datasetBuffer,
+        headers,
+        body: webDatasetStream as any,
+        duplex: "half",
         signal: controller.signal,
       };
 
@@ -97,33 +109,48 @@ export class RemoteRecalibrationClient {
         return false;
       }
 
-      const arrayBuffer = await response.arrayBuffer();
-      const weightsBuffer = Buffer.from(arrayBuffer);
-
-      if (weightsBuffer.length < 100) {
-        console.error(
-          `[BATBOT_V11][REMOTE-TRAINING ERROR] Returned SafeTensors buffer is suspiciously small (${weightsBuffer.length} bytes).`
-        );
+      if (!response.body) {
+        console.error("[BATBOT_V11][REMOTE-TRAINING ERROR] Modal GPU response body is empty.");
         return false;
       }
 
-      // Atomic write to weights path
+      // Stream incoming trained model weights directly to disk without buffering full file in RAM
       const dir = path.dirname(weightsPath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
 
       const tmpPath = `${weightsPath}.remote.tmp`;
-      await fs.promises.writeFile(tmpPath, weightsBuffer);
+      const fileWriteStream = fs.createWriteStream(tmpPath);
+      const resNodeStream = Readable.fromWeb(response.body as any);
+
+      await pipeline(resNodeStream, fileWriteStream);
+
+      const weightsStat = fs.statSync(tmpPath);
+      if (weightsStat.size < 100) {
+        fs.unlinkSync(tmpPath);
+        console.error(
+          `[BATBOT_V11][REMOTE-TRAINING ERROR] Downloaded SafeTensors file is suspiciously small (${weightsStat.size} bytes).`
+        );
+        return false;
+      }
+
+      // Atomic rename to final weights target path
       await fs.promises.rename(tmpPath, weightsPath).catch(async () => {
         // Fallback for Windows file replace lock
         await fs.promises.copyFile(tmpPath, weightsPath);
         await fs.promises.unlink(tmpPath).catch(() => {});
       });
 
+      // Also ensure cfc_updated.safetensors copy exists if weightsPath is cfc_weights.safetensors or vice-versa
+      const altWeightsPath = path.join(dir, "cfc_updated.safetensors");
+      if (weightsPath !== altWeightsPath) {
+        await fs.promises.copyFile(weightsPath, altWeightsPath).catch(() => {});
+      }
+
       const totalMs = Date.now() - startTime;
       console.log(
-        `[BATBOT_V11][REMOTE-TRAINING SUCCESS] Trained SafeTensors weights received (${weightsBuffer.length} bytes) in ${totalMs}ms!`
+        `[BATBOT_V11][REMOTE-TRAINING SUCCESS] Trained SafeTensors weights streamed directly to disk (${weightsStat.size} bytes) in ${totalMs}ms!`
       );
 
       return true;

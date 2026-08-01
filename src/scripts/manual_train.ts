@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { spawn } from "child_process";
+import { RemoteRecalibrationClient } from "../ai/remoteRecalibrationClient";
 
 /**
  * Dynamically resolve the Python binary executable path, prioritizing the project's virtual environment.
@@ -54,16 +55,20 @@ async function main(): Promise<void> {
   console.log(`[BATBOT_V11] Resolved Python Virtualenv Runtime: '${pythonCmd}'`);
 
   const prepScript = path.join(projectRoot, "training", "prepare_data.py");
-  const trainScript = path.join(projectRoot, "training", "train_cfc.py");
 
   try {
     console.log("\n[BATBOT_V11] STEP 1/2: Extracting T-KAN & CfC Features (prepare_data.py)...");
     console.log("-".repeat(75));
     await runCommand(pythonCmd, [prepScript], projectRoot);
 
-    console.log("\n[BATBOT_V11] STEP 2/2: Training CfC Liquid Neural Network (train_cfc.py)...");
+    console.log("\n[BATBOT_V11] STEP 2/2: Training CfC Liquid Neural Network on Modal Serverless GPU...");
     console.log("-".repeat(75));
-    await runCommand(pythonCmd, [trainScript], projectRoot);
+    const remoteClient = new RemoteRecalibrationClient();
+    const success = await remoteClient.trainRemotely();
+
+    if (!success) {
+      throw new Error("Modal Cloud GPU training failed.");
+    }
 
     console.log("\n" + "=".repeat(75));
     console.log("[BATBOT_V11] SUCCESS: New weights exported and ready for zero-lock hot-swap!");
@@ -77,3 +82,4 @@ async function main(): Promise<void> {
 }
 
 void main();
+

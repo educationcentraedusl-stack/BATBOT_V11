@@ -102,7 +102,7 @@ async function runVerificationTests() {
   const bigIntView = new BigInt64Array(sab);
   const client = new MarketDataClient(sab);
   const testRiskGuard = new RiskGuard({ minCooldownMs: 0 }); // zero cooldown for test loop
-  const engine = new StrategyEngine(client, testRiskGuard, configuredClient);
+  const engine = new StrategyEngine(client, testRiskGuard, configuredClient, { symbol: "BTCUSDT", orderQuantity: 0.001 });
 
   // Setup initial SAB metrics
   Atomics.store(bigIntView, 0, 1000n); // Timestamp

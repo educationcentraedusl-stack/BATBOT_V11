@@ -194,7 +194,7 @@ class AutoRecalibrationManager {
         }
     }
     /**
-     * Kill any running local Python training processes (python.exe / train_cfc.py).
+     * Kill any running Python data prep processes.
      */
     killLocalPythonProcesses() {
         try {
@@ -202,9 +202,9 @@ class AutoRecalibrationManager {
                 (0, child_process_1.execSync)("taskkill /F /IM python.exe /T", { stdio: "ignore" });
             }
             else {
-                (0, child_process_1.execSync)("pkill -9 -f train_cfc.py || true", { stdio: "ignore" });
+                (0, child_process_1.execSync)("pkill -9 -f prepare_data.py || true", { stdio: "ignore" });
             }
-            console.log("[BATBOT_V11][OVERRIDE] Active local Python/CPU training processes terminated.");
+            console.log("[BATBOT_V11][OVERRIDE] Active Python data preparation processes terminated.");
         }
         catch (_err) {
             // Ignore if no process was running
@@ -240,7 +240,7 @@ class AutoRecalibrationManager {
         // Intercept automatic execution: Prompt user interactively
         const useModal = await this.promptUserForModalGPU();
         if (useModal) {
-            console.log("[BATBOT_V11][MODAL GPU OVERRIDE] User requested Modal Cloud GPU training. Overriding local processes...");
+            console.log("[BATBOT_V11][MODAL GPU OVERRIDE] User requested Modal Cloud GPU training. Clearing local locks...");
             this.killLocalPythonProcesses();
             this.cleanupLockAndProgressFiles();
         }
@@ -271,49 +271,14 @@ class AutoRecalibrationManager {
             if (prepResult.stderr && prepResult.stderr.trim().length > 0) {
                 console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Data prep stderr log: ${prepResult.stderr.trim()}`);
             }
-            let remoteSuccess = false;
-            if (useModal) {
-                // User explicitly chose Modal Cloud GPU training
-                console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Step 2/4: Executing Modal Serverless GPU offloading...`);
-                try {
-                    const remoteClient = new remoteRecalibrationClient_1.RemoteRecalibrationClient();
-                    remoteSuccess = await remoteClient.trainRemotely();
-                    if (!remoteSuccess) {
-                        console.warn(`\x1b[33m[BATBOT_V11][MODAL GPU WARNING] Modal GPU offloading failed. Automatically falling back to secondary local PyTorch trainer (train_cfc.py)...\x1b[0m`);
-                    }
-                }
-                catch (remoteErr) {
-                    const errorMsg = remoteErr instanceof Error ? remoteErr.message : String(remoteErr);
-                    console.warn(`\x1b[33m[BATBOT_V11][MODAL GPU WARNING] Remote GPU offloading error: ${errorMsg}. Falling back to local PyTorch trainer...\x1b[0m`);
-                }
-            }
-            else {
-                // User chose N (standard fallback flow)
-                console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Step 2/4: Executing PyTorch CfC neural network training...`);
-                try {
-                    console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Attempting primary Modal Serverless GPU offloading...`);
-                    const remoteClient = new remoteRecalibrationClient_1.RemoteRecalibrationClient();
-                    remoteSuccess = await remoteClient.trainRemotely();
-                }
-                catch (remoteErr) {
-                    console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Remote GPU offloading attempt failed: ${String(remoteErr)}`);
-                }
-            }
+            // Step 2: Offload training to Modal Serverless Cloud GPU
+            console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Step 2/4: Executing Modal Serverless GPU offloading...`);
+            const remoteClient = new remoteRecalibrationClient_1.RemoteRecalibrationClient();
+            const remoteSuccess = await remoteClient.trainRemotely();
             if (!remoteSuccess) {
-                console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Executing secondary local PyTorch trainer (train_cfc.py)...`);
-                const trainScript = path.join(this.projectRoot, "training", "train_cfc.py");
-                const trainResult = await execFileAsync(pythonCmd, [trainScript], {
-                    cwd: this.projectRoot,
-                    env: { ...process.env },
-                    timeout: 900000, // 15 min extended timeout for deep neural network training
-                });
-                if (trainResult.stderr && trainResult.stderr.trim().length > 0) {
-                    console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Local training stderr log: ${trainResult.stderr.trim()}`);
-                }
+                throw new Error("Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.");
             }
-            else {
-                console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Primary Modal Serverless GPU training & weights download PASSED!`);
-            }
+            console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Modal Serverless GPU training & weights download PASSED!`);
             // Step 3: Validate generated SafeTensors weights file
             if (!fs.existsSync(this.weightsPath)) {
                 throw new Error(`Trained SafeTensors file not found at expected path: '${this.weightsPath}'.`);

@@ -60,10 +60,13 @@ class StrategyEngine {
         const defaultCvdBuy = !isNaN(envCvdBuy) ? envCvdBuy : 0.0;
         const defaultCvdSell = !isNaN(envCvdSell) ? envCvdSell : 0.0;
         const defaultMaxSpreadVelocity = !isNaN(envMaxSpreadVelocity) ? envMaxSpreadVelocity : 5.0;
-        const defaultOrderQty = !isNaN(envOrderQty) ? envOrderQty : 0.001;
+        const targetSymbol = config?.symbol ?? process.env.SYMBOL ?? "BTCUSDT";
+        const defaultOrderQty = !isNaN(envOrderQty)
+            ? (targetSymbol.includes("BTC") && envOrderQty > 0.01 ? 0.001 : envOrderQty)
+            : (targetSymbol.includes("ETH") ? 0.05 : 0.001);
         const defaultLeverage = !isNaN(envLeverage) ? envLeverage : 10;
         this.config = {
-            symbol: config?.symbol ?? process.env.SYMBOL ?? "BTCUSDT",
+            symbol: targetSymbol,
             orderQuantity: config?.orderQuantity ?? defaultOrderQty,
             obiBuyThreshold: config?.obiBuyThreshold ?? defaultObiBuy,
             obiSellThreshold: config?.obiSellThreshold ?? defaultObiSell,
@@ -120,7 +123,7 @@ class StrategyEngine {
         const aiDirection = this.client.getAIPredictionDirection();
         const aiConfidence = this.client.getAIPredictionConfidence();
         const latencyPenalty = this.client.getLatencyPenaltyCoefficient();
-        const penaltyCoeff = latencyPenalty > 0 ? latencyPenalty : 1.0;
+        const penaltyCoeff = latencyPenalty > 0 ? Math.max(0.75, latencyPenalty) : 1.0;
         const slippageTicks = this.client.getDynamicSlippageTicks();
         // 1. Dynamic Monitoring: Evaluate Unrealized PnL against dynamic TP/SL thresholds across Hedge Slots
         const markPrice = askPrice > 0 ? (askPrice + bidPrice) / 2 : bidPrice;
@@ -215,13 +218,21 @@ class StrategyEngine {
         const longCooldownLock = rawLongCooldownLock > nowMs + 60000 ? 0 : rawLongCooldownLock;
         const shortCooldownLock = rawShortCooldownLock > nowMs + 60000 ? 0 : rawShortCooldownLock;
         let targetSizeDecayCoeff = 1.0;
+        // Weighted Composite Signal Engine (Fix #1)
+        const obiScore = Math.max(-1.0, Math.min(1.0, obi));
+        const cvdScore = cvd > 0 ? 1.0 : cvd < 0 ? -1.0 : 0.0;
+        const aiScore = Math.max(-1.0, Math.min(1.0, aiDirection * (aiConfidence > 0 ? aiConfidence : 1.0)));
+        // Weights: AI Model = 0.50, Order Book Imbalance (OBI) = 0.30, CVD = 0.20
+        const compositeScore = 0.50 * aiScore + 0.30 * obiScore + 0.20 * cvdScore;
+        const isHighConfidenceAi = aiConfidence >= this.config.aggressiveConfidenceThreshold;
+        const isAiBullish = aiDirection > 0 && aiConfidence >= this.config.minAiConfidence;
+        const isAiBearish = aiDirection < 0 && aiConfidence >= this.config.minAiConfidence;
+        const isBuySignal = (isHighConfidenceAi && isAiBullish) || (compositeScore > 0.25 && aiConfidence >= this.config.minAiConfidence);
+        const isSellSignal = (isHighConfidenceAi && isAiBearish) || (compositeScore < -0.25 && aiConfidence >= this.config.minAiConfidence);
         // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
-        if (obi > this.config.obiBuyThreshold &&
-            cvd >= this.config.cvdBuyThreshold &&
+        if (isBuySignal &&
             spreadVelocity < this.config.maxSpreadVelocity &&
             askPrice > 0 &&
-            aiDirection > 0 &&
-            aiConfidence >= this.config.minAiConfidence &&
             !this.hedgeLedger.getCoreLong().isOccupied &&
             nowMs >= longCooldownLock) {
             signalType = "BUY";
@@ -229,12 +240,9 @@ class StrategyEngine {
             targetSlotId = "CORE_LONG";
         }
         // SELL -> Short Slot Entry (Evaluated via Tier-1 Dynamic Slot Dispersion Engine)
-        else if (obi < this.config.obiSellThreshold &&
-            cvd <= this.config.cvdSellThreshold &&
+        else if (isSellSignal &&
             spreadVelocity < this.config.maxSpreadVelocity &&
-            bidPrice > 0 &&
-            aiDirection < 0 &&
-            aiConfidence >= this.config.minAiConfidence) {
+            bidPrice > 0) {
             const slotEval = this.hedgeLedger.evaluateDispersedShortSlotAllocation(bidPrice, this.config.tickSize, realizedVol, hawkesIntensity, shortCooldownLock, nowMs);
             if (slotEval !== null) {
                 signalType = "SELL";
@@ -245,6 +253,9 @@ class StrategyEngine {
             }
         }
         if (signalType === "NONE") {
+            if (seq % 500n === 0n) {
+                console.log(`[StrategyEngine][SignalGate] Seq #${seq} | Composite: ${compositeScore.toFixed(4)} | AI: (dir=${aiDirection.toFixed(2)}, conf=${(aiConfidence * 100).toFixed(0)}%) | OBI: ${obi.toFixed(2)} | CVD: ${cvd.toFixed(0)} | Status: NO SIGNAL TRIGGERED`);
+            }
             this.staticResult.sequenceNum = seq;
             this.staticResult.signalType = "NONE";
             this.staticResult.obi = obi;

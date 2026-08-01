@@ -82,7 +82,7 @@ async function runVerificationTests() {
     const bigIntView = new BigInt64Array(sab);
     const client = new marketDataClient_1.MarketDataClient(sab);
     const testRiskGuard = new risk_1.RiskGuard({ minCooldownMs: 0 }); // zero cooldown for test loop
-    const engine = new engine_1.StrategyEngine(client, testRiskGuard, configuredClient);
+    const engine = new engine_1.StrategyEngine(client, testRiskGuard, configuredClient, { symbol: "BTCUSDT", orderQuantity: 0.001 });
     // Setup initial SAB metrics
     Atomics.store(bigIntView, 0, 1000n); // Timestamp
     storeAtomicFloat64(bigIntView, 1, 0.45); // OBI > 0.25 (Buy signal threshold)

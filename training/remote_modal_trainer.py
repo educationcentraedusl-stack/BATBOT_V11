@@ -2,22 +2,25 @@
 """
 BATBOT_V11 SOTA Remote Cloud GPU Trainer (Modal Serverless Webhook)
 Decouples PyTorch Closed-Form Continuous-Time (CfC) model training to high-performance remote GPUs.
-Receives binary dataset SafeTensors via HTTP POST, executes FP16 AMP training on CUDA (NVIDIA T4/L4),
-and streams back trained model weights serialized in SafeTensors format.
+Receives binary dataset SafeTensors via HTTP POST with optional Bearer HFT_SECRET_TOKEN,
+executes PyTorch 2.6 kernel-fused compilation with BF16 AMP on CUDA (NVIDIA T4/L4/A100),
+and streams back trained model weights serialized in SafeTensors format via FastAPI StreamingResponse.
 """
 
 import io
+import os
 import math
 import time
 import modal
 import fastapi
 from fastapi import Response
+from fastapi.responses import StreamingResponse
 
 # 1. Define Modal Container Environment Image
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
-        "torch",
+        "torch>=2.6.0",
         "safetensors",
         "fastapi",
         "numpy"
@@ -160,22 +163,33 @@ def execute_training_pipeline(body_bytes: bytes) -> bytes:
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-    model = RemoteCfCCell(input_dim=16, hidden_dim=32, output_dim=1).to(device)
+    raw_model = RemoteCfCCell(input_dim=16, hidden_dim=32, output_dim=1).to(device)
+
+    # Enable PyTorch 2.6 kernel fusion and CUDA graphs compilation with max-autotune
+    if device.type == "cuda":
+        try:
+            model = torch.compile(raw_model, mode="max-autotune", dynamic=False)
+            print("[PyTorch 2.6] Successfully compiled CfC model with mode='max-autotune', dynamic=False.")
+        except Exception as e:
+            print(f"[PyTorch 2.6 Compile Warning] torch.compile fallback to raw model ({e}).")
+            model = raw_model
+    else:
+        model = raw_model
+
     criterion = HuberICLoss(delta=1e-3, ic_weight=0.5)
 
     epochs = 35
     total_steps = max(1, epochs * len(train_loader))
-    optimizer = torch.optim.AdamW(model.parameters(), lr=2e-3, weight_decay=1e-4, amsgrad=True)
+    optimizer = torch.optim.AdamW(raw_model.parameters(), lr=2e-3, weight_decay=1e-4, amsgrad=True)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer, max_lr=2e-3, total_steps=total_steps, pct_start=0.1
     )
 
     use_amp = device.type == "cuda"
-    scaler = torch.amp.GradScaler('cuda') if use_amp else None
-
     best_val_ic = -1.0
+
     for epoch in range(1, epochs + 1):
-        model.train()
+        raw_model.train()
         last_loss = 0.0
         for bx, by in train_loader:
             if bx.shape[1] == 0:
@@ -183,28 +197,25 @@ def execute_training_pipeline(body_bytes: bytes) -> bytes:
 
             optimizer.zero_grad()
 
-            if use_amp and scaler is not None:
-                with torch.amp.autocast('cuda'):
+            if use_amp:
+                # Enforce Bfloat16 (BF16) Automatic Mixed Precision to preserve continuous-time numerical stability
+                with torch.autocast('cuda', dtype=torch.bfloat16):
                     pred = model(bx)
                     loss, h_loss, ic = criterion(pred, by)
-
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(optimizer)
-                scaler.update()
             else:
                 pred = model(bx)
                 loss, h_loss, ic = criterion(pred, by)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
 
-            last_loss = loss.item()
+            loss.backward()
+            # Enforce L2 norm gradient clipping threshold of 1.0 prior to every optimizer step
+            torch.nn.utils.clip_grad_norm_(raw_model.parameters(), max_norm=1.0)
+            optimizer.step()
             scheduler.step()
 
+            last_loss = loss.item()
+
         if val_samples > 0:
-            model.eval()
+            raw_model.eval()
             val_ic_sum = 0.0
             val_count = 0
             with torch.no_grad():
@@ -212,7 +223,7 @@ def execute_training_pipeline(body_bytes: bytes) -> bytes:
                     if bx.shape[1] == 0:
                         continue
                     if use_amp:
-                        with torch.amp.autocast('cuda'):
+                        with torch.autocast('cuda', dtype=torch.bfloat16):
                             pred = model(bx)
                             _, _, ic = criterion(pred, by)
                     else:
@@ -233,12 +244,12 @@ def execute_training_pipeline(body_bytes: bytes) -> bytes:
     print(f"[Modal Worker] Training complete in {exec_duration:.3f}s | Best Val IC: {best_val_ic:+.4f}")
 
     weight_tensors = {
-        "w_alpha": model.w_alpha.detach().cpu().contiguous(),
-        "b_alpha": model.b_alpha.detach().cpu().contiguous(),
-        "w_beta": model.w_beta.detach().cpu().contiguous(),
-        "b_beta": model.b_beta.detach().cpu().contiguous(),
-        "w_output": model.w_output.detach().cpu().contiguous(),
-        "b_output": model.b_output.detach().cpu().contiguous(),
+        "w_alpha": raw_model.w_alpha.detach().cpu().contiguous(),
+        "b_alpha": raw_model.b_alpha.detach().cpu().contiguous(),
+        "w_beta": raw_model.w_beta.detach().cpu().contiguous(),
+        "b_beta": raw_model.b_beta.detach().cpu().contiguous(),
+        "w_output": raw_model.w_output.detach().cpu().contiguous(),
+        "b_output": raw_model.b_output.detach().cpu().contiguous(),
     }
 
     return save(weight_tensors)
@@ -255,10 +266,20 @@ def train_cfc_direct(body_bytes: bytes) -> bytes:
 
 @app.function(gpu="T4", image=image, timeout=900)
 @modal.fastapi_endpoint(method="POST")
-async def train_cfc_webhook(request: fastapi.Request) -> Response:
+async def train_cfc_webhook(request: fastapi.Request):
     """
-    High-Speed Serverless Training Webhook for HTTP POST invocation.
+    High-Speed Serverless Training Webhook with Bearer Token Authentication & Streaming Response.
     """
+    secret_token = os.environ.get("HFT_SECRET_TOKEN")
+    if secret_token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header != f"Bearer {secret_token}":
+            return Response(
+                content=b"Error: Unauthorized request. Invalid HFT_SECRET_TOKEN.",
+                status_code=401,
+                media_type="text/plain",
+            )
+
     body_bytes = await request.body()
     if not body_bytes or len(body_bytes) < 64:
         return Response(
@@ -269,7 +290,11 @@ async def train_cfc_webhook(request: fastapi.Request) -> Response:
 
     try:
         serialized_weights = execute_training_pipeline(body_bytes)
-        return Response(content=serialized_weights, media_type="application/octet-stream")
+        return StreamingResponse(
+            io.BytesIO(serialized_weights),
+            media_type="application/octet-stream",
+            headers={"Content-Length": str(len(serialized_weights))},
+        )
     except Exception as e:
         return Response(
             content=f"Error in training pipeline: {str(e)}".encode("utf-8"),
@@ -280,7 +305,6 @@ async def train_cfc_webhook(request: fastapi.Request) -> Response:
 
 @app.local_entrypoint()
 def main():
-    import os
     project_root = os.getcwd()
     dataset_path = os.path.join(project_root, "data", "cfc_features.safetensors")
     weights_path = os.path.join(project_root, "models", "cfc_weights.safetensors")
@@ -301,4 +325,3 @@ def main():
         f.write(weights_bytes)
 
     print(f"[Local Entrypoint] SUCCESS: SafeTensors weights saved ({len(weights_bytes)} bytes) to '{weights_path}'!")
-

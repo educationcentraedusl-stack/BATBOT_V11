@@ -40,7 +40,7 @@ class DynamicRiskEngine {
             regimeState = "MEAN_REVERTING";
         }
         else {
-            regimeState = "TOXIC_CHOP_TRAP";
+            regimeState = "MEAN_REVERTING";
         }
         // 2. Trap Detection Checks
         let isTrapDetected = false;
