@@ -146,30 +146,26 @@ export class AutoRecalibrationManager {
   }
 
   public evaluateTickDrift(ic: number, isDrifted: boolean): void {
-    if (this.isRecalibrating || this.isPromptActive) {
+    if (this.isRecalibrating) {
       return;
     }
 
-    if (isDrifted || ic < 0.0300) {
+    if (isDrifted) {
       this.driftTickCounter++;
+      // Exponential backoff cooldown if previous recalibration failed
+      const effectiveCooldown = this.recalibrationFailed
+        ? Math.min(300000, this.cooldownMs * 2)
+        : this.cooldownMs;
+
       if (
         this.driftTickCounter >= this.sustainedDriftThreshold &&
         !this.isRecalibrating &&
-        !this.isPromptActive &&
-        Date.now() - this.lastAttemptTimestamp >= this.cooldownMs
+        Date.now() - this.lastAttemptTimestamp >= effectiveCooldown
       ) {
         void this.runRecalibrationPipeline(ic);
       }
-    } else if (ic >= 0.0500) {
+    } else {
       this.driftTickCounter = 0;
-      if (
-        this.onStateChangeCallback &&
-        !this.isRecalibrating &&
-        !this.isPromptActive &&
-        !this.recalibrationFailed
-      ) {
-        this.onStateChangeCallback("LIVE_ACTIVE");
-      }
     }
   }
 
@@ -185,53 +181,6 @@ export class AutoRecalibrationManager {
     }
 
     return process.platform === "win32" ? "python" : "python3";
-  }
-
-  private async promptUserForModalGPU(): Promise<boolean> {
-    if (!process.stdin.isTTY) {
-      console.log("[BATBOT_V11] Non-interactive environment detected. Proceeding with default Modal Cloud GPU flow.");
-      return true;
-    }
-
-    if (this.isPromptActive) {
-      return false;
-    }
-
-    this.isPromptActive = true;
-    TerminalOutputMux.getInstance().startPromptSession();
-
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-
-    try {
-      return await new Promise<boolean>((resolve) => {
-        let isAnswered = false;
-        const timeout = setTimeout(() => {
-          if (!isAnswered) {
-            isAnswered = true;
-            rl.close();
-            process.stdout.write("\n\x1b[33m[BATBOT_V11] Prompt timeout (15s elapsed). Defaulting to Modal Cloud GPU training.\x1b[0m\n");
-            resolve(true);
-          }
-        }, 15000);
-
-        const promptMsg = "\n\x1b[33m\x1b[1m[BATBOT_V11] Recalibration triggered. Try Training via Modal Cloud GPU? (Y/N) [Auto-Y in 15s]: \x1b[0m";
-        rl.question(promptMsg, (answer) => {
-          if (!isAnswered) {
-            isAnswered = true;
-            clearTimeout(timeout);
-            rl.close();
-            const input = answer.trim().toLowerCase();
-            resolve(input === "" || input === "y" || input === "yes");
-          }
-        });
-      });
-    } finally {
-      TerminalOutputMux.getInstance().endPromptSession();
-      this.isPromptActive = false;
-    }
   }
 
   private killLocalPythonProcesses(): void {
@@ -260,44 +209,25 @@ export class AutoRecalibrationManager {
   }
 
   public async runRecalibrationPipeline(currentIc: number): Promise<boolean> {
-    if (this.isRecalibrating || this.isPromptActive) {
+    if (this.isRecalibrating) {
       return false;
     }
 
-    // Set attempt timestamp IMMEDIATELY at entry to enforce 60s cooldown on all execution paths
+    // Set attempt timestamp IMMEDIATELY at entry to enforce cooldown on all execution paths
     this.lastAttemptTimestamp = Date.now();
     this.recalibrationFailed = false;
 
-    // Single-Flight Atomic Mutex Acquisition
+    // Single-Flight Atomic Mutex Acquisition (Non-blocking: Engine remains LIVE_ACTIVE)
     this.isRecalibrating = true;
-    if (this.onStateChangeCallback) {
-      this.onStateChangeCallback("TRAINING_LOCK");
-    }
 
     let isSuccess = false;
-    const lockFile = path.join(this.projectRoot, ".training.lock");
-    const isLockDetected = fs.existsSync(lockFile);
 
     try {
       console.log(
-        `[BATBOT_V11][AUTO-RECALIBRATION] Triggered auto-recalibration due to sustained MODEL_DRIFT (IC: ${currentIc.toFixed(4)}, Drift Ticks: ${this.driftTickCounter}).`
+        `[BATBOT_V11][SHADOW-RECALIBRATION] Triggered background recalibration (IC: ${currentIc.toFixed(4)}, Drift Ticks: ${this.driftTickCounter}). Engine remains LIVE_ACTIVE trading on Generation N weights.`
       );
 
-      const useModal = await this.promptUserForModalGPU();
-
-      if (useModal) {
-        console.log("[BATBOT_V11][MODAL GPU OVERRIDE] User requested Modal Cloud GPU training. Clearing local locks...");
-        this.killLocalPythonProcesses();
-        this.cleanupLockAndProgressFiles();
-      } else if (isLockDetected) {
-        console.log("[BATBOT_V11] Manual/Background training detected. Waiting for completion in TRAINING_LOCK...");
-        return false;
-      }
-
-      if (this.onStateChangeCallback) {
-        this.onStateChangeCallback("RECALIBRATING");
-      }
-
+      this.cleanupLockAndProgressFiles();
       this.lastError = null;
 
       // Step 1: Ensure dataset signals log exists and has data
@@ -312,7 +242,7 @@ export class AutoRecalibrationManager {
 
       const pythonCmd = this.getPythonExecutable();
       console.log(
-        `[BATBOT_V11][AUTO-RECALIBRATION] Step 1/4: Executing Python data preparation (prepare_data.py) using runtime '${pythonCmd}'...`
+        `[BATBOT_V11][SHADOW-RECALIBRATION] Step 1/4: Executing Python data preparation (prepare_data.py) using runtime '${pythonCmd}'...`
       );
       const prepScript = path.join(this.projectRoot, "training", "prepare_data.py");
 
@@ -323,11 +253,11 @@ export class AutoRecalibrationManager {
       });
 
       if (prepResult.stderr && prepResult.stderr.trim().length > 0) {
-        console.warn(`[BATBOT_V11][AUTO-RECALIBRATION] Data prep stderr log: ${prepResult.stderr.trim()}`);
+        console.warn(`[BATBOT_V11][SHADOW-RECALIBRATION] Data prep stderr log: ${prepResult.stderr.trim()}`);
       }
 
-      // Step 2: Offload training to Modal Serverless Cloud GPU
-      console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Step 2/4: Executing Modal Serverless GPU offloading...`);
+      // Step 2: Offload training to Modal Serverless Cloud GPU asynchronously
+      console.log(`[BATBOT_V11][SHADOW-RECALIBRATION] Step 2/4: Offloading PyTorch training to Modal Cloud GPU...`);
       const remoteClient = new RemoteRecalibrationClient();
       const remoteSuccess = await remoteClient.trainRemotely();
 
@@ -335,23 +265,23 @@ export class AutoRecalibrationManager {
         throw new Error("Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.");
       }
 
-      console.log(`[BATBOT_V11][AUTO-RECALIBRATION] Modal Serverless GPU training & weights download PASSED!`);
+      console.log(`[BATBOT_V11][SHADOW-RECALIBRATION] Modal Serverless GPU training & weights download PASSED!`);
 
-      // Step 3: Validate generated SafeTensors weights file
+      // Step 3: Validate generated SafeTensors weights file & Holdout Verification
       if (!fs.existsSync(this.weightsPath)) {
         throw new Error(`Trained SafeTensors file not found at expected path: '${this.weightsPath}'.`);
       }
 
       const weightsStat = fs.statSync(this.weightsPath);
-      if (weightsStat.size === 0) {
-        throw new Error(`Exported SafeTensors file '${this.weightsPath}' is empty (0 bytes).`);
+      if (weightsStat.size < 100) {
+        throw new Error(`Exported SafeTensors file '${this.weightsPath}' is empty or invalid (${weightsStat.size} bytes).`);
       }
 
       console.log(
-        `[BATBOT_V11][AUTO-RECALIBRATION] Step 3/4: SafeTensors validation passed (${weightsStat.size} bytes). Executing zero-lock NAPI RCU Hot-Swap...`
+        `[BATBOT_V11][SHADOW-RECALIBRATION] Step 3/4: SafeTensors validation passed (${weightsStat.size} bytes). Executing zero-lock NAPI RCU Atomic Hot-Swap...`
       );
 
-      // Step 4: Atomic Hot-Swap via NAPI RCU pointer swap in Rust
+      // Step 4: Atomic Hot-Swap via NAPI RCU pointer swap in Rust (Zero HFT Latency Pause)
       const loaded = nativeAddon.loadAiModel ? nativeAddon.loadAiModel(this.weightsPath) : false;
       if (!loaded) {
         throw new Error(`NAPI loadAiModel failed to load weights from '${this.weightsPath}'. Engine remains uncalibrated.`);
@@ -368,15 +298,11 @@ export class AutoRecalibrationManager {
       isSuccess = true;
 
       console.log(
-        `[BATBOT_V11][AUTO-RECALIBRATION] Step 4/4: Self-healing pipeline COMPLETED SUCCESSFULLY! Model hot-swapped & IC tracking window reset.`
+        `[BATBOT_V11][SHADOW-RECALIBRATION] Step 4/4: Self-healing pipeline COMPLETED SUCCESSFULLY! Model hot-swapped to Generation ${this.totalRecalibrations}. IC tracking window reset.`
       );
 
       if (this.onSuccessCallback) {
         this.onSuccessCallback();
-      }
-
-      if (this.onStateChangeCallback) {
-        this.onStateChangeCallback("LIVE_ACTIVE");
       }
 
       return true;
@@ -405,20 +331,14 @@ export class AutoRecalibrationManager {
         console.error(`Failed to write to recalibration_errors.log: ${String(logErr)}`);
       }
 
-      console.error(
-        `\x1b[31m[BATBOT_V11][AUTO-RECALIBRATION ERROR] Pipeline execution failed! Engine locked in TRAINING_LOCK safety state.\nReason: ${errorMsg}\x1b[0m`
+      console.warn(
+        `\x1b[33m[BATBOT_V11][SHADOW-RECALIBRATION NOTICE] Background recalibration attempt failed. Trading continues seamlessly on Generation N model weights.\nReason: ${errorMsg}\x1b[0m`
       );
 
       return false;
     } finally {
       this.isRecalibrating = false;
-      if (!isSuccess) {
-        this.recalibrationFailed = true;
-        if (this.onStateChangeCallback) {
-          // Enforce TRAINING_LOCK when recalibration failed or was skipped
-          this.onStateChangeCallback("TRAINING_LOCK");
-        }
-      }
+      // Do NOT set state to TRAINING_LOCK. Engine continues trading on last known good weights.
     }
   }
 }

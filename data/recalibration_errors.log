@@ -2142,3 +2142,5 @@ Training already in progress.
 [FATAL ERROR] CUDA device unavailable! CPU fallback initiated. GPU acceleration & FP16 Tensor Cores disabled.
 [2026-08-01T12:18:59.520Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
 [2026-08-01T13:14:00.304Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-01T16:40:32.332Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-01T16:51:12.801Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.

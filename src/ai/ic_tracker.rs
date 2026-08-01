@@ -2,24 +2,35 @@ use std::collections::VecDeque;
 use crate::ipc::shared_memory::AtomicSharedMemoryBridge;
 
 pub const DEFAULT_IC_WINDOW_SIZE: usize = 1000;
-pub const MODEL_DRIFT_THRESHOLD: f64 = 0.03;
-pub const MIN_SAMPLES_FOR_DRIFT: usize = 30;
+pub const MODEL_DRIFT_FLOOR: f64 = 0.0100;
+pub const MIN_SAMPLES_FOR_DRIFT: usize = 100;
 
 #[derive(Debug, Clone)]
 pub struct ICTracker {
     window_size: usize,
     pairs: VecDeque<(f64, f64)>,
     current_ic: f64,
+    ewma_ic: f64,
+    ewma_var: f64,
+    adaptive_threshold: f64,
     is_drifted: bool,
+    alpha: f64,
+    min_samples_for_drift: usize,
 }
 
 impl ICTracker {
     pub fn new(window_size: usize) -> Self {
+        let min_samples_for_drift = if window_size <= 100 { 30 } else { MIN_SAMPLES_FOR_DRIFT };
         Self {
             window_size,
             pairs: VecDeque::with_capacity(window_size),
             current_ic: 0.0,
+            ewma_ic: 0.0,
+            ewma_var: 0.0,
+            adaptive_threshold: MODEL_DRIFT_FLOOR,
             is_drifted: false,
+            alpha: 0.05,
+            min_samples_for_drift,
         }
     }
 
@@ -41,15 +52,35 @@ impl ICTracker {
         let ic = self.compute_spearman_ic();
         self.current_ic = ic;
 
-        if self.pairs.len() >= MIN_SAMPLES_FOR_DRIFT && ic < MODEL_DRIFT_THRESHOLD {
+        // Update EWMA mean & variance of IC for volatility-adjusted dynamic thresholding
+        if self.pairs.len() >= 10 {
+            if self.ewma_ic == 0.0 && self.ewma_var == 0.0 {
+                self.ewma_ic = ic;
+                self.ewma_var = 0.0025; // Baseline variance initial estimate
+            } else {
+                let delta = ic - self.ewma_ic;
+                self.ewma_ic += self.alpha * delta;
+                self.ewma_var = (1.0 - self.alpha) * (self.ewma_var + self.alpha * delta * delta);
+            }
+        }
+
+        let std_dev = self.ewma_var.sqrt();
+        // Dynamic thresholding: EWMA - 2.0 * std_dev, bounded between 0.0100 and 0.0500
+        let dynamic_thresh = (self.ewma_ic - 2.0 * std_dev).clamp(MODEL_DRIFT_FLOOR, 0.0500);
+        self.adaptive_threshold = dynamic_thresh;
+
+        // Adaptive drift trigger condition:
+        // Requires at least min_samples_for_drift (100) observations
+        // and IC falling below the dynamic threshold AND below absolute floor 0.0200
+        if self.pairs.len() >= self.min_samples_for_drift && ic < dynamic_thresh && ic < 0.0200 {
             if !self.is_drifted {
                 self.is_drifted = true;
                 eprintln!(
-                    "[BATBOT_V11][IC Tracker WARNING] MODEL_DRIFT detected! Rolling Spearman IC: {:.4} < {:.4} threshold over {} pairs.",
-                    ic, MODEL_DRIFT_THRESHOLD, self.pairs.len()
+                    "[BATBOT_V11][IC Tracker ADAPTIVE DRIFT] Dynamic IC Threshold breached! IC: {:.4} < Dynamic Threshold: {:.4} (EWMA: {:.4}, Std: {:.4}) over {} pairs.",
+                    ic, dynamic_thresh, self.ewma_ic, std_dev, self.pairs.len()
                 );
             }
-        } else if ic >= MODEL_DRIFT_THRESHOLD + 0.02 {
+        } else if ic >= dynamic_thresh + 0.03 || ic >= 0.0500 {
             self.is_drifted = false;
         }
 
@@ -64,11 +95,22 @@ impl ICTracker {
     pub fn reset(&mut self) {
         self.pairs.clear();
         self.current_ic = 0.0;
+        self.ewma_ic = 0.0;
+        self.ewma_var = 0.0;
+        self.adaptive_threshold = MODEL_DRIFT_FLOOR;
         self.is_drifted = false;
     }
 
     pub fn current_ic(&self) -> f64 {
         self.current_ic
+    }
+
+    pub fn ewma_ic(&self) -> f64 {
+        self.ewma_ic
+    }
+
+    pub fn adaptive_threshold(&self) -> f64 {
+        self.adaptive_threshold
     }
 
     pub fn is_drifted(&self) -> bool {

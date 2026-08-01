@@ -272,7 +272,7 @@ def execute_training_pipeline(body_bytes: bytes) -> bytes:
 
 
 # 4. Modal Functions & Webhook Entrypoints
-@app.function(gpu="T4", image=image, timeout=900)
+@app.function(gpu="T4", image=image, timeout=900, scaledown_window=300)
 def train_cfc_direct(body_bytes: bytes) -> bytes:
     """
     Direct Modal Function for Python SDK invocation over gRPC.
@@ -280,7 +280,7 @@ def train_cfc_direct(body_bytes: bytes) -> bytes:
     return execute_training_pipeline(body_bytes)
 
 
-@app.function(gpu="T4", image=image, timeout=900)
+@app.function(gpu="T4", image=image, timeout=900, scaledown_window=300)
 @modal.fastapi_endpoint(method="POST")
 async def train_cfc_webhook(request: fastapi.Request):
     """

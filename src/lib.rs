@@ -86,16 +86,18 @@ pub fn get_ic_status() -> String {
     if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
         if let Ok(tracker) = active_engine.ic_tracker.lock() {
             format!(
-                "{{\"ic\":{:.6},\"is_drifted\":{},\"sample_count\":{}}}",
+                "{{\"ic\":{:.6},\"ewma_ic\":{:.6},\"adaptive_threshold\":{:.6},\"is_drifted\":{},\"sample_count\":{}}}",
                 tracker.current_ic(),
+                tracker.ewma_ic(),
+                tracker.adaptive_threshold(),
                 tracker.is_drifted(),
                 tracker.len()
             )
         } else {
-            "{\"ic\":0.0,\"is_drifted\":false,\"sample_count\":0}".to_string()
+            "{\"ic\":0.0,\"ewma_ic\":0.0,\"adaptive_threshold\":0.01,\"is_drifted\":false,\"sample_count\":0}".to_string()
         }
     } else {
-        "{\"ic\":0.0,\"is_drifted\":false,\"sample_count\":0}".to_string()
+        "{\"ic\":0.0,\"ewma_ic\":0.0,\"adaptive_threshold\":0.01,\"is_drifted\":false,\"sample_count\":0}".to_string()
     }
 }
 

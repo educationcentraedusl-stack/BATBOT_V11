@@ -59,7 +59,7 @@ class RemoteRecalibrationClient {
         const datasetPath = options?.datasetPath || this.defaultDatasetPath;
         const weightsPath = options?.weightsPath || this.defaultWeightsPath;
         const endpointUrl = options?.endpointUrl || process.env.MODAL_TRAINING_URL || this.defaultEndpointUrl;
-        const timeoutMs = options?.timeoutMs || 600000; // 600s (10 min) extended timeout for Modal container cold boot & GPU training
+        const timeoutMs = options?.timeoutMs || 600000; // 600s (10 min) extended timeout
         if (!fs.existsSync(datasetPath)) {
             console.warn(`[BATBOT_V11][REMOTE-TRAINING] Dataset file missing at '${datasetPath}'. Cannot offload training.`);
             return false;
@@ -71,60 +71,81 @@ class RemoteRecalibrationClient {
         }
         console.log(`[BATBOT_V11][REMOTE-TRAINING] Uploading SafeTensors dataset (${datasetStat.size} bytes) via chunked stream to Modal Serverless GPU (${endpointUrl})...`);
         const startTime = Date.now();
-        try {
-            let customAgent = undefined;
+        const maxAttempts = 3;
+        let response = null;
+        let lastError = null;
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                // eslint-disable-next-line @typescript-eslint/no-var-requires
-                const undici = require("undici");
-                if (typeof undici.Agent === "function") {
-                    customAgent = new undici.Agent({
-                        headersTimeout: 0,
-                        bodyTimeout: 0,
-                        connectTimeout: 300000,
-                    });
+                let customAgent = undefined;
+                try {
+                    // eslint-disable-next-line @typescript-eslint/no-var-requires
+                    const undici = require("undici");
+                    if (typeof undici.Agent === "function") {
+                        customAgent = new undici.Agent({
+                            headersTimeout: 0,
+                            bodyTimeout: 0,
+                            connectTimeout: 300000,
+                        });
+                    }
+                }
+                catch {
+                    // ignore if undici not loadable
+                }
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+                const headers = {
+                    "Content-Type": "application/octet-stream",
+                    "Content-Length": datasetStat.size.toString(),
+                    "User-Agent": "BATBOT_V11-HFT-Client/1.0",
+                };
+                if (process.env.HFT_SECRET_TOKEN) {
+                    headers["Authorization"] = `Bearer ${process.env.HFT_SECRET_TOKEN}`;
+                }
+                const isLargeFile = datasetStat.size > 50 * 1024 * 1024;
+                const bodyPayload = isLargeFile
+                    ? stream_1.Readable.toWeb(fs.createReadStream(datasetPath))
+                    : fs.readFileSync(datasetPath);
+                const fetchOptions = {
+                    method: "POST",
+                    headers,
+                    body: bodyPayload,
+                    signal: controller.signal,
+                };
+                if (isLargeFile) {
+                    fetchOptions.duplex = "half";
+                }
+                if (customAgent) {
+                    fetchOptions.dispatcher = customAgent;
+                }
+                response = await fetch(endpointUrl, fetchOptions);
+                clearTimeout(timeoutId);
+                if (response.ok) {
+                    break; // Success! Break retry loop
+                }
+                else {
+                    const errorText = await response.text();
+                    console.warn(`[BATBOT_V11][REMOTE-TRAINING WARN] Attempt ${attempt}/${maxAttempts} failed. HTTP ${response.status}: ${errorText}`);
                 }
             }
-            catch {
-                // ignore if undici not loadable
+            catch (err) {
+                lastError = err;
+                console.warn(`[BATBOT_V11][REMOTE-TRAINING WARN] Attempt ${attempt}/${maxAttempts} network exception: ${err.message || String(err)}`);
             }
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-            const headers = {
-                "Content-Type": "application/octet-stream",
-                "Content-Length": datasetStat.size.toString(),
-                "User-Agent": "BATBOT_V11-HFT-Client/1.0",
-            };
-            if (process.env.HFT_SECRET_TOKEN) {
-                headers["Authorization"] = `Bearer ${process.env.HFT_SECRET_TOKEN}`;
+            if (attempt < maxAttempts) {
+                const backoffMs = attempt * 3000;
+                console.log(`[BATBOT_V11][REMOTE-TRAINING] Retrying in ${backoffMs}ms...`);
+                await new Promise((r) => setTimeout(r, backoffMs));
             }
-            // Read directly into Buffer for payload < 50MB to prevent stream backpressure stalls on Node fetch
-            const isLargeFile = datasetStat.size > 50 * 1024 * 1024;
-            const bodyPayload = isLargeFile
-                ? stream_1.Readable.toWeb(fs.createReadStream(datasetPath))
-                : fs.readFileSync(datasetPath);
-            const fetchOptions = {
-                method: "POST",
-                headers,
-                body: bodyPayload,
-                signal: controller.signal,
-            };
-            if (isLargeFile) {
-                fetchOptions.duplex = "half";
-            }
-            if (customAgent) {
-                fetchOptions.dispatcher = customAgent;
-            }
-            const response = await fetch(endpointUrl, fetchOptions);
-            clearTimeout(timeoutId);
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error(`[BATBOT_V11][REMOTE-TRAINING ERROR] Modal GPU returned HTTP ${response.status}: ${errorText}`);
-                return false;
-            }
-            if (!response.body) {
-                console.error("[BATBOT_V11][REMOTE-TRAINING ERROR] Modal GPU response body is empty.");
-                return false;
-            }
+        }
+        if (!response || !response.ok) {
+            console.error(`[BATBOT_V11][REMOTE-TRAINING ERROR] All ${maxAttempts} Modal Cloud GPU attempts failed. ${lastError ? lastError.message : ""}`);
+            return false;
+        }
+        if (!response.body) {
+            console.error("[BATBOT_V11][REMOTE-TRAINING ERROR] Modal GPU response body is empty.");
+            return false;
+        }
+        try {
             // Stream incoming trained model weights directly to disk without buffering full file in RAM
             const dir = path.dirname(weightsPath);
             if (!fs.existsSync(dir)) {

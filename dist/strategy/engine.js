@@ -209,13 +209,8 @@ class StrategyEngine {
                 };
             }
         }
-        // Safety Clamp: Suppress new signal generation when engine is not in LIVE_ACTIVE state
-        if (this.state !== "LIVE_ACTIVE") {
-            const reasonCode = this.state === "TRAINING_LOCK"
-                ? "TRAINING_LOCK_ACTIVE"
-                : this.state === "RECALIBRATING"
-                    ? "RECALIBRATING_ACTIVE"
-                    : "ENGINE_PAUSED";
+        // Safety Clamp: Suppress new signal generation only when engine is explicitly PAUSED or in EMERGENCY_HALT state
+        if (this.state === "PAUSED" || this.state === "EMERGENCY_HALT") {
             if (seq % 500n === 0n) {
                 console.log(`[StrategyEngine][StateLock] Seq #${seq} | Engine locked in [${this.state}] state. Signal evaluation suppressed.`);
             }
@@ -228,7 +223,7 @@ class StrategyEngine {
             this.staticResult.askPrice = askPrice;
             this.staticResult.riskResult = {
                 passed: false,
-                reasonCode: reasonCode,
+                reasonCode: "ENGINE_PAUSED",
                 message: `Engine signal evaluation paused due to state: ${this.state}`,
             };
             return this.staticResult;
