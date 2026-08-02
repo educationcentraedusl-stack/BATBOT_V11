@@ -370,6 +370,9 @@ class StrategyEngine {
         // Pass through Risk Management Guard with target position side
         const isConfigured = this.executionClient.isConfigured();
         const riskResult = this.riskGuard.validateOrder(this.reusableOrderIntent, isConfigured, targetPosSide);
+        if (!riskResult.passed) {
+            console.log(`[StrategyEngine][RISK_REJECTED] Seq #${seq} | Reason: ${riskResult.reasonCode} - ${riskResult.message}`);
+        }
         let executionPromise = undefined;
         if (riskResult.passed) {
             // Set atomic SAB hysteresis lockout (250ms cooldown per side) to suppress microburst sweeps

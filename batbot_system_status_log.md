@@ -605,3 +605,9 @@
 - **Artifacts Created/Modified:** `src/strategy/engine.ts`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Added explicit real-time console telemetry logging for `[BinanceExecution][DISPATCHING]`, `[SUCCESS]`, and `[REJECTED]` events in `src/strategy/engine.ts` to provide immediate feedback when orders reach Binance Futures. Verified 100% via `npm run build:ts` (0 errors).
 - **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-02
+- **Feature/Task:** RiskGuard Order Validation Rejection Diagnostic Logging
+- **Artifacts Created/Modified:** `src/strategy/engine.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Added real-time console telemetry logging for `[StrategyEngine][RISK_REJECTED]` events in `src/strategy/engine.ts` to isolate any risk gate rejections (such as cooldowns, toxic flow, or unconfigured credentials). Verified 100% via `npm run build:ts` (0 errors).
+- **Status:** ✅ Completed & QA Verified

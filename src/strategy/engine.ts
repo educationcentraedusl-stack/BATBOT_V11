@@ -507,6 +507,10 @@ export class StrategyEngine {
       targetPosSide
     );
 
+    if (!riskResult.passed) {
+      console.log(`[StrategyEngine][RISK_REJECTED] Seq #${seq} | Reason: ${riskResult.reasonCode} - ${riskResult.message}`);
+    }
+
     let executionPromise: Promise<BinanceOrderResponse | null> | undefined = undefined;
 
     if (riskResult.passed) {
