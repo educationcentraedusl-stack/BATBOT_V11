@@ -36,106 +36,101 @@ app = modal.App("batbot-cfc-trainer")
 volume = modal.Volume.from_name("batbot-hft-storage", create_if_missing=True)
 STORAGE_DIR = "/storage"
 
-# Import PyTorch & SafeTensors inside container / module scope
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import TensorDataset, DataLoader
-from safetensors.torch import load, save
-
-
-# 3. Model Architecture (Exact Self-Contained PyTorch CfC Cell)
-class RemoteCfCCell(nn.Module):
-    """
-    Exact PyTorch implementation of the 2026 Closed-Form Continuous-Time (CfC) cell
-    matching the Candle Rust formulation in src/ai/cfc.rs.
-    """
-    def __init__(self, input_dim: int = 16, hidden_dim: int = 32, output_dim: int = 1):
-        super().__init__()
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.output_dim = output_dim
-        concat_dim = input_dim + hidden_dim  # 48
-
-        self.w_alpha = nn.Parameter(torch.randn(concat_dim, hidden_dim) * (1.0 / math.sqrt(concat_dim)))
-        self.b_alpha = nn.Parameter(torch.zeros(hidden_dim))
-
-        self.w_beta = nn.Parameter(torch.randn(concat_dim, hidden_dim) * (1.0 / math.sqrt(concat_dim)))
-        self.b_beta = nn.Parameter(torch.zeros(hidden_dim))
-
-        self.w_output = nn.Parameter(torch.randn(hidden_dim, output_dim) * (1.0 / math.sqrt(hidden_dim)))
-        self.b_output = nn.Parameter(torch.zeros(output_dim))
-
-    def forward(self, input_seq: torch.Tensor) -> torch.Tensor:
-        batch_size, seq_len, _ = input_seq.shape
-        device = input_seq.device
-
-        if seq_len == 0:
-            return torch.empty(batch_size, 0, self.output_dim, device=device)
-
-        z_prev = torch.zeros(batch_size, self.hidden_dim, device=device)
-        outputs = []
-
-        for t in range(seq_len):
-            x_t = input_seq[:, t, :]  # [Batch, 16]
-
-            delta_t = x_t[:, 15:16].abs() + 1e-4  # [Batch, 1]
-            chi = torch.cat([x_t, z_prev], dim=-1)
-
-            alpha = F.softplus(chi @ self.w_alpha + self.b_alpha)
-            beta = torch.tanh(chi @ self.w_beta + self.b_beta)
-
-            decay_factor = torch.exp(-alpha * delta_t)
-            z_t = beta - (beta - z_prev) * decay_factor
-
-            output_t = z_t @ self.w_output + self.b_output
-            outputs.append(output_t.unsqueeze(1))
-
-            z_prev = z_t
-
-        return torch.cat(outputs, dim=1)  # [Batch, SeqLen, 1]
-
-
-class HuberICLoss(nn.Module):
-    def __init__(self, delta: float = 1e-3, ic_weight: float = 0.5, eps: float = 1e-8):
-        super().__init__()
-        self.huber = nn.HuberLoss(delta=delta)
-        self.ic_weight = ic_weight
-        self.eps = eps
-
-    def forward(self, pred: torch.Tensor, target: torch.Tensor):
-        h_loss = self.huber(pred, target)
-        pred_flat = pred.view(-1)
-        target_flat = target.view(-1)
-
-        p_mean = pred_flat.mean()
-        t_mean = target_flat.mean()
-
-        p_diff = pred_flat - p_mean
-        t_diff = target_flat - t_mean
-
-        p_std = torch.sqrt((p_diff ** 2).mean() + self.eps)
-        t_std = torch.sqrt((t_diff ** 2).mean() + self.eps)
-
-        cov = (p_diff * t_diff).mean()
-        ic = cov / (p_std * t_std)
-
-        loss = h_loss + self.ic_weight * (1.0 - ic)
-        return loss, h_loss, ic
-
-
-def create_cfc_sequences_strided_torch(features: torch.Tensor, targets: torch.Tensor, seq_len: int = 32):
-    num_samples = features.shape[0] - seq_len + 1
-    if num_samples <= 0:
-        return features.unsqueeze(0), targets.unsqueeze(0)
-    in_sw = features.unfold(0, seq_len, 1)  # [num_samples, 16, 32]
-    tgt_sw = targets.unfold(0, seq_len, 1) # [num_samples, 1, 32]
-    seq_inputs = in_sw.transpose(1, 2).contiguous() # [num_samples, 32, 16]
-    seq_targets = tgt_sw.transpose(1, 2).contiguous() # [num_samples, 32, 1]
-    return seq_inputs, seq_targets
-
-
+# 3. Model Architecture & Training Pipeline (Loaded dynamically inside Modal Container)
 def execute_training_pipeline(body_bytes: bytes) -> bytes:
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch.utils.data import TensorDataset, DataLoader
+    from safetensors.torch import load, save
+
+    class RemoteCfCCell(nn.Module):
+        """
+        Exact PyTorch implementation of the 2026 Closed-Form Continuous-Time (CfC) cell
+        matching the Candle Rust formulation in src/ai/cfc.rs.
+        """
+        def __init__(self, input_dim: int = 16, hidden_dim: int = 32, output_dim: int = 1):
+            super().__init__()
+            self.input_dim = input_dim
+            self.hidden_dim = hidden_dim
+            self.output_dim = output_dim
+            concat_dim = input_dim + hidden_dim  # 48
+
+            self.w_alpha = nn.Parameter(torch.randn(concat_dim, hidden_dim) * (1.0 / math.sqrt(concat_dim)))
+            self.b_alpha = nn.Parameter(torch.zeros(hidden_dim))
+
+            self.w_beta = nn.Parameter(torch.randn(concat_dim, hidden_dim) * (1.0 / math.sqrt(concat_dim)))
+            self.b_beta = nn.Parameter(torch.zeros(hidden_dim))
+
+            self.w_output = nn.Parameter(torch.randn(hidden_dim, output_dim) * (1.0 / math.sqrt(hidden_dim)))
+            self.b_output = nn.Parameter(torch.zeros(output_dim))
+
+        def forward(self, input_seq: torch.Tensor) -> torch.Tensor:
+            batch_size, seq_len, _ = input_seq.shape
+            device = input_seq.device
+
+            if seq_len == 0:
+                return torch.empty(batch_size, 0, self.output_dim, device=device)
+
+            z_prev = torch.zeros(batch_size, self.hidden_dim, device=device)
+            outputs = []
+
+            for t in range(seq_len):
+                x_t = input_seq[:, t, :]  # [Batch, 16]
+
+                delta_t = x_t[:, 15:16].abs() + 1e-4  # [Batch, 1]
+                chi = torch.cat([x_t, z_prev], dim=-1)
+
+                alpha = F.softplus(chi @ self.w_alpha + self.b_alpha)
+                beta = torch.tanh(chi @ self.w_beta + self.b_beta)
+
+                decay_factor = torch.exp(-alpha * delta_t)
+                z_t = beta - (beta - z_prev) * decay_factor
+
+                output_t = z_t @ self.w_output + self.b_output
+                outputs.append(output_t.unsqueeze(1))
+
+                z_prev = z_t
+
+            return torch.cat(outputs, dim=1)  # [Batch, SeqLen, 1]
+
+    class HuberICLoss(nn.Module):
+        def __init__(self, delta: float = 1e-3, ic_weight: float = 0.5, eps: float = 1e-8):
+            super().__init__()
+            self.huber = nn.HuberLoss(delta=delta)
+            self.ic_weight = ic_weight
+            self.eps = eps
+
+        def forward(self, pred: torch.Tensor, target: torch.Tensor):
+            h_loss = self.huber(pred, target)
+            pred_flat = pred.view(-1)
+            target_flat = target.view(-1)
+
+            p_mean = pred_flat.mean()
+            t_mean = target_flat.mean()
+
+            p_diff = pred_flat - p_mean
+            t_diff = target_flat - t_mean
+
+            p_std = torch.sqrt((p_diff ** 2).mean() + self.eps)
+            t_std = torch.sqrt((t_diff ** 2).mean() + self.eps)
+
+            cov = (p_diff * t_diff).mean()
+            ic = cov / (p_std * t_std)
+
+            loss = h_loss + self.ic_weight * (1.0 - ic)
+            return loss, h_loss, ic
+
+    def create_cfc_sequences_strided_torch(features: torch.Tensor, targets: torch.Tensor, seq_len: int = 32):
+        num_samples = features.shape[0] - seq_len + 1
+        if num_samples <= 0:
+            return features.unsqueeze(0), targets.unsqueeze(0)
+        in_sw = features.unfold(0, seq_len, 1)  # [num_samples, 16, 32]
+        tgt_sw = targets.unfold(0, seq_len, 1) # [num_samples, 1, 32]
+        seq_inputs = in_sw.transpose(1, 2).contiguous() # [num_samples, 32, 16]
+        seq_targets = tgt_sw.transpose(1, 2).contiguous() # [num_samples, 32, 1]
+        return seq_inputs, seq_targets
+
     start_time = time.time()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[Modal Worker] Device target: {device} ({torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'})")
@@ -257,6 +252,7 @@ def process_job_gpu(job_id: str):
     Reads /storage/jobs/{job_id}/cfc_features.safetensors, executes PyTorch training,
     saves trained weights to /storage/jobs/{job_id}/cfc_weights.safetensors, and updates status.json.
     """
+    volume.reload()
     job_dir = os.path.join(STORAGE_DIR, "jobs", job_id)
     dataset_path = os.path.join(job_dir, "cfc_features.safetensors")
     weights_path = os.path.join(job_dir, "cfc_weights.safetensors")
