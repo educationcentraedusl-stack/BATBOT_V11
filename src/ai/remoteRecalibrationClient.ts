@@ -8,6 +8,21 @@ export interface RemoteTrainingOptions {
   weightsPath?: string;
   endpointUrl?: string;
   timeoutMs?: number;
+  pollIntervalMs?: number;
+}
+
+export interface JobSubmissionResponse {
+  jobId: string;
+  status: string;
+  message?: string;
+}
+
+export interface JobStatusResponse {
+  jobId: string;
+  status: "QUEUED" | "PROCESSING" | "COMPLETED" | "FAILED" | "NOT_FOUND";
+  weightsSize?: number;
+  error?: string;
+  updatedAt?: number;
 }
 
 export class RemoteRecalibrationClient {
@@ -22,18 +37,46 @@ export class RemoteRecalibrationClient {
     this.defaultWeightsPath = path.join(this.projectRoot, "models", "cfc_weights.safetensors");
     this.defaultEndpointUrl =
       process.env.MODAL_TRAINING_URL ||
-      "https://educationcentra-edu-sl--batbot-cfc-trainer-train-cfc-webhook.modal.run";
+      "https://dhanushka-stu-kcc1993--batbot-cfc-trainer-train-cfc-webhook.modal.run";
   }
 
   /**
-   * Offload PyTorch CfC Neural Network training to remote Modal serverless GPU webhook
-   * using chunked HTTP upload streaming and direct-to-disk weight download streaming.
+   * Helper to construct candidate URL endpoints for decoupled sub-routes.
+   */
+  private getCandidateUrls(baseUrl: string, pathSegment: string): string[] {
+    const urls: string[] = [];
+    const cleanSegment = pathSegment.replace(/^\//, "");
+    
+    // 1. If baseUrl contains a known function name, substitute it
+    if (baseUrl.includes("train-cfc-webhook")) {
+      urls.push(baseUrl.replace(/train-cfc-webhook\/?$/, cleanSegment));
+    }
+
+    // 2. Try parsing base domain
+    try {
+      const parsed = new URL(baseUrl);
+      const domainBase = `${parsed.protocol}//${parsed.host}`;
+      urls.push(`${domainBase}/${cleanSegment}`);
+      urls.push(`${domainBase}/api/${cleanSegment}`);
+    } catch {
+      // ignore URL parse errors
+    }
+
+    // 3. Simple append
+    urls.push(`${baseUrl.replace(/\/$/, "")}/${cleanSegment}`);
+    return Array.from(new Set(urls));
+  }
+
+  /**
+   * Offload PyTorch CfC Neural Network training to remote Modal serverless GPU
+   * using 2026 SOTA Decoupled Asynchronous Job Dispatch, Modal Volume Storage, & Non-blocking Polling.
    */
   public async trainRemotely(options?: RemoteTrainingOptions): Promise<boolean> {
     const datasetPath = options?.datasetPath || this.defaultDatasetPath;
     const weightsPath = options?.weightsPath || this.defaultWeightsPath;
     const endpointUrl = options?.endpointUrl || process.env.MODAL_TRAINING_URL || this.defaultEndpointUrl;
-    const timeoutMs = options?.timeoutMs || 600000; // 600s (10 min) extended timeout
+    const timeoutMs = options?.timeoutMs || 300000; // 5 min timeout cap
+    const pollIntervalMs = options?.pollIntervalMs || 3000;
 
     if (!fs.existsSync(datasetPath)) {
       console.warn(`[BATBOT_V11][REMOTE-TRAINING] Dataset file missing at '${datasetPath}'. Cannot offload training.`);
@@ -47,150 +90,261 @@ export class RemoteRecalibrationClient {
     }
 
     console.log(
-      `[BATBOT_V11][REMOTE-TRAINING] Uploading SafeTensors dataset (${datasetStat.size} bytes) via chunked stream to Modal Serverless GPU (${endpointUrl})...`
+      `[BATBOT_V11][REMOTE-TRAINING] Initiating 2026 SOTA Decoupled Async Cloud GPU Offload (${datasetStat.size} bytes)...`
     );
 
     const startTime = Date.now();
-    const maxAttempts = 3;
-    let response: Response | null = null;
-    let lastError: Error | null = null;
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // Stage 1: Submit Job (Sub-Second Latency)
+    const submission = await this.submitJob(endpointUrl, datasetPath, datasetStat.size);
+    if (!submission) {
+      console.warn(`[BATBOT_V11][REMOTE-TRAINING WARN] Async job submission endpoint unreachable. Falling back to synchronous endpoint...`);
+      return this.trainRemotelySynchronous(endpointUrl, datasetPath, datasetStat.size, weightsPath, timeoutMs);
+    }
+
+    console.log(
+      `[BATBOT_V11][REMOTE-TRAINING] Job #${submission.jobId} submitted successfully! Status: ${submission.status}. Polling for completion...`
+    );
+
+    // Stage 2: Non-Blocking Status Polling Loop
+    const pollResult = await this.pollJobCompletion(endpointUrl, submission.jobId, timeoutMs, pollIntervalMs);
+    if (!pollResult || pollResult.status !== "COMPLETED") {
+      console.error(
+        `[BATBOT_V11][REMOTE-TRAINING ERROR] Job #${submission.jobId} failed or timed out during GPU execution.`
+      );
+      return false;
+    }
+
+    // Stage 3: Zero-Copy Weight Retrieval Stream
+    console.log(`[BATBOT_V11][REMOTE-TRAINING] Training complete. Downloading trained SafeTensors weights...`);
+    const downloadSuccess = await this.downloadWeights(endpointUrl, submission.jobId, weightsPath);
+
+    if (downloadSuccess) {
+      const durationMs = Date.now() - startTime;
+      console.log(
+        `[BATBOT_V11][REMOTE-TRAINING SUCCESS] Async Cloud GPU Recalibration completed in ${durationMs}ms with ZERO HTTP timeouts!`
+      );
+    }
+
+    return downloadSuccess;
+  }
+
+  /**
+   * Stage 1: Submit Job to Modal Cloud Storage
+   */
+  private async submitJob(
+    baseUrl: string,
+    datasetPath: string,
+    datasetSize: number
+  ): Promise<JobSubmissionResponse | null> {
+    const candidateUrls = this.getCandidateUrls(baseUrl, "submit-job");
+    const headers: Record<string, string> = {
+      "Content-Type": "application/octet-stream",
+      "Content-Length": datasetSize.toString(),
+      "User-Agent": "BATBOT_V11-HFT-Client/1.0",
+    };
+
+    if (process.env.HFT_SECRET_TOKEN) {
+      headers["Authorization"] = `Bearer ${process.env.HFT_SECRET_TOKEN}`;
+    }
+
+    const payload = fs.readFileSync(datasetPath);
+
+    for (const url of candidateUrls) {
       try {
-        let customAgent: any = undefined;
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
-          const undici = require("undici");
-          if (typeof undici.Agent === "function") {
-            customAgent = new undici.Agent({
-              headersTimeout: 0,
-              bodyTimeout: 0,
-              connectTimeout: 300000,
-            });
-          }
-        } catch {
-          // ignore if undici not loadable
-        }
-
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s submission timeout
 
-        const headers: Record<string, string> = {
-          "Content-Type": "application/octet-stream",
-          "Content-Length": datasetStat.size.toString(),
-          "User-Agent": "BATBOT_V11-HFT-Client/1.0",
-        };
-
-        if (process.env.HFT_SECRET_TOKEN) {
-          headers["Authorization"] = `Bearer ${process.env.HFT_SECRET_TOKEN}`;
-        }
-
-        const isLargeFile = datasetStat.size > 50 * 1024 * 1024;
-        const bodyPayload = isLargeFile
-          ? (Readable.toWeb(fs.createReadStream(datasetPath)) as any)
-          : fs.readFileSync(datasetPath);
-
-        const fetchOptions: any = {
+        const response = await fetch(url, {
           method: "POST",
           headers,
-          body: bodyPayload,
+          body: payload,
           signal: controller.signal,
-        };
-
-        if (isLargeFile) {
-          fetchOptions.duplex = "half";
-        }
-
-        if (customAgent) {
-          fetchOptions.dispatcher = customAgent;
-        }
-
-        response = await fetch(endpointUrl, fetchOptions);
+        });
         clearTimeout(timeoutId);
 
-        if (response.ok) {
-          break; // Success! Break retry loop
-        } else {
-          const errorText = await response.text();
-          console.warn(
-            `[BATBOT_V11][REMOTE-TRAINING WARN] Attempt ${attempt}/${maxAttempts} failed. HTTP ${response.status}: ${errorText}`
-          );
+        if (response.ok || response.status === 202) {
+          const json = (await response.json()) as JobSubmissionResponse;
+          if (json && json.jobId) {
+            return json;
+          }
+        }
+      } catch {
+        // Try next candidate URL
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Stage 2: Non-Blocking Job Status Polling
+   */
+  private async pollJobCompletion(
+    baseUrl: string,
+    jobId: string,
+    maxWaitMs: number,
+    pollIntervalMs: number
+  ): Promise<JobStatusResponse | null> {
+    const candidateUrls = this.getCandidateUrls(baseUrl, "job-status");
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxWaitMs) {
+      for (const url of candidateUrls) {
+        try {
+          const pollUrl = `${url}?job_id=${encodeURIComponent(jobId)}`;
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s poll timeout
+
+          const response = await fetch(pollUrl, {
+            method: "GET",
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+
+          if (response.ok) {
+            const statusJson = (await response.json()) as JobStatusResponse;
+            if (statusJson.status === "COMPLETED") {
+              return statusJson;
+            }
+            if (statusJson.status === "FAILED") {
+              console.error(`[BATBOT_V11][REMOTE-TRAINING ERROR] GPU Worker Error: ${statusJson.error}`);
+              return statusJson;
+            }
+
+            const elapsedSec = Math.round((Date.now() - startTime) / 1000);
+            console.log(`[BATBOT_V11][REMOTE-TRAINING] Job #${jobId} status: ${statusJson.status} (${elapsedSec}s elapsed)...`);
+            break; // Valid status received, break URL candidates loop & wait for next poll interval
+          }
+        } catch {
+          // Try next candidate URL
+        }
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+
+    console.error(`[BATBOT_V11][REMOTE-TRAINING ERROR] Job #${jobId} polling exceeded max timeout of ${maxWaitMs}ms.`);
+    return null;
+  }
+
+  /**
+   * Stage 3: Direct Weight Download Stream
+   */
+  private async downloadWeights(baseUrl: string, jobId: string, weightsPath: string): Promise<boolean> {
+    const candidateUrls = this.getCandidateUrls(baseUrl, "download-weights");
+
+    for (const url of candidateUrls) {
+      try {
+        const downloadUrl = `${url}?job_id=${encodeURIComponent(jobId)}`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s download timeout
+
+        const response = await fetch(downloadUrl, {
+          method: "GET",
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (response.ok && response.body) {
+          const dir = path.dirname(weightsPath);
+          if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+          }
+
+          const tmpPath = `${weightsPath}.remote.tmp`;
+          const fileWriteStream = fs.createWriteStream(tmpPath);
+          const resNodeStream = Readable.fromWeb(response.body as any);
+
+          await pipeline(resNodeStream, fileWriteStream);
+
+          const weightsStat = fs.statSync(tmpPath);
+          if (weightsStat.size < 100) {
+            fs.unlinkSync(tmpPath);
+            console.error(`[BATBOT_V11][REMOTE-TRAINING ERROR] SafeTensors file suspiciously small (${weightsStat.size} bytes).`);
+            return false;
+          }
+
+          // Atomic rename to final path
+          await fs.promises.rename(tmpPath, weightsPath).catch(async () => {
+            await fs.promises.copyFile(tmpPath, weightsPath);
+            await fs.promises.unlink(tmpPath).catch(() => {});
+          });
+
+          // Ensure cfc_updated.safetensors copy exists
+          const altWeightsPath = path.join(dir, "cfc_updated.safetensors");
+          if (weightsPath !== altWeightsPath) {
+            await fs.promises.copyFile(weightsPath, altWeightsPath).catch(() => {});
+          }
+
+          return true;
         }
       } catch (err: any) {
-        lastError = err;
-        console.warn(
-          `[BATBOT_V11][REMOTE-TRAINING WARN] Attempt ${attempt}/${maxAttempts} network exception: ${err.message || String(err)}`
-        );
-      }
-
-      if (attempt < maxAttempts) {
-        const backoffMs = attempt * 3000;
-        console.log(`[BATBOT_V11][REMOTE-TRAINING] Retrying in ${backoffMs}ms...`);
-        await new Promise((r) => setTimeout(r, backoffMs));
+        console.warn(`[BATBOT_V11][REMOTE-TRAINING WARN] Weight download exception from '${url}': ${err.message}`);
       }
     }
 
-    if (!response || !response.ok) {
-      console.error(
-        `[BATBOT_V11][REMOTE-TRAINING ERROR] All ${maxAttempts} Modal Cloud GPU attempts failed. ${lastError ? lastError.message : ""}`
-      );
-      return false;
-    }
+    return false;
+  }
 
-    if (!response.body) {
-      console.error("[BATBOT_V11][REMOTE-TRAINING ERROR] Modal GPU response body is empty.");
-      return false;
-    }
-
+  /**
+   * Legacy Fallback: Synchronous HTTP POST Streaming
+   */
+  private async trainRemotelySynchronous(
+    endpointUrl: string,
+    datasetPath: string,
+    datasetSize: number,
+    weightsPath: string,
+    timeoutMs: number
+  ): Promise<boolean> {
+    console.log(`[BATBOT_V11][REMOTE-TRAINING] Executing legacy synchronous HTTP POST offload...`);
     try {
-      // Stream incoming trained model weights directly to disk without buffering full file in RAM
-      const dir = path.dirname(weightsPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": datasetSize.toString(),
+        "User-Agent": "BATBOT_V11-HFT-Client/1.0",
+      };
+
+      if (process.env.HFT_SECRET_TOKEN) {
+        headers["Authorization"] = `Bearer ${process.env.HFT_SECRET_TOKEN}`;
       }
 
-      const tmpPath = `${weightsPath}.remote.tmp`;
-      const fileWriteStream = fs.createWriteStream(tmpPath);
-      const resNodeStream = Readable.fromWeb(response.body as any);
-
-      await pipeline(resNodeStream, fileWriteStream);
-
-      const weightsStat = fs.statSync(tmpPath);
-      if (weightsStat.size < 100) {
-        fs.unlinkSync(tmpPath);
-        console.error(
-          `[BATBOT_V11][REMOTE-TRAINING ERROR] Downloaded SafeTensors file is suspiciously small (${weightsStat.size} bytes).`
-        );
-        return false;
-      }
-
-      // Atomic rename to final weights target path
-      await fs.promises.rename(tmpPath, weightsPath).catch(async () => {
-        // Fallback for Windows file replace lock
-        await fs.promises.copyFile(tmpPath, weightsPath);
-        await fs.promises.unlink(tmpPath).catch(() => {});
+      const bodyPayload = fs.readFileSync(datasetPath);
+      const response = await fetch(endpointUrl, {
+        method: "POST",
+        headers,
+        body: bodyPayload,
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
-      // Also ensure cfc_updated.safetensors copy exists if weightsPath is cfc_weights.safetensors or vice-versa
-      const altWeightsPath = path.join(dir, "cfc_updated.safetensors");
-      if (weightsPath !== altWeightsPath) {
-        await fs.promises.copyFile(weightsPath, altWeightsPath).catch(() => {});
+      if (response.ok && response.body) {
+        const dir = path.dirname(weightsPath);
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+
+        const tmpPath = `${weightsPath}.remote.tmp`;
+        const fileWriteStream = fs.createWriteStream(tmpPath);
+        const resNodeStream = Readable.fromWeb(response.body as any);
+
+        await pipeline(resNodeStream, fileWriteStream);
+
+        const weightsStat = fs.statSync(tmpPath);
+        if (weightsStat.size >= 100) {
+          await fs.promises.rename(tmpPath, weightsPath).catch(async () => {
+            await fs.promises.copyFile(tmpPath, weightsPath);
+            await fs.promises.unlink(tmpPath).catch(() => {});
+          });
+          return true;
+        }
       }
-
-      const totalMs = Date.now() - startTime;
-      console.log(
-        `[BATBOT_V11][REMOTE-TRAINING SUCCESS] Trained SafeTensors weights streamed directly to disk (${weightsStat.size} bytes) in ${totalMs}ms!`
-      );
-
-      return true;
-    } catch (err: unknown) {
-      const isAbort = err instanceof Error && (err.name === "AbortError" || err.message.includes("aborted"));
-      const causeStr = (err as any)?.cause ? ` (Cause: ${String((err as any).cause.message || (err as any).cause.code || (err as any).cause)})` : "";
-      const errorMsg = isAbort
-        ? `Request timed out after ${Math.round(timeoutMs / 1000)}s waiting for Modal GPU container cold boot and training.`
-        : `${err instanceof Error ? err.message : String(err)}${causeStr}`;
-      console.error(`[BATBOT_V11][REMOTE-TRAINING FAILURE] Failed to offload training to Modal: ${errorMsg}`);
-      return false;
+    } catch (err: any) {
+      console.error(`[BATBOT_V11][REMOTE-TRAINING ERROR] Legacy sync offload failed: ${err.message}`);
     }
+    return false;
   }
 }

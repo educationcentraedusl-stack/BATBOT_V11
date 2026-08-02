@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """
-BATBOT_V11 SOTA Remote Cloud GPU Trainer (Modal Serverless Webhook)
-Decouples PyTorch Closed-Form Continuous-Time (CfC) model training to high-performance remote GPUs.
-Receives binary dataset SafeTensors via HTTP POST with optional Bearer HFT_SECRET_TOKEN,
-executes PyTorch 2.6 kernel-fused compilation with BF16 AMP on CUDA (NVIDIA T4/L4/A100),
-and streams back trained model weights serialized in SafeTensors format via FastAPI StreamingResponse.
+BATBOT_V11 2026 SOTA Decoupled Asynchronous Remote Cloud GPU Trainer (Modal Serverless)
+Decouples PyTorch Closed-Form Continuous-Time (CfC) model training to high-performance remote GPUs
+using persistent Modal Volume storage (`modal.Volume`) and non-blocking asynchronous job dispatch:
+1. POST /submit-job: Saves dataset to Modal Volume, spawns async GPU task, returns 202 Accepted in <100ms.
+2. Async GPU Worker: Reads dataset from Volume, executes PyTorch 2.6 BF16 AMP training, saves weights to Volume.
+3. GET /job-status?job_id=XYZ: Returns status (QUEUED -> PROCESSING -> COMPLETED) in <50ms.
+4. GET /download-weights?job_id=XYZ: Streams trained SafeTensors model weights directly to client.
 """
 
 import io
 import os
 import math
 import time
+import json
+import uuid
 import modal
 import fastapi
 from fastapi import Response
@@ -27,8 +31,10 @@ image = (
     )
 )
 
-# 2. Define Modal App
+# 2. Define Modal App & Persistent Shared Volume Storage
 app = modal.App("batbot-cfc-trainer")
+volume = modal.Volume.from_name("batbot-hft-storage", create_if_missing=True)
+STORAGE_DIR = "/storage"
 
 # Import PyTorch & SafeTensors inside container / module scope
 import torch
@@ -51,10 +57,6 @@ class RemoteCfCCell(nn.Module):
         self.output_dim = output_dim
         concat_dim = input_dim + hidden_dim  # 48
 
-        # Weights matching Candle Rust shapes:
-        # w_alpha: [48, 32], b_alpha: [32]
-        # w_beta:  [48, 32], b_beta:  [32]
-        # w_output:[32, 1],  b_output:[1]
         self.w_alpha = nn.Parameter(torch.randn(concat_dim, hidden_dim) * (1.0 / math.sqrt(concat_dim)))
         self.b_alpha = nn.Parameter(torch.zeros(hidden_dim))
 
@@ -65,10 +67,6 @@ class RemoteCfCCell(nn.Module):
         self.b_output = nn.Parameter(torch.zeros(output_dim))
 
     def forward(self, input_seq: torch.Tensor) -> torch.Tensor:
-        """
-        input_seq: [Batch, SeqLen (32), InputDim (16)]
-        Returns:   [Batch, SeqLen (32), OutputDim (1)]
-        """
         batch_size, seq_len, _ = input_seq.shape
         device = input_seq.device
 
@@ -81,23 +79,15 @@ class RemoteCfCCell(nn.Module):
         for t in range(seq_len):
             x_t = input_seq[:, t, :]  # [Batch, 16]
 
-            # Delta t extracted from column 15 (delta_tau) or defaulted to 0.001s
             delta_t = x_t[:, 15:16].abs() + 1e-4  # [Batch, 1]
-
-            # Chi = concat(x_t, z_prev) -> [Batch, 48]
             chi = torch.cat([x_t, z_prev], dim=-1)
 
-            # Alpha = softplus(chi @ w_alpha + b_alpha) -> [Batch, 32]
             alpha = F.softplus(chi @ self.w_alpha + self.b_alpha)
-
-            # Beta = tanh(chi @ w_beta + b_beta) -> [Batch, 32]
             beta = torch.tanh(chi @ self.w_beta + self.b_beta)
 
-            # z_t = beta - (beta - z_prev) * exp(-alpha * delta_t) -> [Batch, 32]
             decay_factor = torch.exp(-alpha * delta_t)
             z_t = beta - (beta - z_prev) * decay_factor
 
-            # output_t = z_t @ w_output + b_output -> [Batch, 1]
             output_t = z_t @ self.w_output + self.b_output
             outputs.append(output_t.unsqueeze(1))
 
@@ -107,9 +97,6 @@ class RemoteCfCCell(nn.Module):
 
 
 class HuberICLoss(nn.Module):
-    """
-    Combined Huber + Pearson Rank Correlation (IC) loss for high-precision trade ranking.
-    """
     def __init__(self, delta: float = 1e-3, ic_weight: float = 0.5, eps: float = 1e-8):
         super().__init__()
         self.huber = nn.HuberLoss(delta=delta)
@@ -133,16 +120,11 @@ class HuberICLoss(nn.Module):
         cov = (p_diff * t_diff).mean()
         ic = cov / (p_std * t_std)
 
-        # Maximize IC -> minimize 1.0 - IC
         loss = h_loss + self.ic_weight * (1.0 - ic)
         return loss, h_loss, ic
 
 
 def create_cfc_sequences_strided_torch(features: torch.Tensor, targets: torch.Tensor, seq_len: int = 32):
-    """
-    Zero-copy PyTorch tensor unfolding for 32-step sliding window sequence extraction on GPU.
-    Converts 2D [N, 16] features into 3D [N-31, 32, 16] sequence tensors in microseconds.
-    """
     num_samples = features.shape[0] - seq_len + 1
     if num_samples <= 0:
         return features.unsqueeze(0), targets.unsqueeze(0)
@@ -164,7 +146,6 @@ def execute_training_pipeline(body_bytes: bytes) -> bytes:
     x_val_raw = dataset_tensors["val_inputs"].to(device, non_blocking=True)
     y_val_raw = dataset_tensors["val_targets"].to(device, non_blocking=True)
 
-    # Automatically unfold 2D [N, 16] feature matrices into 3D [Batch, 32, 16] sequence tensors on GPU
     if x_train_raw.dim() == 2:
         x_train, y_train = create_cfc_sequences_strided_torch(x_train_raw, y_train_raw, 32)
         x_val, y_val = create_cfc_sequences_strided_torch(x_val_raw, y_val_raw, 32)
@@ -188,7 +169,6 @@ def execute_training_pipeline(body_bytes: bytes) -> bytes:
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
     raw_model = RemoteCfCCell(input_dim=16, hidden_dim=32, output_dim=1).to(device)
-    # Eager mode execution eliminates 20s graph compilation overhead on serverless GPU containers
     model = raw_model
 
     criterion = HuberICLoss(delta=1e-3, ic_weight=0.5)
@@ -214,7 +194,6 @@ def execute_training_pipeline(body_bytes: bytes) -> bytes:
             optimizer.zero_grad()
 
             if use_amp:
-                # Automatic Mixed Precision preserving continuous-time numerical stability
                 with torch.autocast('cuda', dtype=amp_dtype):
                     pred = model(bx)
                     loss, h_loss, ic = criterion(pred, by)
@@ -223,7 +202,6 @@ def execute_training_pipeline(body_bytes: bytes) -> bytes:
                 loss, h_loss, ic = criterion(pred, by)
 
             loss.backward()
-            # Enforce L2 norm gradient clipping threshold of 1.0 prior to every optimizer step
             torch.nn.utils.clip_grad_norm_(raw_model.parameters(), max_norm=1.0)
             optimizer.step()
             scheduler.step()
@@ -271,38 +249,175 @@ def execute_training_pipeline(body_bytes: bytes) -> bytes:
     return save(weight_tensors)
 
 
-# 4. Modal Functions & Webhook Entrypoints
-@app.function(gpu="T4", image=image, timeout=900, scaledown_window=300)
+# 4. Asynchronous Modal Functions & Storage Workers
+@app.function(gpu="T4", image=image, volumes={STORAGE_DIR: volume}, timeout=900, scaledown_window=300)
+def process_job_gpu(job_id: str):
+    """
+    Asynchronous GPU Training Task spawned by submit_job webhook.
+    Reads /storage/jobs/{job_id}/cfc_features.safetensors, executes PyTorch training,
+    saves trained weights to /storage/jobs/{job_id}/cfc_weights.safetensors, and updates status.json.
+    """
+    job_dir = os.path.join(STORAGE_DIR, "jobs", job_id)
+    dataset_path = os.path.join(job_dir, "cfc_features.safetensors")
+    weights_path = os.path.join(job_dir, "cfc_weights.safetensors")
+    status_path = os.path.join(job_dir, "status.json")
+
+    status_data = {"status": "PROCESSING", "jobId": job_id, "updatedAt": time.time()}
+    with open(status_path, "w") as f:
+        json.dump(status_data, f)
+    volume.commit()
+
+    try:
+        with open(dataset_path, "rb") as f:
+            body_bytes = f.read()
+
+        serialized_weights = execute_training_pipeline(body_bytes)
+
+        with open(weights_path, "wb") as f:
+            f.write(serialized_weights)
+
+        status_data = {
+            "status": "COMPLETED",
+            "jobId": job_id,
+            "weightsSize": len(serialized_weights),
+            "updatedAt": time.time(),
+        }
+        with open(status_path, "w") as f:
+            json.dump(status_data, f)
+        volume.commit()
+    except Exception as e:
+        status_data = {
+            "status": "FAILED",
+            "jobId": job_id,
+            "error": str(e),
+            "updatedAt": time.time(),
+        }
+        with open(status_path, "w") as f:
+            json.dump(status_data, f)
+        volume.commit()
+        raise e
+
+
+@app.function(gpu="T4", image=image, volumes={STORAGE_DIR: volume}, timeout=900, scaledown_window=300)
 def train_cfc_direct(body_bytes: bytes) -> bytes:
     """
-    Direct Modal Function for Python SDK invocation over gRPC.
+    Direct Synchronous Modal Function for Python SDK invocation over gRPC.
     """
     return execute_training_pipeline(body_bytes)
 
 
-@app.function(gpu="T4", image=image, timeout=900, scaledown_window=300)
+# 5. 2026 SOTA Decoupled Webhook Endpoints
+@app.function(image=image, volumes={STORAGE_DIR: volume}, timeout=60)
 @modal.fastapi_endpoint(method="POST")
-async def train_cfc_webhook(request: fastapi.Request):
+async def submit_job(request: fastapi.Request):
     """
-    High-Speed Serverless Training Webhook with Bearer Token Authentication & Streaming Response.
+    POST /submit-job (or /api/submit-job)
+    Submits binary SafeTensors dataset, persists to volume, spawns async GPU task,
+    and returns 202 Accepted { jobId, status: "QUEUED" } in <100ms.
     """
     secret_token = os.environ.get("HFT_SECRET_TOKEN")
     if secret_token:
         auth_header = request.headers.get("Authorization", "")
         if auth_header != f"Bearer {secret_token}":
-            return Response(
-                content=b"Error: Unauthorized request. Invalid HFT_SECRET_TOKEN.",
-                status_code=401,
-                media_type="text/plain",
-            )
+            return Response(content=b"Error: Unauthorized request.", status_code=401)
 
     body_bytes = await request.body()
     if not body_bytes or len(body_bytes) < 64:
-        return Response(
-            content=b"Error: Invalid or empty SafeTensors dataset payload.",
-            status_code=400,
-            media_type="text/plain",
+        return Response(content=b"Error: Invalid or empty dataset.", status_code=400)
+
+    job_id = f"job_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+    job_dir = os.path.join(STORAGE_DIR, "jobs", job_id)
+    os.makedirs(job_dir, exist_ok=True)
+
+    dataset_path = os.path.join(job_dir, "cfc_features.safetensors")
+    status_path = os.path.join(job_dir, "status.json")
+
+    with open(dataset_path, "wb") as f:
+        f.write(body_bytes)
+
+    status_data = {"status": "QUEUED", "jobId": job_id, "submittedAt": time.time()}
+    with open(status_path, "w") as f:
+        json.dump(status_data, f)
+
+    volume.commit()
+
+    # Spawn async background GPU worker
+    process_job_gpu.spawn(job_id)
+
+    return fastapi.responses.JSONResponse(
+        content={"jobId": job_id, "status": "QUEUED", "message": "Job submitted successfully."},
+        status_code=202,
+    )
+
+
+@app.function(image=image, volumes={STORAGE_DIR: volume}, timeout=30)
+@modal.fastapi_endpoint(method="GET")
+async def job_status(request: fastapi.Request, job_id: str = ""):
+    """
+    GET /job-status?job_id=job_123
+    Returns job status JSON in <50ms.
+    """
+    volume.reload()
+    if not job_id:
+        job_id = request.query_params.get("job_id", "")
+    if not job_id:
+        return Response(content=b"Error: Missing job_id query parameter.", status_code=400)
+
+    status_path = os.path.join(STORAGE_DIR, "jobs", job_id, "status.json")
+    if not os.path.exists(status_path):
+        return fastapi.responses.JSONResponse(
+            content={"status": "NOT_FOUND", "jobId": job_id},
+            status_code=404,
         )
+
+    with open(status_path, "r") as f:
+        status_data = json.load(f)
+
+    return fastapi.responses.JSONResponse(content=status_data, status_code=200)
+
+
+@app.function(image=image, volumes={STORAGE_DIR: volume}, timeout=60)
+@modal.fastapi_endpoint(method="GET")
+async def download_weights(request: fastapi.Request, job_id: str = ""):
+    """
+    GET /download-weights?job_id=job_123
+    Streams trained SafeTensors model weights binary file.
+    """
+    volume.reload()
+    if not job_id:
+        job_id = request.query_params.get("job_id", "")
+    if not job_id:
+        return Response(content=b"Error: Missing job_id query parameter.", status_code=400)
+
+    weights_path = os.path.join(STORAGE_DIR, "jobs", job_id, "cfc_weights.safetensors")
+    if not os.path.exists(weights_path):
+        return Response(content=b"Error: Weights not found for job_id.", status_code=404)
+
+    with open(weights_path, "rb") as f:
+        weights_bytes = f.read()
+
+    return StreamingResponse(
+        io.BytesIO(weights_bytes),
+        media_type="application/octet-stream",
+        headers={"Content-Length": str(len(weights_bytes))},
+    )
+
+
+@app.function(gpu="T4", image=image, volumes={STORAGE_DIR: volume}, timeout=900, scaledown_window=300)
+@modal.fastapi_endpoint(method="POST")
+async def train_cfc_webhook(request: fastapi.Request):
+    """
+    Legacy Synchronous Serverless Webhook Endpoint (Retained for backward compatibility).
+    """
+    secret_token = os.environ.get("HFT_SECRET_TOKEN")
+    if secret_token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header != f"Bearer {secret_token}":
+            return Response(content=b"Error: Unauthorized request.", status_code=401)
+
+    body_bytes = await request.body()
+    if not body_bytes or len(body_bytes) < 64:
+        return Response(content=b"Error: Invalid or empty SafeTensors dataset payload.", status_code=400)
 
     try:
         serialized_weights = execute_training_pipeline(body_bytes)
@@ -312,11 +427,7 @@ async def train_cfc_webhook(request: fastapi.Request):
             headers={"Content-Length": str(len(serialized_weights))},
         )
     except Exception as e:
-        return Response(
-            content=f"Error in training pipeline: {str(e)}".encode("utf-8"),
-            status_code=500,
-            media_type="text/plain",
-        )
+        return Response(content=f"Error: {str(e)}".encode("utf-8"), status_code=500)
 
 
 @app.local_entrypoint()
