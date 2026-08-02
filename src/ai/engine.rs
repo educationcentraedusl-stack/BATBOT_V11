@@ -412,7 +412,7 @@ impl AIEngine {
         }
         let current_mid = (best_bid + best_ask) / 2.0;
 
-        let lat_us_val = sab.load_f64(10);
+        let lat_us_val = sab.load_f64(98) * 1000.0;
         let lob_features = {
             let mut pipeline = self.feature_pipeline.lock().unwrap_or_else(|e| e.into_inner());
             pipeline.update_and_normalize(sab, lat_us_val)?
@@ -514,7 +514,7 @@ impl AIEngine {
             return Err(Error::Msg("ORDERBOOK_COLLAPSE_DETECTED".to_string()));
         }
 
-        let lat_us_val = sab.load_f64(10);
+        let lat_us_val = sab.load_f64(98) * 1000.0;
         let lob_features = {
             let mut pipeline = self.feature_pipeline.lock().unwrap_or_else(|e| e.into_inner());
             pipeline.update_and_normalize(sab, lat_us_val)?
