@@ -36,7 +36,8 @@ export interface RiskCheckResult {
     | "REJECTED_COUNTER_TREND_REGIME"
     | "TRAINING_LOCK_ACTIVE"
     | "RECALIBRATING_ACTIVE"
-    | "ENGINE_PAUSED";
+    | "ENGINE_PAUSED"
+    | "INVALID_TICK_DATA";
   message: string;
 }
 

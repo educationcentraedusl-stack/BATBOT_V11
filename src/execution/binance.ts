@@ -230,7 +230,7 @@ export class BinanceExecutionClient {
     return `${queryString}&signature=${signature}`;
   }
 
-  private async request<T>(
+  protected async request<T>(
     method: "GET" | "POST" | "DELETE" | "PUT",
     endpoint: string,
     params: Record<string, string | number | boolean> = {},
