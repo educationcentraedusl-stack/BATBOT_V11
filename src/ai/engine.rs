@@ -86,15 +86,7 @@ impl AIEngine {
             .unwrap_or_default()
             .as_nanos() as u64;
 
-        // 1. Read 40 LOB features from SAB slots 11..90
-        let mut lob_features = [0.0f64; 40];
-        // Read 20 bid features (slots 11, 13..49) & 20 ask features (slots 51, 53..89)
-        for i in 0..20 {
-            lob_features[i] = sab.load_f64(11 + i * 2);
-            lob_features[20 + i] = sab.load_f64(51 + i * 2);
-        }
-
-        // Calculate current mid price for IC tracking realized return calculation
+        // Calculate current mid price dynamically for LOB feature normalization & IC tracking
         let best_bid = sab.load_f64(4);
         let best_ask = sab.load_f64(6);
         let current_mid = if best_bid > 0.0 && best_ask > 0.0 {
@@ -102,6 +94,26 @@ impl AIEngine {
         } else {
             0.0
         };
+
+        // 1. Read 40 LOB features from SAB slots 11..90 & apply Mid-Price Relative Normalization (BPS)
+        let mut lob_features = [0.0f64; 40];
+        // Read 20 bid features (slots 11, 13..49) & 20 ask features (slots 51, 53..89)
+        for i in 0..20 {
+            let raw_bid = sab.load_f64(11 + i * 2);
+            let raw_ask = sab.load_f64(51 + i * 2);
+
+            lob_features[i] = if current_mid > 0.0 && raw_bid > 0.0 {
+                ((raw_bid - current_mid) / current_mid) * 10000.0
+            } else {
+                0.0
+            };
+
+            lob_features[20 + i] = if current_mid > 0.0 && raw_ask > 0.0 {
+                ((raw_ask - current_mid) / current_mid) * 10000.0
+            } else {
+                0.0
+            };
+        }
 
         let last_mid = f64::from_bits(self.last_mid_price.load(Ordering::Relaxed));
         let last_pred = f64::from_bits(self.last_prediction_dir.load(Ordering::Relaxed));
@@ -201,11 +213,32 @@ impl AIEngine {
             .unwrap_or_default()
             .as_nanos() as u64;
 
-        // 1. Read 40 LOB features from SAB slots 11..90
+        // Calculate current mid price dynamically for shadow LOB feature normalization
+        let best_bid = sab.load_f64(4);
+        let best_ask = sab.load_f64(6);
+        let current_mid = if best_bid > 0.0 && best_ask > 0.0 {
+            (best_bid + best_ask) / 2.0
+        } else {
+            0.0
+        };
+
+        // 1. Read 40 LOB features from SAB slots 11..90 & apply Mid-Price Relative Normalization (BPS)
         let mut lob_features = [0.0f64; 40];
         for i in 0..20 {
-            lob_features[i] = sab.load_f64(11 + i * 2);
-            lob_features[20 + i] = sab.load_f64(51 + i * 2);
+            let raw_bid = sab.load_f64(11 + i * 2);
+            let raw_ask = sab.load_f64(51 + i * 2);
+
+            lob_features[i] = if current_mid > 0.0 && raw_bid > 0.0 {
+                ((raw_bid - current_mid) / current_mid) * 10000.0
+            } else {
+                0.0
+            };
+
+            lob_features[20 + i] = if current_mid > 0.0 && raw_ask > 0.0 {
+                ((raw_ask - current_mid) / current_mid) * 10000.0
+            } else {
+                0.0
+            };
         }
 
         // 2. Execute T-KAN forward pass (40 -> 16 spatial encoding)
