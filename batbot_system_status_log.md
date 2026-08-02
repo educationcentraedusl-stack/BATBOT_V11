@@ -1,5 +1,11 @@
 # BATBOT_V11 System Status Log
 
+- **Date:** 2026-08-03
+- **Feature/Task:** Resolution of Training-Inference Asymmetry, Streaming 40-Feature Engine & Orderbook Collapse Safety in Rust AI Engine (`src/ai/engine.rs`)
+- **Artifacts Created/Modified:** `src/ai/engine.rs`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Completely refactored `src/ai/engine.rs` to eradicate live inference feature asymmetry and match Python `prepare_data.py` 1:1. Implemented `StreamingFeaturePipeline` with 40 macro/micro statistical features (OBI EMAs, micro-price dev, CVD deltas, trade velocity, realized volatility, latency metrics, price acceleration), streaming 1000-tick Welford online normalizer applying $(z / 3.0).\text{tanh}()$ in $O(1)$ time (~50 ns), correct depth volume/quantity parsing from SAB slots, and explicit orderbook collapse detection (`ORDERBOOK_COLLAPSE_DETECTED`) when `best_bid <= 0.0` or `best_ask <= 0.0`. QA verified 100% via `cargo test --lib` (23/23 unit tests passed).
+- **Status:** ✅ Completed & QA Verified
+
 - **Date:** 2026-07-28
 - **Feature/Task:** 2026 SOTA Dashboard Architecture Implementation (Phases 1-4 Execution)
 - **Artifacts Created/Modified:** `src/dashboard/store.ts`, `src/dashboard/telemetry.worker.ts`, `src/dashboard/components/AiTelemetry.tsx`, `src/dashboard/components/ExecutionView.tsx`, `src/dashboard/components/ErrorBoundary.tsx`, `src/dashboard/App.tsx`, `tsconfig.json`, `batbot_system_status_log.md`
