@@ -9,6 +9,7 @@ and Strict Split Purge Buffers for T-KAN and CfC models.
 
 import os
 import sys
+import io
 import json
 import math
 import time
@@ -25,6 +26,51 @@ from data_config import (
 
 # Strict Purge Buffer to prevent target horizon leakage across train/val boundary
 PURGE_BUFFER_TICKS = 50
+
+def read_ndjson_sanitized(file_path: str, schema_overrides: dict) -> pl.DataFrame:
+    """
+    Reads an NDJSON file into a Polars DataFrame safely by filtering out empty lines,
+    NUL bytes ('\x00'), and corrupted line headers via stream-level line sanitization.
+    Explicitly validates byte bounds and JSON invariants without lazy global exception suppression.
+    """
+    if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+        return pl.DataFrame(schema=schema_overrides)
+
+    cleaned_chunks = []
+    skipped_count = 0
+
+    with open(file_path, "rb") as f:
+        for line_bytes in f:
+            # 1. Strip embedded NUL bytes and surrounding whitespace
+            if b"\x00" in line_bytes:
+                line_bytes = line_bytes.replace(b"\x00", b"")
+            line_bytes = line_bytes.strip()
+
+            if not line_bytes:
+                skipped_count += 1
+                continue
+
+            # 2. Enforce strict JSON object structural bounds (must start with '{' and end with '}')
+            if not (line_bytes.startswith(b"{") and line_bytes.endswith(b"}")):
+                start = line_bytes.find(b"{")
+                end = line_bytes.rfind(b"}")
+                if start != -1 and end != -1 and start < end:
+                    line_bytes = line_bytes[start : end + 1]
+                else:
+                    skipped_count += 1
+                    continue
+
+            cleaned_chunks.append(line_bytes)
+
+    if skipped_count > 0:
+        print(f"[NDJSON Sanitizer] Filtered {skipped_count} corrupted or blank line(s) from '{file_path}'")
+
+    if not cleaned_chunks:
+        return pl.DataFrame(schema=schema_overrides)
+
+    buffer = io.BytesIO(b"\n".join(cleaned_chunks))
+    return pl.read_ndjson(buffer, schema_overrides=schema_overrides)
+
 
 def compute_polars_rolling_tanh_df(df: pl.DataFrame, feature_names: list[str], window: int = 1000, eps: float = 1e-8) -> np.ndarray:
     """
@@ -95,27 +141,25 @@ def load_and_preprocess_lob_data():
         "latUs": pl.Float64,
     }
 
-    df_sig = pl.read_ndjson(SIGNALS_PATH, schema_overrides=sig_schema)
+    df_sig = read_ndjson_sanitized(SIGNALS_PATH, sig_schema)
     print(f"[Ingestion] Loaded {len(df_sig)} raw signal records in {time.time() - start_time:.3f}s")
 
     # Load executions if available
     df_exec = None
     if os.path.exists(EXECUTIONS_PATH) and os.path.getsize(EXECUTIONS_PATH) > 0:
-        try:
-            exec_schema = {
-                "timestamp": pl.Int64,
-                "symbol": pl.Utf8,
-                "side": pl.Utf8,
-                "price": pl.Float64,
-                "quantity": pl.Float64,
-                "realizedPnl": pl.Float64,
-                "fee": pl.Float64,
-                "latencyMs": pl.Float64,
-            }
-            df_exec = pl.read_ndjson(EXECUTIONS_PATH, schema_overrides=exec_schema)
+        exec_schema = {
+            "timestamp": pl.Int64,
+            "symbol": pl.Utf8,
+            "side": pl.Utf8,
+            "price": pl.Float64,
+            "quantity": pl.Float64,
+            "realizedPnl": pl.Float64,
+            "fee": pl.Float64,
+            "latencyMs": pl.Float64,
+        }
+        df_exec = read_ndjson_sanitized(EXECUTIONS_PATH, exec_schema)
+        if len(df_exec) > 0:
             print(f"[Ingestion] Loaded {len(df_exec)} execution records")
-        except Exception as e:
-            print(f"[Ingestion] Warning: Failed to parse executions: {e}")
 
     # Ensure timestamp sorting
     df_sig = df_sig.sort("ts")

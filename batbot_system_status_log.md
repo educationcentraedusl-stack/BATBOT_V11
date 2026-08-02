@@ -545,6 +545,10 @@
 - **Feature/Task:** Final 2% Remediation for 100% Production Ready Status (Decoupled Asynchronous Modal Cloud GPU Offloading)
 - **Artifacts Created/Modified:** `training/remote_modal_trainer.py`, `modal_offloading_audit_report.md`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Remediated both audit findings in `training/remote_modal_trainer.py`. Added explicit `volume.reload()` as the very first line inside `process_job_gpu(job_id)` to ensure Modal Volume cache synchronization across worker containers. Encapsulated heavy ML imports (`torch`, `safetensors`) inside `execute_training_pipeline()` to allow host machines without PyTorch to parse AST and deploy cleanly via `modal deploy`. Verified 100% Production Ready status.
+- **Date:** 2026-08-02
+- **Feature/Task:** Telemetry NDJSON Stream Sanitizer & Polars TapeError Hostile Remediation
+- **Artifacts Created/Modified:** `training/prepare_data.py`, `data/signals.jsonl`, `src/strategy/engine.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Implemented stream-level NDJSON line sanitizer `read_ndjson_sanitized()` in `training/prepare_data.py`, filtering NUL (`\x00`) bytes, blank lines, and malformed non-JSON lines in memory before passing buffers to Polars C++ tape parser (`pl.read_ndjson`). Eradicated background recalibration `ComputeError: error parsing line: InternalError(TapeError) at character 0`. Cleaned disk telemetry log `data/signals.jsonl` (770 NUL bytes stripped). Updated `StrategyEngine` safety clamp to enforce `TRAINING_LOCK_ACTIVE` and `RECALIBRATING_ACTIVE` risk reason codes during shadow recalibration. Verified 100% via Hostile Audit test matrix (`scratch/test_ndjson_audit.py`), raw signal data ingestion (188,815 records loaded in 1.078s), TypeScript compilation (`npm run build:ts`, 0 errors), and recalibration test suite (`node dist/test_recalibration_pipeline.js`, 5/5 passed).
 - **Status:** ✅ Completed & QA Verified
 
 
