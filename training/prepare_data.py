@@ -39,12 +39,13 @@ def read_ndjson_sanitized(file_path: str, schema_overrides: dict) -> pl.DataFram
 
     skipped_count = 0
     valid_count = 0
-
-    # Stream to a disk-backed temporary file (delete=False for cross-platform file path access by Polars)
-    tmp_file = tempfile.NamedTemporaryFile(mode="wb", suffix=".jsonl", delete=False)
-    tmp_path = tmp_file.name
+    tmp_path = None
 
     try:
+        # Stream to a disk-backed temporary file (delete=False for cross-platform file path access by Polars)
+        tmp_file = tempfile.NamedTemporaryFile(mode="wb", suffix=".jsonl", delete=False)
+        tmp_path = tmp_file.name
+
         with open(file_path, "rb") as f_in, tmp_file as f_out:
             for line_bytes in f_in:
                 # 1. Strip embedded NUL bytes and surrounding whitespace
@@ -69,7 +70,7 @@ def read_ndjson_sanitized(file_path: str, schema_overrides: dict) -> pl.DataFram
                 # 3. Strict JSON validation: verify syntax before streaming to disk
                 try:
                     json.loads(line_bytes.decode("utf-8"))
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, UnicodeDecodeError):
                     skipped_count += 1
                     continue
 
@@ -89,7 +90,7 @@ def read_ndjson_sanitized(file_path: str, schema_overrides: dict) -> pl.DataFram
 
     finally:
         # Guarantee complete cleanup of temporary file
-        if os.path.exists(tmp_path):
+        if tmp_path and os.path.exists(tmp_path):
             try:
                 os.remove(tmp_path)
             except OSError:
@@ -349,26 +350,12 @@ def load_and_preprocess_lob_data():
 
     tkan_tmp = f"{TKAN_OUT_PATH}.tmp"
     save_file(tkan_tensors, tkan_tmp)
-    if os.path.exists(TKAN_OUT_PATH):
-        try:
-            os.replace(tkan_tmp, TKAN_OUT_PATH)
-        except OSError:
-            os.remove(TKAN_OUT_PATH)
-            os.rename(tkan_tmp, TKAN_OUT_PATH)
-    else:
-        os.rename(tkan_tmp, TKAN_OUT_PATH)
+    os.replace(tkan_tmp, TKAN_OUT_PATH)
     print(f"         Exported T-KAN Dataset: '{TKAN_OUT_PATH}' ({os.path.getsize(TKAN_OUT_PATH)} bytes)")
 
     cfc_tmp = f"{CFC_OUT_PATH}.tmp"
     save_file(cfc_tensors, cfc_tmp)
-    if os.path.exists(CFC_OUT_PATH):
-        try:
-            os.replace(cfc_tmp, CFC_OUT_PATH)
-        except OSError:
-            os.remove(CFC_OUT_PATH)
-            os.rename(cfc_tmp, CFC_OUT_PATH)
-    else:
-        os.rename(cfc_tmp, CFC_OUT_PATH)
+    os.replace(cfc_tmp, CFC_OUT_PATH)
     print(f"         Exported CfC Dataset:   '{CFC_OUT_PATH}' ({os.path.getsize(CFC_OUT_PATH)} bytes)")
 
     # Export Feature Normalization Statistics Metadata
