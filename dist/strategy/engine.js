@@ -48,16 +48,16 @@ class StrategyEngine {
         const envMaxSpreadVelocity = process.env.MAX_SPREAD_VELOCITY ? parseFloat(process.env.MAX_SPREAD_VELOCITY) : NaN;
         const envOrderQty = process.env.ORDER_QUANTITY ? parseFloat(process.env.ORDER_QUANTITY) : NaN;
         const envLeverage = process.env.LEVERAGE ? parseInt(process.env.LEVERAGE, 10) : NaN;
-        const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 2.5;
-        const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 1.2;
-        const defaultShortTp = !isNaN(envShortTp) ? envShortTp : 0.6;
-        const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.5;
+        const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 0.35;
+        const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 0.25;
+        const defaultShortTp = !isNaN(envShortTp) ? envShortTp : 0.35;
+        const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.25;
         const defaultProfitLock = !isNaN(envProfitLock) ? envProfitLock : 10.0;
         const defaultMaxShortSlots = !isNaN(envMaxShortSlots) ? envMaxShortSlots : 3;
-        const defaultMinAiConfidence = !isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.50;
-        const defaultAggressiveConfidence = !isNaN(envAggressiveConfidence) ? envAggressiveConfidence : 0.55;
-        const defaultObiBuy = !isNaN(envObiBuy) ? envObiBuy : 0.25;
-        const defaultObiSell = !isNaN(envObiSell) ? envObiSell : -0.25;
+        const defaultMinAiConfidence = !isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.65;
+        const defaultAggressiveConfidence = !isNaN(envAggressiveConfidence) ? envAggressiveConfidence : 0.75;
+        const defaultObiBuy = !isNaN(envObiBuy) ? envObiBuy : 0.35;
+        const defaultObiSell = !isNaN(envObiSell) ? envObiSell : -0.35;
         const defaultCvdBuy = !isNaN(envCvdBuy) ? envCvdBuy : 0.0;
         const defaultCvdSell = !isNaN(envCvdSell) ? envCvdSell : 0.0;
         const defaultMaxSpreadVelocity = !isNaN(envMaxSpreadVelocity) ? envMaxSpreadVelocity : 5.0;
@@ -259,15 +259,17 @@ class StrategyEngine {
         let isBuySignal = false;
         let isSellSignal = false;
         if (isHighConfidenceAi) {
-            // AI-Override Rule: High-confidence AI bypasses OBI/CVD restrictions entirely
-            isBuySignal = aiDirection > 0;
-            isSellSignal = aiDirection < 0;
-            console.log(`[StrategyEngine][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)}, Conf: ${(aiConfidence * 100).toFixed(1)}%, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
+            // AI-Override Rule: High-confidence AI must also satisfy strict OBI directional pressure threshold (+/- 0.35)
+            isBuySignal = aiDirection > 0 && obi >= this.config.obiBuyThreshold;
+            isSellSignal = aiDirection < 0 && obi <= this.config.obiSellThreshold;
+            if (isBuySignal || isSellSignal) {
+                console.log(`[StrategyEngine][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)}, Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
+            }
         }
         else {
-            // Weighted Composite Rule (Responsive Threshold: 0.12)
-            isBuySignal = compositeScore > 0.12 && aiConfidence >= this.config.minAiConfidence;
-            isSellSignal = compositeScore < -0.12 && aiConfidence >= this.config.minAiConfidence;
+            // Weighted Composite Rule with strict OBI directional pressure (+/- 0.35)
+            isBuySignal = compositeScore > 0.12 && aiConfidence >= this.config.minAiConfidence && obi >= this.config.obiBuyThreshold;
+            isSellSignal = compositeScore < -0.12 && aiConfidence >= this.config.minAiConfidence && obi <= this.config.obiSellThreshold;
         }
         // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
         const isCoreLongOccupied = this.hedgeLedger.getCoreLong().isOccupied;
@@ -333,6 +335,26 @@ class StrategyEngine {
             orderType = "LIMIT";
             timeInForce = "GTX";
             targetPrice = signalType === "BUY" ? bidPrice : askPrice;
+        }
+        // SPREAD GUARD: Explicitly block MARKET executions if current spread > 0.50 USDT (for ETHUSDT)
+        const currentSpread = askPrice > 0 && bidPrice > 0 ? Math.abs(askPrice - bidPrice) : 0;
+        const maxSpreadAllowed = this.config.symbol.includes("ETH") ? 0.50 : 5.0;
+        if (orderType === "MARKET" && currentSpread > maxSpreadAllowed) {
+            console.log(`[StrategyEngine][SPREAD_GUARD_BLOCK] Seq #${seq} | Current Spread: ${currentSpread.toFixed(2)} USDT > ${maxSpreadAllowed.toFixed(2)} USDT threshold. MARKET execution blocked.`);
+            this.staticResult.sequenceNum = seq;
+            this.staticResult.signalType = "NONE";
+            this.staticResult.obi = obi;
+            this.staticResult.cvd = cvd;
+            this.staticResult.spreadVelocity = spreadVelocity;
+            this.staticResult.bidPrice = bidPrice;
+            this.staticResult.askPrice = askPrice;
+            this.staticResult.riskResult = {
+                passed: false,
+                reasonCode: "REJECTED_LIQUIDITY_SWEEP_TRAP",
+                message: `Market execution blocked: current spread (${currentSpread.toFixed(2)} USDT) > ${maxSpreadAllowed.toFixed(2)} USDT threshold`,
+            };
+            this.staticResult.executionPromise = undefined;
+            return this.staticResult;
         }
         // Avellaneda-Stoikov Inventory Shift: Skew sell target higher for deeper short slots
         if (signalType === "SELL" && targetSlotIndex !== undefined && targetSlotIndex > 0) {

@@ -641,3 +641,9 @@
 - **Artifacts Created/Modified:** `src/execution/binance.ts`, `src/strategy/engine.ts`, `src/test_strategy_execution.ts`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Eradicated vulnerability where ternary assignment of `undefined` could serialize `"timeInForce=undefined"` into query strings. Refactored `src/strategy/engine.ts` to build `orderParams` using conditional property assignment (`if (orderType === "LIMIT") { orderParams.price = ...; orderParams.timeInForce = ...; }`). Refactored `src/execution/binance.ts` `placeOrder` to enforce strict key deletion via `delete payload.timeInForce` and `delete payload.reduceOnly` for non-LIMIT or hedge-mode orders. Verified 100% via TypeScript compilation (`npm run build:ts`) and physical payload object audit suite (`node dist/test_strategy_execution.js`).
 - **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-03
+- **Feature/Task:** HFT Engine Win Rate Optimization & Strict Parameter Binding Verification
+- **Artifacts Created/Modified:** `.env`, `src/strategy/engine.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Implemented 4 targeted Win Rate optimizations strictly in `.env` and `src/strategy/engine.ts`. Updated AI Confidence thresholds (`MIN_AI_CONFIDENCE=0.65`, `AGGRESSIVE_CONFIDENCE_THRESHOLD=0.75`), integrated explicit Spread Guard blocking MARKET executions when current spread exceeds 0.50 USDT (`REJECTED_LIQUIDITY_SWEEP_TRAP`), re-aligned Risk-to-Reward ratio (`LONG_TP/SL = 0.35/0.25`, `SHORT_TP/SL = 0.35/0.25`), and enforced strict OBI directional pressure threshold (`±0.35`). Verified 100% via TypeScript compilation (`npm run build:ts`), parameter binding tracing (`node -e`), and Phase 4 test suite execution (`node dist/test_strategy_execution.js`).
+- **Status:** ✅ Completed & QA Verified
