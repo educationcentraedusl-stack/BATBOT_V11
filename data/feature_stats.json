@@ -1,8 +1,8 @@
 {
-  "dataset_records": 190904,
-  "train_records": 152723,
+  "dataset_records": 196666,
+  "train_records": 157332,
   "purged_records": 50,
-  "val_records": 38131,
+  "val_records": 39284,
   "welford_window": 1000,
   "cfc_sequence_length": 32,
   "purge_buffer_ticks": 50,
@@ -52,7 +52,7 @@
     ],
     "min_val": -1.0,
     "max_val": 1.0,
-    "mean_val": -0.0017372622387483716
+    "mean_val": -0.001394465914927423
   },
   "cfc_features": {
     "dim": 16,
@@ -76,23 +76,23 @@
     ],
     "min_val": -1.0,
     "max_val": 10.0,
-    "mean_val": 0.045556407421827316
+    "mean_val": 0.04524099454283714
   },
   "shapes": {
     "tkan_train_inputs": [
-      152723,
+      157332,
       40
     ],
     "tkan_val_inputs": [
-      38131,
+      39284,
       40
     ],
     "cfc_train_inputs": [
-      152723,
+      157332,
       16
     ],
     "cfc_val_inputs": [
-      38131,
+      39284,
       16
     ]
   }

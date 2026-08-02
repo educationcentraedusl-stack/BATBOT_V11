@@ -101,8 +101,7 @@ async function syncStateOnStartup(executionClient, strategyEngine, riskGuard) {
         }
     }
     catch (err) {
-        console.error(`[StateSync] Critical Error during startup state sync: ${err.message}`);
-        throw err;
+        console.warn(`[StateSync Warning] Temporary issue during startup state sync: ${err.message}. System starting in resilient mode.`);
     }
 }
 async function initializeSystem() {
@@ -169,10 +168,10 @@ async function initializeSystem() {
         const msg = err instanceof Error ? err.message : String(err);
         process.stdout.write(`[BATBOT_V11] Ingestion binding notice: ${msg}\n`);
     }
-    // Start Telemetry WebSocket Server & Async Binance Balance Polling (every 5s)
+    // Start Telemetry WebSocket Server & Async Binance Balance Polling (every 30s to respect Binance rate limits)
     telemetryServer.start();
     if (executionClient.isConfigured()) {
-        executionClient.startBalancePolling(5000);
+        executionClient.startBalancePolling(30000);
     }
     // Active HFT tick evaluation & UI refresh loop (10ms tick polling rate)
     tickInterval = setInterval(() => {

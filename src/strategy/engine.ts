@@ -353,7 +353,7 @@ export class StrategyEngine {
     // Weights: AI Model = 50% (0.50), OBI = 25% (0.25), CVD = 25% (0.25)
     const compositeScore = 0.50 * aiScore + 0.25 * obiScore + 0.25 * cvdScore;
 
-    const isHighConfidenceAi = aiConfidence >= 0.85 || aiConfidence >= this.config.aggressiveConfidenceThreshold;
+    const isHighConfidenceAi = aiConfidence >= this.config.aggressiveConfidenceThreshold;
 
     let isBuySignal = false;
     let isSellSignal = false;
@@ -363,15 +363,15 @@ export class StrategyEngine {
       isBuySignal = aiDirection > 0;
       isSellSignal = aiDirection < 0;
     } else {
-      // Weighted Composite Rule
-      isBuySignal = compositeScore > 0.25 && aiConfidence >= this.config.minAiConfidence;
-      isSellSignal = compositeScore < -0.25 && aiConfidence >= this.config.minAiConfidence;
+      // Weighted Composite Rule (Responsive Threshold: 0.12)
+      isBuySignal = compositeScore > 0.12 && aiConfidence >= this.config.minAiConfidence;
+      isSellSignal = compositeScore < -0.12 && aiConfidence >= this.config.minAiConfidence;
     }
 
     // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
     if (
       isBuySignal &&
-      spreadVelocity < this.config.maxSpreadVelocity &&
+      (isHighConfidenceAi || spreadVelocity < this.config.maxSpreadVelocity) &&
       askPrice > 0 &&
       !this.hedgeLedger.getCoreLong().isOccupied &&
       nowMs >= longCooldownLock
@@ -383,7 +383,7 @@ export class StrategyEngine {
     // SELL -> Short Slot Entry (Evaluated via Tier-1 Dynamic Slot Dispersion Engine)
     else if (
       isSellSignal &&
-      spreadVelocity < this.config.maxSpreadVelocity &&
+      (isHighConfidenceAi || spreadVelocity < this.config.maxSpreadVelocity) &&
       bidPrice > 0
     ) {
       const slotEval = this.hedgeLedger.evaluateDispersedShortSlotAllocation(
