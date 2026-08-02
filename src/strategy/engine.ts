@@ -431,8 +431,8 @@ export class StrategyEngine {
     }
 
     // Apply latency penalty & slot-index decay coefficients to orderQuantity BEFORE RiskGuard check
-    const scaledQuantity = Number((this.config.orderQuantity * penaltyCoeff * targetSizeDecayCoeff).toFixed(4));
-    let finalQuantity = Math.max(0.0001, scaledQuantity);
+    const scaledQuantity = Number((this.config.orderQuantity * penaltyCoeff * targetSizeDecayCoeff).toFixed(3));
+    let finalQuantity = Math.max(0.001, scaledQuantity);
 
     // Dynamic Taker Fallback (>75% Confidence) & 1-Tick Post-Only Offset (<=75%)
     const effectiveSlippage = Math.max(2, slippageTicks);
@@ -465,7 +465,7 @@ export class StrategyEngine {
     if (basePrice > 0) {
       const minNotionalUsdt = 55.0;
       if (finalQuantity * basePrice < minNotionalUsdt) {
-        finalQuantity = Number((minNotionalUsdt / basePrice).toFixed(4));
+        finalQuantity = Number((minNotionalUsdt / basePrice).toFixed(3));
       }
     }
 
@@ -525,8 +525,6 @@ export class StrategyEngine {
       }
 
       const notional = this.reusableOrderIntent.price * this.reusableOrderIntent.quantity;
-      this.riskGuard.recordExecutionSuccess(notional);
-
 
       console.log(`[BinanceExecution][DISPATCHING] Submitting ${orderType} ${this.reusableOrderIntent.side} order for ${this.reusableOrderIntent.quantity} ${this.reusableOrderIntent.symbol} to Binance Futures...`);
 
@@ -542,6 +540,7 @@ export class StrategyEngine {
         })
         .then((res) => {
           if (res) {
+            this.riskGuard.recordExecutionSuccess(notional);
             console.log(`[BinanceExecution][SUCCESS] Order Executed on Binance! OrderId: ${res.orderId}, Status: ${res.status}, ExecQty: ${res.executedQty}`);
             const execPx = parseFloat(res.price || res.avgPrice || "0") || targetPrice;
             if (targetPosSide === "LONG") {

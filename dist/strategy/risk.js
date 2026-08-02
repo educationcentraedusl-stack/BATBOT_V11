@@ -38,7 +38,7 @@ class RiskGuard {
         const defaultProfitLock = !isNaN(envDailyProfitLock) ? envDailyProfitLock : 10.0;
         this.config = {
             maxPositionSizeUsdt: config?.maxPositionSizeUsdt ?? 1000.0,
-            minCooldownMs: config?.minCooldownMs ?? 1000,
+            minCooldownMs: config?.minCooldownMs ?? 0,
             maxDailyLossUsdt: config?.maxDailyLossUsdt ?? 500.0,
             maxPriceSlippagePercent: config?.maxPriceSlippagePercent ?? 0.5,
             dailyProfitLockTargetUsdt: config?.dailyProfitLockTargetUsdt ?? defaultProfitLock,

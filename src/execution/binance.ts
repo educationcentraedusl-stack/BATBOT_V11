@@ -329,14 +329,15 @@ export class BinanceExecutionClient {
   }
 
   public async placeOrder(params: BinanceOrderParams): Promise<BinanceOrderResponse> {
+    const formattedQty = Number(params.quantity.toFixed(3));
     const payload: Record<string, string | number | boolean> = {
       symbol: params.symbol,
       side: params.side,
       type: params.type,
-      quantity: params.quantity,
+      quantity: formattedQty,
     };
 
-    if (params.price !== undefined) payload.price = params.price;
+    if (params.price !== undefined) payload.price = Number(params.price.toFixed(2));
     if (params.stopPrice !== undefined) payload.stopPrice = params.stopPrice;
     if (params.timeInForce !== undefined) payload.timeInForce = params.timeInForce;
     if (params.closePosition !== undefined) payload.closePosition = params.closePosition;
