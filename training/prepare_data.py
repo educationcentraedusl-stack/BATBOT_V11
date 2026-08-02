@@ -13,6 +13,7 @@ import io
 import json
 import math
 import time
+import tempfile
 import numpy as np
 import polars as pl
 import torch
@@ -29,47 +30,70 @@ PURGE_BUFFER_TICKS = 50
 
 def read_ndjson_sanitized(file_path: str, schema_overrides: dict) -> pl.DataFrame:
     """
-    Reads an NDJSON file into a Polars DataFrame safely by filtering out empty lines,
-    NUL bytes ('\x00'), and corrupted line headers via stream-level line sanitization.
-    Explicitly validates byte bounds and JSON invariants without lazy global exception suppression.
+    Reads an NDJSON file into a Polars DataFrame with O(1) RAM streaming and strict JSON validation.
+    Stream-writes sanitized lines to a temporary file on disk to prevent Out-Of-Memory (OOM) crashes
+    on multi-gigabyte log files. Validates structural JSON bounds and catches json.JSONDecodeError explicitly.
     """
     if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
         return pl.DataFrame(schema=schema_overrides)
 
-    cleaned_chunks = []
     skipped_count = 0
+    valid_count = 0
 
-    with open(file_path, "rb") as f:
-        for line_bytes in f:
-            # 1. Strip embedded NUL bytes and surrounding whitespace
-            if b"\x00" in line_bytes:
-                line_bytes = line_bytes.replace(b"\x00", b"")
-            line_bytes = line_bytes.strip()
+    # Stream to a disk-backed temporary file (delete=False for cross-platform file path access by Polars)
+    tmp_file = tempfile.NamedTemporaryFile(mode="wb", suffix=".jsonl", delete=False)
+    tmp_path = tmp_file.name
 
-            if not line_bytes:
-                skipped_count += 1
-                continue
+    try:
+        with open(file_path, "rb") as f_in, tmp_file as f_out:
+            for line_bytes in f_in:
+                # 1. Strip embedded NUL bytes and surrounding whitespace
+                if b"\x00" in line_bytes:
+                    line_bytes = line_bytes.replace(b"\x00", b"")
+                line_bytes = line_bytes.strip()
 
-            # 2. Enforce strict JSON object structural bounds (must start with '{' and end with '}')
-            if not (line_bytes.startswith(b"{") and line_bytes.endswith(b"}")):
-                start = line_bytes.find(b"{")
-                end = line_bytes.rfind(b"}")
-                if start != -1 and end != -1 and start < end:
-                    line_bytes = line_bytes[start : end + 1]
-                else:
+                if not line_bytes:
                     skipped_count += 1
                     continue
 
-            cleaned_chunks.append(line_bytes)
+                # 2. Extract potential JSON object boundary
+                if not (line_bytes.startswith(b"{") and line_bytes.endswith(b"}")):
+                    start = line_bytes.find(b"{")
+                    end = line_bytes.rfind(b"}")
+                    if start != -1 and end != -1 and start < end:
+                        line_bytes = line_bytes[start : end + 1]
+                    else:
+                        skipped_count += 1
+                        continue
 
-    if skipped_count > 0:
-        print(f"[NDJSON Sanitizer] Filtered {skipped_count} corrupted or blank line(s) from '{file_path}'")
+                # 3. Strict JSON validation: verify syntax before streaming to disk
+                try:
+                    json.loads(line_bytes.decode("utf-8"))
+                except json.JSONDecodeError:
+                    skipped_count += 1
+                    continue
 
-    if not cleaned_chunks:
-        return pl.DataFrame(schema=schema_overrides)
+                # 4. Stream valid JSON line directly to temporary disk file
+                f_out.write(line_bytes)
+                f_out.write(b"\n")
+                valid_count += 1
 
-    buffer = io.BytesIO(b"\n".join(cleaned_chunks))
-    return pl.read_ndjson(buffer, schema_overrides=schema_overrides)
+        if skipped_count > 0:
+            print(f"[NDJSON Sanitizer] Filtered {skipped_count} corrupted or blank line(s) from '{file_path}'")
+
+        if valid_count == 0:
+            return pl.DataFrame(schema=schema_overrides)
+
+        # Polars reads directly from the sanitized temporary file on disk
+        return pl.read_ndjson(tmp_path, schema_overrides=schema_overrides)
+
+    finally:
+        # Guarantee complete cleanup of temporary file
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 def compute_polars_rolling_tanh_df(df: pl.DataFrame, feature_names: list[str], window: int = 1000, eps: float = 1e-8) -> np.ndarray:
