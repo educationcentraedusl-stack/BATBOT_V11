@@ -54,8 +54,8 @@ class StrategyEngine {
         const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.5;
         const defaultProfitLock = !isNaN(envProfitLock) ? envProfitLock : 10.0;
         const defaultMaxShortSlots = !isNaN(envMaxShortSlots) ? envMaxShortSlots : 3;
-        const defaultMinAiConfidence = !isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.6;
-        const defaultAggressiveConfidence = !isNaN(envAggressiveConfidence) ? envAggressiveConfidence : 0.85;
+        const defaultMinAiConfidence = !isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.50;
+        const defaultAggressiveConfidence = !isNaN(envAggressiveConfidence) ? envAggressiveConfidence : 0.55;
         const defaultObiBuy = !isNaN(envObiBuy) ? envObiBuy : 0.25;
         const defaultObiSell = !isNaN(envObiSell) ? envObiSell : -0.25;
         const defaultCvdBuy = !isNaN(envCvdBuy) ? envCvdBuy : 0.0;
@@ -262,6 +262,7 @@ class StrategyEngine {
             // AI-Override Rule: High-confidence AI bypasses OBI/CVD restrictions entirely
             isBuySignal = aiDirection > 0;
             isSellSignal = aiDirection < 0;
+            console.log(`[StrategyEngine][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)}, Conf: ${(aiConfidence * 100).toFixed(1)}%, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
         }
         else {
             // Weighted Composite Rule (Responsive Threshold: 0.12)
@@ -269,11 +270,16 @@ class StrategyEngine {
             isSellSignal = compositeScore < -0.12 && aiConfidence >= this.config.minAiConfidence;
         }
         // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
+        const isCoreLongOccupied = this.hedgeLedger.getCoreLong().isOccupied;
+        const isCooldownCleared = nowMs >= longCooldownLock;
+        if (!isCoreLongOccupied && !isCooldownCleared) {
+            console.log(`[StrategyEngine][COOLDOWN_BLOCK] Seq #${seq} | nowMs: ${nowMs}, longCooldownLock: ${longCooldownLock}, diff: ${longCooldownLock - nowMs}ms`);
+        }
         if (isBuySignal &&
             (isHighConfidenceAi || spreadVelocity < this.config.maxSpreadVelocity) &&
             askPrice > 0 &&
-            !this.hedgeLedger.getCoreLong().isOccupied &&
-            nowMs >= longCooldownLock) {
+            !isCoreLongOccupied &&
+            isCooldownCleared) {
             signalType = "BUY";
             targetPosSide = "LONG";
             targetSlotId = "CORE_LONG";
@@ -313,14 +319,14 @@ class StrategyEngine {
         const effectiveSlippage = Math.max(2, slippageTicks);
         const priceAdjustment = effectiveSlippage * this.config.tickSize;
         const basePrice = signalType === "BUY" ? askPrice : bidPrice;
-        const isHighConfidence = aiConfidence > 0.75;
-        const isAggressive = aiConfidence >= this.config.aggressiveConfidenceThreshold;
+        const isHighConfidence = aiConfidence >= this.config.aggressiveConfidenceThreshold;
+        const isAggressive = isHighConfidence;
         let targetPrice;
         let orderType;
         let timeInForce;
         if (isHighConfidence) {
-            orderType = isAggressive ? "MARKET" : "LIMIT";
-            timeInForce = isAggressive ? "IOC" : "GTC";
+            orderType = "MARKET";
+            timeInForce = "IOC";
             targetPrice = signalType === "BUY" ? askPrice + priceAdjustment : bidPrice - priceAdjustment;
         }
         else {

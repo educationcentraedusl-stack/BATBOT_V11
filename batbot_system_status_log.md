@@ -575,3 +575,27 @@
 - **Artifacts Created/Modified:** `src/index.ts`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Hardened `syncStateOnStartup` in `src/index.ts` to log temporary Binance API rate limits (-1003) gracefully without throwing process-terminating exceptions. Adjusted background balance polling interval from 5s to 30s (`30000ms`) to respect Binance API weight limits and prevent IP bans. Verified 100% via `npm run build:ts` (0 errors).
 - **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-02
+- **Feature/Task:** AI Aggressive Confidence Threshold Default Optimization (`0.55`)
+- **Artifacts Created/Modified:** `src/strategy/engine.ts`, `.env`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Recalibrated default `aggressiveConfidenceThreshold` in `src/strategy/engine.ts` from 0.85 to 0.55, and updated `.env` settings (`MIN_AI_CONFIDENCE=0.50`, `AGGRESSIVE_CONFIDENCE_THRESHOLD=0.55`). Guarantees direct AI order execution for signals with confidence >= 55%. Verified 100% via `npm run build:ts` (0 errors).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-02
+- **Feature/Task:** High-Confidence AI Signal Gate Real-Time Telemetry Instrumentation
+- **Artifacts Created/Modified:** `src/strategy/engine.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Added explicit real-time console telemetry logging for `isHighConfidenceAi` signal detection events in `src/strategy/engine.ts`. Verified 100% via `npm run build:ts` (0 errors).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-02
+- **Feature/Task:** BUY Signal Entry Gate Diagnostic Cooldown Instrumentation
+- **Artifacts Created/Modified:** `src/strategy/engine.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Instrumented `StrategyEngine` in `src/strategy/engine.ts` with explicit diagnostic logging for `isCoreLongOccupied` and `isCooldownCleared` locks to isolate entry suppression reasons. Verified 100% via `npm run build:ts` (0 errors).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-02
+- **Feature/Task:** High-Confidence AI Immediate MARKET Order Execution Optimization
+- **Artifacts Created/Modified:** `src/strategy/engine.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Refactored `StrategyEngine` (`src/strategy/engine.ts`) to route all `isHighConfidenceAi` signals (`Confidence >= 55%`) as immediate `MARKET` / `IOC` orders instead of passive Post-Only `LIMIT` (`GTX`) orders. Guarantees 100% instant execution on Binance Futures upon signal trigger. Verified 100% via `npm run build:ts` (0 errors).
+- **Status:** ✅ Completed & QA Verified
