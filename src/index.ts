@@ -60,44 +60,24 @@ export async function syncStateOnStartup(
     const balance = await executionClient.fetchUsdtBalanceAsync();
     console.log(`[StateSync] Binance Wallet Available Balance Synced: $${balance.toFixed(2)} USDT`);
 
-    // 4. Fetch Position Risk & Sync Active Positions (Filter explicitly by positionSide LONG and SHORT)
+    // 4. Fetch Position Risk & Reconcile Active Positions for StrategyEngine
     const symbol = strategyEngine.getConfig().symbol;
     const positions = await executionClient.getPositionRisk(symbol);
     if (Array.isArray(positions)) {
-      let hasActivePosition = false;
-      for (const pos of positions) {
-        if (pos.symbol !== symbol) continue;
-        const amt = parseFloat(pos.positionAmt || "0");
-        const entryPx = parseFloat(pos.entryPrice || "0");
-        const posSide = pos.positionSide === "LONG" || (pos.positionSide === "BOTH" && amt > 0) ? "LONG" : "SHORT";
+      strategyEngine.reconcileStartupPositions(positions);
 
-        if (Math.abs(amt) > 0 && entryPx > 0) {
-          hasActivePosition = true;
-          const qty = Math.abs(amt);
-          strategyEngine.getPositionLedger().syncActivePosition(posSide, qty, entryPx);
-          if (posSide === "LONG") {
-            strategyEngine.getHedgeLedger().occupyCoreLong(
-              qty,
-              entryPx,
-              strategyEngine.getConfig().longTakeProfitPercent,
-              strategyEngine.getConfig().longStopLossPercent
-            );
-          } else {
-            strategyEngine.getHedgeLedger().occupyShortSlot(
-              0,
-              qty,
-              entryPx,
-              strategyEngine.getConfig().shortTakeProfitPercent,
-              strategyEngine.getConfig().shortStopLossPercent
-            );
+      // Update Risk Guard position notional baseline
+      let totalNotional = 0;
+      for (const pos of positions) {
+        if (pos.symbol === symbol) {
+          const amt = Math.abs(parseFloat(pos.positionAmt || "0"));
+          const entryPx = parseFloat(pos.entryPrice || "0");
+          if (amt > 0 && entryPx > 0) {
+            totalNotional += amt * entryPx;
           }
-          riskGuard.updatePositionNotional(qty * entryPx);
-          console.log(`[StateSync] Open Binance Position Synced: ${posSide} (${pos.positionSide || "DEFAULT"}) ${qty} ${symbol} @ $${entryPx.toFixed(2)}`);
         }
       }
-      if (!hasActivePosition) {
-        console.log(`[StateSync] Binance Position Synced: FLAT (No active open positions for ${symbol})`);
-      }
+      riskGuard.updatePositionNotional(totalNotional);
     }
   } catch (err: any) {
     console.warn(`[StateSync Warning] Temporary issue during startup state sync: ${err.message}. System starting in resilient mode.`);

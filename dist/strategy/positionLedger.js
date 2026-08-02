@@ -382,6 +382,40 @@ class HedgePositionLedger {
         this.coreLong.takeProfitPrice = entryPrice * (1 + tpPercent / 100);
         this.coreLong.stopLossPrice = entryPrice * (1 - slPercent / 100);
     }
+    syncStartupPositions(recoveredPositions, longTpPct, longSlPct, shortTpPct, shortSlPct) {
+        this.releaseCoreLong();
+        for (let i = 0; i < this.maxShortSlots; i++) {
+            this.releaseShortSlot(i);
+        }
+        let netQty = 0;
+        let weightedPxSum = 0;
+        let primarySide = "FLAT";
+        for (const pos of recoveredPositions) {
+            if (pos.quantity <= 0 || pos.entryPrice <= 0)
+                continue;
+            if (pos.side === "LONG") {
+                this.occupyCoreLong(pos.quantity, pos.entryPrice, longTpPct, longSlPct);
+                netQty += pos.quantity;
+                weightedPxSum += pos.entryPrice * pos.quantity;
+                primarySide = "LONG";
+                console.log(`[HedgePositionLedger] Recovered Core Long Position: ${pos.quantity} @ $${pos.entryPrice.toFixed(2)} (TP: $${this.coreLong.takeProfitPrice.toFixed(2)}, SL: $${this.coreLong.stopLossPrice.toFixed(2)})`);
+            }
+            else if (pos.side === "SHORT") {
+                const slotIdx = this.getAvailableShortSlotIndex();
+                if (slotIdx >= 0) {
+                    this.occupyShortSlot(slotIdx, pos.quantity, pos.entryPrice, shortTpPct, shortSlPct);
+                    netQty += pos.quantity;
+                    weightedPxSum += pos.entryPrice * pos.quantity;
+                    primarySide = "SHORT";
+                    console.log(`[HedgePositionLedger] Recovered Short Slot #${slotIdx} Position: ${pos.quantity} @ $${pos.entryPrice.toFixed(2)} (TP: $${this.shortSlots[slotIdx].takeProfitPrice.toFixed(2)}, SL: $${this.shortSlots[slotIdx].stopLossPrice.toFixed(2)})`);
+                }
+            }
+        }
+        if (primarySide !== "FLAT" && netQty > 0) {
+            const avgPx = weightedPxSum / netQty;
+            this.legacyLedger.syncActivePosition(primarySide, netQty, avgPx);
+        }
+    }
     releaseCoreLong() {
         this.coreLong.isOccupied = false;
         this.coreLong.quantity = 0;

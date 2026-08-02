@@ -48,6 +48,10 @@ class StrategyEngine {
         const envMaxSpreadVelocity = process.env.MAX_SPREAD_VELOCITY ? parseFloat(process.env.MAX_SPREAD_VELOCITY) : NaN;
         const envOrderQty = process.env.ORDER_QUANTITY ? parseFloat(process.env.ORDER_QUANTITY) : NaN;
         const envLeverage = process.env.LEVERAGE ? parseInt(process.env.LEVERAGE, 10) : NaN;
+        const envMaxSpreadEth = process.env.MAX_SPREAD_ETH ? parseFloat(process.env.MAX_SPREAD_ETH) : NaN;
+        const envMaxSpreadBtc = process.env.MAX_SPREAD_BTC ? parseFloat(process.env.MAX_SPREAD_BTC) : NaN;
+        const envMinNotionalUsdt = process.env.MIN_NOTIONAL_USDT ? parseFloat(process.env.MIN_NOTIONAL_USDT) : NaN;
+        const envCooldownMs = process.env.COOLDOWN_MS ? parseInt(process.env.COOLDOWN_MS, 10) : NaN;
         const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 0.35;
         const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 0.25;
         const defaultShortTp = !isNaN(envShortTp) ? envShortTp : 0.35;
@@ -61,9 +65,13 @@ class StrategyEngine {
         const defaultCvdBuy = !isNaN(envCvdBuy) ? envCvdBuy : 0.0;
         const defaultCvdSell = !isNaN(envCvdSell) ? envCvdSell : 0.0;
         const defaultMaxSpreadVelocity = !isNaN(envMaxSpreadVelocity) ? envMaxSpreadVelocity : 5.0;
+        const defaultMaxSpreadEth = !isNaN(envMaxSpreadEth) ? envMaxSpreadEth : 0.50;
+        const defaultMaxSpreadBtc = !isNaN(envMaxSpreadBtc) ? envMaxSpreadBtc : 5.0;
+        const defaultMinNotionalUsdt = !isNaN(envMinNotionalUsdt) ? envMinNotionalUsdt : 55.0;
+        const defaultCooldownMs = !isNaN(envCooldownMs) ? envCooldownMs : 250;
         const targetSymbol = config?.symbol ?? process.env.SYMBOL ?? "BTCUSDT";
         const defaultOrderQty = !isNaN(envOrderQty)
-            ? (targetSymbol.includes("BTC") && envOrderQty > 0.01 ? 0.001 : envOrderQty)
+            ? envOrderQty
             : (targetSymbol.includes("ETH") ? 0.05 : 0.001);
         const defaultLeverage = !isNaN(envLeverage) ? envLeverage : 10;
         this.config = {
@@ -86,6 +94,10 @@ class StrategyEngine {
             dailyProfitLockUsdt: config?.dailyProfitLockUsdt ?? defaultProfitLock,
             maxShortSlots: config?.maxShortSlots ?? defaultMaxShortSlots,
             leverageMultiplier: config?.leverageMultiplier ?? defaultLeverage,
+            maxSpreadEth: config?.maxSpreadEth ?? defaultMaxSpreadEth,
+            maxSpreadBtc: config?.maxSpreadBtc ?? defaultMaxSpreadBtc,
+            minNotionalUsdt: config?.minNotionalUsdt ?? defaultMinNotionalUsdt,
+            cooldownMs: config?.cooldownMs ?? defaultCooldownMs,
         };
         this.hedgeLedger = hedgeLedger ?? new positionLedger_1.HedgePositionLedger(this.config.symbol, this.config.maxShortSlots);
         this.positionLedger = positionLedger ?? this.hedgeLedger.getLegacyLedger();
@@ -110,6 +122,34 @@ class StrategyEngine {
     }
     getActiveTrades(currentPrice = 0) {
         return this.hedgeLedger.getActiveTradeSlots(currentPrice, this.config.leverageMultiplier, this.config.longTakeProfitPercent, this.config.longStopLossPercent, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent);
+    }
+    reconcileStartupPositions(rawPositions) {
+        if (!Array.isArray(rawPositions) || rawPositions.length === 0) {
+            console.log(`[StrategyEngine][StateRecovery] No active positions returned from Binance REST API for ${this.config.symbol}.`);
+            return;
+        }
+        const recovered = [];
+        for (const pos of rawPositions) {
+            if (pos.symbol !== this.config.symbol)
+                continue;
+            const amt = parseFloat(pos.positionAmt || "0");
+            const entryPx = parseFloat(pos.entryPrice || "0");
+            if (Math.abs(amt) <= 0 || entryPx <= 0)
+                continue;
+            const side = pos.positionSide === "LONG" || (pos.positionSide === "BOTH" && amt > 0) ? "LONG" : "SHORT";
+            recovered.push({
+                side,
+                quantity: Math.abs(amt),
+                entryPrice: entryPx,
+            });
+        }
+        if (recovered.length > 0) {
+            this.hedgeLedger.syncStartupPositions(recovered, this.config.longTakeProfitPercent, this.config.longStopLossPercent, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent);
+            console.log(`[StrategyEngine][StateRecovery] Successfully recovered ${recovered.length} open position(s) from Binance REST API for ${this.config.symbol}.`);
+        }
+        else {
+            console.log(`[StrategyEngine][StateRecovery] Binance position state: FLAT (0.0000) for ${this.config.symbol}.`);
+        }
     }
     /**
      * High-frequency tick evaluation loop.
@@ -336,11 +376,16 @@ class StrategyEngine {
             timeInForce = "GTX";
             targetPrice = signalType === "BUY" ? bidPrice : askPrice;
         }
-        // SPREAD GUARD: Explicitly block MARKET executions if current spread > 0.50 USDT (for ETHUSDT)
-        const currentSpread = askPrice > 0 && bidPrice > 0 ? Math.abs(askPrice - bidPrice) : 0;
-        const maxSpreadAllowed = this.config.symbol.includes("ETH") ? 0.50 : 5.0;
+        // SPREAD GUARD: Explicitly block MARKET executions if spread is invalid or exceeds configured max threshold
+        const isTickValid = askPrice > 0 && bidPrice > 0 && askPrice >= bidPrice;
+        const currentSpread = isTickValid ? askPrice - bidPrice : Infinity;
+        const maxSpreadAllowed = this.config.symbol.includes("ETH") ? this.config.maxSpreadEth : this.config.maxSpreadBtc;
         if (orderType === "MARKET" && currentSpread > maxSpreadAllowed) {
-            console.log(`[StrategyEngine][SPREAD_GUARD_BLOCK] Seq #${seq} | Current Spread: ${currentSpread.toFixed(2)} USDT > ${maxSpreadAllowed.toFixed(2)} USDT threshold. MARKET execution blocked.`);
+            const reasonCode = !isTickValid ? "INVALID_TICK_DATA" : "REJECTED_LIQUIDITY_SWEEP_TRAP";
+            const message = !isTickValid
+                ? `Market execution blocked: invalid tick prices (bid: ${bidPrice}, ask: ${askPrice})`
+                : `Market execution blocked: current spread (${currentSpread.toFixed(2)} USDT) > ${maxSpreadAllowed.toFixed(2)} USDT threshold`;
+            console.log(`[StrategyEngine][SPREAD_GUARD_BLOCK] Seq #${seq} | ${message}`);
             this.staticResult.sequenceNum = seq;
             this.staticResult.signalType = "NONE";
             this.staticResult.obi = obi;
@@ -350,8 +395,8 @@ class StrategyEngine {
             this.staticResult.askPrice = askPrice;
             this.staticResult.riskResult = {
                 passed: false,
-                reasonCode: "REJECTED_LIQUIDITY_SWEEP_TRAP",
-                message: `Market execution blocked: current spread (${currentSpread.toFixed(2)} USDT) > ${maxSpreadAllowed.toFixed(2)} USDT threshold`,
+                reasonCode,
+                message,
             };
             this.staticResult.executionPromise = undefined;
             return this.staticResult;
@@ -360,9 +405,9 @@ class StrategyEngine {
         if (signalType === "SELL" && targetSlotIndex !== undefined && targetSlotIndex > 0) {
             targetPrice = targetPrice + targetSlotIndex * 2.0 * this.config.tickSize;
         }
-        // Binance Futures Min Notional Guard: ensure order notional >= 55 USDT
+        // Binance Futures Min Notional Guard: ensure order notional >= minNotionalUsdt
         if (basePrice > 0) {
-            const minNotionalUsdt = 55.0;
+            const minNotionalUsdt = this.config.minNotionalUsdt;
             if (finalQuantity * basePrice < minNotionalUsdt) {
                 finalQuantity = Number((minNotionalUsdt / basePrice).toFixed(3));
             }
@@ -398,13 +443,13 @@ class StrategyEngine {
         }
         let executionPromise = undefined;
         if (riskResult.passed) {
-            // Set atomic SAB hysteresis lockout (250ms cooldown per side) to suppress microburst sweeps
+            // Set atomic SAB hysteresis lockout (cooldown per side) to suppress microburst sweeps
             if (targetPosSide === "SHORT") {
-                this.client.setShortCooldownLock(Date.now() + 250);
+                this.client.setShortCooldownLock(Date.now() + this.config.cooldownMs);
                 this.client.setLastShortFillPrice(this.reusableOrderIntent.price);
             }
             else if (targetPosSide === "LONG") {
-                this.client.setLongCooldownLock(Date.now() + 250);
+                this.client.setLongCooldownLock(Date.now() + this.config.cooldownMs);
                 this.client.setLastLongFillPrice(this.reusableOrderIntent.price);
             }
             const notional = this.reusableOrderIntent.price * this.reusableOrderIntent.quantity;

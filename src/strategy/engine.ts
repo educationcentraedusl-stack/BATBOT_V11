@@ -1,6 +1,6 @@
 import { MarketDataClient } from "../marketDataClient";
 import { RiskGuard, OrderIntent, RiskCheckResult } from "./risk";
-import { BinanceExecutionClient, BinanceOrderResponse, BinanceOrderParams } from "../execution/binance";
+import { BinanceExecutionClient, BinanceOrderResponse, BinanceOrderParams, BinancePositionRisk } from "../execution/binance";
 import { PositionLedger, HedgePositionLedger, PositionSlot, SlotExitTrigger, ActiveTradeSlot } from "./positionLedger";
 import { DynamicRiskEngine, DynamicMicrostructureMetrics } from "./dynamicRiskEngine";
 
@@ -194,6 +194,46 @@ export class StrategyEngine {
       this.config.shortTakeProfitPercent,
       this.config.shortStopLossPercent
     );
+  }
+
+  public reconcileStartupPositions(rawPositions: BinancePositionRisk[]): void {
+    if (!Array.isArray(rawPositions) || rawPositions.length === 0) {
+      console.log(`[StrategyEngine][StateRecovery] No active positions returned from Binance REST API for ${this.config.symbol}.`);
+      return;
+    }
+
+    const recovered: { side: "LONG" | "SHORT"; quantity: number; entryPrice: number }[] = [];
+
+    for (const pos of rawPositions) {
+      if (pos.symbol !== this.config.symbol) continue;
+
+      const amt = parseFloat(pos.positionAmt || "0");
+      const entryPx = parseFloat(pos.entryPrice || "0");
+      if (Math.abs(amt) <= 0 || entryPx <= 0) continue;
+
+      const side: "LONG" | "SHORT" =
+        pos.positionSide === "LONG" || (pos.positionSide === "BOTH" && amt > 0) ? "LONG" : "SHORT";
+      recovered.push({
+        side,
+        quantity: Math.abs(amt),
+        entryPrice: entryPx,
+      });
+    }
+
+    if (recovered.length > 0) {
+      this.hedgeLedger.syncStartupPositions(
+        recovered,
+        this.config.longTakeProfitPercent,
+        this.config.longStopLossPercent,
+        this.config.shortTakeProfitPercent,
+        this.config.shortStopLossPercent
+      );
+      console.log(
+        `[StrategyEngine][StateRecovery] Successfully recovered ${recovered.length} open position(s) from Binance REST API for ${this.config.symbol}.`
+      );
+    } else {
+      console.log(`[StrategyEngine][StateRecovery] Binance position state: FLAT (0.0000) for ${this.config.symbol}.`);
+    }
   }
 
   /**
