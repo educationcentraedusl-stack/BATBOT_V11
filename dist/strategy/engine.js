@@ -383,6 +383,7 @@ class StrategyEngine {
             }
             const notional = this.reusableOrderIntent.price * this.reusableOrderIntent.quantity;
             this.riskGuard.recordExecutionSuccess(notional);
+            console.log(`[BinanceExecution][DISPATCHING] Submitting ${orderType} ${this.reusableOrderIntent.side} order for ${this.reusableOrderIntent.quantity} ${this.reusableOrderIntent.symbol} to Binance Futures...`);
             executionPromise = this.executionClient
                 .placeOrder({
                 symbol: this.reusableOrderIntent.symbol,
@@ -395,6 +396,7 @@ class StrategyEngine {
             })
                 .then((res) => {
                 if (res) {
+                    console.log(`[BinanceExecution][SUCCESS] Order Executed on Binance! OrderId: ${res.orderId}, Status: ${res.status}, ExecQty: ${res.executedQty}`);
                     const execPx = parseFloat(res.price || res.avgPrice || "0") || targetPrice;
                     if (targetPosSide === "LONG") {
                         this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, this.config.longTakeProfitPercent, this.config.longStopLossPercent);
@@ -406,7 +408,7 @@ class StrategyEngine {
                 return res;
             })
                 .catch((err) => {
-                console.error(`[CRITICAL_EXECUTION_ERROR] Order placement failed: ${err.message}`);
+                console.error(`[BinanceExecution][REJECTED] Order Placement Failed: ${err.message}`);
                 return null;
             });
         }
