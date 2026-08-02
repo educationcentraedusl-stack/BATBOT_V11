@@ -394,7 +394,7 @@ class StrategyEngine {
                 type: orderType,
                 quantity: this.reusableOrderIntent.quantity,
                 price: orderType === "LIMIT" ? this.reusableOrderIntent.price : undefined,
-                timeInForce: timeInForce,
+                timeInForce: orderType === "LIMIT" ? timeInForce : undefined,
                 positionSide: targetPosSide,
             })
                 .then((res) => {

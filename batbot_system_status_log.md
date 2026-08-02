@@ -629,3 +629,9 @@
 - **Artifacts Created/Modified:** `src/execution/binance.ts`, `src/strategy/engine.ts`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Resolved Binance API Error `-1111` (`Precision is over the maximum defined for this asset`) by enforcing strict 3-decimal quantity rounding (`params.quantity.toFixed(3)`) and 2-decimal price rounding in `BinanceExecutionClient` (`src/execution/binance.ts`) and `StrategyEngine` (`src/strategy/engine.ts`). Verified 100% via `npm run build:ts` (0 errors).
 - **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-02
+- **Feature/Task:** Fix Binance API Error [-1106] for MARKET Orders (Strict Parameter Compliance)
+- **Artifacts Created/Modified:** `src/execution/binance.ts`, `src/strategy/engine.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Eradicated Binance API Error `[-1106]` ("Parameter 'timeinforce' sent when not required") by updating `BinanceExecutionClient.placeOrder()` (`src/execution/binance.ts`) to strictly omit `timeInForce` when order type is `MARKET`, `STOP_MARKET`, or `TAKE_PROFIT_MARKET`. Refactored `StrategyEngine` (`src/strategy/engine.ts`) to pass `timeInForce: orderType === "LIMIT" ? timeInForce : undefined`. Verified 100% via `npm run build:ts` (0 errors).
+- **Status:** ✅ Completed & QA Verified

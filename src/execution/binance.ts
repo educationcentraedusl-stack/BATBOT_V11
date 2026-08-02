@@ -339,7 +339,18 @@ export class BinanceExecutionClient {
 
     if (params.price !== undefined) payload.price = Number(params.price.toFixed(2));
     if (params.stopPrice !== undefined) payload.stopPrice = params.stopPrice;
-    if (params.timeInForce !== undefined) payload.timeInForce = params.timeInForce;
+    
+    // Binance API Error -1106: Parameter 'timeinforce' sent when not required.
+    // timeInForce MUST NOT be sent for MARKET, STOP_MARKET, or TAKE_PROFIT_MARKET orders.
+    if (
+      params.timeInForce !== undefined &&
+      params.type !== "MARKET" &&
+      params.type !== "STOP_MARKET" &&
+      params.type !== "TAKE_PROFIT_MARKET"
+    ) {
+      payload.timeInForce = params.timeInForce;
+    }
+
     if (params.closePosition !== undefined) payload.closePosition = params.closePosition;
     if (params.workingType !== undefined) payload.workingType = params.workingType;
     if (params.recvWindow !== undefined) payload.recvWindow = params.recvWindow;
