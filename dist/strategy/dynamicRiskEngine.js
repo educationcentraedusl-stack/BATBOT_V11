@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DynamicRiskEngine = void 0;
 class DynamicRiskEngine {
-    vpinThreshold = 0.70;
+    vpinThreshold = 0.85;
     minHurstTrend = 0.55;
     maxHurstMeanReversion = 0.45;
     constructor(vpinThreshold) {

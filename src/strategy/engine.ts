@@ -487,6 +487,7 @@ export class StrategyEngine {
       microMetrics,
       Math.abs(askPrice - bidPrice)
     );
+    riskProfile.isHighConfidenceAi = isHighConfidenceAi;
 
     // Populate pre-allocated intent
     this.reusableOrderIntent.symbol = this.config.symbol;

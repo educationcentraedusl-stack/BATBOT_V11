@@ -357,6 +357,7 @@ class StrategyEngine {
             isSweepDetected: this.client.getIsSweepDetected(),
         };
         const riskProfile = this.dynamicRiskEngine.evaluateDynamicRisk(basePrice, targetPosSide === "LONG" ? "LONG" : "SHORT", microMetrics, Math.abs(askPrice - bidPrice));
+        riskProfile.isHighConfidenceAi = isHighConfidenceAi;
         // Populate pre-allocated intent
         this.reusableOrderIntent.symbol = this.config.symbol;
         this.reusableOrderIntent.side = signalType;

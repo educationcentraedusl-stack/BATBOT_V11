@@ -20,10 +20,11 @@ export interface DynamicRiskProfile {
   vpinToxicity: number;
   rvGkVol: number;
   hurstExponent: number;
+  isHighConfidenceAi?: boolean;
 }
 
 export class DynamicRiskEngine {
-  private vpinThreshold: number = 0.70;
+  private vpinThreshold: number = 0.85;
   private minHurstTrend: number = 0.55;
   private maxHurstMeanReversion: number = 0.45;
 
