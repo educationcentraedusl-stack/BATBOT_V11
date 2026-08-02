@@ -2344,3 +2344,26 @@ Traceback (most recent call last):
     return wrap_df(ldf.collect(engine, callback))
                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 polars.exceptions.ComputeError: error parsing line: InternalError(TapeError) at character 0 (' ')
+[2026-08-02T08:40:08.476Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-02T08:40:53.914Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-02T08:43:01.736Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-02T08:44:52.895Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-02T08:46:52.335Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-02T08:48:57.923Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-02T08:51:10.781Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-02T08:52:57.651Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-02T08:54:52.877Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-02T08:57:06.128Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-02T08:59:42.099Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-02T09:01:24.118Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-02T09:04:00.653Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-02T09:05:12.073Z] [RECALIBRATION_FAILURE] Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.
+[2026-08-02T10:57:44.743Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDOUT LOG ---
+[BATBOT_V11][LOCAL-TRAINER] Ingesting SafeTensors dataset: 'D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\data\cfc_features.safetensors' (12978416 bytes)...
+[BATBOT_V11][LOCAL-TRAINER] Hardware Acceleration: CPU Vectorized (8 Threads)
+[BATBOT_V11][LOCAL-TRAINER] Unfolded 2D feature matrix into 3D sequences: train=torch.Size([152692, 32, 16]), val=torch.Size([38100, 32, 16])
+[BATBOT_V11][LOCAL-TRAINER] Sequence Dataset Ready: 152692 train samples, 38100 val samples.
+[BATBOT_V11][LOCAL-TRAINER] Starting Continuous-Time Recalibration (20 Epochs)...
+[BATBOT Epoch 05/20] Loss: 0.408569 | Best Val IC: +0.3317

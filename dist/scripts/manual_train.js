@@ -36,7 +36,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const child_process_1 = require("child_process");
-const remoteRecalibrationClient_1 = require("../ai/remoteRecalibrationClient");
 /**
  * Dynamically resolve the Python binary executable path, prioritizing the project's virtual environment.
  */
@@ -82,17 +81,14 @@ async function main() {
     console.log("=".repeat(75));
     console.log(`[BATBOT_V11] Resolved Python Virtualenv Runtime: '${pythonCmd}'`);
     const prepScript = path.join(projectRoot, "training", "prepare_data.py");
+    const trainerScript = path.join(projectRoot, "training", "local_async_trainer.py");
     try {
         console.log("\n[BATBOT_V11] STEP 1/2: Extracting T-KAN & CfC Features (prepare_data.py)...");
         console.log("-".repeat(75));
         await runCommand(pythonCmd, [prepScript], projectRoot);
-        console.log("\n[BATBOT_V11] STEP 2/2: Training CfC Liquid Neural Network on Modal Serverless GPU...");
+        console.log("\n[BATBOT_V11] STEP 2/2: Training CfC Liquid Neural Network via Local PyTorch 2.6 Background Recalibrator...");
         console.log("-".repeat(75));
-        const remoteClient = new remoteRecalibrationClient_1.RemoteRecalibrationClient();
-        const success = await remoteClient.trainRemotely();
-        if (!success) {
-            throw new Error("Modal Cloud GPU training failed.");
-        }
+        await runCommand(pythonCmd, [trainerScript], projectRoot);
         console.log("\n" + "=".repeat(75));
         console.log("[BATBOT_V11] SUCCESS: New weights exported and ready for zero-lock hot-swap!");
         console.log("=".repeat(75));

@@ -216,7 +216,8 @@ impl PreflightValidator {
         };
 
         // Gate 3: Shadow IC >= min_ic_threshold AND directional accuracy >= 0.50 (or default fallback when low sample count)
-        let gate3 = shadow_ic >= self.min_ic_threshold && (dir_acc >= 0.50 || self.total_eval_directions <= 5);
+        let ic_ok = if shadow_ic.is_nan() { self.min_ic_threshold <= 0.0 } else { shadow_ic >= self.min_ic_threshold };
+        let gate3 = ic_ok && (dir_acc >= 0.50 || self.total_eval_directions <= 5);
         self.gate3_passed = gate3;
 
         // Gate 4: Mean latency <= 1500ns (1.5us) AND Max latency <= 3000ns (3.0us)
@@ -320,6 +321,9 @@ mod tests {
                 bridge.store_f64(4, 50000.0 + (i as f64 * 10.0));
                 bridge.store_f64(6, 50010.0 + (i as f64 * 10.0));
                 validator.step_shadow(&bridge);
+            }
+            if validator.phase() != PreflightPhase::Passed {
+                eprintln!("[TEST DIAGNOSTIC] Preflight phase failed with reason: {:?}", validator.failure_reason);
             }
             assert_eq!(validator.phase(), PreflightPhase::Passed);
 

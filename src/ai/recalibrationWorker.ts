@@ -3,7 +3,6 @@ import * as path from "path";
 import { execFile, execSync } from "child_process";
 import { promisify } from "util";
 import * as readline from "readline";
-import { RemoteRecalibrationClient } from "./remoteRecalibrationClient";
 import { CLIDashboard } from "../telemetry/dashboard";
 import { TerminalOutputMux } from "../telemetry/terminalMux";
 
@@ -256,16 +255,21 @@ export class AutoRecalibrationManager {
         console.warn(`[BATBOT_V11][SHADOW-RECALIBRATION] Data prep stderr log: ${prepResult.stderr.trim()}`);
       }
 
-      // Step 2: Offload training to Modal Serverless Cloud GPU asynchronously
-      console.log(`[BATBOT_V11][SHADOW-RECALIBRATION] Step 2/4: Offloading PyTorch training to Modal Cloud GPU...`);
-      const remoteClient = new RemoteRecalibrationClient();
-      const remoteSuccess = await remoteClient.trainRemotely();
+      // Step 2: Execute 100% Free Local Asynchronous PyTorch 2.6 Background Trainer
+      console.log(`[BATBOT_V11][SHADOW-RECALIBRATION] Step 2/4: Executing 100% Free Local PyTorch 2.6 Background Recalibrator (local_async_trainer.py)...`);
+      const trainerScript = path.join(this.projectRoot, "training", "local_async_trainer.py");
 
-      if (!remoteSuccess) {
-        throw new Error("Modal Serverless GPU training offloading failed. Local CPU fallback is deprecated.");
+      const trainResult = await execFileAsync(pythonCmd, [trainerScript], {
+        cwd: this.projectRoot,
+        env: { ...process.env, PYTHONUNBUFFERED: "1" },
+        timeout: 300000,
+      });
+
+      if (trainResult.stderr && trainResult.stderr.trim().length > 0) {
+        console.warn(`[BATBOT_V11][SHADOW-RECALIBRATION] Local trainer stderr log: ${trainResult.stderr.trim()}`);
       }
 
-      console.log(`[BATBOT_V11][SHADOW-RECALIBRATION] Modal Serverless GPU training & weights download PASSED!`);
+      console.log(`[BATBOT_V11][SHADOW-RECALIBRATION] Local PyTorch 2.6 Background Training PASSED!`);
 
       // Step 3: Validate generated SafeTensors weights file & Holdout Verification
       if (!fs.existsSync(this.weightsPath)) {
