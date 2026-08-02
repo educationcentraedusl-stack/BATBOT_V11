@@ -387,16 +387,19 @@ class StrategyEngine {
             }
             const notional = this.reusableOrderIntent.price * this.reusableOrderIntent.quantity;
             console.log(`[BinanceExecution][DISPATCHING] Submitting ${orderType} ${this.reusableOrderIntent.side} order for ${this.reusableOrderIntent.quantity} ${this.reusableOrderIntent.symbol} to Binance Futures...`);
-            executionPromise = this.executionClient
-                .placeOrder({
+            const orderParams = {
                 symbol: this.reusableOrderIntent.symbol,
                 side: this.reusableOrderIntent.side,
                 type: orderType,
                 quantity: this.reusableOrderIntent.quantity,
-                price: orderType === "LIMIT" ? this.reusableOrderIntent.price : undefined,
-                timeInForce: orderType === "LIMIT" ? timeInForce : undefined,
                 positionSide: targetPosSide,
-            })
+            };
+            if (orderType === "LIMIT") {
+                orderParams.price = this.reusableOrderIntent.price;
+                orderParams.timeInForce = timeInForce;
+            }
+            executionPromise = this.executionClient
+                .placeOrder(orderParams)
                 .then((res) => {
                 if (res) {
                     this.riskGuard.recordExecutionSuccess(notional);

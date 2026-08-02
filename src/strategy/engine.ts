@@ -1,6 +1,6 @@
 import { MarketDataClient } from "../marketDataClient";
 import { RiskGuard, OrderIntent, RiskCheckResult } from "./risk";
-import { BinanceExecutionClient, BinanceOrderResponse } from "../execution/binance";
+import { BinanceExecutionClient, BinanceOrderResponse, BinanceOrderParams } from "../execution/binance";
 import { PositionLedger, HedgePositionLedger, PositionSlot, SlotExitTrigger, ActiveTradeSlot } from "./positionLedger";
 import { DynamicRiskEngine, DynamicMicrostructureMetrics } from "./dynamicRiskEngine";
 
@@ -528,16 +528,21 @@ export class StrategyEngine {
 
       console.log(`[BinanceExecution][DISPATCHING] Submitting ${orderType} ${this.reusableOrderIntent.side} order for ${this.reusableOrderIntent.quantity} ${this.reusableOrderIntent.symbol} to Binance Futures...`);
 
+      const orderParams: BinanceOrderParams = {
+        symbol: this.reusableOrderIntent.symbol,
+        side: this.reusableOrderIntent.side,
+        type: orderType,
+        quantity: this.reusableOrderIntent.quantity,
+        positionSide: targetPosSide,
+      };
+
+      if (orderType === "LIMIT") {
+        orderParams.price = this.reusableOrderIntent.price;
+        orderParams.timeInForce = timeInForce;
+      }
+
       executionPromise = this.executionClient
-        .placeOrder({
-          symbol: this.reusableOrderIntent.symbol,
-          side: this.reusableOrderIntent.side,
-          type: orderType,
-          quantity: this.reusableOrderIntent.quantity,
-          price: orderType === "LIMIT" ? this.reusableOrderIntent.price : undefined,
-          timeInForce: orderType === "LIMIT" ? timeInForce : undefined,
-          positionSide: targetPosSide,
-        })
+        .placeOrder(orderParams)
         .then((res) => {
           if (res) {
             this.riskGuard.recordExecutionSuccess(notional);

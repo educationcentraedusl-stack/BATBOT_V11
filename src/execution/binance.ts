@@ -343,12 +343,14 @@ export class BinanceExecutionClient {
     // Binance API Error -1106: Parameter 'timeinforce' sent when not required.
     // timeInForce MUST NOT be sent for MARKET, STOP_MARKET, or TAKE_PROFIT_MARKET orders.
     if (
-      params.timeInForce !== undefined &&
       params.type !== "MARKET" &&
       params.type !== "STOP_MARKET" &&
-      params.type !== "TAKE_PROFIT_MARKET"
+      params.type !== "TAKE_PROFIT_MARKET" &&
+      params.timeInForce !== undefined
     ) {
       payload.timeInForce = params.timeInForce;
+    } else {
+      delete payload.timeInForce;
     }
 
     if (params.closePosition !== undefined) payload.closePosition = params.closePosition;
@@ -363,6 +365,8 @@ export class BinanceExecutionClient {
       (params.positionSide === undefined || params.positionSide === "BOTH")
     ) {
       payload.reduceOnly = params.reduceOnly;
+    } else {
+      delete payload.reduceOnly;
     }
 
     return this.request<BinanceOrderResponse>("POST", "/fapi/v1/order", payload, true);

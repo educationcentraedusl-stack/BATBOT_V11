@@ -153,6 +153,72 @@ async function runVerificationTests() {
     else {
         console.log(`  ✓ Sub-1.5µs Latency Target Achieved!`);
     }
+    // -------------------------------------------------------------------
+    // TEST 5: Strict Omission Audit for Binance Order Parameters (Error -1106 Guard)
+    // -------------------------------------------------------------------
+    console.log("\n[TEST 5] Testing Strict Omission of timeInForce for Non-LIMIT Orders...");
+    // We can test placeOrder indirectly or signQuery directly
+    const marketOrderParams = {
+        symbol: "BTCUSDT",
+        side: "BUY",
+        type: "MARKET",
+        quantity: 0.001,
+    };
+    const signedMarketQuery = configuredClient.signQuery(marketOrderParams);
+    if (signedMarketQuery.includes("timeInForce")) {
+        throw new Error("FAIL: timeInForce parameter was serialized for MARKET order query string!");
+    }
+    console.log("  ✓ MARKET order query string is 100% free of timeInForce.");
+    // Test payload construction logic in placeOrder
+    // We subclass or inspect placeOrder payload behavior
+    let capturedPayload = null;
+    const mockClient = new (class extends binance_1.BinanceExecutionClient {
+        async request(method, endpoint, params) {
+            capturedPayload = params;
+            return { orderId: 12345, status: "FILLED" };
+        }
+    })({ apiKey: "key", apiSecret: "secret" });
+    // Test 5a: MARKET order
+    await mockClient.placeOrder({
+        symbol: "BTCUSDT",
+        side: "BUY",
+        type: "MARKET",
+        quantity: 0.001,
+        timeInForce: undefined, // pass undefined explicitly to test vulnerability
+    });
+    if ("timeInForce" in capturedPayload || Object.prototype.hasOwnProperty.call(capturedPayload, "timeInForce")) {
+        throw new Error("FAIL: timeInForce key exists in MARKET order payload object!");
+    }
+    if (JSON.stringify(capturedPayload).includes("timeInForce")) {
+        throw new Error("FAIL: JSON.stringify(capturedPayload) contains timeInForce key for MARKET order!");
+    }
+    console.log("  ✓ MARKET order payload structurally guarantees total absence of timeInForce key.");
+    // Test 5b: STOP_MARKET order
+    await mockClient.placeOrder({
+        symbol: "BTCUSDT",
+        side: "SELL",
+        type: "STOP_MARKET",
+        quantity: 0.001,
+        stopPrice: 60000,
+        timeInForce: "GTC", // attempt to supply timeInForce to STOP_MARKET
+    });
+    if ("timeInForce" in capturedPayload || Object.prototype.hasOwnProperty.call(capturedPayload, "timeInForce")) {
+        throw new Error("FAIL: timeInForce key exists in STOP_MARKET order payload object!");
+    }
+    console.log("  ✓ STOP_MARKET order payload structurally strips timeInForce key.");
+    // Test 5c: LIMIT order
+    await mockClient.placeOrder({
+        symbol: "BTCUSDT",
+        side: "BUY",
+        type: "LIMIT",
+        quantity: 0.001,
+        price: 64000,
+        timeInForce: "GTX",
+    });
+    if (!("timeInForce" in capturedPayload) || capturedPayload.timeInForce !== "GTX") {
+        throw new Error("FAIL: timeInForce key was missing or incorrect for LIMIT order!");
+    }
+    console.log("  ✓ LIMIT order payload correctly retains timeInForce=GTX.");
     console.log("\n=================================================");
     console.log("ALL PHASE 4 VERIFICATION TESTS PASSED SUCCESSFULLY!");
     console.log("=================================================");
