@@ -237,5 +237,26 @@ class MarketDataClient {
     setIsSweepDetected(isSweep) {
         this.writeAtomicFloat64(126, isSweep ? 1.0 : 0.0);
     }
+    // --- Slots 127 to 129: AI Temperature Scaling & Platt Calibration Params ---
+    getAiTemperature() {
+        const val = this.readAtomicFloat64(127);
+        return val > 0.05 ? val : 1.0;
+    }
+    setAiTemperature(val) {
+        this.writeAtomicFloat64(127, val);
+    }
+    getAiPlattScale() {
+        const val = this.readAtomicFloat64(128);
+        return val > 0.05 ? val : 1.0;
+    }
+    setAiPlattScale(val) {
+        this.writeAtomicFloat64(128, val);
+    }
+    getAiPlattOffset() {
+        return this.readAtomicFloat64(129);
+    }
+    setAiPlattOffset(val) {
+        this.writeAtomicFloat64(129, val);
+    }
 }
 exports.MarketDataClient = MarketDataClient;

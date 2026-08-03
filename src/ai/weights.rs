@@ -8,9 +8,27 @@ pub enum AiEngineStatus {
     Uncalibrated,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CalibrationParams {
+    pub temperature: f64,
+    pub platt_scale: f64,
+    pub platt_offset: f64,
+}
+
+impl Default for CalibrationParams {
+    fn default() -> Self {
+        Self {
+            temperature: 1.0,
+            platt_scale: 1.0,
+            platt_offset: 0.0,
+        }
+    }
+}
+
 pub struct AiEngine {
     pub cell: Option<CfCCell>,
     pub status: AiEngineStatus,
+    pub calibration_params: CalibrationParams,
 }
 
 impl AiEngine {
@@ -29,6 +47,7 @@ impl AiEngine {
             return Self {
                 cell: None,
                 status: AiEngineStatus::Uncalibrated,
+                calibration_params: CalibrationParams::default(),
             };
         }
 
@@ -44,6 +63,7 @@ impl AiEngine {
                 return Self {
                     cell: None,
                     status: AiEngineStatus::Uncalibrated,
+                    calibration_params: CalibrationParams::default(),
                 };
             }
         };
@@ -66,6 +86,7 @@ impl AiEngine {
             Self {
                 cell: Some(cell),
                 status: AiEngineStatus::Calibrated,
+                calibration_params: CalibrationParams::default(),
             }
         } else {
             eprintln!(
@@ -75,6 +96,7 @@ impl AiEngine {
             Self {
                 cell: None,
                 status: AiEngineStatus::Uncalibrated,
+                calibration_params: CalibrationParams::default(),
             }
         }
     }

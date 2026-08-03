@@ -305,6 +305,34 @@ export class MarketDataClient {
   public setIsSweepDetected(isSweep: boolean): void {
     this.writeAtomicFloat64(126, isSweep ? 1.0 : 0.0);
   }
+
+  // --- Slots 127 to 129: AI Temperature Scaling & Platt Calibration Params ---
+
+  public getAiTemperature(): number {
+    const val = this.readAtomicFloat64(127);
+    return val > 0.05 ? val : 1.0;
+  }
+
+  public setAiTemperature(val: number): void {
+    this.writeAtomicFloat64(127, val);
+  }
+
+  public getAiPlattScale(): number {
+    const val = this.readAtomicFloat64(128);
+    return val > 0.05 ? val : 1.0;
+  }
+
+  public setAiPlattScale(val: number): void {
+    this.writeAtomicFloat64(128, val);
+  }
+
+  public getAiPlattOffset(): number {
+    return this.readAtomicFloat64(129);
+  }
+
+  public setAiPlattOffset(val: number): void {
+    this.writeAtomicFloat64(129, val);
+  }
 }
 
 

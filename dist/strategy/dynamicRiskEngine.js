@@ -93,5 +93,20 @@ class DynamicRiskEngine {
             hurstExponent: metrics.hurst,
         };
     }
+    /**
+     * Calculates fee-adjusted Break-Even Stop Loss price:
+     * EntryPrice ± (EntryPrice * FeeRate * 2.5) to guarantee zero-loss covering commissions & slippage.
+     */
+    calculateFeeAdjustedBreakEvenPrice(entryPrice, positionSide, feeRate = 0.0005) {
+        if (entryPrice <= 0)
+            return 0;
+        const feeMultiplier = feeRate * 2.5; // Round-trip fee buffer (2 x fee + 0.5 fee slippage)
+        if (positionSide === "LONG") {
+            return entryPrice * (1.0 + feeMultiplier);
+        }
+        else {
+            return entryPrice * (1.0 - feeMultiplier);
+        }
+    }
 }
 exports.DynamicRiskEngine = DynamicRiskEngine;

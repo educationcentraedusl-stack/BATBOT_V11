@@ -345,4 +345,34 @@ export class AutoRecalibrationManager {
       // Do NOT set state to TRAINING_LOCK. Engine continues trading on last known good weights.
     }
   }
+
+  /**
+   * Dynamically calculates and applies Temperature Scaling and Platt Calibration parameters
+   * based on rolling Information Coefficient (IC) and empirical accuracy.
+   */
+  public applyPlattCalibration(client: any, rollingIc: number): { temperature: number; scale: number; offset: number } {
+    let temperature = 1.0;
+    let scale = 1.0;
+    let offset = 0.0;
+
+    if (rollingIc > 0.05) {
+      // High predictive power -> Sharpen confidence (Temperature < 1.0, scale up)
+      temperature = Math.max(0.6, 1.0 - rollingIc * 2.0);
+      scale = 1.0 + rollingIc * 1.5;
+      offset = 0.05;
+    } else if (rollingIc < 0.01) {
+      // Low predictive power -> Smooth/soften confidence (Temperature > 1.0, scale down)
+      temperature = Math.min(1.8, 1.0 + (0.05 - Math.max(-0.1, rollingIc)) * 5.0);
+      scale = Math.max(0.4, 1.0 - Math.abs(rollingIc) * 2.0);
+      offset = -0.05;
+    }
+
+    if (client && typeof client.setAiTemperature === "function") {
+      client.setAiTemperature(temperature);
+      client.setAiPlattScale(scale);
+      client.setAiPlattOffset(offset);
+    }
+
+    return { temperature, scale, offset };
+  }
 }

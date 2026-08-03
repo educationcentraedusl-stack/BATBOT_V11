@@ -304,11 +304,14 @@ export class StrategyEngine {
             })
             .then((res) => {
               if (res) {
-                if (trigger.side === "LONG") {
-                  this.hedgeLedger.releaseCoreLong();
-                } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
-                  const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
-                  this.hedgeLedger.releaseShortSlot(sIdx);
+                // Only release slot if full exit (not partial close)
+                if (!trigger.isPartialClose) {
+                  if (trigger.side === "LONG") {
+                    this.hedgeLedger.releaseCoreLong();
+                  } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
+                    const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
+                    this.hedgeLedger.releaseShortSlot(sIdx);
+                  }
                 }
               }
               return res;
@@ -383,7 +386,7 @@ export class StrategyEngine {
 
     // Auto-reconcile hedge ledger slots if local position ledger is flat
     if (this.positionLedger.getSide() === "FLAT" || this.positionLedger.getNetQuantity() === 0) {
-      if (this.hedgeLedger.getCoreLong().isOccupied) {
+      if (this.hedgeLedger.getCoreLong().isOccupied && (!this.hedgeLedger.getCoreLong().quantity || this.hedgeLedger.getCoreLong().quantity <= 0)) {
         this.hedgeLedger.releaseCoreLong();
       }
     }
@@ -393,6 +396,8 @@ export class StrategyEngine {
     const realizedVol = this.client.getRealizedVolatility();
     const rawShortCooldownLock = this.client.getShortCooldownLock();
     const rawLongCooldownLock = this.client.getLongCooldownLock();
+    const hurstExponent = this.client.getHurstExponent();
+    const garmanKlassRV = this.client.getGarmanKlassRV();
 
     const nowMs = Date.now();
     // Defensive ceiling guard: if cooldown lock is set to a future timestamp > 60s, reset lock to 0
@@ -405,6 +410,13 @@ export class StrategyEngine {
     const obiScore = Math.max(-1.0, Math.min(1.0, obi));
     const cvdScore = cvd > 0 ? 1.0 : cvd < 0 ? -1.0 : 0.0;
     const aiScore = Math.max(-1.0, Math.min(1.0, aiDirection * aiConfidence));
+
+    // Regime-aware AI confidence threshold adaptation:
+    // In strong trend regime (Hurst > 0.55), lower required minAiConfidence to 0.52 for fast momentum capture.
+    let effectiveMinConfidence = this.config.minAiConfidence;
+    if (hurstExponent > 0.55 && garmanKlassRV > 0.001) {
+      effectiveMinConfidence = Math.max(0.50, this.config.minAiConfidence - 0.15);
+    }
 
     // Weights: AI Model = 50% (0.50), OBI = 25% (0.25), CVD = 25% (0.25)
     const compositeScore = 0.50 * aiScore + 0.25 * obiScore + 0.25 * cvdScore;
@@ -422,9 +434,9 @@ export class StrategyEngine {
         console.log(`[StrategyEngine][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)}, Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
       }
     } else {
-      // Weighted Composite Rule with strict OBI directional pressure (+/- 0.35)
-      isBuySignal = compositeScore > 0.12 && aiConfidence >= this.config.minAiConfidence && obi >= this.config.obiBuyThreshold;
-      isSellSignal = compositeScore < -0.12 && aiConfidence >= this.config.minAiConfidence && obi <= this.config.obiSellThreshold;
+      // Weighted Composite Rule with dynamic effective confidence thresholding
+      isBuySignal = compositeScore > 0.12 && aiConfidence >= effectiveMinConfidence && obi >= this.config.obiBuyThreshold;
+      isSellSignal = compositeScore < -0.12 && aiConfidence >= effectiveMinConfidence && obi <= this.config.obiSellThreshold;
     }
 
     // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
