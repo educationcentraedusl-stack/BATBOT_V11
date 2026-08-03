@@ -677,3 +677,8 @@
 - **Status:** ✅ Completed & QA Verified
 
 
+- **Date:** 2026-08-03
+- **Feature/Task:** Resolution of Hostile Audit Finding: Lot-Size Float Precision Sanitization
+- **Artifacts Created/Modified:** `src/strategy/positionLedger.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Applied `Number((Math.floor(rawChunk * factor + 1e-9) / factor).toFixed(precision))` and `Number(roundedChunk.toFixed(precision))` float-safe string sanitization to `calculatePartialExitChunk()` in `src/strategy/positionLedger.ts`. Completely eliminated IEEE 754 binary floating-point division precision artifacts (e.g., `0.0019999999999999996`) that trigger Binance API `-1013 (INVALID_QTY / LOT_SIZE)` order rejection errors. Verified 100% via TypeScript build (`npm run build:ts`), zero-loss multi-TP verification suite (`npx ts-node src/test_multi_tp_zero_loss.ts`), and position ledger unit test harness (`npx ts-node src/test_position_ledger.ts`).
+- **Status:** ✅ Completed & QA Verified

@@ -412,7 +412,7 @@ export function calculatePartialExitChunk(
   const rawChunk = initialSlotQuantity * (percent / 100.0);
   const precision = Math.max(0, Math.round(-Math.log10(stepSize)));
   const factor = Math.pow(10, precision);
-  let roundedChunk = Math.floor(rawChunk * factor + 1e-9) / factor;
+  let roundedChunk = Number((Math.floor(rawChunk * factor + 1e-9) / factor).toFixed(precision));
 
   roundedChunk = Math.min(roundedChunk, currentSlotQuantity);
 
@@ -420,12 +420,12 @@ export function calculatePartialExitChunk(
   if (roundedChunk < minQty || notional < minNotional) {
     const fullNotional = currentSlotQuantity * markPrice;
     if (currentSlotQuantity >= minQty && fullNotional >= minNotional) {
-      return currentSlotQuantity;
+      return Number(currentSlotQuantity.toFixed(precision));
     }
     return 0;
   }
 
-  return roundedChunk;
+  return Number(roundedChunk.toFixed(precision));
 }
 
 export class HedgePositionLedger {
