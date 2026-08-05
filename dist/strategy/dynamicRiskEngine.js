@@ -108,5 +108,25 @@ class DynamicRiskEngine {
             return entryPrice * (1.0 - feeMultiplier);
         }
     }
+    /**
+     * Evaluates absolute Ruthless Hard Stop condition.
+     * Returns true if markPrice breaches stopLossPrice by any amount,
+     * triggering an unblockable, high-priority emergency market close order.
+     */
+    evaluateEmergencyHardStop(positionSide, entryPrice, currentMarkPrice, stopLossPrice) {
+        if (entryPrice <= 0 || currentMarkPrice <= 0 || stopLossPrice <= 0) {
+            return { isHardStopBreached: false, breachAmount: 0 };
+        }
+        if (positionSide === "LONG") {
+            const isBreached = currentMarkPrice <= stopLossPrice;
+            const breachAmount = isBreached ? stopLossPrice - currentMarkPrice : 0;
+            return { isHardStopBreached: isBreached, breachAmount };
+        }
+        else {
+            const isBreached = currentMarkPrice >= stopLossPrice;
+            const breachAmount = isBreached ? currentMarkPrice - stopLossPrice : 0;
+            return { isHardStopBreached: isBreached, breachAmount };
+        }
+    }
 }
 exports.DynamicRiskEngine = DynamicRiskEngine;

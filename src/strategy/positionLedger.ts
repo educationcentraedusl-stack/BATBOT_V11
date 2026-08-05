@@ -722,6 +722,27 @@ export class HedgePositionLedger {
     slot.tpPrices = [];
   }
 
+  public deductCoreLongQuantity(qty: number): void {
+    if (this.coreLong.isOccupied && qty > 0) {
+      this.coreLong.quantity = Math.max(0, Number((this.coreLong.quantity - qty).toFixed(6)));
+      if (this.coreLong.quantity <= 1e-6) {
+        this.releaseCoreLong();
+      }
+    }
+  }
+
+  public deductShortSlotQuantity(slotIndex: number, qty: number): void {
+    if (slotIndex >= 0 && slotIndex < this.maxShortSlots) {
+      const slot = this.shortSlots[slotIndex];
+      if (slot.isOccupied && qty > 0) {
+        slot.quantity = Math.max(0, Number((slot.quantity - qty).toFixed(6)));
+        if (slot.quantity <= 1e-6) {
+          this.releaseShortSlot(slotIndex);
+        }
+      }
+    }
+  }
+
   public evaluateHedgeDynamicTpSl(markPrice: number): SlotExitTrigger[] {
     const triggers: SlotExitTrigger[] = [];
     if (markPrice <= 0) return triggers;
@@ -756,11 +777,7 @@ export class HedgePositionLedger {
               isPartialClose: chunk < slot.quantity,
               tpStage: 1,
             });
-            slot.quantity -= chunk;
-            if (slot.quantity <= 1e-6) {
-              slot.isOccupied = false;
-              return;
-            }
+            return;
           }
         }
 
@@ -781,11 +798,7 @@ export class HedgePositionLedger {
               isPartialClose: chunk < slot.quantity,
               tpStage: 2,
             });
-            slot.quantity -= chunk;
-            if (slot.quantity <= 1e-6) {
-              slot.isOccupied = false;
-              return;
-            }
+            return;
           }
         }
 
@@ -806,11 +819,7 @@ export class HedgePositionLedger {
               isPartialClose: chunk < slot.quantity,
               tpStage: 3,
             });
-            slot.quantity -= chunk;
-            if (slot.quantity <= 1e-6) {
-              slot.isOccupied = false;
-              return;
-            }
+            return;
           }
         }
 
@@ -831,11 +840,7 @@ export class HedgePositionLedger {
               isPartialClose: chunk < slot.quantity,
               tpStage: 4,
             });
-            slot.quantity -= chunk;
-            if (slot.quantity <= 1e-6) {
-              slot.isOccupied = false;
-              return;
-            }
+            return;
           }
         }
 
@@ -852,7 +857,6 @@ export class HedgePositionLedger {
             isPartialClose: false,
             tpStage: 5,
           });
-          slot.isOccupied = false;
           return;
         }
       }
@@ -873,7 +877,6 @@ export class HedgePositionLedger {
           markPrice,
           isPartialClose: false,
         });
-        slot.isOccupied = false;
         return;
       }
 
@@ -892,7 +895,6 @@ export class HedgePositionLedger {
           markPrice,
           isPartialClose: false,
         });
-        slot.isOccupied = false;
       }
     };
 

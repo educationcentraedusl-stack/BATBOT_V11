@@ -17,6 +17,7 @@ export interface OrderIntent {
   takeProfitPrice?: number;
   currentPositionSide?: "FLAT" | "LONG" | "SHORT";
   isCloseOrder?: boolean;
+  isHardStop?: boolean;
   riskProfile?: DynamicRiskProfile;
 }
 
@@ -103,6 +104,12 @@ export class RiskGuard {
   ): RiskCheckResult {
     if (!isClientConfigured) {
       return RISK_REJECTED_UNCONFIGURED;
+    }
+
+    // EMERGENCY HARD STOP & POSITION CLOSE OVERRIDE:
+    // Position exit orders and hard stop executions MUST ALWAYS be approved regardless of cooldown, profit lock, toxic flow, or daily loss limits.
+    if (intent.isCloseOrder === true || intent.isHardStop === true) {
+      return RISK_PASSED;
     }
 
     const now = Date.now();

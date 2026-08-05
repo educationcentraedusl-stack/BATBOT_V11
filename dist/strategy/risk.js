@@ -51,6 +51,11 @@ class RiskGuard {
         if (!isClientConfigured) {
             return exports.RISK_REJECTED_UNCONFIGURED;
         }
+        // EMERGENCY HARD STOP & POSITION CLOSE OVERRIDE:
+        // Position exit orders and hard stop executions MUST ALWAYS be approved regardless of cooldown, profit lock, toxic flow, or daily loss limits.
+        if (intent.isCloseOrder === true || intent.isHardStop === true) {
+            return exports.RISK_PASSED;
+        }
         const now = Date.now();
         // 1. Cooldown Enforcement
         if (now - this.lastExecutionTimestampMs < this.config.minCooldownMs) {

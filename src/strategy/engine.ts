@@ -109,10 +109,10 @@ export class StrategyEngine {
     const envMinNotionalUsdt = process.env.MIN_NOTIONAL_USDT ? parseFloat(process.env.MIN_NOTIONAL_USDT) : NaN;
     const envCooldownMs = process.env.COOLDOWN_MS ? parseInt(process.env.COOLDOWN_MS, 10) : NaN;
 
-    const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 0.35;
-    const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 0.25;
-    const defaultShortTp = !isNaN(envShortTp) ? envShortTp : 0.35;
-    const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.25;
+    const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 0.25;
+    const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 0.20;
+    const defaultShortTp = !isNaN(envShortTp) ? envShortTp : 0.25;
+    const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.20;
     const defaultProfitLock = !isNaN(envProfitLock) ? envProfitLock : 10.0;
     const defaultMaxShortSlots = !isNaN(envMaxShortSlots) ? envMaxShortSlots : 3;
     const defaultMinAiConfidence = !isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.65;
@@ -272,10 +272,12 @@ export class StrategyEngine {
       if (hedgeTriggers.length > 0) {
         const trigger = hedgeTriggers[0];
         const exitSide: "BUY" | "SELL" = trigger.side === "LONG" ? "SELL" : "BUY";
+        const isHardStopTrigger = trigger.reason === "STOP_LOSS" || trigger.reason === "BREAK_EVEN_STOP_LOSS";
+
         console.log(
           `[HEDGE_DYNAMIC_MONITORING] Slot ${trigger.slotId} ${trigger.reason} TRIGGERED! Side: ${trigger.side}, Entry: $${trigger.entryPrice.toFixed(
             2
-          )}, Mark: $${markPrice.toFixed(2)}. Dispatching MARKET close with positionSide: ${trigger.side}.`
+          )}, Mark: $${markPrice.toFixed(2)}. Dispatching MARKET close with positionSide: ${trigger.side}.${isHardStopTrigger ? " [RUTHLESS HARD STOP OVERRIDE ACTIVE]" : ""}`
         );
 
         this.reusableOrderIntent.symbol = this.config.symbol;
@@ -284,6 +286,7 @@ export class StrategyEngine {
         this.reusableOrderIntent.price = markPrice;
         this.reusableOrderIntent.currentPositionSide = trigger.side;
         this.reusableOrderIntent.isCloseOrder = true;
+        this.reusableOrderIntent.isHardStop = isHardStopTrigger;
 
         const isConfigured = this.executionClient.isConfigured();
         const riskResult = this.riskGuard.validateOrder(
@@ -304,8 +307,14 @@ export class StrategyEngine {
             })
             .then((res) => {
               if (res) {
-                // Only release slot if full exit (not partial close)
-                if (!trigger.isPartialClose) {
+                if (trigger.isPartialClose && trigger.quantity > 0) {
+                  if (trigger.side === "LONG") {
+                    this.hedgeLedger.deductCoreLongQuantity(trigger.quantity);
+                  } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
+                    const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
+                    this.hedgeLedger.deductShortSlotQuantity(sIdx, trigger.quantity);
+                  }
+                } else if (!trigger.isPartialClose) {
                   if (trigger.side === "LONG") {
                     this.hedgeLedger.releaseCoreLong();
                   } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
@@ -530,7 +539,12 @@ export class StrategyEngine {
     const isTickValid = askPrice > 0 && bidPrice > 0 && askPrice >= bidPrice;
     const currentSpread = isTickValid ? askPrice - bidPrice : Infinity;
     const maxSpreadAllowed = this.config.symbol.includes("ETH") ? this.config.maxSpreadEth : this.config.maxSpreadBtc;
-    if (orderType === "MARKET" && currentSpread > maxSpreadAllowed) {
+    if (
+      orderType === "MARKET" &&
+      currentSpread > maxSpreadAllowed &&
+      !this.reusableOrderIntent.isCloseOrder &&
+      !this.reusableOrderIntent.isHardStop
+    ) {
       const reasonCode = !isTickValid ? "INVALID_TICK_DATA" : "REJECTED_LIQUIDITY_SWEEP_TRAP";
       const message = !isTickValid
         ? `Market execution blocked: invalid tick prices (bid: ${bidPrice}, ask: ${askPrice})`

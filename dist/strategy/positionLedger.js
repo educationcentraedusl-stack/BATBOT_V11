@@ -521,6 +521,25 @@ class HedgePositionLedger {
         slot.breakEvenPrice = 0;
         slot.tpPrices = [];
     }
+    deductCoreLongQuantity(qty) {
+        if (this.coreLong.isOccupied && qty > 0) {
+            this.coreLong.quantity = Math.max(0, Number((this.coreLong.quantity - qty).toFixed(6)));
+            if (this.coreLong.quantity <= 1e-6) {
+                this.releaseCoreLong();
+            }
+        }
+    }
+    deductShortSlotQuantity(slotIndex, qty) {
+        if (slotIndex >= 0 && slotIndex < this.maxShortSlots) {
+            const slot = this.shortSlots[slotIndex];
+            if (slot.isOccupied && qty > 0) {
+                slot.quantity = Math.max(0, Number((slot.quantity - qty).toFixed(6)));
+                if (slot.quantity <= 1e-6) {
+                    this.releaseShortSlot(slotIndex);
+                }
+            }
+        }
+    }
     evaluateHedgeDynamicTpSl(markPrice) {
         const triggers = [];
         if (markPrice <= 0)
@@ -553,11 +572,7 @@ class HedgePositionLedger {
                             isPartialClose: chunk < slot.quantity,
                             tpStage: 1,
                         });
-                        slot.quantity -= chunk;
-                        if (slot.quantity <= 1e-6) {
-                            slot.isOccupied = false;
-                            return;
-                        }
+                        return;
                     }
                 }
                 // TP2 (+30% ROI Target) -> Trail SL to TP1 price
@@ -576,11 +591,7 @@ class HedgePositionLedger {
                             isPartialClose: chunk < slot.quantity,
                             tpStage: 2,
                         });
-                        slot.quantity -= chunk;
-                        if (slot.quantity <= 1e-6) {
-                            slot.isOccupied = false;
-                            return;
-                        }
+                        return;
                     }
                 }
                 // TP3 (+50% ROI Target) -> Trail SL to TP2 price
@@ -599,11 +610,7 @@ class HedgePositionLedger {
                             isPartialClose: chunk < slot.quantity,
                             tpStage: 3,
                         });
-                        slot.quantity -= chunk;
-                        if (slot.quantity <= 1e-6) {
-                            slot.isOccupied = false;
-                            return;
-                        }
+                        return;
                     }
                 }
                 // TP4 (+80% ROI Target) -> Trail SL to TP3 price
@@ -622,11 +629,7 @@ class HedgePositionLedger {
                             isPartialClose: chunk < slot.quantity,
                             tpStage: 4,
                         });
-                        slot.quantity -= chunk;
-                        if (slot.quantity <= 1e-6) {
-                            slot.isOccupied = false;
-                            return;
-                        }
+                        return;
                     }
                 }
                 // TP5 (+120%+ ROI Target) -> Close remaining position
@@ -642,7 +645,6 @@ class HedgePositionLedger {
                         isPartialClose: false,
                         tpStage: 5,
                     });
-                    slot.isOccupied = false;
                     return;
                 }
             }
@@ -661,7 +663,6 @@ class HedgePositionLedger {
                     markPrice,
                     isPartialClose: false,
                 });
-                slot.isOccupied = false;
                 return;
             }
             // 3. Fallback Standard TP Percent Check
@@ -678,7 +679,6 @@ class HedgePositionLedger {
                     markPrice,
                     isPartialClose: false,
                 });
-                slot.isOccupied = false;
             }
         };
         evalSlot(this.coreLong);
