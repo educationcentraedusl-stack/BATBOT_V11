@@ -2367,3 +2367,17 @@ polars.exceptions.ComputeError: error parsing line: InternalError(TapeError) at 
 [BATBOT_V11][LOCAL-TRAINER] Sequence Dataset Ready: 152692 train samples, 38100 val samples.
 [BATBOT_V11][LOCAL-TRAINER] Starting Continuous-Time Recalibration (20 Epochs)...
 [BATBOT Epoch 05/20] Loss: 0.408569 | Best Val IC: +0.3317
+[2026-08-03T08:07:43.144Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py", line 286, in <module>
+    train_local_cfc()
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py", line 278, in train_local_cfc
+    os.remove(weights_path)
+PermissionError: [WinError 32] The process cannot access the file because it is being used by another process: 'D:\\AI Trading Bot\\Trading Bot Virsions\\BATBOT_V11-Antigravity\\BATBOT_V11\\models\\cfc_weights.safetensors'
+--- PYTHON STDERR TRACEBACK ---
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py", line 286, in <module>
+    train_local_cfc()
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py", line 278, in train_local_cfc
+    os.remove(weights_path)
+PermissionError: [WinError 32] The process cannot access the file because it is being used by another process: 'D:\\AI Trading Bot\\Trading Bot Virsions\\BATBOT_V11-Antigravity\\BATBOT_V11\\models\\cfc_weights.safetensors'
