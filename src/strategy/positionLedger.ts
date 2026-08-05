@@ -583,12 +583,12 @@ export class HedgePositionLedger {
     this.coreLong.takeProfitPrice = entryPrice * (1 + tpPercent / 100);
     this.coreLong.stopLossPrice = entryPrice * (1 - slPercent / 100);
 
-    // 5-Stage TP Targets: 20%, 30%, 50%, 80%, 120% ROI (assuming 10x leverage base = 2%, 3%, 5%, 8%, 12% price moves)
-    const tp1Pct = Math.min(2.0, tpPercent * 0.4);
-    const tp2Pct = Math.min(3.0, tpPercent * 0.6);
-    const tp3Pct = Math.min(5.0, tpPercent * 1.0);
-    const tp4Pct = Math.min(8.0, tpPercent * 1.6);
-    const tp5Pct = Math.min(12.0, tpPercent * 2.4);
+    // 5-Stage TP Micro-Ladder Targets: 0.25%, 0.50%, 1.00%, 1.50%, 2.50% price moves (tpPercent * 1.0, 2.0, 4.0, 6.0, 10.0)
+    const tp1Pct = Math.min(2.0, tpPercent * 1.0);
+    const tp2Pct = Math.min(3.0, tpPercent * 2.0);
+    const tp3Pct = Math.min(5.0, tpPercent * 4.0);
+    const tp4Pct = Math.min(8.0, tpPercent * 6.0);
+    const tp5Pct = Math.min(12.0, tpPercent * 10.0);
 
     this.coreLong.tpPrices = [
       entryPrice * (1 + tp1Pct / 100),
@@ -690,11 +690,11 @@ export class HedgePositionLedger {
     slot.takeProfitPrice = entryPrice * (1 - tpPercent / 100);
     slot.stopLossPrice = entryPrice * (1 + slPercent / 100);
 
-    const tp1Pct = Math.min(2.0, tpPercent * 0.4);
-    const tp2Pct = Math.min(3.0, tpPercent * 0.6);
-    const tp3Pct = Math.min(5.0, tpPercent * 1.0);
-    const tp4Pct = Math.min(8.0, tpPercent * 1.6);
-    const tp5Pct = Math.min(12.0, tpPercent * 2.4);
+    const tp1Pct = Math.min(2.0, tpPercent * 1.0);
+    const tp2Pct = Math.min(3.0, tpPercent * 2.0);
+    const tp3Pct = Math.min(5.0, tpPercent * 4.0);
+    const tp4Pct = Math.min(8.0, tpPercent * 6.0);
+    const tp5Pct = Math.min(12.0, tpPercent * 10.0);
 
     slot.tpPrices = [
       entryPrice * (1 - tp1Pct / 100),
