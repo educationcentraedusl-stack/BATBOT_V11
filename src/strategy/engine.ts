@@ -362,33 +362,59 @@ export class StrategyEngine {
 
         let executionPromise: Promise<BinanceOrderResponse | null> | undefined = undefined;
         if (riskResult.passed) {
-          if (trigger.cancelOrderIds && trigger.cancelOrderIds.length > 0) {
-            console.log(
-              `[MAKER_TP_ENGINE][EMERGENCY_CANCEL] Cancelling ${trigger.cancelOrderIds.length} open POST_ONLY limit TP orders for ${trigger.slotId} before MARKET SL dispatch...`
-            );
-            this.executionClient.cancelBatchOrders(this.config.symbol, trigger.cancelOrderIds).catch((err) => {
-              console.warn(`[MAKER_TP_ENGINE][CANCEL_WARN] Batch order cancellation warning: ${err.message}`);
-            });
-          }
+          executionPromise = (async () => {
+            if (trigger.cancelOrderIds && trigger.cancelOrderIds.length > 0) {
+              console.log(
+                `[MAKER_TP_ENGINE][EMERGENCY_CANCEL] Cancelling ${trigger.cancelOrderIds.length} open POST_ONLY limit TP orders for ${trigger.slotId} before MARKET SL dispatch...`
+              );
+              try {
+                await this.executionClient.cancelBatchOrders(this.config.symbol, trigger.cancelOrderIds);
+                console.log(`[MAKER_TP_ENGINE][EMERGENCY_CANCEL] Batch order cancellation confirmed by exchange.`);
+              } catch (err: any) {
+                console.warn(`[MAKER_TP_ENGINE][CANCEL_WARN] Batch order cancellation warning: ${err.message}`);
+              }
+            }
 
-          executionPromise = this.executionClient
-            .placeOrder({
-              symbol: this.config.symbol,
-              side: exitSide,
-              type: "MARKET",
-              quantity: trigger.quantity,
-              positionSide: trigger.side,
-            })
-            .then((res) => {
-              if (res) {
-                if (trigger.isPartialClose && trigger.quantity > 0) {
-                  if (trigger.side === "LONG") {
-                    this.hedgeLedger.deductCoreLongQuantity(trigger.quantity);
-                  } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
-                    const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
-                    this.hedgeLedger.deductShortSlotQuantity(sIdx, trigger.quantity);
+            return this.executionClient
+              .placeOrder({
+                symbol: this.config.symbol,
+                side: exitSide,
+                type: "MARKET",
+                quantity: trigger.quantity,
+                positionSide: trigger.side,
+              })
+              .then((res) => {
+                if (res) {
+                  if (trigger.isPartialClose && trigger.quantity > 0) {
+                    if (trigger.side === "LONG") {
+                      this.hedgeLedger.deductCoreLongQuantity(trigger.quantity);
+                    } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
+                      const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
+                      this.hedgeLedger.deductShortSlotQuantity(sIdx, trigger.quantity);
+                    }
+                  } else if (!trigger.isPartialClose) {
+                    if (trigger.side === "LONG") {
+                      this.hedgeLedger.releaseCoreLong();
+                    } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
+                      const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
+                      this.hedgeLedger.releaseShortSlot(sIdx);
+                    }
                   }
-                } else if (!trigger.isPartialClose) {
+                }
+                return res;
+              })
+              .catch((err) => {
+                console.error(`[DYNAMIC_MONITORING_ERROR] Hedge ${trigger.reason} MARKET order failed: ${err.message}`);
+                if (
+                  err.message &&
+                  (err.message.includes("-2022") ||
+                    err.message.includes("ReduceOnly") ||
+                    err.message.includes("-2011") ||
+                    err.message.includes("not configured"))
+                ) {
+                  console.warn(
+                    `[DYNAMIC_MONITORING_WARN] Clearing local slot ${trigger.slotId} due to exchange release/error: ${err.message}`
+                  );
                   if (trigger.side === "LONG") {
                     this.hedgeLedger.releaseCoreLong();
                   } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
@@ -396,30 +422,9 @@ export class StrategyEngine {
                     this.hedgeLedger.releaseShortSlot(sIdx);
                   }
                 }
-              }
-              return res;
-            })
-            .catch((err) => {
-              console.error(`[DYNAMIC_MONITORING_ERROR] Hedge ${trigger.reason} MARKET order failed: ${err.message}`);
-              if (
-                err.message &&
-                (err.message.includes("-2022") ||
-                  err.message.includes("ReduceOnly") ||
-                  err.message.includes("-2011") ||
-                  err.message.includes("not configured"))
-              ) {
-                console.warn(
-                  `[DYNAMIC_MONITORING_WARN] Clearing local slot ${trigger.slotId} due to exchange release/error: ${err.message}`
-                );
-                if (trigger.side === "LONG") {
-                  this.hedgeLedger.releaseCoreLong();
-                } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
-                  const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
-                  this.hedgeLedger.releaseShortSlot(sIdx);
-                }
-              }
-              return null;
-            });
+                return null;
+              });
+          })();
         }
 
         return {

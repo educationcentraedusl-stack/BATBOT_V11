@@ -29,33 +29,56 @@ export class DynamicSizingCalculator {
   private takerFeeRate: number;
 
   constructor() {
-    // Dynamically parse configuration from process.env (Zero hardcoding rule)
-    const raw3Stage = process.env.TP_STAGE_ALLOCATION_3STAGE || "40,35,25";
+    // Dynamically parse configuration from process.env (Zero hardcoding rule - Strict Error Enforcement)
+    const raw3Stage = process.env.TP_STAGE_ALLOCATION_3STAGE;
+    if (!raw3Stage) {
+      throw new Error("[DynamicSizingCalculator] Missing required environment variable: TP_STAGE_ALLOCATION_3STAGE");
+    }
     this.allocation3Stage = raw3Stage
       .split(",")
       .map((val) => parseFloat(val.trim()) / 100.0)
       .filter((val) => !isNaN(val) && val > 0);
 
     if (this.allocation3Stage.length === 0) {
-      this.allocation3Stage = [0.40, 0.35, 0.25];
+      throw new Error("[DynamicSizingCalculator] Invalid TP_STAGE_ALLOCATION_3STAGE environment variable format.");
     }
 
-    const raw2Stage = process.env.TP_STAGE_ALLOCATION_2STAGE || "60,40";
+    const raw2Stage = process.env.TP_STAGE_ALLOCATION_2STAGE;
+    if (!raw2Stage) {
+      throw new Error("[DynamicSizingCalculator] Missing required environment variable: TP_STAGE_ALLOCATION_2STAGE");
+    }
     this.allocation2Stage = raw2Stage
       .split(",")
       .map((val) => parseFloat(val.trim()) / 100.0)
       .filter((val) => !isNaN(val) && val > 0);
 
     if (this.allocation2Stage.length === 0) {
-      this.allocation2Stage = [0.60, 0.40];
+      throw new Error("[DynamicSizingCalculator] Invalid TP_STAGE_ALLOCATION_2STAGE environment variable format.");
     }
 
-    this.consolidationThresholdUsdt = parseFloat(
-      process.env.DYNAMIC_SIZING_CONSOLIDATION_THRESHOLD_USDT || "150.0"
-    );
-    this.minNotionalUsdt = parseFloat(process.env.MIN_NOTIONAL_USDT || "10.0");
-    this.makerFeeRate = parseFloat(process.env.MAKER_FEE_RATE || "0.00018");
-    this.takerFeeRate = parseFloat(process.env.TAKER_FEE_RATE || "0.00045");
+    const rawConsolidation = process.env.DYNAMIC_SIZING_CONSOLIDATION_THRESHOLD_USDT;
+    if (!rawConsolidation) {
+      throw new Error("[DynamicSizingCalculator] Missing required environment variable: DYNAMIC_SIZING_CONSOLIDATION_THRESHOLD_USDT");
+    }
+    this.consolidationThresholdUsdt = parseFloat(rawConsolidation);
+
+    const rawMinNotional = process.env.MIN_NOTIONAL_USDT;
+    if (!rawMinNotional) {
+      throw new Error("[DynamicSizingCalculator] Missing required environment variable: MIN_NOTIONAL_USDT");
+    }
+    this.minNotionalUsdt = parseFloat(rawMinNotional);
+
+    const rawMakerFee = process.env.MAKER_FEE_RATE;
+    if (!rawMakerFee) {
+      throw new Error("[DynamicSizingCalculator] Missing required environment variable: MAKER_FEE_RATE");
+    }
+    this.makerFeeRate = parseFloat(rawMakerFee);
+
+    const rawTakerFee = process.env.TAKER_FEE_RATE;
+    if (!rawTakerFee) {
+      throw new Error("[DynamicSizingCalculator] Missing required environment variable: TAKER_FEE_RATE");
+    }
+    this.takerFeeRate = parseFloat(rawTakerFee);
   }
 
   public getMakerFeeRate(): number {

@@ -713,7 +713,9 @@ export class HedgePositionLedger {
     this.coreLong.tpStageReached = 0;
     this.coreLong.breakEvenLocked = false;
 
-    const feeMultiplier = 0.0005 * 2.5; // Fee-adjusted zero-loss buffer (0.125%)
+    const makerFee = this.sizingCalc.getMakerFeeRate();
+    const takerFee = this.sizingCalc.getTakerFeeRate();
+    const feeMultiplier = (makerFee + takerFee) * 2.5; // Fee-adjusted zero-loss buffer loaded from .env
     this.coreLong.breakEvenPrice = entryPrice * (1.0 + feeMultiplier);
     this.coreLong.takeProfitPrice = entryPrice * (1 + tpPercent / 100);
     this.coreLong.stopLossPrice = entryPrice * (1 - slPercent / 100);
@@ -820,7 +822,9 @@ export class HedgePositionLedger {
     slot.tpStageReached = 0;
     slot.breakEvenLocked = false;
 
-    const feeMultiplier = 0.0005 * 2.5; // Fee-adjusted zero-loss buffer (0.125%)
+    const makerFee = this.sizingCalc.getMakerFeeRate();
+    const takerFee = this.sizingCalc.getTakerFeeRate();
+    const feeMultiplier = (makerFee + takerFee) * 2.5; // Fee-adjusted zero-loss buffer loaded from .env
     slot.breakEvenPrice = entryPrice * (1.0 - feeMultiplier);
     slot.takeProfitPrice = entryPrice * (1 - tpPercent / 100);
     slot.stopLossPrice = entryPrice * (1 + slPercent / 100);
@@ -890,8 +894,10 @@ export class HedgePositionLedger {
       const isLong = slot.side === "LONG";
       const tpPrices = slot.tpPrices && slot.tpPrices.length === 5 ? slot.tpPrices : [];
 
-      // 1. Evaluate 5-Stage Partial Take Profits
-      if (tpPrices.length === 5) {
+      const hasActiveLimitOrders = slot.activeTpOrderIds && slot.activeTpOrderIds.length > 0;
+
+      // 1. Evaluate 5-Stage Partial Take Profits (ONLY if no active exchange limit TP orders are registered)
+      if (!hasActiveLimitOrders && tpPrices.length === 5) {
         // TP1 (+20% ROI Target)
         if (stage < 1 && ((isLong && markPrice >= tpPrices[0]) || (!isLong && markPrice <= tpPrices[0]))) {
           slot.tpStageReached = 1;
@@ -996,7 +1002,7 @@ export class HedgePositionLedger {
         }
       }
 
-      // 2. Evaluate Stop Loss / Fee-Adjusted Break-Even SL
+      // 2. Evaluate Stop Loss / Fee-Adjusted Break-Even SL (ALWAYS ACTIVE)
       const isSlTriggered = isLong
         ? markPrice <= slot.stopLossPrice
         : markPrice >= slot.stopLossPrice;
@@ -1016,21 +1022,23 @@ export class HedgePositionLedger {
         return;
       }
 
-      // 3. Fallback Standard TP Percent Check
-      const pnlPct = isLong
-        ? ((markPrice - slot.entryPrice) / slot.entryPrice) * 100
-        : ((slot.entryPrice - markPrice) / slot.entryPrice) * 100;
+      // 3. Fallback Standard TP Percent Check (ONLY if no active exchange limit TP orders are registered)
+      if (!hasActiveLimitOrders) {
+        const pnlPct = isLong
+          ? ((markPrice - slot.entryPrice) / slot.entryPrice) * 100
+          : ((slot.entryPrice - markPrice) / slot.entryPrice) * 100;
 
-      if (pnlPct >= slot.takeProfitPercent) {
-        triggers.push({
-          slotId: slot.slotId,
-          side: slot.side,
-          reason: "TAKE_PROFIT",
-          quantity: slot.quantity,
-          entryPrice: slot.entryPrice,
-          markPrice,
-          isPartialClose: false,
-        });
+        if (pnlPct >= slot.takeProfitPercent) {
+          triggers.push({
+            slotId: slot.slotId,
+            side: slot.side,
+            reason: "TAKE_PROFIT",
+            quantity: slot.quantity,
+            entryPrice: slot.entryPrice,
+            markPrice,
+            isPartialClose: false,
+          });
+        }
       }
     };
 
