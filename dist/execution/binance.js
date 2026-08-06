@@ -286,6 +286,71 @@ class BinanceExecutionClient {
         }
         return this.request("POST", "/fapi/v1/order", payload, true);
     }
+    /**
+     * Submits a batch of orders in a single low-latency HTTP REST request (POST /fapi/v1/batchOrders).
+     * Dynamically loads batch order max limits and recvWindow from environment variables.
+     */
+    async placeBatchOrders(orders) {
+        if (!orders || orders.length === 0)
+            return [];
+        const maxBatchLimit = parseInt(process.env.BATCH_ORDER_MAX_LIMIT || "5", 10);
+        const recvWindow = parseInt(process.env.RECV_WINDOW_MS || "5000", 10);
+        if (orders.length > maxBatchLimit) {
+            console.warn(`[BinanceExecutionClient] Batch order count (${orders.length}) exceeds BATCH_ORDER_MAX_LIMIT (${maxBatchLimit}). Truncating to ${maxBatchLimit}.`);
+        }
+        const targetOrders = orders.slice(0, maxBatchLimit);
+        const formattedOrders = targetOrders.map((params) => {
+            const formattedQty = Number(params.quantity.toFixed(3));
+            const orderObj = {
+                symbol: params.symbol,
+                side: params.side,
+                type: params.type,
+                quantity: formattedQty,
+            };
+            if (params.price !== undefined)
+                orderObj.price = Number(params.price.toFixed(2));
+            if (params.stopPrice !== undefined)
+                orderObj.stopPrice = params.stopPrice;
+            if (params.type !== "MARKET" &&
+                params.type !== "STOP_MARKET" &&
+                params.type !== "TAKE_PROFIT_MARKET" &&
+                params.timeInForce !== undefined) {
+                orderObj.timeInForce = params.timeInForce;
+            }
+            if (params.closePosition !== undefined)
+                orderObj.closePosition = params.closePosition;
+            if (params.workingType !== undefined)
+                orderObj.workingType = params.workingType;
+            if (params.positionSide !== undefined)
+                orderObj.positionSide = params.positionSide;
+            if (params.reduceOnly !== undefined &&
+                (params.positionSide === undefined || params.positionSide === "BOTH")) {
+                orderObj.reduceOnly = params.reduceOnly;
+            }
+            return orderObj;
+        });
+        const payload = {
+            batchOrders: JSON.stringify(formattedOrders),
+            recvWindow,
+        };
+        return this.request("POST", "/fapi/v1/batchOrders", payload, true);
+    }
+    /**
+     * Cancels a list of open orders for a symbol in a single batch request (DELETE /fapi/v1/batchOrders).
+     */
+    async cancelBatchOrders(symbol, orderIdList) {
+        if (!symbol || !orderIdList || orderIdList.length === 0)
+            return [];
+        const recvWindow = parseInt(process.env.RECV_WINDOW_MS || "5000", 10);
+        const maxBatchLimit = parseInt(process.env.BATCH_ORDER_MAX_LIMIT || "5", 10);
+        const targetIds = orderIdList.slice(0, maxBatchLimit);
+        const payload = {
+            symbol,
+            orderIdList: JSON.stringify(targetIds),
+            recvWindow,
+        };
+        return this.request("DELETE", "/fapi/v1/batchOrders", payload, true);
+    }
     async cancelOrder(symbol, orderId) {
         return this.request("DELETE", "/fapi/v1/order", { symbol, orderId }, true);
     }

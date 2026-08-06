@@ -477,3 +477,4 @@
 {"timestamp":1785989791632,"symbol":"ETHUSDT","side":"SELL","price":1901.56,"quantity":0.007,"realizedPnl":-0.0012643680000005092,"fee":0.005324368,"latencyMs":0}
 {"timestamp":1785990389636,"symbol":"ETHUSDT","side":"SELL","price":1903.17,"quantity":0.007,"realizedPnl":0.010001124000000382,"fee":0.005328876000000001,"latencyMs":0}
 {"timestamp":1785990389706,"symbol":"ETHUSDT","side":"SELL","price":1903.17,"quantity":0.017,"realizedPnl":0.024288444000000926,"fee":0.012941556000000003,"latencyMs":0}
+{"timestamp":1785999229289,"symbol":"ETHUSDT","side":"BUY","price":1912.07,"quantity":0.038,"realizedPnl":0,"fee":0.029063464,"latencyMs":0}

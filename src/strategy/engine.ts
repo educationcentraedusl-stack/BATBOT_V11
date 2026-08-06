@@ -29,6 +29,8 @@ export interface StrategyConfig {
   maxSpreadBtc: number;
   minNotionalUsdt: number;
   cooldownMs: number;
+  vpinThreshold: number;
+  vpinBucketVolume: number;
 }
 
 export type EngineState = "LIVE_ACTIVE" | "TRAINING_LOCK" | "RECALIBRATING" | "PAUSED" | "EMERGENCY_HALT";
@@ -110,6 +112,8 @@ export class StrategyEngine {
     const envMaxSpreadBtc = process.env.MAX_SPREAD_BTC ? parseFloat(process.env.MAX_SPREAD_BTC) : NaN;
     const envMinNotionalUsdt = process.env.MIN_NOTIONAL_USDT ? parseFloat(process.env.MIN_NOTIONAL_USDT) : NaN;
     const envCooldownMs = process.env.COOLDOWN_MS ? parseInt(process.env.COOLDOWN_MS, 10) : NaN;
+    const envVpinThreshold = process.env.VPIN_THRESHOLD ? parseFloat(process.env.VPIN_THRESHOLD) : NaN;
+    const envVpinBucketVolume = process.env.VPIN_BUCKET_VOLUME ? parseFloat(process.env.VPIN_BUCKET_VOLUME) : NaN;
 
     const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 0.25;
     const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 0.20;
@@ -128,6 +132,8 @@ export class StrategyEngine {
     const defaultMaxSpreadBtc = !isNaN(envMaxSpreadBtc) ? envMaxSpreadBtc : 5.0;
     const defaultMinNotionalUsdt = !isNaN(envMinNotionalUsdt) ? envMinNotionalUsdt : 55.0;
     const defaultCooldownMs = !isNaN(envCooldownMs) ? envCooldownMs : 250;
+    const defaultVpinThreshold = !isNaN(envVpinThreshold) ? envVpinThreshold : 0.85;
+    const defaultVpinBucketVolume = !isNaN(envVpinBucketVolume) ? envVpinBucketVolume : 50000.0;
     const targetSymbol = config?.symbol ?? process.env.SYMBOL ?? "BTCUSDT";
     const defaultOrderQty = !isNaN(envOrderQty)
       ? envOrderQty
@@ -159,7 +165,11 @@ export class StrategyEngine {
       maxSpreadBtc: config?.maxSpreadBtc ?? defaultMaxSpreadBtc,
       minNotionalUsdt: config?.minNotionalUsdt ?? defaultMinNotionalUsdt,
       cooldownMs: config?.cooldownMs ?? defaultCooldownMs,
+      vpinThreshold: config?.vpinThreshold ?? defaultVpinThreshold,
+      vpinBucketVolume: config?.vpinBucketVolume ?? defaultVpinBucketVolume,
     };
+
+    this.dynamicRiskEngine = new DynamicRiskEngine(this.config.vpinThreshold);
 
     this.hedgeLedger = hedgeLedger ?? new HedgePositionLedger(this.config.symbol, this.config.maxShortSlots);
     this.positionLedger = positionLedger ?? this.hedgeLedger.getLegacyLedger();
@@ -678,6 +688,7 @@ export class StrategyEngine {
       Math.abs(askPrice - bidPrice)
     );
     riskProfile.isHighConfidenceAi = isHighConfidenceAi;
+    riskProfile.aiConfidence = aiConfidence;
 
     // Populate pre-allocated intent
     this.reusableOrderIntent.symbol = this.config.symbol;
@@ -699,7 +710,9 @@ export class StrategyEngine {
     );
 
     if (!riskResult.passed) {
-      console.log(`[StrategyEngine][RISK_REJECTED] Seq #${seq} | Reason: ${riskResult.reasonCode} - ${riskResult.message}`);
+      if (seq % 1000n === 0n) {
+        console.log(`[StrategyEngine][RISK_REJECTED] Seq #${seq} | Reason: ${riskResult.reasonCode} - ${riskResult.message}`);
+      }
     }
 
     let executionPromise: Promise<BinanceOrderResponse | null> | undefined = undefined;

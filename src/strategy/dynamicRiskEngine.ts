@@ -21,6 +21,7 @@ export interface DynamicRiskProfile {
   rvGkVol: number;
   hurstExponent: number;
   isHighConfidenceAi?: boolean;
+  aiConfidence?: number;
 }
 
 export class DynamicRiskEngine {
@@ -29,9 +30,9 @@ export class DynamicRiskEngine {
   private maxHurstMeanReversion: number = 0.45;
 
   constructor(vpinThreshold?: number) {
-    if (vpinThreshold && vpinThreshold > 0) {
-      this.vpinThreshold = vpinThreshold;
-    }
+    const envVpinThreshold = process.env.VPIN_THRESHOLD ? parseFloat(process.env.VPIN_THRESHOLD) : NaN;
+    const defaultVpin = !isNaN(envVpinThreshold) ? envVpinThreshold : 0.85;
+    this.vpinThreshold = (vpinThreshold && vpinThreshold > 0) ? vpinThreshold : defaultVpin;
   }
 
   /**

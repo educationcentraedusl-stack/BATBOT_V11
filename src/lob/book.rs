@@ -129,7 +129,7 @@ impl LimitOrderBook {
             bids: [(0.0, 0.0); LOB_DEPTH],
             asks: [(0.0, 0.0); LOB_DEPTH],
             metrics: MicrostructureMetrics::default(),
-            analyzer: MicrostructureAnalyzer::new(50.0),
+            analyzer: MicrostructureAnalyzer::new(50000.0),
             last_update_ns: 0,
         }
     }

@@ -94,7 +94,7 @@ pub struct MicrostructureAnalyzer {
 
 impl Default for MicrostructureAnalyzer {
     fn default() -> Self {
-        Self::new(50.0) // Default 50.0 volume unit per bucket
+        Self::new(50000.0) // Default 50000.0 USDT volume unit per bucket
     }
 }
 
@@ -112,7 +112,7 @@ impl MicrostructureAnalyzer {
             vpin_bucket_count: 0,
             current_bucket_buy: 0.0,
             current_bucket_sell: 0.0,
-            bucket_target_volume: if bucket_target_volume > 1e-6 { bucket_target_volume } else { 50.0 },
+            bucket_target_volume: if bucket_target_volume > 1e-6 { bucket_target_volume } else { 50000.0 },
 
             price_history: [0.0; HURST_WINDOW],
             price_index: 0,
@@ -322,7 +322,7 @@ impl MicrostructureAnalyzer {
         }
 
         // Classify Regime
-        if self.cached_vpin > 0.70 || self.is_sweep_detected {
+        if self.cached_vpin > 0.85 || self.is_sweep_detected {
             self.cached_regime = MicroRegime::ToxicChopTrap;
         } else if self.cached_hurst > 0.55 {
             self.cached_regime = MicroRegime::DirectionalTrend;

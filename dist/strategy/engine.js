@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.StrategyEngine = void 0;
 const positionLedger_1 = require("./positionLedger");
 const dynamicRiskEngine_1 = require("./dynamicRiskEngine");
+const userDataStream_1 = require("../execution/userDataStream");
 class StrategyEngine {
     client;
     riskGuard;
@@ -11,6 +12,7 @@ class StrategyEngine {
     hedgeLedger;
     config;
     dynamicRiskEngine = new dynamicRiskEngine_1.DynamicRiskEngine();
+    userDataStream = null;
     lastProcessedSequence = -1n;
     state = "LIVE_ACTIVE";
     reusableOrderIntent = {
@@ -52,6 +54,8 @@ class StrategyEngine {
         const envMaxSpreadBtc = process.env.MAX_SPREAD_BTC ? parseFloat(process.env.MAX_SPREAD_BTC) : NaN;
         const envMinNotionalUsdt = process.env.MIN_NOTIONAL_USDT ? parseFloat(process.env.MIN_NOTIONAL_USDT) : NaN;
         const envCooldownMs = process.env.COOLDOWN_MS ? parseInt(process.env.COOLDOWN_MS, 10) : NaN;
+        const envVpinThreshold = process.env.VPIN_THRESHOLD ? parseFloat(process.env.VPIN_THRESHOLD) : NaN;
+        const envVpinBucketVolume = process.env.VPIN_BUCKET_VOLUME ? parseFloat(process.env.VPIN_BUCKET_VOLUME) : NaN;
         const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 0.25;
         const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 0.20;
         const defaultShortTp = !isNaN(envShortTp) ? envShortTp : 0.25;
@@ -69,6 +73,8 @@ class StrategyEngine {
         const defaultMaxSpreadBtc = !isNaN(envMaxSpreadBtc) ? envMaxSpreadBtc : 5.0;
         const defaultMinNotionalUsdt = !isNaN(envMinNotionalUsdt) ? envMinNotionalUsdt : 55.0;
         const defaultCooldownMs = !isNaN(envCooldownMs) ? envCooldownMs : 250;
+        const defaultVpinThreshold = !isNaN(envVpinThreshold) ? envVpinThreshold : 0.85;
+        const defaultVpinBucketVolume = !isNaN(envVpinBucketVolume) ? envVpinBucketVolume : 50000.0;
         const targetSymbol = config?.symbol ?? process.env.SYMBOL ?? "BTCUSDT";
         const defaultOrderQty = !isNaN(envOrderQty)
             ? envOrderQty
@@ -98,11 +104,68 @@ class StrategyEngine {
             maxSpreadBtc: config?.maxSpreadBtc ?? defaultMaxSpreadBtc,
             minNotionalUsdt: config?.minNotionalUsdt ?? defaultMinNotionalUsdt,
             cooldownMs: config?.cooldownMs ?? defaultCooldownMs,
+            vpinThreshold: config?.vpinThreshold ?? defaultVpinThreshold,
+            vpinBucketVolume: config?.vpinBucketVolume ?? defaultVpinBucketVolume,
         };
+        this.dynamicRiskEngine = new dynamicRiskEngine_1.DynamicRiskEngine(this.config.vpinThreshold);
         this.hedgeLedger = hedgeLedger ?? new positionLedger_1.HedgePositionLedger(this.config.symbol, this.config.maxShortSlots);
         this.positionLedger = positionLedger ?? this.hedgeLedger.getLegacyLedger();
         this.reusableOrderIntent.symbol = this.config.symbol;
         this.reusableOrderIntent.quantity = this.config.orderQuantity;
+    }
+    async initUserDataStream() {
+        if (!this.executionClient.isConfigured())
+            return false;
+        this.userDataStream = new userDataStream_1.BinanceUserDataStream(this.executionClient);
+        this.userDataStream.subscribeOrderUpdates((update) => {
+            const { order } = update;
+            if (order.orderStatus === "FILLED" || order.orderStatus === "PARTIALLY_FILLED") {
+                if (order.orderType === "LIMIT" || order.isMaker) {
+                    console.log(`[MAKER_TP_ENGINE][WS_FILL_NOTIFIED] OrderId #${order.orderId} filled as ${order.isMaker ? "MAKER" : "TAKER"}. Qty: ${order.lastFilledQuantity} @ $${order.lastFilledPrice}`);
+                    const coreLong = this.hedgeLedger.getCoreLong();
+                    const shortSlots = this.hedgeLedger.getShortSlots();
+                    let targetSlotId = null;
+                    if (coreLong.isOccupied && coreLong.activeTpOrderIds?.includes(order.orderId)) {
+                        targetSlotId = "CORE_LONG";
+                    }
+                    else {
+                        for (const s of shortSlots) {
+                            if (s.isOccupied && s.activeTpOrderIds?.includes(order.orderId)) {
+                                targetSlotId = s.slotId;
+                                break;
+                            }
+                        }
+                    }
+                    if (targetSlotId) {
+                        const res = this.hedgeLedger.processTpLimitFill(targetSlotId, order.orderId, order.lastFilledQuantity, order.lastFilledPrice, order.isMaker);
+                        console.log(`[MAKER_TP_ENGINE][RECONCILED] Slot ${targetSlotId} updated. Closed: ${res.isPositionClosed}, RemQty: ${res.remainingQuantity}, NewSL: $${res.newStopLossPrice}`);
+                    }
+                }
+            }
+        });
+        return this.userDataStream.start();
+    }
+    async dispatchBatchPostOnlyTpOrders(slotId, entryPrice, quantity, side) {
+        const isPostOnlyTpEnabled = process.env.ENABLE_POST_ONLY_TP !== "false";
+        if (!isPostOnlyTpEnabled)
+            return;
+        const intents = this.hedgeLedger.generateBatchTpOrderIntents(slotId, entryPrice, quantity, side);
+        if (intents.length === 0)
+            return;
+        console.log(`[MAKER_TP_ENGINE][DISPATCHING] Submitting ${intents.length} POST_ONLY limit TP orders for ${slotId} via batchOrders...`);
+        try {
+            const resList = await this.executionClient.placeBatchOrders(intents);
+            if (Array.isArray(resList) && resList.length > 0) {
+                const orderIds = resList
+                    .map((r) => r.orderId)
+                    .filter((id) => typeof id === "number" || typeof id === "string");
+                this.hedgeLedger.registerActiveTpOrderIds(slotId, orderIds);
+                console.log(`[MAKER_TP_ENGINE][SUCCESS] Registered ${orderIds.length} POST_ONLY TP limit order IDs on Binance orderbook: [${orderIds.join(", ")}]`);
+            }
+        }
+        catch (err) {
+            console.error(`[MAKER_TP_ENGINE][ERROR] Failed to submit batch POST_ONLY TP orders: ${err.message}`);
+        }
     }
     getEngineState() {
         return this.state;
@@ -196,26 +259,56 @@ class StrategyEngine {
                 const riskResult = this.riskGuard.validateOrder(this.reusableOrderIntent, isConfigured, trigger.side);
                 let executionPromise = undefined;
                 if (riskResult.passed) {
-                    executionPromise = this.executionClient
-                        .placeOrder({
-                        symbol: this.config.symbol,
-                        side: exitSide,
-                        type: "MARKET",
-                        quantity: trigger.quantity,
-                        positionSide: trigger.side,
-                    })
-                        .then((res) => {
-                        if (res) {
-                            if (trigger.isPartialClose && trigger.quantity > 0) {
-                                if (trigger.side === "LONG") {
-                                    this.hedgeLedger.deductCoreLongQuantity(trigger.quantity);
+                    executionPromise = (async () => {
+                        if (trigger.cancelOrderIds && trigger.cancelOrderIds.length > 0) {
+                            console.log(`[MAKER_TP_ENGINE][EMERGENCY_CANCEL] Cancelling ${trigger.cancelOrderIds.length} open POST_ONLY limit TP orders for ${trigger.slotId} before MARKET SL dispatch...`);
+                            try {
+                                await this.executionClient.cancelBatchOrders(this.config.symbol, trigger.cancelOrderIds);
+                                console.log(`[MAKER_TP_ENGINE][EMERGENCY_CANCEL] Batch order cancellation confirmed by exchange.`);
+                            }
+                            catch (err) {
+                                console.warn(`[MAKER_TP_ENGINE][CANCEL_WARN] Batch order cancellation warning: ${err.message}`);
+                            }
+                        }
+                        return this.executionClient
+                            .placeOrder({
+                            symbol: this.config.symbol,
+                            side: exitSide,
+                            type: "MARKET",
+                            quantity: trigger.quantity,
+                            positionSide: trigger.side,
+                        })
+                            .then((res) => {
+                            if (res) {
+                                if (trigger.isPartialClose && trigger.quantity > 0) {
+                                    if (trigger.side === "LONG") {
+                                        this.hedgeLedger.deductCoreLongQuantity(trigger.quantity);
+                                    }
+                                    else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
+                                        const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
+                                        this.hedgeLedger.deductShortSlotQuantity(sIdx, trigger.quantity);
+                                    }
                                 }
-                                else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
-                                    const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
-                                    this.hedgeLedger.deductShortSlotQuantity(sIdx, trigger.quantity);
+                                else if (!trigger.isPartialClose) {
+                                    if (trigger.side === "LONG") {
+                                        this.hedgeLedger.releaseCoreLong();
+                                    }
+                                    else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
+                                        const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
+                                        this.hedgeLedger.releaseShortSlot(sIdx);
+                                    }
                                 }
                             }
-                            else if (!trigger.isPartialClose) {
+                            return res;
+                        })
+                            .catch((err) => {
+                            console.error(`[DYNAMIC_MONITORING_ERROR] Hedge ${trigger.reason} MARKET order failed: ${err.message}`);
+                            if (err.message &&
+                                (err.message.includes("-2022") ||
+                                    err.message.includes("ReduceOnly") ||
+                                    err.message.includes("-2011") ||
+                                    err.message.includes("not configured"))) {
+                                console.warn(`[DYNAMIC_MONITORING_WARN] Clearing local slot ${trigger.slotId} due to exchange release/error: ${err.message}`);
                                 if (trigger.side === "LONG") {
                                     this.hedgeLedger.releaseCoreLong();
                                 }
@@ -224,27 +317,9 @@ class StrategyEngine {
                                     this.hedgeLedger.releaseShortSlot(sIdx);
                                 }
                             }
-                        }
-                        return res;
-                    })
-                        .catch((err) => {
-                        console.error(`[DYNAMIC_MONITORING_ERROR] Hedge ${trigger.reason} MARKET order failed: ${err.message}`);
-                        if (err.message &&
-                            (err.message.includes("-2022") ||
-                                err.message.includes("ReduceOnly") ||
-                                err.message.includes("-2011") ||
-                                err.message.includes("not configured"))) {
-                            console.warn(`[DYNAMIC_MONITORING_WARN] Clearing local slot ${trigger.slotId} due to exchange release/error: ${err.message}`);
-                            if (trigger.side === "LONG") {
-                                this.hedgeLedger.releaseCoreLong();
-                            }
-                            else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
-                                const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
-                                this.hedgeLedger.releaseShortSlot(sIdx);
-                            }
-                        }
-                        return null;
-                    });
+                            return null;
+                        });
+                    })();
                 }
                 return {
                     sequenceNum: seq,
@@ -449,6 +524,7 @@ class StrategyEngine {
         };
         const riskProfile = this.dynamicRiskEngine.evaluateDynamicRisk(basePrice, targetPosSide === "LONG" ? "LONG" : "SHORT", microMetrics, Math.abs(askPrice - bidPrice));
         riskProfile.isHighConfidenceAi = isHighConfidenceAi;
+        riskProfile.aiConfidence = aiConfidence;
         // Populate pre-allocated intent
         this.reusableOrderIntent.symbol = this.config.symbol;
         this.reusableOrderIntent.side = signalType;
@@ -463,7 +539,9 @@ class StrategyEngine {
         const isConfigured = this.executionClient.isConfigured();
         const riskResult = this.riskGuard.validateOrder(this.reusableOrderIntent, isConfigured, targetPosSide);
         if (!riskResult.passed) {
-            console.log(`[StrategyEngine][RISK_REJECTED] Seq #${seq} | Reason: ${riskResult.reasonCode} - ${riskResult.message}`);
+            if (seq % 1000n === 0n) {
+                console.log(`[StrategyEngine][RISK_REJECTED] Seq #${seq} | Reason: ${riskResult.reasonCode} - ${riskResult.message}`);
+            }
         }
         let executionPromise = undefined;
         if (riskResult.passed) {
@@ -498,9 +576,12 @@ class StrategyEngine {
                     const execPx = parseFloat(res.price || res.avgPrice || "0") || targetPrice;
                     if (targetPosSide === "LONG") {
                         this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, this.config.longTakeProfitPercent, this.config.longStopLossPercent);
+                        this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, finalQuantity, "LONG");
                     }
                     else if (targetPosSide === "SHORT" && targetSlotIndex !== undefined) {
+                        const slotId = `SHORT_SLOT_${targetSlotIndex}`;
                         this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent);
+                        this.dispatchBatchPostOnlyTpOrders(slotId, execPx, finalQuantity, "SHORT");
                     }
                 }
                 return res;

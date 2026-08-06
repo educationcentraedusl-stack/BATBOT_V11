@@ -125,8 +125,11 @@ export class RiskGuard {
     }
 
     // 3. Dynamic Microstructure Trap & Toxic Flow Enforcement
-    // High-confidence AI signals (>= 55% confidence) bypass VPIN toxic flow traps
-    const isAiHighConfidence = intent.riskProfile && intent.riskProfile.isHighConfidenceAi;
+    // High-confidence AI signals (>= 65% confidence) bypass VPIN toxic flow traps
+    const isAiHighConfidence = intent.riskProfile && (
+      intent.riskProfile.isHighConfidenceAi === true ||
+      (intent.riskProfile.aiConfidence !== undefined && intent.riskProfile.aiConfidence >= 0.65)
+    );
     if (intent.riskProfile && !intent.isCloseOrder && !isAiHighConfidence) {
       if (intent.riskProfile.isTrapDetected) {
         const reason = intent.riskProfile.trapReason ?? "TRAP_DETECTED";

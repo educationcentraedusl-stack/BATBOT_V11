@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HedgePositionLedger = exports.PositionLedger = void 0;
 exports.calculatePartialExitChunk = calculatePartialExitChunk;
+const dynamicSizing_1 = require("./dynamicSizing");
 const DEFAULT_MAX_LOTS = 1024;
 class PositionLedger {
     symbol;
@@ -288,10 +289,12 @@ class HedgePositionLedger {
     shortSlots;
     maxShortSlots;
     legacyLedger;
+    sizingCalc;
     constructor(symbol = "BTCUSDT", maxShortSlots = 3) {
         this.symbol = symbol;
         this.maxShortSlots = maxShortSlots;
         this.legacyLedger = new PositionLedger(symbol);
+        this.sizingCalc = new dynamicSizing_1.DynamicSizingCalculator();
         this.coreLong = {
             slotId: "CORE_LONG",
             isOccupied: false,
@@ -303,6 +306,9 @@ class HedgePositionLedger {
             stopLossPrice: 0,
             takeProfitPercent: 0,
             stopLossPercent: 0,
+            activeTpOrderIds: [],
+            tpStagePrices: [],
+            tpStageQuantities: [],
         };
         this.shortSlots = new Array(maxShortSlots);
         for (let i = 0; i < maxShortSlots; i++) {
@@ -317,8 +323,106 @@ class HedgePositionLedger {
                 stopLossPrice: 0,
                 takeProfitPercent: 0,
                 stopLossPercent: 0,
+                activeTpOrderIds: [],
+                tpStagePrices: [],
+                tpStageQuantities: [],
             };
         }
+    }
+    /**
+     * Generates batch POST_ONLY (GTX) limit TP order intents for an occupied position slot.
+     * Dynamically formats 3-stage or 2-stage partial TP limit orders using DynamicSizingCalculator.
+     */
+    generateBatchTpOrderIntents(slotId, entryPrice, quantity, side) {
+        const slot = slotId === "CORE_LONG" ? this.coreLong : this.shortSlots.find((s) => s.slotId === slotId);
+        if (!slot || entryPrice <= 0 || quantity <= 0)
+            return [];
+        const dynamicRes = this.sizingCalc.calculateDynamicTpChunks(quantity, entryPrice);
+        if (dynamicRes.chunks.length === 0)
+            return [];
+        const isLong = side === "LONG";
+        const exitSide = isLong ? "SELL" : "BUY";
+        const orderParamsList = [];
+        const tpStagePrices = [];
+        const tpStageQuantities = [];
+        // Micro-scalp target offsets: Stage 1 = 0.25%, Stage 2 = 0.50%, Stage 3 = 1.00%
+        const tpOffsets = isLong ? [0.0025, 0.0050, 0.0100] : [-0.0025, -0.0050, -0.0100];
+        for (let i = 0; i < dynamicRes.chunks.length; i++) {
+            const chunk = dynamicRes.chunks[i];
+            const offset = tpOffsets[i] !== undefined ? tpOffsets[i] : (isLong ? 0.0025 * (i + 1) : -0.0025 * (i + 1));
+            const targetPrice = Number((entryPrice * (1.0 + offset)).toFixed(2));
+            tpStagePrices.push(targetPrice);
+            tpStageQuantities.push(chunk.quantity);
+            orderParamsList.push({
+                symbol: this.symbol,
+                side: exitSide,
+                type: "LIMIT",
+                quantity: chunk.quantity,
+                price: targetPrice,
+                timeInForce: "GTX", // Post-Only guarantee
+                positionSide: side,
+            });
+        }
+        slot.tpStagePrices = tpStagePrices;
+        slot.tpStageQuantities = tpStageQuantities;
+        slot.activeTpOrderIds = [];
+        return orderParamsList;
+    }
+    /**
+     * Registers assigned order IDs returned from Binance REST batchOrder execution into slot state.
+     */
+    registerActiveTpOrderIds(slotId, orderIds) {
+        const slot = slotId === "CORE_LONG" ? this.coreLong : this.shortSlots.find((s) => s.slotId === slotId);
+        if (slot) {
+            slot.activeTpOrderIds = orderIds;
+        }
+    }
+    /**
+     * Processes a filled WebSocket POST_ONLY limit TP order update.
+     * Advances tpStageReached and updates fee-adjusted Break-Even / Trailing Stop-Loss price.
+     */
+    processTpLimitFill(slotId, orderId, fillQuantity, fillPrice, isMaker = true) {
+        const slot = slotId === "CORE_LONG" ? this.coreLong : this.shortSlots.find((s) => s.slotId === slotId);
+        if (!slot || !slot.isOccupied) {
+            return { isPositionClosed: true, remainingQuantity: 0, newStopLossPrice: 0 };
+        }
+        if (slot.activeTpOrderIds) {
+            slot.activeTpOrderIds = slot.activeTpOrderIds.filter((id) => id !== orderId);
+        }
+        slot.quantity = Math.max(0, Number((slot.quantity - fillQuantity).toFixed(3)));
+        const currentStage = (slot.tpStageReached || 0) + 1;
+        slot.tpStageReached = currentStage;
+        const isLong = slot.side === "LONG";
+        // Advance Trailing Stop Loss
+        if (currentStage === 1) {
+            slot.breakEvenLocked = true;
+            const makerFee = this.sizingCalc.getMakerFeeRate();
+            const takerFee = this.sizingCalc.getTakerFeeRate();
+            const feeBuffer = (makerFee + takerFee) * 2.5; // Fee-adjusted Break-Even
+            slot.breakEvenPrice = isLong ? slot.entryPrice * (1 + feeBuffer) : slot.entryPrice * (1 - feeBuffer);
+            slot.stopLossPrice = slot.breakEvenPrice;
+        }
+        else if (currentStage === 2 && slot.tpStagePrices && slot.tpStagePrices.length >= 1) {
+            slot.stopLossPrice = slot.tpStagePrices[0];
+        }
+        else if (currentStage >= 3 && slot.tpStagePrices && slot.tpStagePrices.length >= 2) {
+            slot.stopLossPrice = slot.tpStagePrices[1];
+        }
+        const isClosed = slot.quantity <= 0;
+        if (isClosed) {
+            if (slotId === "CORE_LONG") {
+                this.releaseCoreLong();
+            }
+            else if (slotId.startsWith("SHORT_SLOT_")) {
+                const sIdx = parseInt(slotId.replace("SHORT_SLOT_", ""), 10);
+                this.releaseShortSlot(sIdx);
+            }
+        }
+        return {
+            isPositionClosed: isClosed,
+            remainingQuantity: slot.quantity,
+            newStopLossPrice: slot.stopLossPrice,
+        };
     }
     getCoreLong() {
         return this.coreLong;
@@ -407,16 +511,18 @@ class HedgePositionLedger {
         this.coreLong.stopLossPercent = slPercent;
         this.coreLong.tpStageReached = 0;
         this.coreLong.breakEvenLocked = false;
-        const feeMultiplier = 0.0005 * 2.5; // Fee-adjusted zero-loss buffer (0.125%)
+        const makerFee = this.sizingCalc.getMakerFeeRate();
+        const takerFee = this.sizingCalc.getTakerFeeRate();
+        const feeMultiplier = (makerFee + takerFee) * 2.5; // Fee-adjusted zero-loss buffer loaded from .env
         this.coreLong.breakEvenPrice = entryPrice * (1.0 + feeMultiplier);
         this.coreLong.takeProfitPrice = entryPrice * (1 + tpPercent / 100);
         this.coreLong.stopLossPrice = entryPrice * (1 - slPercent / 100);
-        // 5-Stage TP Targets: 20%, 30%, 50%, 80%, 120% ROI (assuming 10x leverage base = 2%, 3%, 5%, 8%, 12% price moves)
-        const tp1Pct = Math.min(2.0, tpPercent * 0.4);
-        const tp2Pct = Math.min(3.0, tpPercent * 0.6);
-        const tp3Pct = Math.min(5.0, tpPercent * 1.0);
-        const tp4Pct = Math.min(8.0, tpPercent * 1.6);
-        const tp5Pct = Math.min(12.0, tpPercent * 2.4);
+        // 5-Stage TP Micro-Ladder Targets: 0.25%, 0.50%, 1.00%, 1.50%, 2.50% price moves (tpPercent * 1.0, 2.0, 4.0, 6.0, 10.0)
+        const tp1Pct = Math.min(2.0, tpPercent * 1.0);
+        const tp2Pct = Math.min(3.0, tpPercent * 2.0);
+        const tp3Pct = Math.min(5.0, tpPercent * 4.0);
+        const tp4Pct = Math.min(8.0, tpPercent * 6.0);
+        const tp5Pct = Math.min(12.0, tpPercent * 10.0);
         this.coreLong.tpPrices = [
             entryPrice * (1 + tp1Pct / 100),
             entryPrice * (1 + tp2Pct / 100),
@@ -487,15 +593,17 @@ class HedgePositionLedger {
         slot.stopLossPercent = slPercent;
         slot.tpStageReached = 0;
         slot.breakEvenLocked = false;
-        const feeMultiplier = 0.0005 * 2.5; // Fee-adjusted zero-loss buffer (0.125%)
+        const makerFee = this.sizingCalc.getMakerFeeRate();
+        const takerFee = this.sizingCalc.getTakerFeeRate();
+        const feeMultiplier = (makerFee + takerFee) * 2.5; // Fee-adjusted zero-loss buffer loaded from .env
         slot.breakEvenPrice = entryPrice * (1.0 - feeMultiplier);
         slot.takeProfitPrice = entryPrice * (1 - tpPercent / 100);
         slot.stopLossPrice = entryPrice * (1 + slPercent / 100);
-        const tp1Pct = Math.min(2.0, tpPercent * 0.4);
-        const tp2Pct = Math.min(3.0, tpPercent * 0.6);
-        const tp3Pct = Math.min(5.0, tpPercent * 1.0);
-        const tp4Pct = Math.min(8.0, tpPercent * 1.6);
-        const tp5Pct = Math.min(12.0, tpPercent * 2.4);
+        const tp1Pct = Math.min(2.0, tpPercent * 1.0);
+        const tp2Pct = Math.min(3.0, tpPercent * 2.0);
+        const tp3Pct = Math.min(5.0, tpPercent * 4.0);
+        const tp4Pct = Math.min(8.0, tpPercent * 6.0);
+        const tp5Pct = Math.min(12.0, tpPercent * 10.0);
         slot.tpPrices = [
             entryPrice * (1 - tp1Pct / 100),
             entryPrice * (1 - tp2Pct / 100),
@@ -551,8 +659,9 @@ class HedgePositionLedger {
             const stage = slot.tpStageReached || 0;
             const isLong = slot.side === "LONG";
             const tpPrices = slot.tpPrices && slot.tpPrices.length === 5 ? slot.tpPrices : [];
-            // 1. Evaluate 5-Stage Partial Take Profits
-            if (tpPrices.length === 5) {
+            const hasActiveLimitOrders = slot.activeTpOrderIds && slot.activeTpOrderIds.length > 0;
+            // 1. Evaluate 5-Stage Partial Take Profits (ONLY if no active exchange limit TP orders are registered)
+            if (!hasActiveLimitOrders && tpPrices.length === 5) {
                 // TP1 (+20% ROI Target)
                 if (stage < 1 && ((isLong && markPrice >= tpPrices[0]) || (!isLong && markPrice <= tpPrices[0]))) {
                     slot.tpStageReached = 1;
@@ -648,7 +757,7 @@ class HedgePositionLedger {
                     return;
                 }
             }
-            // 2. Evaluate Stop Loss / Fee-Adjusted Break-Even SL
+            // 2. Evaluate Stop Loss / Fee-Adjusted Break-Even SL (ALWAYS ACTIVE)
             const isSlTriggered = isLong
                 ? markPrice <= slot.stopLossPrice
                 : markPrice >= slot.stopLossPrice;
@@ -662,23 +771,26 @@ class HedgePositionLedger {
                     entryPrice: slot.entryPrice,
                     markPrice,
                     isPartialClose: false,
+                    cancelOrderIds: slot.activeTpOrderIds ? [...slot.activeTpOrderIds] : [],
                 });
                 return;
             }
-            // 3. Fallback Standard TP Percent Check
-            const pnlPct = isLong
-                ? ((markPrice - slot.entryPrice) / slot.entryPrice) * 100
-                : ((slot.entryPrice - markPrice) / slot.entryPrice) * 100;
-            if (pnlPct >= slot.takeProfitPercent) {
-                triggers.push({
-                    slotId: slot.slotId,
-                    side: slot.side,
-                    reason: "TAKE_PROFIT",
-                    quantity: slot.quantity,
-                    entryPrice: slot.entryPrice,
-                    markPrice,
-                    isPartialClose: false,
-                });
+            // 3. Fallback Standard TP Percent Check (ONLY if no active exchange limit TP orders are registered)
+            if (!hasActiveLimitOrders) {
+                const pnlPct = isLong
+                    ? ((markPrice - slot.entryPrice) / slot.entryPrice) * 100
+                    : ((slot.entryPrice - markPrice) / slot.entryPrice) * 100;
+                if (pnlPct >= slot.takeProfitPercent) {
+                    triggers.push({
+                        slotId: slot.slotId,
+                        side: slot.side,
+                        reason: "TAKE_PROFIT",
+                        quantity: slot.quantity,
+                        entryPrice: slot.entryPrice,
+                        markPrice,
+                        isPartialClose: false,
+                    });
+                }
             }
         };
         evalSlot(this.coreLong);

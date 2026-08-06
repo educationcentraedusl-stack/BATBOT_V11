@@ -6,9 +6,9 @@ class DynamicRiskEngine {
     minHurstTrend = 0.55;
     maxHurstMeanReversion = 0.45;
     constructor(vpinThreshold) {
-        if (vpinThreshold && vpinThreshold > 0) {
-            this.vpinThreshold = vpinThreshold;
-        }
+        const envVpinThreshold = process.env.VPIN_THRESHOLD ? parseFloat(process.env.VPIN_THRESHOLD) : NaN;
+        const defaultVpin = !isNaN(envVpinThreshold) ? envVpinThreshold : 0.85;
+        this.vpinThreshold = (vpinThreshold && vpinThreshold > 0) ? vpinThreshold : defaultVpin;
     }
     /**
      * Calculates real-time dynamic stop-loss, take-profit, regime classification,
@@ -96,11 +96,15 @@ class DynamicRiskEngine {
     /**
      * Calculates fee-adjusted Break-Even Stop Loss price:
      * EntryPrice ± (EntryPrice * FeeRate * 2.5) to guarantee zero-loss covering commissions & slippage.
+     * Dynamically loads fee rates from process.env (Zero hardcoding rule).
      */
-    calculateFeeAdjustedBreakEvenPrice(entryPrice, positionSide, feeRate = 0.0005) {
+    calculateFeeAdjustedBreakEvenPrice(entryPrice, positionSide, overrideFeeRate) {
         if (entryPrice <= 0)
             return 0;
-        const feeMultiplier = feeRate * 2.5; // Round-trip fee buffer (2 x fee + 0.5 fee slippage)
+        const defaultMakerFee = parseFloat(process.env.MAKER_FEE_RATE || "0.00018");
+        const defaultTakerFee = parseFloat(process.env.TAKER_FEE_RATE || "0.00045");
+        const effectiveFeeRate = overrideFeeRate ?? (defaultMakerFee + defaultTakerFee);
+        const feeMultiplier = effectiveFeeRate * 2.5; // Round-trip fee buffer (2 x fee + 0.5 fee slippage)
         if (positionSide === "LONG") {
             return entryPrice * (1.0 + feeMultiplier);
         }
