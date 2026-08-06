@@ -1,3 +1,6 @@
+import { DynamicSizingCalculator } from "./dynamicSizing";
+import { BinanceOrderParams } from "../execution/binance";
+
 export interface PositionLot {
   price: number;
   quantity: number;
@@ -371,6 +374,10 @@ export interface PositionSlot {
   tpPrices?: number[];
   breakEvenLocked?: boolean;
   breakEvenPrice?: number;
+  // Phase 3 Maker-Taker Post-Only tracking fields
+  activeTpOrderIds?: number[];
+  tpStagePrices?: number[];
+  tpStageQuantities?: number[];
 }
 
 export interface SlotExitTrigger {
@@ -390,6 +397,7 @@ export interface SlotExitTrigger {
   markPrice: number;
   isPartialClose?: boolean;
   tpStage?: number;
+  cancelOrderIds?: number[];
 }
 
 /**
@@ -434,11 +442,13 @@ export class HedgePositionLedger {
   private shortSlots: PositionSlot[];
   private maxShortSlots: number;
   private legacyLedger: PositionLedger;
+  private sizingCalc: DynamicSizingCalculator;
 
   constructor(symbol: string = "BTCUSDT", maxShortSlots: number = 3) {
     this.symbol = symbol;
     this.maxShortSlots = maxShortSlots;
     this.legacyLedger = new PositionLedger(symbol);
+    this.sizingCalc = new DynamicSizingCalculator();
 
     this.coreLong = {
       slotId: "CORE_LONG",
@@ -451,6 +461,9 @@ export class HedgePositionLedger {
       stopLossPrice: 0,
       takeProfitPercent: 0,
       stopLossPercent: 0,
+      activeTpOrderIds: [],
+      tpStagePrices: [],
+      tpStageQuantities: [],
     };
 
     this.shortSlots = new Array<PositionSlot>(maxShortSlots);
@@ -466,9 +479,131 @@ export class HedgePositionLedger {
         stopLossPrice: 0,
         takeProfitPercent: 0,
         stopLossPercent: 0,
+        activeTpOrderIds: [],
+        tpStagePrices: [],
+        tpStageQuantities: [],
       };
     }
   }
+
+  /**
+   * Generates batch POST_ONLY (GTX) limit TP order intents for an occupied position slot.
+   * Dynamically formats 3-stage or 2-stage partial TP limit orders using DynamicSizingCalculator.
+   */
+  public generateBatchTpOrderIntents(
+    slotId: string,
+    entryPrice: number,
+    quantity: number,
+    side: "LONG" | "SHORT"
+  ): BinanceOrderParams[] {
+    const slot = slotId === "CORE_LONG" ? this.coreLong : this.shortSlots.find((s) => s.slotId === slotId);
+    if (!slot || entryPrice <= 0 || quantity <= 0) return [];
+
+    const dynamicRes = this.sizingCalc.calculateDynamicTpChunks(quantity, entryPrice);
+    if (dynamicRes.chunks.length === 0) return [];
+
+    const isLong = side === "LONG";
+    const exitSide: "BUY" | "SELL" = isLong ? "SELL" : "BUY";
+    const orderParamsList: BinanceOrderParams[] = [];
+    const tpStagePrices: number[] = [];
+    const tpStageQuantities: number[] = [];
+
+    // Micro-scalp target offsets: Stage 1 = 0.25%, Stage 2 = 0.50%, Stage 3 = 1.00%
+    const tpOffsets = isLong ? [0.0025, 0.0050, 0.0100] : [-0.0025, -0.0050, -0.0100];
+
+    for (let i = 0; i < dynamicRes.chunks.length; i++) {
+      const chunk = dynamicRes.chunks[i];
+      const offset = tpOffsets[i] !== undefined ? tpOffsets[i] : (isLong ? 0.0025 * (i + 1) : -0.0025 * (i + 1));
+      const targetPrice = Number((entryPrice * (1.0 + offset)).toFixed(2));
+
+      tpStagePrices.push(targetPrice);
+      tpStageQuantities.push(chunk.quantity);
+
+      orderParamsList.push({
+        symbol: this.symbol,
+        side: exitSide,
+        type: "LIMIT",
+        quantity: chunk.quantity,
+        price: targetPrice,
+        timeInForce: "GTX", // Post-Only guarantee
+        positionSide: side,
+      });
+    }
+
+    slot.tpStagePrices = tpStagePrices;
+    slot.tpStageQuantities = tpStageQuantities;
+    slot.activeTpOrderIds = [];
+
+    return orderParamsList;
+  }
+
+  /**
+   * Registers assigned order IDs returned from Binance REST batchOrder execution into slot state.
+   */
+  public registerActiveTpOrderIds(slotId: string, orderIds: number[]): void {
+    const slot = slotId === "CORE_LONG" ? this.coreLong : this.shortSlots.find((s) => s.slotId === slotId);
+    if (slot) {
+      slot.activeTpOrderIds = orderIds;
+    }
+  }
+
+  /**
+   * Processes a filled WebSocket POST_ONLY limit TP order update.
+   * Advances tpStageReached and updates fee-adjusted Break-Even / Trailing Stop-Loss price.
+   */
+  public processTpLimitFill(
+    slotId: string,
+    orderId: number,
+    fillQuantity: number,
+    fillPrice: number,
+    isMaker: boolean = true
+  ): { isPositionClosed: boolean; remainingQuantity: number; newStopLossPrice: number } {
+    const slot = slotId === "CORE_LONG" ? this.coreLong : this.shortSlots.find((s) => s.slotId === slotId);
+    if (!slot || !slot.isOccupied) {
+      return { isPositionClosed: true, remainingQuantity: 0, newStopLossPrice: 0 };
+    }
+
+    if (slot.activeTpOrderIds) {
+      slot.activeTpOrderIds = slot.activeTpOrderIds.filter((id) => id !== orderId);
+    }
+
+    slot.quantity = Math.max(0, Number((slot.quantity - fillQuantity).toFixed(3)));
+    const currentStage = (slot.tpStageReached || 0) + 1;
+    slot.tpStageReached = currentStage;
+
+    const isLong = slot.side === "LONG";
+
+    // Advance Trailing Stop Loss
+    if (currentStage === 1) {
+      slot.breakEvenLocked = true;
+      const makerFee = this.sizingCalc.getMakerFeeRate();
+      const takerFee = this.sizingCalc.getTakerFeeRate();
+      const feeBuffer = (makerFee + takerFee) * 2.5; // Fee-adjusted Break-Even
+      slot.breakEvenPrice = isLong ? slot.entryPrice * (1 + feeBuffer) : slot.entryPrice * (1 - feeBuffer);
+      slot.stopLossPrice = slot.breakEvenPrice;
+    } else if (currentStage === 2 && slot.tpStagePrices && slot.tpStagePrices.length >= 1) {
+      slot.stopLossPrice = slot.tpStagePrices[0];
+    } else if (currentStage >= 3 && slot.tpStagePrices && slot.tpStagePrices.length >= 2) {
+      slot.stopLossPrice = slot.tpStagePrices[1];
+    }
+
+    const isClosed = slot.quantity <= 0;
+    if (isClosed) {
+      if (slotId === "CORE_LONG") {
+        this.releaseCoreLong();
+      } else if (slotId.startsWith("SHORT_SLOT_")) {
+        const sIdx = parseInt(slotId.replace("SHORT_SLOT_", ""), 10);
+        this.releaseShortSlot(sIdx);
+      }
+    }
+
+    return {
+      isPositionClosed: isClosed,
+      remainingQuantity: slot.quantity,
+      newStopLossPrice: slot.stopLossPrice,
+    };
+  }
+
 
   public getCoreLong(): Readonly<PositionSlot> {
     return this.coreLong;
@@ -876,6 +1011,7 @@ export class HedgePositionLedger {
           entryPrice: slot.entryPrice,
           markPrice,
           isPartialClose: false,
+          cancelOrderIds: slot.activeTpOrderIds ? [...slot.activeTpOrderIds] : [],
         });
         return;
       }

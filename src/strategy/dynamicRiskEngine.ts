@@ -141,14 +141,18 @@ export class DynamicRiskEngine {
   /**
    * Calculates fee-adjusted Break-Even Stop Loss price:
    * EntryPrice ± (EntryPrice * FeeRate * 2.5) to guarantee zero-loss covering commissions & slippage.
+   * Dynamically loads fee rates from process.env (Zero hardcoding rule).
    */
   public calculateFeeAdjustedBreakEvenPrice(
     entryPrice: number,
     positionSide: "LONG" | "SHORT",
-    feeRate: number = 0.0005
+    overrideFeeRate?: number
   ): number {
     if (entryPrice <= 0) return 0;
-    const feeMultiplier = feeRate * 2.5; // Round-trip fee buffer (2 x fee + 0.5 fee slippage)
+    const defaultMakerFee = parseFloat(process.env.MAKER_FEE_RATE || "0.00018");
+    const defaultTakerFee = parseFloat(process.env.TAKER_FEE_RATE || "0.00045");
+    const effectiveFeeRate = overrideFeeRate ?? (defaultMakerFee + defaultTakerFee);
+    const feeMultiplier = effectiveFeeRate * 2.5; // Round-trip fee buffer (2 x fee + 0.5 fee slippage)
     if (positionSide === "LONG") {
       return entryPrice * (1.0 + feeMultiplier);
     } else {

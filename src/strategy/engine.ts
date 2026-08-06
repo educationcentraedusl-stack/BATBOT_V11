@@ -3,6 +3,7 @@ import { RiskGuard, OrderIntent, RiskCheckResult } from "./risk";
 import { BinanceExecutionClient, BinanceOrderResponse, BinanceOrderParams, BinancePositionRisk } from "../execution/binance";
 import { PositionLedger, HedgePositionLedger, PositionSlot, SlotExitTrigger, ActiveTradeSlot } from "./positionLedger";
 import { DynamicRiskEngine, DynamicMicrostructureMetrics } from "./dynamicRiskEngine";
+import { BinanceUserDataStream, OrderTradeUpdatePayload } from "../execution/userDataStream";
 
 export interface StrategyConfig {
   symbol: string;
@@ -56,6 +57,7 @@ export class StrategyEngine {
   private hedgeLedger: HedgePositionLedger;
   private config: StrategyConfig;
   private dynamicRiskEngine: DynamicRiskEngine = new DynamicRiskEngine();
+  private userDataStream: BinanceUserDataStream | null = null;
   private lastProcessedSequence: bigint = -1n;
   private state: EngineState = "LIVE_ACTIVE";
 
@@ -163,6 +165,69 @@ export class StrategyEngine {
     this.positionLedger = positionLedger ?? this.hedgeLedger.getLegacyLedger();
     this.reusableOrderIntent.symbol = this.config.symbol;
     this.reusableOrderIntent.quantity = this.config.orderQuantity;
+  }
+
+  public async initUserDataStream(): Promise<boolean> {
+    if (!this.executionClient.isConfigured()) return false;
+    this.userDataStream = new BinanceUserDataStream(this.executionClient);
+
+    this.userDataStream.subscribeOrderUpdates((update: OrderTradeUpdatePayload) => {
+      const { order } = update;
+      if (order.orderStatus === "FILLED" || order.orderStatus === "PARTIALLY_FILLED") {
+        if (order.orderType === "LIMIT" || order.isMaker) {
+          console.log(`[MAKER_TP_ENGINE][WS_FILL_NOTIFIED] OrderId #${order.orderId} filled as ${order.isMaker ? "MAKER" : "TAKER"}. Qty: ${order.lastFilledQuantity} @ $${order.lastFilledPrice}`);
+
+          const coreLong = this.hedgeLedger.getCoreLong();
+          const shortSlots = this.hedgeLedger.getShortSlots();
+
+          let targetSlotId: string | null = null;
+          if (coreLong.isOccupied && coreLong.activeTpOrderIds?.includes(order.orderId)) {
+            targetSlotId = "CORE_LONG";
+          } else {
+            for (const s of shortSlots) {
+              if (s.isOccupied && s.activeTpOrderIds?.includes(order.orderId)) {
+                targetSlotId = s.slotId;
+                break;
+              }
+            }
+          }
+
+          if (targetSlotId) {
+            const res = this.hedgeLedger.processTpLimitFill(targetSlotId, order.orderId, order.lastFilledQuantity, order.lastFilledPrice, order.isMaker);
+            console.log(`[MAKER_TP_ENGINE][RECONCILED] Slot ${targetSlotId} updated. Closed: ${res.isPositionClosed}, RemQty: ${res.remainingQuantity}, NewSL: $${res.newStopLossPrice}`);
+          }
+        }
+      }
+    });
+
+    return this.userDataStream.start();
+  }
+
+  private async dispatchBatchPostOnlyTpOrders(
+    slotId: string,
+    entryPrice: number,
+    quantity: number,
+    side: "LONG" | "SHORT"
+  ): Promise<void> {
+    const isPostOnlyTpEnabled = process.env.ENABLE_POST_ONLY_TP !== "false";
+    if (!isPostOnlyTpEnabled) return;
+
+    const intents = this.hedgeLedger.generateBatchTpOrderIntents(slotId, entryPrice, quantity, side);
+    if (intents.length === 0) return;
+
+    console.log(`[MAKER_TP_ENGINE][DISPATCHING] Submitting ${intents.length} POST_ONLY limit TP orders for ${slotId} via batchOrders...`);
+    try {
+      const resList = await this.executionClient.placeBatchOrders(intents);
+      if (Array.isArray(resList) && resList.length > 0) {
+        const orderIds = resList
+          .map((r) => r.orderId)
+          .filter((id) => typeof id === "number" || typeof id === "string");
+        this.hedgeLedger.registerActiveTpOrderIds(slotId, orderIds as any[]);
+        console.log(`[MAKER_TP_ENGINE][SUCCESS] Registered ${orderIds.length} POST_ONLY TP limit order IDs on Binance orderbook: [${orderIds.join(", ")}]`);
+      }
+    } catch (err: any) {
+      console.error(`[MAKER_TP_ENGINE][ERROR] Failed to submit batch POST_ONLY TP orders: ${err.message}`);
+    }
   }
 
   public getEngineState(): EngineState {
@@ -297,6 +362,15 @@ export class StrategyEngine {
 
         let executionPromise: Promise<BinanceOrderResponse | null> | undefined = undefined;
         if (riskResult.passed) {
+          if (trigger.cancelOrderIds && trigger.cancelOrderIds.length > 0) {
+            console.log(
+              `[MAKER_TP_ENGINE][EMERGENCY_CANCEL] Cancelling ${trigger.cancelOrderIds.length} open POST_ONLY limit TP orders for ${trigger.slotId} before MARKET SL dispatch...`
+            );
+            this.executionClient.cancelBatchOrders(this.config.symbol, trigger.cancelOrderIds).catch((err) => {
+              console.warn(`[MAKER_TP_ENGINE][CANCEL_WARN] Batch order cancellation warning: ${err.message}`);
+            });
+          }
+
           executionPromise = this.executionClient
             .placeOrder({
               symbol: this.config.symbol,
@@ -661,8 +735,11 @@ export class StrategyEngine {
             const execPx = parseFloat(res.price || res.avgPrice || "0") || targetPrice;
             if (targetPosSide === "LONG") {
               this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, this.config.longTakeProfitPercent, this.config.longStopLossPercent);
+              this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, finalQuantity, "LONG");
             } else if (targetPosSide === "SHORT" && targetSlotIndex !== undefined) {
+              const slotId = `SHORT_SLOT_${targetSlotIndex}`;
               this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent);
+              this.dispatchBatchPostOnlyTpOrders(slotId, execPx, finalQuantity, "SHORT");
             }
           }
           return res;
