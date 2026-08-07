@@ -378,6 +378,7 @@ impl NativeUniverseScanner {
 #[napi]
 pub struct NativeMultiStreamManager {
     inner: Arc<ws::manager::MultiStreamManager>,
+    wired_slots: Arc<Mutex<Vec<bool>>>,
 }
 
 #[napi]
@@ -387,17 +388,30 @@ impl NativeMultiStreamManager {
         let manager = Arc::new(ws::manager::MultiStreamManager::new(
             max_active_assets as usize,
         ));
+        let num_slots = manager.max_active_assets();
+        let wired_slots = Arc::new(Mutex::new(vec![false; num_slots]));
 
-        // Wire slot consumer loops to IngestionBridge ONCE upon initialization
+        let mgr = Self {
+            inner: manager,
+            wired_slots,
+        };
+
+        mgr.ensure_consumer_loops_wired();
+        mgr
+    }
+
+    fn ensure_consumer_loops_wired(&self) {
         if let Some(bridge) = GLOBAL_INGESTION_BRIDGE.load().as_ref() {
-            for slot in 0..(max_active_assets as usize) {
-                if let Some(q) = manager.queue_at(slot) {
-                    bridge.start_consumer_loop_asset(q, slot);
+            let mut wired = self.wired_slots.lock().unwrap_or_else(|e| e.into_inner());
+            for slot in 0..self.inner.max_active_assets() {
+                if slot < wired.len() && !wired[slot] {
+                    if let Some(q) = self.inner.queue_at(slot) {
+                        bridge.start_consumer_loop_asset(q, slot);
+                        wired[slot] = true;
+                    }
                 }
             }
         }
-
-        Self { inner: manager }
     }
 
     #[napi]
@@ -407,6 +421,7 @@ impl NativeMultiStreamManager {
 
     #[napi]
     pub async fn update_subscriptions(&self, new_top_k: Vec<String>) -> napi::Result<Vec<String>> {
+        self.ensure_consumer_loops_wired();
         self.inner
             .update_subscriptions(&new_top_k)
             .await

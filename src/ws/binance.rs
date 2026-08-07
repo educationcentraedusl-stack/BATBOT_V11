@@ -134,7 +134,7 @@ impl BinanceWsStream {
                 msg = read.next() => {
                     match msg {
                         Some(Ok(Message::Text(text))) => {
-                            Self::parse_and_enqueue(&text, &queue);
+                            self.parse_and_enqueue(&text, &queue);
                         }
                         Some(Ok(Message::Ping(payload))) => {
                             if let Err(e) = write.send(Message::Pong(payload)).await {
@@ -164,7 +164,11 @@ impl BinanceWsStream {
         Ok(())
     }
 
-    fn parse_and_enqueue(text: &str, queue: &LockFreeSpscQueue) {
+    fn parse_and_enqueue(&self, text: &str, queue: &LockFreeSpscQueue) {
+        if self.shutdown_requested.load(Ordering::Relaxed) {
+            return;
+        }
+
         // Filter out non-stream control frames or subscription ACKs (e.g. {"result":null,"id":1})
         if text.contains("\"result\":") || text.contains("\"id\":") || !text.contains("\"stream\":") {
             return;
@@ -182,6 +186,10 @@ impl BinanceWsStream {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
+
+        if self.shutdown_requested.load(Ordering::Relaxed) {
+            return;
+        }
 
         if combined.stream.contains("@depth20") {
             match serde_json::from_str::<BinanceDepthPayload>(combined.data.get()) {
@@ -203,6 +211,9 @@ impl BinanceWsStream {
                     }
 
                     if valid {
+                        if self.shutdown_requested.load(Ordering::Relaxed) {
+                            return;
+                        }
                         if let Err(_) = queue.push(MarketUpdateEvent::DepthUpdate {
                             bids,
                             asks,
@@ -232,6 +243,10 @@ impl BinanceWsStream {
                     };
                     let is_buyer_maker = trade.m;
 
+                    if self.shutdown_requested.load(Ordering::Relaxed) {
+                        return;
+                    }
+
                     if let Err(_) = queue.push(MarketUpdateEvent::TradeEvent {
                         price,
                         quantity,
@@ -257,6 +272,10 @@ impl BinanceWsStream {
                         eprintln!("[Binance WS Error] Failed to parse liquidation quantity float");
                         return;
                     };
+
+                    if self.shutdown_requested.load(Ordering::Relaxed) {
+                        return;
+                    }
 
                     if let Err(_) = queue.push(MarketUpdateEvent::new_liquidation(
                         fo.o.s,
