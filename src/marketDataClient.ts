@@ -240,12 +240,20 @@ export class MarketDataClient {
     this.writeAtomicFloat64Asset(assetIdx, 112, val);
   }
 
-  public getMicroburstScore(assetIdx: number = 0): number {
-    return this.readAtomicFloat64Asset(assetIdx, 113);
+  public setOBI(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 1, val);
   }
 
-  public setMicroburstScore(val: number, assetIdx: number = 0): void {
-    this.writeAtomicFloat64Asset(assetIdx, 113, val);
+  public setCVD(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 2, val);
+  }
+
+  public getHurst(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 123);
+  }
+
+  public setHurst(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 123, val);
   }
 
   public getRealizedVolatility(assetIdx: number = 0): number {

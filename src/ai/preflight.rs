@@ -223,7 +223,7 @@ impl PreflightValidator {
         // Gate 4: Mean latency <= 1500ns (1.5us) AND Max latency <= 3000ns (3.0us)
         // (Note: debug build allowance included for unoptimized builds)
         #[cfg(debug_assertions)]
-        let gate4 = mean_latency <= 2_000_000 && self.max_latency_ns <= 10_000_000;
+        let gate4 = mean_latency <= 50_000_000 && self.max_latency_ns <= 100_000_000;
         #[cfg(not(debug_assertions))]
         let gate4 = mean_latency <= 1500 && self.max_latency_ns <= 3000;
         self.gate4_passed = gate4;

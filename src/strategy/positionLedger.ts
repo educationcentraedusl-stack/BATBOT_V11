@@ -489,6 +489,10 @@ export class HedgePositionLedger {
     }
   }
 
+  public getSummary(currentMarkPrice: number = 0): PositionSummary {
+    return this.legacyLedger.getSummary(currentMarkPrice);
+  }
+
   /**
    * Generates batch POST_ONLY (GTX) limit TP order intents for an occupied position slot.
    * Dynamically formats 3-stage or 2-stage partial TP limit orders using DynamicSizingCalculator.
@@ -1220,6 +1224,76 @@ export class HedgePositionLedger {
     }
 
     return slots;
+  }
+}
+
+export interface MultiAssetPortfolioSnapshot {
+  timestamp: number;
+  totalActiveSymbols: number;
+  totalGrossNotionalUsdt: number;
+  totalUnrealizedPnlUsdt: number;
+  totalRealizedPnlUsdt: number;
+  portfolioLeverage: number;
+  perSymbolSummaries: Map<string, PositionSummary>;
+}
+
+export class MultiAssetPositionLedger {
+  private ledgers: Map<string, HedgePositionLedger> = new Map();
+  private accountBalanceUsdt: number;
+
+  constructor(symbols: string[] = [], accountBalanceUsdt: number = 100_000.0) {
+    this.accountBalanceUsdt = accountBalanceUsdt;
+    for (const sym of symbols) {
+      if (sym && !this.ledgers.has(sym)) {
+        this.ledgers.set(sym, new HedgePositionLedger(sym));
+      }
+    }
+  }
+
+  public getOrCreateLedger(symbol: string): HedgePositionLedger {
+    let ledger = this.ledgers.get(symbol);
+    if (!ledger) {
+      ledger = new HedgePositionLedger(symbol);
+      this.ledgers.set(symbol, ledger);
+    }
+    return ledger;
+  }
+
+  public updateAccountBalance(balanceUsdt: number): void {
+    if (balanceUsdt > 0) {
+      this.accountBalanceUsdt = balanceUsdt;
+    }
+  }
+
+  public getPortfolioSnapshot(currentPrices: Map<string, number>): MultiAssetPortfolioSnapshot {
+    let totalGrossNotional = 0;
+    let totalUnrealized = 0;
+    let totalRealized = 0;
+    const summaries = new Map<string, PositionSummary>();
+
+    for (const [sym, ledger] of this.ledgers.entries()) {
+      const price = currentPrices.get(sym) ?? 0;
+      const summary = ledger.getSummary(price);
+      summaries.set(sym, summary);
+
+      if (summary.side !== "FLAT") {
+        totalGrossNotional += summary.netQuantity * (price > 0 ? price : summary.averageEntryPrice);
+        totalUnrealized += summary.unrealizedPnl;
+      }
+      totalRealized += summary.cumulativeRealizedPnl;
+    }
+
+    const leverage = this.accountBalanceUsdt > 0 ? totalGrossNotional / this.accountBalanceUsdt : 0;
+
+    return {
+      timestamp: Date.now(),
+      totalActiveSymbols: this.ledgers.size,
+      totalGrossNotionalUsdt: totalGrossNotional,
+      totalUnrealizedPnlUsdt: totalUnrealized,
+      totalRealizedPnlUsdt: totalRealized,
+      portfolioLeverage: leverage,
+      perSymbolSummaries: summaries,
+    };
   }
 }
 

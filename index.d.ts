@@ -19,6 +19,12 @@ export declare function startIngestion(sabBuffer: Buffer): boolean
 export declare function getMicrostructureMetrics(): string
 export declare function getDynamicCollars(entryPrice: number, positionSide: string): string
 export declare function calculateCsLvrScoreNapi(symbol: string, high: number, low: number, open: number, close: number, volumeUsd5M: number, bestBid: number, bestAsk: number, priceChange5M: number, volume5M: number): number
+export declare function updateAssetReturnNapi(assetIdx: number, returnVal: number): boolean
+export declare function getCovarianceMatrixNapi(): string
+export declare function getCorrelationMatrixNapi(): string
+export declare function calculateCcDfkSizeNapi(assetIdx: number, expectedReturn: number, gkVol: number, bidAskSpreadBp: number, accountBalance: number, currentPrice: number, activeWeightsJson?: string | undefined | null): string
+export declare function getMultiAssetCollarsNapi(entryPrice: number, gkVol: number, isLong: boolean): string
+export declare function evaluateMultiAssetSignalsNapi(sabBuffer: Buffer, activeSymbolsJson: string): string
 export declare class NativeUniverseScanner {
   constructor(maxActiveAssets: number)
   updateTicker(symbol: string, high: number, low: number, open: number, close: number, volumeUsd5M: number, bestBid: number, bestAsk: number, priceChange5M: number, volume5M: number): void

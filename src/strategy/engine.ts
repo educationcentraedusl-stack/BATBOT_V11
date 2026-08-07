@@ -1,7 +1,7 @@
 import { MarketDataClient } from "../marketDataClient";
-import { RiskGuard, OrderIntent, RiskCheckResult } from "./risk";
+import { RiskGuard, MultiAssetRiskGuard, OrderIntent, RiskCheckResult } from "./risk";
 import { BinanceExecutionClient, BinanceOrderResponse, BinanceOrderParams, BinancePositionRisk } from "../execution/binance";
-import { PositionLedger, HedgePositionLedger, PositionSlot, SlotExitTrigger, ActiveTradeSlot } from "./positionLedger";
+import { PositionLedger, HedgePositionLedger, MultiAssetPositionLedger, PositionSlot, SlotExitTrigger, ActiveTradeSlot } from "./positionLedger";
 import { DynamicRiskEngine, DynamicMicrostructureMetrics } from "./dynamicRiskEngine";
 import { BinanceUserDataStream, OrderTradeUpdatePayload } from "../execution/userDataStream";
 
@@ -790,5 +790,112 @@ export class StrategyEngine {
 
   public getConfig(): Readonly<StrategyConfig> {
     return this.config;
+  }
+}
+
+export interface MultiAssetSignalBatch {
+  timestamp: number;
+  signals: Array<{
+    assetIndex: number;
+    symbol: string;
+    signalType: "NONE" | "BUY" | "SELL";
+    confidence: number;
+    obi: number;
+    cvd: number;
+    hurst: number;
+    isApproved: boolean;
+    rejectReason?: string;
+  }>;
+}
+
+export class MultiAssetStrategyEngine {
+  private client: MarketDataClient;
+  private riskGuard: MultiAssetRiskGuard;
+  private executionClient: BinanceExecutionClient;
+  private positionLedger: MultiAssetPositionLedger;
+  private activeSymbols: string[];
+
+  constructor(
+    client: MarketDataClient,
+    riskGuard: MultiAssetRiskGuard,
+    executionClient: BinanceExecutionClient,
+    activeSymbols: string[] = ["ETHUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "SUIUSDT"],
+    positionLedger?: MultiAssetPositionLedger
+  ) {
+    this.client = client;
+    this.riskGuard = riskGuard;
+    this.executionClient = executionClient;
+    this.activeSymbols = activeSymbols;
+    this.positionLedger = positionLedger ?? new MultiAssetPositionLedger(activeSymbols);
+  }
+
+  public updateActiveSymbols(symbols: string[]): void {
+    if (symbols && symbols.length > 0) {
+      this.activeSymbols = symbols.slice(0, 10);
+    }
+  }
+
+  public getActiveSymbols(): ReadonlyArray<string> {
+    return this.activeSymbols;
+  }
+
+  public evaluateMultiAssetTick(): MultiAssetSignalBatch {
+    const timestamp = Date.now();
+    const signals: MultiAssetSignalBatch["signals"] = [];
+
+    for (let k = 0; k < this.activeSymbols.length; k++) {
+      const symbol = this.activeSymbols[k];
+      if (!symbol) continue;
+
+      const obi = this.client.getOBI(k);
+      const cvd = this.client.getCVD(k);
+      const hurst = this.client.getHurst(k);
+      const vpin = this.client.getVPIN(k);
+      const hawkes = this.client.getHawkesIntensity(k);
+
+      let signalType: "NONE" | "BUY" | "SELL" = "NONE";
+      let confidence = 0;
+      let isApproved = false;
+      let rejectReason: string | undefined = undefined;
+
+      if (vpin > 0.75) {
+        rejectReason = "REJECTED_TOXIC_FLOW";
+      } else if (hurst < 0.45) {
+        rejectReason = "REJECTED_COUNTER_TREND_REGIME";
+      } else if (obi >= 0.35 && cvd >= 0.0 && hawkes >= 0.5) {
+        signalType = "BUY";
+        confidence = Math.min(0.99, 0.5 + obi * 0.3 + (hurst - 0.45) * 0.5);
+        isApproved = true;
+      } else if (obi <= -0.35 && cvd <= 0.0 && hawkes >= 0.5) {
+        signalType = "SELL";
+        confidence = Math.min(0.99, 0.5 + Math.abs(obi) * 0.3 + (hurst - 0.45) * 0.5);
+        isApproved = true;
+      }
+
+      signals.push({
+        assetIndex: k,
+        symbol,
+        signalType,
+        confidence,
+        obi,
+        cvd,
+        hurst,
+        isApproved,
+        rejectReason,
+      });
+    }
+
+    return {
+      timestamp,
+      signals,
+    };
+  }
+
+  public getPositionLedger(): MultiAssetPositionLedger {
+    return this.positionLedger;
+  }
+
+  public getRiskGuard(): MultiAssetRiskGuard {
+    return this.riskGuard;
   }
 }

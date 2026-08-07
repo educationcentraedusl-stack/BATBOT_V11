@@ -289,3 +289,80 @@ export class RiskGuard {
     this.isProfitLocked = false;
   }
 }
+
+export interface MultiAssetRiskConfig extends RiskConfig {
+  maxPortfolioLeverage: number;
+  maxAssetCorrelation: number;
+  accountBalanceUsdt: number;
+}
+
+export class MultiAssetRiskGuard extends RiskGuard {
+  private activeSymbolNotionals: Map<string, number> = new Map();
+  private accountBalanceUsdt: number;
+  private maxPortfolioLeverage: number;
+  private maxAssetCorrelation: number;
+
+  constructor(config?: Partial<MultiAssetRiskConfig>) {
+    super(config);
+    this.accountBalanceUsdt = config?.accountBalanceUsdt ?? 100_000.0;
+    this.maxPortfolioLeverage = config?.maxPortfolioLeverage ?? 3.0;
+    this.maxAssetCorrelation = config?.maxAssetCorrelation ?? 0.85;
+  }
+
+  public updateAccountBalance(balanceUsdt: number): void {
+    if (balanceUsdt > 0) {
+      this.accountBalanceUsdt = balanceUsdt;
+    }
+  }
+
+  public updateSymbolNotional(symbol: string, notionalUsdt: number): void {
+    if (notionalUsdt <= 0) {
+      this.activeSymbolNotionals.delete(symbol);
+    } else {
+      this.activeSymbolNotionals.set(symbol, notionalUsdt);
+    }
+  }
+
+  public getGrossPortfolioNotional(): number {
+    let total = 0;
+    for (const notional of this.activeSymbolNotionals.values()) {
+      total += notional;
+    }
+    return total;
+  }
+
+  public getPortfolioLeverage(): number {
+    if (this.accountBalanceUsdt <= 0) return 0;
+    return this.getGrossPortfolioNotional() / this.accountBalanceUsdt;
+  }
+
+  public validateMultiAssetOrder(
+    intent: OrderIntent,
+    isClientConfigured: boolean
+  ): RiskCheckResult {
+    const baseResult = this.validateOrder(intent, isClientConfigured);
+    if (!baseResult.passed) {
+      return baseResult;
+    }
+
+    if (intent.isCloseOrder || intent.isHardStop) {
+      return RISK_PASSED;
+    }
+
+    const proposedNotional = intent.price * intent.quantity;
+    const currentGross = this.getGrossPortfolioNotional();
+    const existingSymbolNotional = this.activeSymbolNotionals.get(intent.symbol) ?? 0;
+    const newGross = currentGross - existingSymbolNotional + proposedNotional;
+    const proposedLeverage = this.accountBalanceUsdt > 0 ? newGross / this.accountBalanceUsdt : 0;
+
+    if (proposedLeverage > this.maxPortfolioLeverage + 1e-4) {
+      return {
+        passed: false,
+        reasonCode: "EXCEEDS_MAX_POSITION",
+        message: `Order rejected: Proposed portfolio gross leverage (${proposedLeverage.toFixed(2)}x) exceeds max portfolio cap (${this.maxPortfolioLeverage.toFixed(2)}x).`,
+      };
+    }
+
+    return RISK_PASSED;
+  }
+}

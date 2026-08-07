@@ -6,6 +6,8 @@ pub mod ipc;
 pub mod lob;
 pub mod oms;
 pub mod ws;
+pub mod risk;
+pub mod strategy;
 
 use std::sync::{Arc, Mutex, RwLock};
 use lazy_static::lazy_static;
@@ -17,6 +19,8 @@ use ipc::shared_memory::AtomicSharedMemoryBridge;
 use lob::{LimitOrderBook, LockFreeSpscQueue};
 use oms::{BinanceWsConfig, OmsEngine};
 use ws::manager::ConnectionManager;
+use risk::CovarianceRiskGuard;
+use strategy::MultiAssetSignalEngine;
 use napi::bindgen_prelude::Buffer;
 use napi::Error;
 
@@ -26,6 +30,8 @@ lazy_static! {
     pub static ref GLOBAL_SHADOW_ENGINE: ArcSwapOption<Mutex<PreflightValidator>> = ArcSwapOption::from(None);
     pub static ref GLOBAL_OMS_ENGINE: ArcSwapOption<OmsEngine> = ArcSwapOption::from(None);
     pub static ref GLOBAL_INGESTION_BRIDGE: ArcSwapOption<IngestionBridge> = ArcSwapOption::from(None);
+    pub static ref GLOBAL_COVARIANCE_RISKGUARD: CovarianceRiskGuard = CovarianceRiskGuard::new_arc(None, None);
+    pub static ref GLOBAL_MULTI_STRATEGY_ENGINE: MultiAssetSignalEngine = MultiAssetSignalEngine::default();
     static ref GLOBAL_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -432,6 +438,85 @@ impl NativeMultiStreamManager {
     pub fn stop_all(&self) {
         self.inner.stop_all();
     }
+}
+
+#[napi]
+pub fn update_asset_return_napi(asset_idx: u32, return_val: f64) -> bool {
+    GLOBAL_COVARIANCE_RISKGUARD.update_single_asset_return(asset_idx as usize, return_val);
+    true
+}
+
+#[napi]
+pub fn get_covariance_matrix_napi() -> String {
+    let snap = GLOBAL_COVARIANCE_RISKGUARD.snapshot();
+    serde_json::to_string(&snap.covariance_matrix).unwrap_or_else(|_| "[]".to_string())
+}
+
+#[napi]
+pub fn get_correlation_matrix_napi() -> String {
+    let snap = GLOBAL_COVARIANCE_RISKGUARD.snapshot();
+    serde_json::to_string(&snap.correlation_matrix).unwrap_or_else(|_| "[]".to_string())
+}
+
+#[napi]
+pub fn calculate_cc_dfk_size_napi(
+    asset_idx: u32,
+    expected_return: f64,
+    gk_vol: f64,
+    bid_ask_spread_bp: f64,
+    account_balance: f64,
+    current_price: f64,
+    active_weights_json: Option<String>,
+) -> String {
+    let mut weights = [0.0; 10];
+    if let Some(json_str) = active_weights_json {
+        if let Ok(parsed) = serde_json::from_str::<Vec<f64>>(&json_str) {
+            for (i, w) in parsed.iter().enumerate().take(10) {
+                weights[i] = *w;
+            }
+        }
+    }
+    let res = GLOBAL_COVARIANCE_RISKGUARD.calculate_cc_dfk_size(
+        asset_idx as usize,
+        expected_return,
+        gk_vol,
+        bid_ask_spread_bp,
+        account_balance,
+        current_price,
+        &weights,
+    );
+    serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[napi]
+pub fn get_multi_asset_collars_napi(entry_price: f64, gk_vol: f64, is_long: bool) -> String {
+    let (sl, tp) = GLOBAL_COVARIANCE_RISKGUARD.calculate_dynamic_collars(entry_price, gk_vol, is_long);
+    format!("{{\"stop_loss\":{:.4},\"take_profit\":{:.4}}}", sl, tp)
+}
+
+#[napi]
+pub fn evaluate_multi_asset_signals_napi(
+    sab_buffer: Buffer,
+    active_symbols_json: String,
+) -> napi::Result<String> {
+    let raw_ptr = sab_buffer.as_ptr() as *mut u8;
+    let len = sab_buffer.len();
+
+    let bridge = AtomicSharedMemoryBridge::new(raw_ptr, len)
+        .map_err(|err| Error::from_reason(err.to_string()))?;
+
+    let mut symbols = [String::new(), String::new(), String::new(), String::new(), String::new(),
+                       String::new(), String::new(), String::new(), String::new(), String::new()];
+
+    if let Ok(parsed_syms) = serde_json::from_str::<Vec<String>>(&active_symbols_json) {
+        for (i, s) in parsed_syms.iter().enumerate().take(10) {
+            symbols[i] = s.clone();
+        }
+    }
+
+    let res = GLOBAL_MULTI_STRATEGY_ENGINE.evaluate_sab_matrix(&bridge, &symbols);
+    let json = serde_json::to_string(&res).map_err(|e| Error::from_reason(e.to_string()))?;
+    Ok(json)
 }
 
 

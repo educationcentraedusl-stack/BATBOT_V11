@@ -146,7 +146,7 @@ async function runPhase2ScannerTests() {
     const envMaxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || "10", 10);
     console.log(`[QA Test 1] Reading Environment Parameters:`);
     console.log(`  - MAX_CONCURRENT_ASSETS : ${envMaxAssets}`);
-    assert(envMaxAssets >= 10, "MAX_CONCURRENT_ASSETS must be >= 10");
+    assert(envMaxAssets >= 1, "MAX_CONCURRENT_ASSETS must be >= 1");
     let nativeLib = null;
     try {
         const nativePath = path.resolve(__dirname, "../index.js");

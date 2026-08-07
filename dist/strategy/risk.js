@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RiskGuard = exports.RISK_REJECTED_PROFIT_LOCKED = exports.RISK_REJECTED_DAILY_LOSS = exports.RISK_REJECTED_COOLDOWN = exports.RISK_REJECTED_UNCONFIGURED = exports.RISK_PASSED = void 0;
+exports.MultiAssetRiskGuard = exports.RiskGuard = exports.RISK_REJECTED_PROFIT_LOCKED = exports.RISK_REJECTED_DAILY_LOSS = exports.RISK_REJECTED_COOLDOWN = exports.RISK_REJECTED_UNCONFIGURED = exports.RISK_PASSED = void 0;
 exports.RISK_PASSED = Object.freeze({
     passed: true,
     reasonCode: "APPROVED",
@@ -214,3 +214,63 @@ class RiskGuard {
     }
 }
 exports.RiskGuard = RiskGuard;
+class MultiAssetRiskGuard extends RiskGuard {
+    activeSymbolNotionals = new Map();
+    accountBalanceUsdt;
+    maxPortfolioLeverage;
+    maxAssetCorrelation;
+    constructor(config) {
+        super(config);
+        this.accountBalanceUsdt = config?.accountBalanceUsdt ?? 100_000.0;
+        this.maxPortfolioLeverage = config?.maxPortfolioLeverage ?? 3.0;
+        this.maxAssetCorrelation = config?.maxAssetCorrelation ?? 0.85;
+    }
+    updateAccountBalance(balanceUsdt) {
+        if (balanceUsdt > 0) {
+            this.accountBalanceUsdt = balanceUsdt;
+        }
+    }
+    updateSymbolNotional(symbol, notionalUsdt) {
+        if (notionalUsdt <= 0) {
+            this.activeSymbolNotionals.delete(symbol);
+        }
+        else {
+            this.activeSymbolNotionals.set(symbol, notionalUsdt);
+        }
+    }
+    getGrossPortfolioNotional() {
+        let total = 0;
+        for (const notional of this.activeSymbolNotionals.values()) {
+            total += notional;
+        }
+        return total;
+    }
+    getPortfolioLeverage() {
+        if (this.accountBalanceUsdt <= 0)
+            return 0;
+        return this.getGrossPortfolioNotional() / this.accountBalanceUsdt;
+    }
+    validateMultiAssetOrder(intent, isClientConfigured) {
+        const baseResult = this.validateOrder(intent, isClientConfigured);
+        if (!baseResult.passed) {
+            return baseResult;
+        }
+        if (intent.isCloseOrder || intent.isHardStop) {
+            return exports.RISK_PASSED;
+        }
+        const proposedNotional = intent.price * intent.quantity;
+        const currentGross = this.getGrossPortfolioNotional();
+        const existingSymbolNotional = this.activeSymbolNotionals.get(intent.symbol) ?? 0;
+        const newGross = currentGross - existingSymbolNotional + proposedNotional;
+        const proposedLeverage = this.accountBalanceUsdt > 0 ? newGross / this.accountBalanceUsdt : 0;
+        if (proposedLeverage > this.maxPortfolioLeverage + 1e-4) {
+            return {
+                passed: false,
+                reasonCode: "EXCEEDS_MAX_POSITION",
+                message: `Order rejected: Proposed portfolio gross leverage (${proposedLeverage.toFixed(2)}x) exceeds max portfolio cap (${this.maxPortfolioLeverage.toFixed(2)}x).`,
+            };
+        }
+        return exports.RISK_PASSED;
+    }
+}
+exports.MultiAssetRiskGuard = MultiAssetRiskGuard;

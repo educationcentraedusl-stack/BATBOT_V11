@@ -310,7 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { initCore, createLobEngine, loadAiModel, loadAiModelFull, resetIcTracker, getIcStatus, triggerPreflightWarmup, getPreflightStatus, startOmsEngine, evaluateOmsTick, getOmsMetrics, getPositionSnapshot, startIngestion, getMicrostructureMetrics, getDynamicCollars, calculateCsLvrScoreNapi, NativeUniverseScanner, NativeMultiStreamManager } = nativeBinding
+const { initCore, createLobEngine, loadAiModel, loadAiModelFull, resetIcTracker, getIcStatus, triggerPreflightWarmup, getPreflightStatus, startOmsEngine, evaluateOmsTick, getOmsMetrics, getPositionSnapshot, startIngestion, getMicrostructureMetrics, getDynamicCollars, calculateCsLvrScoreNapi, NativeUniverseScanner, NativeMultiStreamManager, updateAssetReturnNapi, getCovarianceMatrixNapi, getCorrelationMatrixNapi, calculateCcDfkSizeNapi, getMultiAssetCollarsNapi, evaluateMultiAssetSignalsNapi } = nativeBinding
 
 module.exports.initCore = initCore
 module.exports.createLobEngine = createLobEngine
@@ -330,3 +330,9 @@ module.exports.getDynamicCollars = getDynamicCollars
 module.exports.calculateCsLvrScoreNapi = calculateCsLvrScoreNapi
 module.exports.NativeUniverseScanner = NativeUniverseScanner
 module.exports.NativeMultiStreamManager = NativeMultiStreamManager
+module.exports.updateAssetReturnNapi = updateAssetReturnNapi
+module.exports.getCovarianceMatrixNapi = getCovarianceMatrixNapi
+module.exports.getCorrelationMatrixNapi = getCorrelationMatrixNapi
+module.exports.calculateCcDfkSizeNapi = calculateCcDfkSizeNapi
+module.exports.getMultiAssetCollarsNapi = getMultiAssetCollarsNapi
+module.exports.evaluateMultiAssetSignalsNapi = evaluateMultiAssetSignalsNapi

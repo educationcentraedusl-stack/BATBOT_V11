@@ -187,11 +187,17 @@ class MarketDataClient {
     setHawkesIntensity(val, assetIdx = 0) {
         this.writeAtomicFloat64Asset(assetIdx, 112, val);
     }
-    getMicroburstScore(assetIdx = 0) {
-        return this.readAtomicFloat64Asset(assetIdx, 113);
+    setOBI(val, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 1, val);
     }
-    setMicroburstScore(val, assetIdx = 0) {
-        this.writeAtomicFloat64Asset(assetIdx, 113, val);
+    setCVD(val, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 2, val);
+    }
+    getHurst(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 123);
+    }
+    setHurst(val, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 123, val);
     }
     getRealizedVolatility(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 114);

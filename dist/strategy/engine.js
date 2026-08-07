@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.StrategyEngine = void 0;
+exports.MultiAssetStrategyEngine = exports.StrategyEngine = void 0;
 const positionLedger_1 = require("./positionLedger");
 const dynamicRiskEngine_1 = require("./dynamicRiskEngine");
 const userDataStream_1 = require("../execution/userDataStream");
@@ -614,3 +614,81 @@ class StrategyEngine {
     }
 }
 exports.StrategyEngine = StrategyEngine;
+class MultiAssetStrategyEngine {
+    client;
+    riskGuard;
+    executionClient;
+    positionLedger;
+    activeSymbols;
+    constructor(client, riskGuard, executionClient, activeSymbols = ["ETHUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "SUIUSDT"], positionLedger) {
+        this.client = client;
+        this.riskGuard = riskGuard;
+        this.executionClient = executionClient;
+        this.activeSymbols = activeSymbols;
+        this.positionLedger = positionLedger ?? new positionLedger_1.MultiAssetPositionLedger(activeSymbols);
+    }
+    updateActiveSymbols(symbols) {
+        if (symbols && symbols.length > 0) {
+            this.activeSymbols = symbols.slice(0, 10);
+        }
+    }
+    getActiveSymbols() {
+        return this.activeSymbols;
+    }
+    evaluateMultiAssetTick() {
+        const timestamp = Date.now();
+        const signals = [];
+        for (let k = 0; k < this.activeSymbols.length; k++) {
+            const symbol = this.activeSymbols[k];
+            if (!symbol)
+                continue;
+            const obi = this.client.getOBI(k);
+            const cvd = this.client.getCVD(k);
+            const hurst = this.client.getHurst(k);
+            const vpin = this.client.getVPIN(k);
+            const hawkes = this.client.getHawkesIntensity(k);
+            let signalType = "NONE";
+            let confidence = 0;
+            let isApproved = false;
+            let rejectReason = undefined;
+            if (vpin > 0.75) {
+                rejectReason = "REJECTED_TOXIC_FLOW";
+            }
+            else if (hurst < 0.45) {
+                rejectReason = "REJECTED_COUNTER_TREND_REGIME";
+            }
+            else if (obi >= 0.35 && cvd >= 0.0 && hawkes >= 0.5) {
+                signalType = "BUY";
+                confidence = Math.min(0.99, 0.5 + obi * 0.3 + (hurst - 0.45) * 0.5);
+                isApproved = true;
+            }
+            else if (obi <= -0.35 && cvd <= 0.0 && hawkes >= 0.5) {
+                signalType = "SELL";
+                confidence = Math.min(0.99, 0.5 + Math.abs(obi) * 0.3 + (hurst - 0.45) * 0.5);
+                isApproved = true;
+            }
+            signals.push({
+                assetIndex: k,
+                symbol,
+                signalType,
+                confidence,
+                obi,
+                cvd,
+                hurst,
+                isApproved,
+                rejectReason,
+            });
+        }
+        return {
+            timestamp,
+            signals,
+        };
+    }
+    getPositionLedger() {
+        return this.positionLedger;
+    }
+    getRiskGuard() {
+        return this.riskGuard;
+    }
+}
+exports.MultiAssetStrategyEngine = MultiAssetStrategyEngine;
