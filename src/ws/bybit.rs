@@ -108,6 +108,7 @@ impl BybitWsStream {
             tokio::select! {
                 _ = self.shutdown_notify.notified() => {
                     let _ = write.send(Message::Close(None)).await;
+                    let _ = write.close().await;
                     self.is_running.store(false, Ordering::Relaxed);
                     break;
                 }

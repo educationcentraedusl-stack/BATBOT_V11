@@ -231,7 +231,7 @@ impl MultiStreamManager {
             .map(|s| s.to_uppercase())
             .collect();
 
-        let mut to_add: Vec<(String, usize)> = Vec::new();
+        let mut streams_to_spawn: Vec<(String, usize, Arc<BinanceWsStream>)> = Vec::new();
 
         {
             let mut streams_guard = self.streams.lock().unwrap_or_else(|e| e.into_inner());
@@ -256,7 +256,7 @@ impl MultiStreamManager {
                 .filter(|idx| !used_slots.contains(idx))
                 .collect();
 
-            // 3. Identify new symbols to add
+            // 3. Instantiate and reserve new symbols synchronously inside streams_guard
             for sym in &target_symbols {
                 if streams_guard.contains_key(sym) {
                     continue;
@@ -270,7 +270,15 @@ impl MultiStreamManager {
                         );
                         continue;
                     }
-                    to_add.push((sym.clone(), slot));
+
+                    println!(
+                        "[MultiStreamManager] Dynamic Hot-Swap: Reserving symbol {} in slot {}",
+                        sym, slot
+                    );
+
+                    let stream = Arc::new(BinanceWsStream::new(sym));
+                    streams_guard.insert(sym.clone(), (slot, stream.clone()));
+                    streams_to_spawn.push((sym.clone(), slot, stream));
                 } else {
                     eprintln!(
                         "[MultiStreamManager Warning] No available slots left for symbol {}",
@@ -278,16 +286,14 @@ impl MultiStreamManager {
                     );
                 }
             }
-        } // Lock is explicitly dropped here before any WS spawning or async sleeping!
+        } // Lock is explicitly dropped here after all slots & streams are firmly reserved!
 
-        // 4. Spawn new WS streams and apply rate-limit backoff (NO MUTEX LOCK HELD across await!)
-        for (sym, slot) in to_add {
+        // 4. Spawn connection tasks for reserved streams and apply rate-limit backoff (NO MUTEX LOCK HELD across await!)
+        for (sym, slot, stream) in streams_to_spawn {
             println!(
-                "[MultiStreamManager] Dynamic Hot-Swap: Adding symbol {} to slot {}",
+                "[MultiStreamManager] Spawning connection task for symbol {} in slot {}",
                 sym, slot
             );
-
-            let stream = Arc::new(BinanceWsStream::new(&sym));
             let s_clone = stream.clone();
             let queue_clone = queues[slot].clone();
 
@@ -327,11 +333,6 @@ impl MultiStreamManager {
                     backoff_secs = (backoff_secs * 2).min(30);
                 }
             });
-
-            {
-                let mut guard = self.streams.lock().unwrap_or_else(|e| e.into_inner());
-                guard.insert(sym, (slot, stream));
-            }
 
             // Binance Connection Rate-Limit Safety: Sleep 200ms between new WS connection bursts (NO LOCK HELD!)
             sleep(Duration::from_millis(200)).await;

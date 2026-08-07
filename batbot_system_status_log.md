@@ -13,9 +13,9 @@
 - **Status:** ✅ Completed & QA Verified
 
 - **Date:** 2026-08-08
-- **Feature/Task:** Critical Remediation for Phase 2 Closure (Async Deadlocks, WS Protocols & N-API Exports)
+- **Feature/Task:** Final Remediation for Phase 2 Closure (Slot Reservation Race Condition, WS Transport Flushing & N-API FFI Completeness)
 - **Artifacts Created/Modified:** `src/ws/manager.rs`, `src/ws/binance.rs`, `src/ws/bybit.rs`, `src/lib.rs`, `batbot_system_status_log.md`
-- **HFT/Performance Compliance:** Remediated all 4 flaws identified during Hostile Deep Scan Audit. Dropped `streams_guard` before executing rate-limiting async `sleep` in `MultiStreamManager::update_subscriptions`, eliminating cross-await Mutex lock holding. Replaced exponential backoff `sleep` calls with `tokio::select!` monitoring `shutdown_notify` in `spawn_stream` and `update_subscriptions`, eliminating zombie background tasks during reconnection sleeps. Added explicit `Message::Close(None)` frame sending prior to WebSocket loop termination in `BinanceWsStream` and `BybitWsStream`. Exported `NativeUniverseScanner` and `NativeMultiStreamManager` to Node.js/TypeScript plane via `#[napi]` in `src/lib.rs`. 100% verified via `cargo test --lib lob::universe_scanner` (5/5 passed), `npm run build:rust` (clean native build), `npm run build:ts` (0 errors), and live Binance Futures 569-symbol ticker scoring harness (`npx ts-node src/test_phase2_multi_asset_scanner.ts`).
+- **HFT/Performance Compliance:** Remediated all 3 audit findings. Synchronously reserved slots and inserted `(slot, stream)` into `streams_guard` within the first locked block in `MultiStreamManager::update_subscriptions`, eliminating slot reservation race conditions during concurrent calls. Added `let _ = write.close().await;` after `write.send(...)` in `BinanceWsStream` and `BybitWsStream` to enforce RFC 6455 transport-level socket flushing. Exported `update_subscriptions` on `NativeMultiStreamManager` in `src/lib.rs` for TypeScript host control plane interaction. 100% verified via `cargo test --lib lob::universe_scanner` (5/5 passed), `npm run build:rust` (clean 0-warning native build), `npm run build:ts` (0 errors), and live Binance Futures 569-symbol ticker scoring harness (`npx ts-node src/test_phase2_multi_asset_scanner.ts`).
 - **Status:** ✅ Completed & QA Verified
 
 - **Date:** 2026-08-03

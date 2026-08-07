@@ -123,6 +123,7 @@ impl BinanceWsStream {
                 _ = self.shutdown_notify.notified() => {
                     println!("[Binance WS] Received shutdown notification.");
                     let _ = write.send(Message::Close(None)).await;
+                    let _ = write.close().await;
                     self.is_running.store(false, Ordering::Relaxed);
                     break;
                 }

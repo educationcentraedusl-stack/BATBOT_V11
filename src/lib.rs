@@ -393,6 +393,19 @@ impl NativeMultiStreamManager {
     }
 
     #[napi]
+    pub async fn update_subscriptions(&self, new_top_k: Vec<String>) -> napi::Result<Vec<String>> {
+        let max_assets = self.inner.max_active_assets();
+        let queues: Vec<LockFreeSpscQueue> = (0..max_assets)
+            .map(|_| LockFreeSpscQueue::new(4096))
+            .collect();
+
+        self.inner
+            .update_subscriptions(&new_top_k, &queues)
+            .await
+            .map_err(|e| Error::from_reason(e))
+    }
+
+    #[napi]
     pub fn stop_all(&self) {
         self.inner.stop_all();
     }

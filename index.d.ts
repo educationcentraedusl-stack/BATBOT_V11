@@ -28,5 +28,6 @@ export declare class NativeUniverseScanner {
 export declare class NativeMultiStreamManager {
   constructor(maxActiveAssets: number)
   activeSymbols(): Array<string>
+  updateSubscriptions(newTopK: Array<string>): Promise<Array<string>>
   stopAll(): void
 }
