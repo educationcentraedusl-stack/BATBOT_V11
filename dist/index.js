@@ -94,8 +94,10 @@ async function syncStateOnStartup(executionClient, strategyEngine, riskGuard) {
     }
 }
 async function initializeSystem() {
-    const maxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || "10", 10);
-    const slotsPerAsset = parseInt(process.env.SAB_SLOTS_PER_ASSET || "256", 10);
+    const parsedMaxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || "10", 10);
+    const maxAssets = Number.isFinite(parsedMaxAssets) && parsedMaxAssets > 0 ? parsedMaxAssets : 10;
+    const parsedSlotsPerAsset = parseInt(process.env.SAB_SLOTS_PER_ASSET || "256", 10);
+    const slotsPerAsset = Number.isFinite(parsedSlotsPerAsset) && parsedSlotsPerAsset > 0 ? parsedSlotsPerAsset : 256;
     const sab = new SharedArrayBuffer(maxAssets * slotsPerAsset * 8);
     const client = new marketDataClient_1.MarketDataClient(sab, maxAssets, slotsPerAsset);
     const riskGuard = new risk_1.RiskGuard();

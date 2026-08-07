@@ -501,10 +501,6 @@ impl AIEngine {
 
         Ok(())
     }
-        sab.store_u64(104, seq);
-
-        Ok(())
-    }
 
     pub fn inherit_hidden_state(&self, other: &AIEngine) {
         if let Ok(other_hs) = other.hidden_state.lock() {

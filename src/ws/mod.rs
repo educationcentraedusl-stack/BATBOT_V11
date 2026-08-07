@@ -4,4 +4,5 @@ pub mod manager;
 
 pub use binance::BinanceWsStream;
 pub use bybit::BybitWsStream;
-pub use manager::{ConnectionManager, ExchangeType};
+pub use manager::{ConnectionManager, ExchangeType, MultiStreamManager};
+

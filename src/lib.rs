@@ -285,3 +285,33 @@ pub fn get_dynamic_collars(entry_price: f64, position_side: String) -> String {
     let (sl, tp) = lob_guard.calculate_dynamic_collars(entry_price, &position_side);
     format!("{{\"stop_loss\":{:.4},\"take_profit\":{:.4}}}", sl, tp)
 }
+
+#[napi]
+pub fn calculate_cs_lvr_score_napi(
+    symbol: String,
+    high: f64,
+    low: f64,
+    open: f64,
+    close: f64,
+    volume_usd_5m: f64,
+    best_bid: f64,
+    best_ask: f64,
+    price_change_5m: f64,
+    volume_5m: f64,
+) -> f64 {
+    let metrics = lob::AltcoinMetrics {
+        symbol,
+        high,
+        low,
+        open,
+        close,
+        volume_usd_5m,
+        best_bid,
+        best_ask,
+        price_change_5m,
+        volume_5m,
+        correlation_risk: 0.0,
+    };
+    lob::calculate_cs_lvr_score(&metrics)
+}
+

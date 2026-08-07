@@ -18,3 +18,4 @@ export declare function getPositionSnapshot(): string
 export declare function startIngestion(sabBuffer: Buffer): boolean
 export declare function getMicrostructureMetrics(): string
 export declare function getDynamicCollars(entryPrice: number, positionSide: string): string
+export declare function calculateCsLvrScoreNapi(symbol: string, high: number, low: number, open: number, close: number, volumeUsd5M: number, bestBid: number, bestAsk: number, priceChange5M: number, volume5M: number): number

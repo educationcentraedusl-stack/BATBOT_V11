@@ -22,7 +22,7 @@ async function runMultiAssetSabTests() {
     console.log(`  - Calculated SAB Bytes  : ${expectedBytes} bytes (${expectedBytes / 1024} KB)\n`);
     assert(envMaxAssets >= 10, "MAX_CONCURRENT_ASSETS must be >= 10");
     assert(envSlotsPerAsset === 256, "SAB_SLOTS_PER_ASSET must be 256");
-    // 2. Validate Buffer Size Safeguard (Throw error if buffer too small)
+    // 2. Validate Buffer Size Safeguard & Out-of-Bounds Fail-Fast Enforcement
     console.log(`[QA Test 2] Testing Buffer Underflow Safeguard...`);
     try {
         const smallSab = new SharedArrayBuffer(1024);
@@ -31,6 +31,17 @@ async function runMultiAssetSabTests() {
     }
     catch (err) {
         console.log(`  ✅ Correctly caught undersized buffer exception: "${err.message}"\n`);
+    }
+    console.log(`[QA Test 2B] Testing Fail-Fast RangeError Safeguard on Out-of-Bounds Index Access...`);
+    const testSab = new SharedArrayBuffer(expectedBytes);
+    const testClient = new marketDataClient_1.MarketDataClient(testSab, envMaxAssets, envSlotsPerAsset);
+    try {
+        testClient.getOBI(9999);
+        assert(false, "MarketDataClient should have thrown RangeError for out-of-bounds assetIdx=9999");
+    }
+    catch (err) {
+        assert(err instanceof RangeError, "Error must be an instance of RangeError");
+        console.log(`  ✅ Correctly caught RangeError on out-of-bounds asset access: "${err.message}"\n`);
     }
     // 3. Multi-Asset Atomic SharedArrayBuffer Read/Write Isolation
     console.log(`[QA Test 3] Validating Cross-Asset Memory Isolation across ${envMaxAssets} Assets...`);
