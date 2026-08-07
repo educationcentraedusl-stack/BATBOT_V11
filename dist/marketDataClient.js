@@ -28,7 +28,11 @@ class MarketDataClient {
      * Dynamically calculates offset slot for (assetIdx, slot)
      */
     getGlobalSlot(assetIdx, slot) {
-        return assetIdx * this.slotsPerAsset + slot;
+        if (assetIdx < 0 || assetIdx >= this.maxAssets || slot < 0 || slot >= this.slotsPerAsset) {
+            return 0;
+        }
+        const globalSlot = assetIdx * this.slotsPerAsset + slot;
+        return globalSlot < this.totalSlots ? globalSlot : 0;
     }
     /**
      * Reads a 64-bit float slot atomically using a memory barrier via Atomics.load on BigInt64Array

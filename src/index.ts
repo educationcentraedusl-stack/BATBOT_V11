@@ -85,8 +85,10 @@ export async function syncStateOnStartup(
 }
 
 export async function initializeSystem(): Promise<SystemControlPlane> {
-  const sab = new SharedArrayBuffer(2048);
-  const client = new MarketDataClient(sab);
+  const maxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || "10", 10);
+  const slotsPerAsset = parseInt(process.env.SAB_SLOTS_PER_ASSET || "256", 10);
+  const sab = new SharedArrayBuffer(maxAssets * slotsPerAsset * 8);
+  const client = new MarketDataClient(sab, maxAssets, slotsPerAsset);
   const riskGuard = new RiskGuard();
   const executionClient = new BinanceExecutionClient();
   const symbol = process.env.SYMBOL ?? "BTCUSDT";

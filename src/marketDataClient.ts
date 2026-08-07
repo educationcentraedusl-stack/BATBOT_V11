@@ -37,7 +37,11 @@ export class MarketDataClient {
    * Dynamically calculates offset slot for (assetIdx, slot)
    */
   private getGlobalSlot(assetIdx: number, slot: number): number {
-    return assetIdx * this.slotsPerAsset + slot;
+    if (assetIdx < 0 || assetIdx >= this.maxAssets || slot < 0 || slot >= this.slotsPerAsset) {
+      return 0;
+    }
+    const globalSlot = assetIdx * this.slotsPerAsset + slot;
+    return globalSlot < this.totalSlots ? globalSlot : 0;
   }
 
   /**

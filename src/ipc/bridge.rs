@@ -28,6 +28,10 @@ impl IngestionBridge {
     }
 
     pub fn start_consumer_loop(&self, queue: LockFreeSpscQueue) {
+        self.start_consumer_loop_asset(queue, 0);
+    }
+
+    pub fn start_consumer_loop_asset(&self, queue: LockFreeSpscQueue, asset_idx: usize) {
         let bridge = self.bridge;
         let is_running = self.is_running.clone();
         is_running.store(true, Ordering::Relaxed);
@@ -53,7 +57,8 @@ impl IngestionBridge {
 
                 if processed_any {
                     seq = seq.wrapping_add(1);
-                    bridge.write_lob_snapshot(
+                    bridge.write_lob_snapshot_asset(
+                        asset_idx,
                         &lob.bids,
                         &lob.asks,
                         lob.metrics.obi,
