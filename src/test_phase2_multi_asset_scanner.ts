@@ -124,7 +124,8 @@ function computeCsLvrScore(t: Binance24hTicker, nativeLib?: any): ScoredTicker {
   const spreadBp = mid > 0 ? Math.max(0.1, ((ask - bid) / mid) * 10000) : 10.0;
   const kyleLambda = Math.abs(priceChange) / Math.sqrt(vol + 1e-8);
   const lnVolUsd = Math.max(0.001, Math.log(Math.max(1.0, volUsd)));
-  const denominator = spreadBp * (1.0 + kyleLambda);
+  const corrRisk = 0.0;
+  const denominator = spreadBp * (1.0 + kyleLambda) * (1.0 + corrRisk);
   const score = denominator > 0 ? (gkVol * lnVolUsd) / denominator : 0;
 
   return {

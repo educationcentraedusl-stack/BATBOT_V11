@@ -57,6 +57,9 @@ impl ConnectionManager {
                 tokio::spawn(async move {
                     let mut backoff_secs = 1u64;
                     loop {
+                        if s_clone.is_shutdown_requested() {
+                            break;
+                        }
                         match s_clone.connect_and_listen(queue.clone()).await {
                             Ok(()) => {
                                 if s_clone.is_shutdown_requested() {
@@ -68,6 +71,9 @@ impl ConnectionManager {
                                 );
                             }
                             Err(e) => {
+                                if s_clone.is_shutdown_requested() {
+                                    break;
+                                }
                                 eprintln!(
                                     "[Binance WS] Connection failed: {}. Retrying in {}s...",
                                     e, backoff_secs
@@ -86,6 +92,9 @@ impl ConnectionManager {
                 tokio::spawn(async move {
                     let mut backoff_secs = 1u64;
                     loop {
+                        if s_clone.is_shutdown_requested() {
+                            break;
+                        }
                         match s_clone.connect_and_listen(queue.clone()).await {
                             Ok(()) => {
                                 if s_clone.is_shutdown_requested() {
@@ -97,6 +106,9 @@ impl ConnectionManager {
                                 );
                             }
                             Err(e) => {
+                                if s_clone.is_shutdown_requested() {
+                                    break;
+                                }
                                 eprintln!(
                                     "[Bybit WS] Connection failed: {}. Retrying in {}s...",
                                     e, backoff_secs
@@ -258,6 +270,9 @@ impl MultiStreamManager {
                 tokio::spawn(async move {
                     let mut backoff_secs = 1u64;
                     loop {
+                        if s_clone.is_shutdown_requested() {
+                            break;
+                        }
                         match s_clone.connect_and_listen(queue_clone.clone()).await {
                             Ok(()) => {
                                 if s_clone.is_shutdown_requested() {
@@ -269,6 +284,9 @@ impl MultiStreamManager {
                                 );
                             }
                             Err(e) => {
+                                if s_clone.is_shutdown_requested() {
+                                    break;
+                                }
                                 eprintln!(
                                     "[MultiStreamManager WS Error][Slot {}] Connection error: {}. Retrying in {}s...",
                                     slot, e, backoff_secs
