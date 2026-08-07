@@ -1,6 +1,5 @@
 use crate::lob::LockFreeSpscQueue;
 use crate::ws::binance::BinanceWsStream;
-use crate::ws::bybit::BybitWsStream;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -9,21 +8,6 @@ use tokio::time::{sleep, Duration, Instant};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExchangeType {
     Binance,
-    Bybit,
-}
-
-enum ActiveStream {
-    Binance(Arc<BinanceWsStream>),
-    Bybit(Arc<BybitWsStream>),
-}
-
-impl ActiveStream {
-    fn stop(&self) {
-        match self {
-            ActiveStream::Binance(s) => s.stop(),
-            ActiveStream::Bybit(s) => s.stop(),
-        }
-    }
 }
 
 pub struct ConnectionManager {
@@ -45,95 +29,55 @@ impl ConnectionManager {
         }
     }
 
+    pub fn exchange(&self) -> ExchangeType {
+        self.exchange
+    }
+
     pub fn stop(&self) {
         self.is_active.store(false, Ordering::Relaxed);
     }
 
-    fn spawn_stream(&self, queue: LockFreeSpscQueue) -> ActiveStream {
-        match self.exchange {
-            ExchangeType::Binance => {
-                let stream = Arc::new(BinanceWsStream::new(&self.symbol));
-                let s_clone = stream.clone();
-                tokio::spawn(async move {
-                    let mut backoff_secs = 1u64;
-                    loop {
+
+    fn spawn_stream(&self, queue: LockFreeSpscQueue) -> Arc<BinanceWsStream> {
+        let stream = Arc::new(BinanceWsStream::new(&self.symbol));
+        let s_clone = stream.clone();
+        tokio::spawn(async move {
+            let mut backoff_secs = 1u64;
+            loop {
+                if s_clone.is_shutdown_requested() {
+                    break;
+                }
+                match s_clone.connect_and_listen(queue.clone()).await {
+                    Ok(()) => {
                         if s_clone.is_shutdown_requested() {
                             break;
                         }
-                        match s_clone.connect_and_listen(queue.clone()).await {
-                            Ok(()) => {
-                                if s_clone.is_shutdown_requested() {
-                                    break;
-                                }
-                                eprintln!(
-                                    "[Binance WS] Stream disconnected. Reconnecting in {}s...",
-                                    backoff_secs
-                                );
-                            }
-                            Err(e) => {
-                                if s_clone.is_shutdown_requested() {
-                                    break;
-                                }
-                                eprintln!(
-                                    "[Binance WS] Connection failed: {}. Retrying in {}s...",
-                                    e, backoff_secs
-                                );
-                            }
-                        }
-                        let shutdown_notify = s_clone.shutdown_notify();
-                        tokio::select! {
-                            _ = shutdown_notify.notified() => {
-                                break;
-                            }
-                            _ = sleep(Duration::from_secs(backoff_secs)) => {}
-                        }
-                        backoff_secs = (backoff_secs * 2).min(30);
+                        eprintln!(
+                            "[Binance WS] Stream disconnected. Reconnecting in {}s...",
+                            backoff_secs
+                        );
                     }
-                });
-                ActiveStream::Binance(stream)
-            }
-            ExchangeType::Bybit => {
-                let stream = Arc::new(BybitWsStream::new(&self.symbol));
-                let s_clone = stream.clone();
-                tokio::spawn(async move {
-                    let mut backoff_secs = 1u64;
-                    loop {
+                    Err(e) => {
                         if s_clone.is_shutdown_requested() {
                             break;
                         }
-                        match s_clone.connect_and_listen(queue.clone()).await {
-                            Ok(()) => {
-                                if s_clone.is_shutdown_requested() {
-                                    break;
-                                }
-                                eprintln!(
-                                    "[Bybit WS] Stream disconnected. Reconnecting in {}s...",
-                                    backoff_secs
-                                );
-                            }
-                            Err(e) => {
-                                if s_clone.is_shutdown_requested() {
-                                    break;
-                                }
-                                eprintln!(
-                                    "[Bybit WS] Connection failed: {}. Retrying in {}s...",
-                                    e, backoff_secs
-                                );
-                            }
-                        }
-                        let shutdown_notify = s_clone.shutdown_notify();
-                        tokio::select! {
-                            _ = shutdown_notify.notified() => {
-                                break;
-                            }
-                            _ = sleep(Duration::from_secs(backoff_secs)) => {}
-                        }
-                        backoff_secs = (backoff_secs * 2).min(30);
+                        eprintln!(
+                            "[Binance WS] Connection failed: {}. Retrying in {}s...",
+                            e, backoff_secs
+                        );
                     }
-                });
-                ActiveStream::Bybit(stream)
+                }
+                let shutdown_notify = s_clone.shutdown_notify();
+                tokio::select! {
+                    _ = shutdown_notify.notified() => {
+                        break;
+                    }
+                    _ = sleep(Duration::from_secs(backoff_secs)) => {}
+                }
+                backoff_secs = (backoff_secs * 2).min(30);
             }
-        }
+        });
+        stream
     }
 
     pub async fn run_rotation_loop(&self, queue: LockFreeSpscQueue) -> Result<(), String> {
@@ -175,6 +119,7 @@ pub struct MultiStreamManager {
     exchange: ExchangeType,
     is_active: Arc<AtomicBool>,
     streams: Arc<Mutex<HashMap<String, (usize, Arc<BinanceWsStream>)>>>,
+    queues: Vec<LockFreeSpscQueue>,
 }
 
 impl MultiStreamManager {
@@ -184,11 +129,17 @@ impl MultiStreamManager {
             .and_then(|v| v.parse().ok())
             .unwrap_or(max_active_assets);
 
+        let final_max = env_max.max(1);
+        let queues: Vec<LockFreeSpscQueue> = (0..final_max)
+            .map(|_| LockFreeSpscQueue::new(4096))
+            .collect();
+
         Self {
-            max_active_assets: env_max.max(1),
+            max_active_assets: final_max,
             exchange,
             is_active: Arc::new(AtomicBool::new(true)),
             streams: Arc::new(Mutex::new(HashMap::new())),
+            queues,
         }
     }
 
@@ -202,6 +153,14 @@ impl MultiStreamManager {
 
     pub fn is_active(&self) -> bool {
         self.is_active.load(Ordering::Relaxed)
+    }
+
+    pub fn queues(&self) -> &[LockFreeSpscQueue] {
+        &self.queues
+    }
+
+    pub fn queue_at(&self, slot: usize) -> Option<LockFreeSpscQueue> {
+        self.queues.get(slot).cloned()
     }
 
     pub fn stop_all(&self) {
@@ -219,7 +178,6 @@ impl MultiStreamManager {
     pub async fn update_subscriptions(
         &self,
         new_top_k: &[String],
-        queues: &[LockFreeSpscQueue],
     ) -> Result<Vec<String>, String> {
         if !self.is_active.load(Ordering::Relaxed) {
             return Err("MultiStreamManager is stopped".to_string());
@@ -263,10 +221,10 @@ impl MultiStreamManager {
                 }
 
                 if let Some(slot) = available_slots.pop() {
-                    if slot >= queues.len() {
+                    if slot >= self.queues.len() {
                         eprintln!(
-                            "[MultiStreamManager Warning] Slot {} exceeds provided queues length {}",
-                            slot, queues.len()
+                            "[MultiStreamManager Warning] Slot {} exceeds internal queues length {}",
+                            slot, self.queues.len()
                         );
                         continue;
                     }
@@ -288,14 +246,14 @@ impl MultiStreamManager {
             }
         } // Lock is explicitly dropped here after all slots & streams are firmly reserved!
 
-        // 4. Spawn connection tasks for reserved streams and apply rate-limit backoff (NO MUTEX LOCK HELD across await!)
+        // 4. Spawn connection tasks for reserved streams using internal persistent queues
         for (sym, slot, stream) in streams_to_spawn {
             println!(
                 "[MultiStreamManager] Spawning connection task for symbol {} in slot {}",
                 sym, slot
             );
             let s_clone = stream.clone();
-            let queue_clone = queues[slot].clone();
+            let queue_clone = self.queues[slot].clone();
 
             tokio::spawn(async move {
                 let mut backoff_secs = 1u64;
@@ -347,3 +305,4 @@ impl MultiStreamManager {
         guard.keys().cloned().collect()
     }
 }
+

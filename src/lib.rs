@@ -25,11 +25,13 @@ lazy_static! {
     pub static ref GLOBAL_AI_ENGINE: ArcSwapOption<AIEngine> = ArcSwapOption::from(Some(Arc::new(AIEngine::new())));
     pub static ref GLOBAL_SHADOW_ENGINE: ArcSwapOption<Mutex<PreflightValidator>> = ArcSwapOption::from(None);
     pub static ref GLOBAL_OMS_ENGINE: ArcSwapOption<OmsEngine> = ArcSwapOption::from(None);
+    pub static ref GLOBAL_INGESTION_BRIDGE: ArcSwapOption<IngestionBridge> = ArcSwapOption::from(None);
     static ref GLOBAL_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("Failed to initialize Tokio runtime for HFT ingestion");
 }
+
 
 #[napi]
 pub fn init_core() -> String {
@@ -243,6 +245,8 @@ pub fn start_ingestion(sab_buffer: Buffer) -> napi::Result<bool> {
 
     let queue = LockFreeSpscQueue::new(4096);
     let bridge = Arc::new(IngestionBridge::new(atomic_bridge));
+    GLOBAL_INGESTION_BRIDGE.store(Some(bridge.clone()));
+
     let bridge_clone = bridge.clone();
     let queue_consumer = queue.clone();
 
@@ -268,6 +272,7 @@ pub fn start_ingestion(sab_buffer: Buffer) -> napi::Result<bool> {
 
     Ok(true)
 }
+
 
 #[napi]
 pub fn get_microstructure_metrics() -> String {
@@ -379,12 +384,21 @@ pub struct NativeMultiStreamManager {
 impl NativeMultiStreamManager {
     #[napi(constructor)]
     pub fn new(max_active_assets: u32) -> Self {
-        Self {
-            inner: Arc::new(ws::manager::MultiStreamManager::new(
-                max_active_assets as usize,
-                ws::manager::ExchangeType::Binance,
-            )),
+        let manager = Arc::new(ws::manager::MultiStreamManager::new(
+            max_active_assets as usize,
+            ws::manager::ExchangeType::Binance,
+        ));
+
+        // Wire slot consumer loops to IngestionBridge if bridge is initialized
+        if let Some(bridge) = GLOBAL_INGESTION_BRIDGE.load().as_ref() {
+            for slot in 0..(max_active_assets as usize) {
+                if let Some(q) = manager.queue_at(slot) {
+                    bridge.start_consumer_loop_asset(q, slot);
+                }
+            }
         }
+
+        Self { inner: manager }
     }
 
     #[napi]
@@ -394,13 +408,17 @@ impl NativeMultiStreamManager {
 
     #[napi]
     pub async fn update_subscriptions(&self, new_top_k: Vec<String>) -> napi::Result<Vec<String>> {
-        let max_assets = self.inner.max_active_assets();
-        let queues: Vec<LockFreeSpscQueue> = (0..max_assets)
-            .map(|_| LockFreeSpscQueue::new(4096))
-            .collect();
+        // Ensure consumer loops for active slots are running if bridge is active
+        if let Some(bridge) = GLOBAL_INGESTION_BRIDGE.load().as_ref() {
+            for slot in 0..self.inner.max_active_assets() {
+                if let Some(q) = self.inner.queue_at(slot) {
+                    bridge.start_consumer_loop_asset(q, slot);
+                }
+            }
+        }
 
         self.inner
-            .update_subscriptions(&new_top_k, &queues)
+            .update_subscriptions(&new_top_k)
             .await
             .map_err(|e| Error::from_reason(e))
     }
@@ -410,5 +428,6 @@ impl NativeMultiStreamManager {
         self.inner.stop_all();
     }
 }
+
 
 

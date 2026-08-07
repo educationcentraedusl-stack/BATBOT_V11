@@ -122,8 +122,12 @@ impl BinanceWsStream {
             tokio::select! {
                 _ = self.shutdown_notify.notified() => {
                     println!("[Binance WS] Received shutdown notification.");
-                    let _ = write.send(Message::Close(None)).await;
-                    let _ = write.close().await;
+                    if let Err(e) = write.send(Message::Close(None)).await {
+                        eprintln!("[Binance WS Warning] Failed to send close frame: {}", e);
+                    }
+                    if let Err(e) = write.close().await {
+                        eprintln!("[Binance WS Warning] Failed to close write stream: {}", e);
+                    }
                     self.is_running.store(false, Ordering::Relaxed);
                     break;
                 }
@@ -133,7 +137,9 @@ impl BinanceWsStream {
                             Self::parse_and_enqueue(&text, &queue);
                         }
                         Some(Ok(Message::Ping(payload))) => {
-                            let _ = write.send(Message::Pong(payload)).await;
+                            if let Err(e) = write.send(Message::Pong(payload)).await {
+                                eprintln!("[Binance WS Warning] Failed to send pong response: {}", e);
+                            }
                         }
                         Some(Ok(Message::Close(_))) => {
                             println!("[Binance WS] Connection closed by remote server.");
@@ -158,8 +164,12 @@ impl BinanceWsStream {
         Ok(())
     }
 
-
     fn parse_and_enqueue(text: &str, queue: &LockFreeSpscQueue) {
+        // Filter out non-stream control frames or subscription ACKs (e.g. {"result":null,"id":1})
+        if text.contains("\"result\":") || text.contains("\"id\":") || !text.contains("\"stream\":") {
+            return;
+        }
+
         let combined: BinanceCombinedStream = match serde_json::from_str(text) {
             Ok(c) => c,
             Err(e) => {
@@ -193,11 +203,16 @@ impl BinanceWsStream {
                     }
 
                     if valid {
-                        let _ = queue.push(MarketUpdateEvent::DepthUpdate {
+                        if let Err(_) = queue.push(MarketUpdateEvent::DepthUpdate {
                             bids,
                             asks,
                             timestamp_ns,
-                        });
+                        }) {
+                            eprintln!(
+                                "[Binance WS Warning] SPSC queue full! Dropped depth event. Total dropped: {}",
+                                LockFreeSpscQueue::dropped_count()
+                            );
+                        }
                     } else {
                         eprintln!("[Binance WS Error] Failed to parse depth price/quantity float");
                     }
@@ -217,12 +232,17 @@ impl BinanceWsStream {
                     };
                     let is_buyer_maker = trade.m;
 
-                    let _ = queue.push(MarketUpdateEvent::TradeEvent {
+                    if let Err(_) = queue.push(MarketUpdateEvent::TradeEvent {
                         price,
                         quantity,
                         is_buyer_maker,
                         timestamp_ns,
-                    });
+                    }) {
+                        eprintln!(
+                            "[Binance WS Warning] SPSC queue full! Dropped trade event. Total dropped: {}",
+                            LockFreeSpscQueue::dropped_count()
+                        );
+                    }
                 }
                 Err(e) => eprintln!("[Binance WS Error] Failed to deserialize trade payload: {}", e),
             }
@@ -238,17 +258,23 @@ impl BinanceWsStream {
                         return;
                     };
 
-                    let _ = queue.push(MarketUpdateEvent::new_liquidation(
+                    if let Err(_) = queue.push(MarketUpdateEvent::new_liquidation(
                         fo.o.s,
                         fo.o.side,
                         price,
                         quantity,
                         timestamp_ns,
-                    ));
+                    )) {
+                        eprintln!(
+                            "[Binance WS Warning] SPSC queue full! Dropped liquidation event. Total dropped: {}",
+                            LockFreeSpscQueue::dropped_count()
+                        );
+                    }
                 }
                 Err(e) => eprintln!("[Binance WS Error] Failed to deserialize liquidation payload: {}", e),
             }
         }
     }
 }
+
 
