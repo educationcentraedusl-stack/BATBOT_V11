@@ -77,6 +77,10 @@ impl BybitWsStream {
         self.shutdown_requested.load(Ordering::Relaxed)
     }
 
+    pub fn shutdown_notify(&self) -> Arc<tokio::sync::Notify> {
+        self.shutdown_notify.clone()
+    }
+
     pub async fn connect_and_listen(&self, queue: LockFreeSpscQueue) -> Result<(), String> {
         let (ws_stream, _) = match connect_async(self.stream_url.as_str()).await {
             Ok(res) => res,
@@ -103,6 +107,7 @@ impl BybitWsStream {
         while self.is_running.load(Ordering::Relaxed) {
             tokio::select! {
                 _ = self.shutdown_notify.notified() => {
+                    let _ = write.send(Message::Close(None)).await;
                     self.is_running.store(false, Ordering::Relaxed);
                     break;
                 }

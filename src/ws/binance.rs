@@ -98,6 +98,10 @@ impl BinanceWsStream {
         self.shutdown_requested.load(Ordering::Relaxed)
     }
 
+    pub fn shutdown_notify(&self) -> Arc<tokio::sync::Notify> {
+        self.shutdown_notify.clone()
+    }
+
     pub async fn connect_and_listen(&self, queue: LockFreeSpscQueue) -> Result<(), String> {
         println!("[Binance WS] Connecting to Binance WebSocket stream ({}) ...", self.stream_url);
         let (ws_stream, _) = match connect_async(self.stream_url.as_str()).await {
@@ -118,6 +122,7 @@ impl BinanceWsStream {
             tokio::select! {
                 _ = self.shutdown_notify.notified() => {
                     println!("[Binance WS] Received shutdown notification.");
+                    let _ = write.send(Message::Close(None)).await;
                     self.is_running.store(false, Ordering::Relaxed);
                     break;
                 }

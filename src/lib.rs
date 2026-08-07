@@ -315,3 +315,87 @@ pub fn calculate_cs_lvr_score_napi(
     lob::calculate_cs_lvr_score(&metrics)
 }
 
+#[napi]
+pub struct NativeUniverseScanner {
+    inner: lob::UniverseScanner,
+}
+
+#[napi]
+impl NativeUniverseScanner {
+    #[napi(constructor)]
+    pub fn new(max_active_assets: u32) -> Self {
+        Self {
+            inner: lob::UniverseScanner::new(max_active_assets as usize),
+        }
+    }
+
+    #[napi]
+    pub fn update_ticker(
+        &mut self,
+        symbol: String,
+        high: f64,
+        low: f64,
+        open: f64,
+        close: f64,
+        volume_usd_5m: f64,
+        best_bid: f64,
+        best_ask: f64,
+        price_change_5m: f64,
+        volume_5m: f64,
+    ) {
+        self.inner.update_ticker(
+            &symbol,
+            high,
+            low,
+            open,
+            close,
+            volume_usd_5m,
+            best_bid,
+            best_ask,
+            price_change_5m,
+            volume_5m,
+            0.0,
+        );
+    }
+
+    #[napi]
+    pub fn rank_universe(&mut self) -> String {
+        let scores = self.inner.rank_universe();
+        serde_json::to_string(&scores).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    #[napi]
+    pub fn get_top_k(&mut self) -> Vec<String> {
+        self.inner.get_top_k()
+    }
+}
+
+#[napi]
+pub struct NativeMultiStreamManager {
+    inner: Arc<ws::manager::MultiStreamManager>,
+}
+
+#[napi]
+impl NativeMultiStreamManager {
+    #[napi(constructor)]
+    pub fn new(max_active_assets: u32) -> Self {
+        Self {
+            inner: Arc::new(ws::manager::MultiStreamManager::new(
+                max_active_assets as usize,
+                ws::manager::ExchangeType::Binance,
+            )),
+        }
+    }
+
+    #[napi]
+    pub fn active_symbols(&self) -> Vec<String> {
+        self.inner.active_symbols()
+    }
+
+    #[napi]
+    pub fn stop_all(&self) {
+        self.inner.stop_all();
+    }
+}
+
+

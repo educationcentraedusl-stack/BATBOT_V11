@@ -12,6 +12,12 @@
 - **HFT/Performance Compliance:** Eradicated single-asset 2048-byte allocation from `src/index.ts`, replacing with dynamic environment variable allocation (`MAX_CONCURRENT_ASSETS * SAB_SLOTS_PER_ASSET * 8`). Implemented strict 3-tier boundary protection inside `marketDataClient.ts` `getGlobalSlot` (`assetIdx < 0 || assetIdx >= this.maxAssets`) to eliminate V8 `RangeError` panics. Enhanced Rust `IngestionBridge` consumer loop with `start_consumer_loop_asset` and `write_lob_snapshot_asset` target indexing for multi-asset streams. QA verified 100% via `npm run build:ts` (0 errors), `cargo check --lib` (clean build), and `node dist/test_multi_asset_sab.js` (100,000 atomic iterations, 143.3 ns scalar getter latency, 1.73 µs 20-level depth fill latency, 0 memory leaks, 100% memory isolation).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-08-08
+- **Feature/Task:** Critical Remediation for Phase 2 Closure (Async Deadlocks, WS Protocols & N-API Exports)
+- **Artifacts Created/Modified:** `src/ws/manager.rs`, `src/ws/binance.rs`, `src/ws/bybit.rs`, `src/lib.rs`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Remediated all 4 flaws identified during Hostile Deep Scan Audit. Dropped `streams_guard` before executing rate-limiting async `sleep` in `MultiStreamManager::update_subscriptions`, eliminating cross-await Mutex lock holding. Replaced exponential backoff `sleep` calls with `tokio::select!` monitoring `shutdown_notify` in `spawn_stream` and `update_subscriptions`, eliminating zombie background tasks during reconnection sleeps. Added explicit `Message::Close(None)` frame sending prior to WebSocket loop termination in `BinanceWsStream` and `BybitWsStream`. Exported `NativeUniverseScanner` and `NativeMultiStreamManager` to Node.js/TypeScript plane via `#[napi]` in `src/lib.rs`. 100% verified via `cargo test --lib lob::universe_scanner` (5/5 passed), `npm run build:rust` (clean native build), `npm run build:ts` (0 errors), and live Binance Futures 569-symbol ticker scoring harness (`npx ts-node src/test_phase2_multi_asset_scanner.ts`).
+- **Status:** ✅ Completed & QA Verified
+
 - **Date:** 2026-08-03
 - **Feature/Task:** Resolution of Training-Inference Asymmetry, Streaming 40-Feature Engine & Orderbook Collapse Safety in Rust AI Engine (`src/ai/engine.rs`)
 - **Artifacts Created/Modified:** `src/ai/engine.rs`, `batbot_system_status_log.md`

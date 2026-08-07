@@ -80,7 +80,13 @@ impl ConnectionManager {
                                 );
                             }
                         }
-                        sleep(Duration::from_secs(backoff_secs)).await;
+                        let shutdown_notify = s_clone.shutdown_notify();
+                        tokio::select! {
+                            _ = shutdown_notify.notified() => {
+                                break;
+                            }
+                            _ = sleep(Duration::from_secs(backoff_secs)) => {}
+                        }
                         backoff_secs = (backoff_secs * 2).min(30);
                     }
                 });
@@ -115,7 +121,13 @@ impl ConnectionManager {
                                 );
                             }
                         }
-                        sleep(Duration::from_secs(backoff_secs)).await;
+                        let shutdown_notify = s_clone.shutdown_notify();
+                        tokio::select! {
+                            _ = shutdown_notify.notified() => {
+                                break;
+                            }
+                            _ = sleep(Duration::from_secs(backoff_secs)) => {}
+                        }
                         backoff_secs = (backoff_secs * 2).min(30);
                     }
                 });
@@ -219,99 +231,113 @@ impl MultiStreamManager {
             .map(|s| s.to_uppercase())
             .collect();
 
-        let mut streams_guard = self.streams.lock().unwrap_or_else(|e| e.into_inner());
+        let mut to_add: Vec<(String, usize)> = Vec::new();
 
-        // 1. Identify symbols to remove
-        let current_symbols: Vec<String> = streams_guard.keys().cloned().collect();
-        for sym in &current_symbols {
-            if !target_symbols.contains(sym) {
-                if let Some((asset_idx, stream)) = streams_guard.remove(sym) {
-                    println!(
-                        "[MultiStreamManager] Dynamic Hot-Swap: Removing symbol {} from slot {}",
-                        sym, asset_idx
-                    );
-                    stream.stop();
+        {
+            let mut streams_guard = self.streams.lock().unwrap_or_else(|e| e.into_inner());
+
+            // 1. Identify and stop symbols to remove
+            let current_symbols: Vec<String> = streams_guard.keys().cloned().collect();
+            for sym in &current_symbols {
+                if !target_symbols.contains(sym) {
+                    if let Some((asset_idx, stream)) = streams_guard.remove(sym) {
+                        println!(
+                            "[MultiStreamManager] Dynamic Hot-Swap: Removing symbol {} from slot {}",
+                            sym, asset_idx
+                        );
+                        stream.stop();
+                    }
                 }
             }
-        }
 
-        // 2. Identify available asset slots
-        let used_slots: Vec<usize> = streams_guard.values().map(|(idx, _)| *idx).collect();
-        let mut available_slots: Vec<usize> = (0..self.max_active_assets)
-            .filter(|idx| !used_slots.contains(idx))
-            .collect();
+            // 2. Identify available asset slots
+            let used_slots: Vec<usize> = streams_guard.values().map(|(idx, _)| *idx).collect();
+            let mut available_slots: Vec<usize> = (0..self.max_active_assets)
+                .filter(|idx| !used_slots.contains(idx))
+                .collect();
 
-        // 3. Identify and add new symbols
-        let mut active_result = Vec::new();
-        for sym in &target_symbols {
-            if streams_guard.contains_key(sym) {
-                active_result.push(sym.clone());
-                continue;
-            }
-
-            if let Some(slot) = available_slots.pop() {
-                if slot >= queues.len() {
-                    eprintln!(
-                        "[MultiStreamManager Warning] Slot {} exceeds provided queues length {}",
-                        slot, queues.len()
-                    );
+            // 3. Identify new symbols to add
+            for sym in &target_symbols {
+                if streams_guard.contains_key(sym) {
                     continue;
                 }
 
-                println!(
-                    "[MultiStreamManager] Dynamic Hot-Swap: Adding symbol {} to slot {}",
-                    sym, slot
-                );
+                if let Some(slot) = available_slots.pop() {
+                    if slot >= queues.len() {
+                        eprintln!(
+                            "[MultiStreamManager Warning] Slot {} exceeds provided queues length {}",
+                            slot, queues.len()
+                        );
+                        continue;
+                    }
+                    to_add.push((sym.clone(), slot));
+                } else {
+                    eprintln!(
+                        "[MultiStreamManager Warning] No available slots left for symbol {}",
+                        sym
+                    );
+                }
+            }
+        } // Lock is explicitly dropped here before any WS spawning or async sleeping!
 
-                let stream = Arc::new(BinanceWsStream::new(sym));
-                let s_clone = stream.clone();
-                let queue_clone = queues[slot].clone();
+        // 4. Spawn new WS streams and apply rate-limit backoff (NO MUTEX LOCK HELD across await!)
+        for (sym, slot) in to_add {
+            println!(
+                "[MultiStreamManager] Dynamic Hot-Swap: Adding symbol {} to slot {}",
+                sym, slot
+            );
 
-                tokio::spawn(async move {
-                    let mut backoff_secs = 1u64;
-                    loop {
-                        if s_clone.is_shutdown_requested() {
+            let stream = Arc::new(BinanceWsStream::new(&sym));
+            let s_clone = stream.clone();
+            let queue_clone = queues[slot].clone();
+
+            tokio::spawn(async move {
+                let mut backoff_secs = 1u64;
+                loop {
+                    if s_clone.is_shutdown_requested() {
+                        break;
+                    }
+                    match s_clone.connect_and_listen(queue_clone.clone()).await {
+                        Ok(()) => {
+                            if s_clone.is_shutdown_requested() {
+                                break;
+                            }
+                            eprintln!(
+                                "[MultiStreamManager WS][Slot {}] Disconnected. Reconnecting in {}s...",
+                                slot, backoff_secs
+                            );
+                        }
+                        Err(e) => {
+                            if s_clone.is_shutdown_requested() {
+                                break;
+                            }
+                            eprintln!(
+                                "[MultiStreamManager WS Error][Slot {}] Connection error: {}. Retrying in {}s...",
+                                slot, e, backoff_secs
+                            );
+                        }
+                    }
+                    let shutdown_notify = s_clone.shutdown_notify();
+                    tokio::select! {
+                        _ = shutdown_notify.notified() => {
                             break;
                         }
-                        match s_clone.connect_and_listen(queue_clone.clone()).await {
-                            Ok(()) => {
-                                if s_clone.is_shutdown_requested() {
-                                    break;
-                                }
-                                eprintln!(
-                                    "[MultiStreamManager WS][Slot {}] Disconnected. Reconnecting in {}s...",
-                                    slot, backoff_secs
-                                );
-                            }
-                            Err(e) => {
-                                if s_clone.is_shutdown_requested() {
-                                    break;
-                                }
-                                eprintln!(
-                                    "[MultiStreamManager WS Error][Slot {}] Connection error: {}. Retrying in {}s...",
-                                    slot, e, backoff_secs
-                                );
-                            }
-                        }
-                        sleep(Duration::from_secs(backoff_secs)).await;
-                        backoff_secs = (backoff_secs * 2).min(30);
+                        _ = sleep(Duration::from_secs(backoff_secs)) => {}
                     }
-                });
+                    backoff_secs = (backoff_secs * 2).min(30);
+                }
+            });
 
-                streams_guard.insert(sym.clone(), (slot, stream));
-                active_result.push(sym.clone());
-
-                // Binance Connection Rate-Limit Safety: Sleep 200ms between new WS connection bursts
-                sleep(Duration::from_millis(200)).await;
-            } else {
-                eprintln!(
-                    "[MultiStreamManager Warning] No available slots left for symbol {}",
-                    sym
-                );
+            {
+                let mut guard = self.streams.lock().unwrap_or_else(|e| e.into_inner());
+                guard.insert(sym, (slot, stream));
             }
+
+            // Binance Connection Rate-Limit Safety: Sleep 200ms between new WS connection bursts (NO LOCK HELD!)
+            sleep(Duration::from_millis(200)).await;
         }
 
-        Ok(active_result)
+        Ok(self.active_symbols())
     }
 
     /// Returns current active dynamic symbol list.

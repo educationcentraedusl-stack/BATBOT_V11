@@ -310,7 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { initCore, createLobEngine, loadAiModel, loadAiModelFull, resetIcTracker, getIcStatus, triggerPreflightWarmup, getPreflightStatus, startOmsEngine, evaluateOmsTick, getOmsMetrics, getPositionSnapshot, startIngestion, getMicrostructureMetrics, getDynamicCollars, calculateCsLvrScoreNapi } = nativeBinding
+const { initCore, createLobEngine, loadAiModel, loadAiModelFull, resetIcTracker, getIcStatus, triggerPreflightWarmup, getPreflightStatus, startOmsEngine, evaluateOmsTick, getOmsMetrics, getPositionSnapshot, startIngestion, getMicrostructureMetrics, getDynamicCollars, calculateCsLvrScoreNapi, NativeUniverseScanner, NativeMultiStreamManager } = nativeBinding
 
 module.exports.initCore = initCore
 module.exports.createLobEngine = createLobEngine
@@ -328,3 +328,5 @@ module.exports.startIngestion = startIngestion
 module.exports.getMicrostructureMetrics = getMicrostructureMetrics
 module.exports.getDynamicCollars = getDynamicCollars
 module.exports.calculateCsLvrScoreNapi = calculateCsLvrScoreNapi
+module.exports.NativeUniverseScanner = NativeUniverseScanner
+module.exports.NativeMultiStreamManager = NativeMultiStreamManager
