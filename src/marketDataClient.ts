@@ -1,82 +1,119 @@
+import "dotenv/config";
+
 // Static 8-byte conversion buffer used for zero-allocation atomic float bitcasting
 const BITCAST_BUF = new ArrayBuffer(8);
 const BITCAST_BIGINT = new BigInt64Array(BITCAST_BUF);
 const BITCAST_FLOAT = new Float64Array(BITCAST_BUF);
 
+const DEFAULT_MAX_CONCURRENT_ASSETS = parseInt(process.env.MAX_CONCURRENT_ASSETS || "10", 10);
+const DEFAULT_SAB_SLOTS_PER_ASSET = parseInt(process.env.SAB_SLOTS_PER_ASSET || "256", 10);
+
 export class MarketDataClient {
   private bigIntView: BigInt64Array;
+  public readonly maxAssets: number;
+  public readonly slotsPerAsset: number;
+  public readonly totalSlots: number;
+  public readonly requiredBytes: number;
 
-  constructor(sab: SharedArrayBuffer) {
-    if (sab.byteLength < 2048) {
-      throw new Error("SharedArrayBuffer must be at least 2048 bytes");
+  constructor(
+    sab: SharedArrayBuffer,
+    maxAssets: number = DEFAULT_MAX_CONCURRENT_ASSETS,
+    slotsPerAsset: number = DEFAULT_SAB_SLOTS_PER_ASSET
+  ) {
+    this.maxAssets = maxAssets;
+    this.slotsPerAsset = slotsPerAsset;
+    this.totalSlots = maxAssets * slotsPerAsset;
+    this.requiredBytes = this.totalSlots * 8;
+
+    if (sab.byteLength < this.requiredBytes) {
+      throw new Error(
+        `SharedArrayBuffer must be at least ${this.requiredBytes} bytes for MAX_CONCURRENT_ASSETS=${maxAssets} and SAB_SLOTS_PER_ASSET=${slotsPerAsset} (received ${sab.byteLength} bytes)`
+      );
     }
     this.bigIntView = new BigInt64Array(sab);
+  }
+
+  /**
+   * Dynamically calculates offset slot for (assetIdx, slot)
+   */
+  private getGlobalSlot(assetIdx: number, slot: number): number {
+    return assetIdx * this.slotsPerAsset + slot;
   }
 
   /**
    * Reads a 64-bit float slot atomically using a memory barrier via Atomics.load on BigInt64Array
    * and bitcasting the BigInt to a Float64 number using static conversion views (zero allocation).
    */
-  private readAtomicFloat64(slot: number): number {
-    const rawBits = Atomics.load(this.bigIntView, slot);
+  private readAtomicFloat64Asset(assetIdx: number, slot: number): number {
+    const globalSlot = this.getGlobalSlot(assetIdx, slot);
+    const rawBits = Atomics.load(this.bigIntView, globalSlot);
     BITCAST_BIGINT[0] = rawBits;
     return BITCAST_FLOAT[0];
   }
 
-  public getTimestampNs(): bigint {
-    return Atomics.load(this.bigIntView, 0);
+  /**
+   * Writes a 64-bit float slot atomically using Atomics.store and static conversion views.
+   */
+  private writeAtomicFloat64Asset(assetIdx: number, slot: number, value: number): void {
+    const globalSlot = this.getGlobalSlot(assetIdx, slot);
+    BITCAST_FLOAT[0] = value;
+    Atomics.store(this.bigIntView, globalSlot, BITCAST_BIGINT[0]);
   }
 
-  public getOBI(): number {
-    return this.readAtomicFloat64(1);
+  public getTimestampNs(assetIdx: number = 0): bigint {
+    return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 0));
   }
 
-  public getCVD(): number {
-    return this.readAtomicFloat64(2);
+  public getOBI(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 1);
   }
 
-  public getSpreadVelocity(): number {
-    return this.readAtomicFloat64(3);
+  public getCVD(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 2);
   }
 
-  public getBestBidPrice(): number {
-    return this.readAtomicFloat64(4);
+  public getSpreadVelocity(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 3);
   }
 
-  public getBestBidQuantity(): number {
-    return this.readAtomicFloat64(5);
+  public getBestBidPrice(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 4);
   }
 
-  public getBestAskPrice(): number {
-    return this.readAtomicFloat64(6);
+  public getBestBidQuantity(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 5);
   }
 
-  public getBestAskQuantity(): number {
-    return this.readAtomicFloat64(7);
+  public getBestAskPrice(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 6);
   }
 
-  public getLiquidationTotalVolume(): number {
-    return this.readAtomicFloat64(8);
+  public getBestAskQuantity(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 7);
   }
 
-  public getLiquidationBuyVolume(): number {
-    return this.readAtomicFloat64(9);
+  public getLiquidationTotalVolume(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 8);
   }
 
-  public getLiquidationSellVolume(): number {
-    return this.readAtomicFloat64(10);
+  public getLiquidationBuyVolume(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 9);
+  }
+
+  public getLiquidationSellVolume(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 10);
   }
 
   /**
    * Zero-allocation reader method to populate pre-allocated target Float64Array with Top Bids.
    * `outArray` format: [price0, qty0, price1, qty1, ...]
    */
-  public fillTopBids(outArray: Float64Array, depth: number = 20): void {
+  public fillTopBids(outArray: Float64Array, depth: number = 20, assetIdx: number = 0): void {
     const count = Math.min(depth, 20, Math.floor(outArray.length / 2));
     for (let i = 0; i < count; i++) {
       const base = 11 + i * 2;
-      outArray[i * 2] = this.readAtomicFloat64(base);
-      outArray[i * 2 + 1] = this.readAtomicFloat64(base + 1);
+      outArray[i * 2] = this.readAtomicFloat64Asset(assetIdx, base);
+      outArray[i * 2 + 1] = this.readAtomicFloat64Asset(assetIdx, base + 1);
     }
   }
 
@@ -84,255 +121,248 @@ export class MarketDataClient {
    * Zero-allocation reader method to populate pre-allocated target Float64Array with Top Asks.
    * `outArray` format: [price0, qty0, price1, qty1, ...]
    */
-  public fillTopAsks(outArray: Float64Array, depth: number = 20): void {
+  public fillTopAsks(outArray: Float64Array, depth: number = 20, assetIdx: number = 0): void {
     const count = Math.min(depth, 20, Math.floor(outArray.length / 2));
     for (let i = 0; i < count; i++) {
       const base = 51 + i * 2;
-      outArray[i * 2] = this.readAtomicFloat64(base);
-      outArray[i * 2 + 1] = this.readAtomicFloat64(base + 1);
+      outArray[i * 2] = this.readAtomicFloat64Asset(assetIdx, base);
+      outArray[i * 2 + 1] = this.readAtomicFloat64Asset(assetIdx, base + 1);
     }
   }
 
-  public getDroppedEvents(): bigint {
-    return Atomics.load(this.bigIntView, 91);
+  public getDroppedEvents(assetIdx: number = 0): bigint {
+    return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 91));
   }
 
-  public getSequenceNum(): bigint {
-    return Atomics.load(this.bigIntView, 92);
+  public getSequenceNum(assetIdx: number = 0): bigint {
+    return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 92));
   }
 
-  // --- Slots 93 to 102: AI Prediction & Latency Metrics ---
+  // --- Slots 93 to 104: AI Prediction & Latency Metrics ---
 
-  public getAIPredictionDirection(): number {
-    return this.readAtomicFloat64(93);
+  public getAIPredictionDirection(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 93);
   }
 
-  public getAIPredictionConfidence(): number {
-    return this.readAtomicFloat64(94);
+  public getAIPredictionConfidence(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 94);
   }
 
-  public getAIPredictionHorizonMs(): number {
-    return this.readAtomicFloat64(95);
+  public getAIPredictionHorizonMs(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 95);
   }
 
-  public getAIPredictionTimestampNs(): bigint {
-    return Atomics.load(this.bigIntView, 96);
+  public getAIPredictionTimestampNs(assetIdx: number = 0): bigint {
+    return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 96));
   }
 
-  public getMeasuredRttMs(): number {
-    return this.readAtomicFloat64(98);
+  public getMeasuredRttMs(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 98);
   }
 
-  public getLatencyPenaltyCoefficient(): number {
-    return this.readAtomicFloat64(99);
+  public getLatencyPenaltyCoefficient(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 99);
   }
 
-  public getDynamicSlippageTicks(): number {
-    return this.readAtomicFloat64(100);
+  public getDynamicSlippageTicks(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 100);
   }
 
-  public getRollingIC(): number {
-    return this.readAtomicFloat64(101);
+  public getRollingIC(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 101);
   }
 
-  public getIsModelDrifted(): boolean {
-    return this.readAtomicFloat64(102) > 0.5;
+  public getIsModelDrifted(assetIdx: number = 0): boolean {
+    return this.readAtomicFloat64Asset(assetIdx, 102) > 0.5;
   }
 
-  public getAIInferenceLatencyNs(): bigint {
-    return Atomics.load(this.bigIntView, 103);
+  public getAIInferenceLatencyNs(assetIdx: number = 0): bigint {
+    return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 103));
   }
 
-  public getAIInferenceSequenceNum(): bigint {
-    return Atomics.load(this.bigIntView, 104);
+  public getAIInferenceSequenceNum(assetIdx: number = 0): bigint {
+    return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 104));
   }
 
   // --- Slots 105 to 111: OMS Position Ledger Metrics ---
 
-  public getOmsPositionQty(): number {
-    return this.readAtomicFloat64(105);
+  public getOmsPositionQty(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 105);
   }
 
-  public getOmsAvgEntryPrice(): number {
-    return this.readAtomicFloat64(106);
+  public getOmsAvgEntryPrice(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 106);
   }
 
-  public getOmsRealizedPnl(): number {
-    return this.readAtomicFloat64(107);
+  public getOmsRealizedPnl(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 107);
   }
 
-  public getOmsUnrealizedPnl(): number {
-    return this.readAtomicFloat64(108);
+  public getOmsUnrealizedPnl(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 108);
   }
 
-  public getOmsLeverage(): number {
-    return this.readAtomicFloat64(109);
+  public getOmsLeverage(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 109);
   }
 
-  public getOmsCumVolumeUsd(): number {
-    return this.readAtomicFloat64(110);
+  public getOmsCumVolumeUsd(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 110);
   }
 
-  public getOmsTotalTrades(): bigint {
-    return Atomics.load(this.bigIntView, 111);
+  public getOmsTotalTrades(assetIdx: number = 0): bigint {
+    return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 111));
   }
 
   // --- Slots 112 to 120: Micro-Burst & Dynamic Dispersion Metrics ---
 
-  private writeAtomicFloat64(slot: number, value: number): void {
-    BITCAST_FLOAT[0] = value;
-    Atomics.store(this.bigIntView, slot, BITCAST_BIGINT[0]);
+  public getHawkesIntensity(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 112);
   }
 
-  public getHawkesIntensity(): number {
-    return this.readAtomicFloat64(112);
+  public setHawkesIntensity(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 112, val);
   }
 
-  public setHawkesIntensity(val: number): void {
-    this.writeAtomicFloat64(112, val);
+  public getMicroburstScore(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 113);
   }
 
-  public getMicroburstScore(): number {
-    return this.readAtomicFloat64(113);
+  public setMicroburstScore(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 113, val);
   }
 
-  public setMicroburstScore(val: number): void {
-    this.writeAtomicFloat64(113, val);
+  public getRealizedVolatility(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 114);
   }
 
-  public getRealizedVolatility(): number {
-    return this.readAtomicFloat64(114);
+  public setRealizedVolatility(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 114, val);
   }
 
-  public setRealizedVolatility(val: number): void {
-    this.writeAtomicFloat64(114, val);
+  public getLastShortFillPrice(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 115);
   }
 
-  public getLastShortFillPrice(): number {
-    return this.readAtomicFloat64(115);
+  public setLastShortFillPrice(price: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 115, price);
   }
 
-  public setLastShortFillPrice(price: number): void {
-    this.writeAtomicFloat64(115, price);
+  public getLastLongFillPrice(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 116);
   }
 
-  public getLastLongFillPrice(): number {
-    return this.readAtomicFloat64(116);
+  public setLastLongFillPrice(price: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 116, price);
   }
 
-  public setLastLongFillPrice(price: number): void {
-    this.writeAtomicFloat64(116, price);
+  public getLastShortFillTime(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 117);
   }
 
-  public getLastShortFillTime(): number {
-    return this.readAtomicFloat64(117);
+  public setLastShortFillTime(time: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 117, time);
   }
 
-  public setLastShortFillTime(time: number): void {
-    this.writeAtomicFloat64(117, time);
+  public getLastLongFillTime(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 118);
   }
 
-  public getLastLongFillTime(): number {
-    return this.readAtomicFloat64(118);
+  public setLastLongFillTime(time: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 118, time);
   }
 
-  public setLastLongFillTime(time: number): void {
-    this.writeAtomicFloat64(118, time);
+  public getShortCooldownLock(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 119);
   }
 
-  public getShortCooldownLock(): number {
-    return this.readAtomicFloat64(119);
+  public setShortCooldownLock(expiryMs: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 119, expiryMs);
   }
 
-  public setShortCooldownLock(expiryMs: number): void {
-    this.writeAtomicFloat64(119, expiryMs);
+  public getLongCooldownLock(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 120);
   }
 
-  public getLongCooldownLock(): number {
-    return this.readAtomicFloat64(120);
-  }
-
-  public setLongCooldownLock(expiryMs: number): void {
-    this.writeAtomicFloat64(120, expiryMs);
+  public setLongCooldownLock(expiryMs: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 120, expiryMs);
   }
 
   // --- Slots 121 to 126: Dynamic Microstructure & Trap Metrics ---
 
-  public getGarmanKlassRV(): number {
-    return this.readAtomicFloat64(121);
+  public getGarmanKlassRV(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 121);
   }
 
-  public setGarmanKlassRV(val: number): void {
-    this.writeAtomicFloat64(121, val);
+  public setGarmanKlassRV(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 121, val);
   }
 
-  public getVPIN(): number {
-    return this.readAtomicFloat64(122);
+  public getVPIN(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 122);
   }
 
-  public setVPIN(val: number): void {
-    this.writeAtomicFloat64(122, val);
+  public setVPIN(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 122, val);
   }
 
-  public getHurstExponent(): number {
-    return this.readAtomicFloat64(123);
+  public getHurstExponent(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 123);
   }
 
-  public setHurstExponent(val: number): void {
-    this.writeAtomicFloat64(123, val);
+  public setHurstExponent(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 123, val);
   }
 
-  public getLOBEntropy(): number {
-    return this.readAtomicFloat64(124);
+  public getLOBEntropy(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 124);
   }
 
-  public setLOBEntropy(val: number): void {
-    this.writeAtomicFloat64(124, val);
+  public setLOBEntropy(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 124, val);
   }
 
-  public getRegimeStateCode(): number {
-    return this.readAtomicFloat64(125);
+  public getRegimeStateCode(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 125);
   }
 
-  public setRegimeStateCode(code: number): void {
-    this.writeAtomicFloat64(125, code);
+  public setRegimeStateCode(code: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 125, code);
   }
 
-  public getIsSweepDetected(): boolean {
-    return this.readAtomicFloat64(126) > 0.5;
+  public getIsSweepDetected(assetIdx: number = 0): boolean {
+    return this.readAtomicFloat64Asset(assetIdx, 126) > 0.5;
   }
 
-  public setIsSweepDetected(isSweep: boolean): void {
-    this.writeAtomicFloat64(126, isSweep ? 1.0 : 0.0);
+  public setIsSweepDetected(isSweep: boolean, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 126, isSweep ? 1.0 : 0.0);
   }
 
   // --- Slots 127 to 129: AI Temperature Scaling & Platt Calibration Params ---
 
-  public getAiTemperature(): number {
-    const val = this.readAtomicFloat64(127);
+  public getAiTemperature(assetIdx: number = 0): number {
+    const val = this.readAtomicFloat64Asset(assetIdx, 127);
     return val > 0.05 ? val : 1.0;
   }
 
-  public setAiTemperature(val: number): void {
-    this.writeAtomicFloat64(127, val);
+  public setAiTemperature(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 127, val);
   }
 
-  public getAiPlattScale(): number {
-    const val = this.readAtomicFloat64(128);
+  public getAiPlattScale(assetIdx: number = 0): number {
+    const val = this.readAtomicFloat64Asset(assetIdx, 128);
     return val > 0.05 ? val : 1.0;
   }
 
-  public setAiPlattScale(val: number): void {
-    this.writeAtomicFloat64(128, val);
+  public setAiPlattScale(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 128, val);
   }
 
-  public getAiPlattOffset(): number {
-    return this.readAtomicFloat64(129);
+  public getAiPlattOffset(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 129);
   }
 
-  public setAiPlattOffset(val: number): void {
-    this.writeAtomicFloat64(129, val);
+  public setAiPlattOffset(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 129, val);
   }
 }
-
-
