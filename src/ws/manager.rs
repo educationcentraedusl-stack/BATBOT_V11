@@ -5,38 +5,26 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::time::{sleep, Duration, Instant};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExchangeType {
-    Binance,
-}
-
 pub struct ConnectionManager {
     symbol: String,
-    exchange: ExchangeType,
     is_active: Arc<AtomicBool>,
     rotation_interval_secs: u64,
     overlap_duration_secs: u64,
 }
 
 impl ConnectionManager {
-    pub fn new(symbol: &str, exchange: ExchangeType) -> Self {
+    pub fn new(symbol: &str) -> Self {
         Self {
             symbol: symbol.to_string(),
-            exchange,
             is_active: Arc::new(AtomicBool::new(false)),
             rotation_interval_secs: 84600, // 23.5 hours
             overlap_duration_secs: 1800,   // 30 minutes overlap (until 24.0 hours)
         }
     }
 
-    pub fn exchange(&self) -> ExchangeType {
-        self.exchange
-    }
-
     pub fn stop(&self) {
         self.is_active.store(false, Ordering::Relaxed);
     }
-
 
     fn spawn_stream(&self, queue: LockFreeSpscQueue) -> Arc<BinanceWsStream> {
         let stream = Arc::new(BinanceWsStream::new(&self.symbol));
@@ -53,9 +41,9 @@ impl ConnectionManager {
                             break;
                         }
                         eprintln!(
-                            "[Binance WS] Stream disconnected. Reconnecting in {}s...",
-                            backoff_secs
+                            "[Binance WS] Stream disconnected cleanly. Reconnecting in 1s..."
                         );
+                        backoff_secs = 1;
                     }
                     Err(e) => {
                         if s_clone.is_shutdown_requested() {
@@ -65,6 +53,7 @@ impl ConnectionManager {
                             "[Binance WS] Connection failed: {}. Retrying in {}s...",
                             e, backoff_secs
                         );
+                        backoff_secs = (backoff_secs * 2).min(30);
                     }
                 }
                 let shutdown_notify = s_clone.shutdown_notify();
@@ -74,7 +63,6 @@ impl ConnectionManager {
                     }
                     _ = sleep(Duration::from_secs(backoff_secs)) => {}
                 }
-                backoff_secs = (backoff_secs * 2).min(30);
             }
         });
         stream
@@ -116,14 +104,13 @@ impl ConnectionManager {
 /// Manages parallel WebSocket streams per symbol with dynamic hot-swapping and Binance rate-limit protection.
 pub struct MultiStreamManager {
     max_active_assets: usize,
-    exchange: ExchangeType,
     is_active: Arc<AtomicBool>,
     streams: Arc<Mutex<HashMap<String, (usize, Arc<BinanceWsStream>)>>>,
     queues: Vec<LockFreeSpscQueue>,
 }
 
 impl MultiStreamManager {
-    pub fn new(max_active_assets: usize, exchange: ExchangeType) -> Self {
+    pub fn new(max_active_assets: usize) -> Self {
         let env_max: usize = std::env::var("MAX_CONCURRENT_ASSETS")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -136,15 +123,10 @@ impl MultiStreamManager {
 
         Self {
             max_active_assets: final_max,
-            exchange,
             is_active: Arc::new(AtomicBool::new(true)),
             streams: Arc::new(Mutex::new(HashMap::new())),
             queues,
         }
-    }
-
-    pub fn exchange(&self) -> ExchangeType {
-        self.exchange
     }
 
     pub fn max_active_assets(&self) -> usize {
@@ -204,6 +186,19 @@ impl MultiStreamManager {
                             sym, asset_idx
                         );
                         stream.stop();
+                        // VULN-03 FIX: Flush residual stale events from SPSC queue in this slot to guarantee zero cross-talk
+                        if let Some(q) = self.queues.get(asset_idx) {
+                            let mut flushed = 0usize;
+                            while q.pop().is_some() {
+                                flushed += 1;
+                            }
+                            if flushed > 0 {
+                                println!(
+                                    "[MultiStreamManager] Flushed {} stale events from queue slot {}",
+                                    flushed, asset_idx
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -267,9 +262,10 @@ impl MultiStreamManager {
                                 break;
                             }
                             eprintln!(
-                                "[MultiStreamManager WS][Slot {}] Disconnected. Reconnecting in {}s...",
-                                slot, backoff_secs
+                                "[MultiStreamManager WS][Slot {}] Stream disconnected cleanly. Reconnecting in 1s...",
+                                slot
                             );
+                            backoff_secs = 1;
                         }
                         Err(e) => {
                             if s_clone.is_shutdown_requested() {
@@ -279,6 +275,7 @@ impl MultiStreamManager {
                                 "[MultiStreamManager WS Error][Slot {}] Connection error: {}. Retrying in {}s...",
                                 slot, e, backoff_secs
                             );
+                            backoff_secs = (backoff_secs * 2).min(30);
                         }
                     }
                     let shutdown_notify = s_clone.shutdown_notify();
@@ -288,7 +285,6 @@ impl MultiStreamManager {
                         }
                         _ = sleep(Duration::from_secs(backoff_secs)) => {}
                     }
-                    backoff_secs = (backoff_secs * 2).min(30);
                 }
             });
 

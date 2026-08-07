@@ -41,6 +41,9 @@ function fetchBinance24hTickers(): Promise<Binance24hTicker[]> {
 
     const req = https.get(url, { timeout: 5000 }, (res) => {
       let data = "";
+      if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+        console.warn(`[QA Harness Warning] Public Binance REST API responded with HTTP status ${res.statusCode}. Using synthetic ticker pool.`);
+      }
       res.on("data", (chunk) => (data += chunk));
       res.on("end", () => {
         try {
@@ -49,9 +52,11 @@ function fetchBinance24hTickers(): Promise<Binance24hTicker[]> {
             console.log(`  ✅ Successfully fetched ${parsed.length} Binance Futures tickers!\n`);
             resolve(parsed);
           } else {
+            console.warn(`[QA Harness Warning] Binance API returned non-array or empty ticker payload. Using synthetic ticker pool.`);
             resolve([]);
           }
-        } catch {
+        } catch (err: any) {
+          console.warn(`[QA Harness Error] Failed to parse JSON response from Binance REST API: ${err.message}. Raw snippet: "${data.slice(0, 100)}". Using synthetic ticker pool.`);
           resolve([]);
         }
       });

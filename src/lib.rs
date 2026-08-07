@@ -16,7 +16,7 @@ use ipc::bridge::IngestionBridge;
 use ipc::shared_memory::AtomicSharedMemoryBridge;
 use lob::{LimitOrderBook, LockFreeSpscQueue};
 use oms::{BinanceWsConfig, OmsEngine};
-use ws::manager::{ConnectionManager, ExchangeType};
+use ws::manager::ConnectionManager;
 use napi::bindgen_prelude::Buffer;
 use napi::Error;
 
@@ -257,7 +257,7 @@ pub fn start_ingestion(sab_buffer: Buffer) -> napi::Result<bool> {
 
     // Spawn WebSocket Connection Manager on Tokio runtime
     let symbol = std::env::var("SYMBOL").unwrap_or_else(|_| "BTCUSDT".to_string());
-    let conn_mgr = Arc::new(ConnectionManager::new(&symbol, ExchangeType::Binance));
+    let conn_mgr = Arc::new(ConnectionManager::new(&symbol));
     let queue_producer = queue.clone();
 
     GLOBAL_RUNTIME.spawn(async move {
@@ -386,10 +386,9 @@ impl NativeMultiStreamManager {
     pub fn new(max_active_assets: u32) -> Self {
         let manager = Arc::new(ws::manager::MultiStreamManager::new(
             max_active_assets as usize,
-            ws::manager::ExchangeType::Binance,
         ));
 
-        // Wire slot consumer loops to IngestionBridge if bridge is initialized
+        // Wire slot consumer loops to IngestionBridge ONCE upon initialization
         if let Some(bridge) = GLOBAL_INGESTION_BRIDGE.load().as_ref() {
             for slot in 0..(max_active_assets as usize) {
                 if let Some(q) = manager.queue_at(slot) {
@@ -408,15 +407,6 @@ impl NativeMultiStreamManager {
 
     #[napi]
     pub async fn update_subscriptions(&self, new_top_k: Vec<String>) -> napi::Result<Vec<String>> {
-        // Ensure consumer loops for active slots are running if bridge is active
-        if let Some(bridge) = GLOBAL_INGESTION_BRIDGE.load().as_ref() {
-            for slot in 0..self.inner.max_active_assets() {
-                if let Some(q) = self.inner.queue_at(slot) {
-                    bridge.start_consumer_loop_asset(q, slot);
-                }
-            }
-        }
-
         self.inner
             .update_subscriptions(&new_top_k)
             .await
