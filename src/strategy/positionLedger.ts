@@ -374,6 +374,7 @@ export interface PositionSlot {
   tpPrices?: number[];
   breakEvenLocked?: boolean;
   breakEvenPrice?: number;
+  timeDecayTier?: number;
   // Phase 3 Maker-Taker Post-Only tracking fields
   activeTpOrderIds?: number[];
   tpStagePrices?: number[];
@@ -391,7 +392,9 @@ export interface SlotExitTrigger {
     | "TAKE_PROFIT_TP3"
     | "TAKE_PROFIT_TP4"
     | "TAKE_PROFIT_TP5"
-    | "BREAK_EVEN_STOP_LOSS";
+    | "BREAK_EVEN_STOP_LOSS"
+    | "TIME_DECAY_PROFIT_LOCK"
+    | "LONG_HOLD_PROFIT_HARVEST";
   quantity: number;
   entryPrice: number;
   markPrice: number;
@@ -882,7 +885,7 @@ export class HedgePositionLedger {
     }
   }
 
-  public evaluateHedgeDynamicTpSl(markPrice: number): SlotExitTrigger[] {
+  public evaluateHedgeDynamicTpSl(markPrice: number, nowMs: number = Date.now()): SlotExitTrigger[] {
     const triggers: SlotExitTrigger[] = [];
     if (markPrice <= 0) return triggers;
 
@@ -895,6 +898,59 @@ export class HedgePositionLedger {
       const tpPrices = slot.tpPrices && slot.tpPrices.length === 5 ? slot.tpPrices : [];
 
       const hasActiveLimitOrders = slot.activeTpOrderIds && slot.activeTpOrderIds.length > 0;
+
+      // 0. Evaluate 4-Tier Institutional Time-Decay Profit Lock & Harvest Timeout
+      const openTime = slot.openTime && slot.openTime > 0 ? slot.openTime : nowMs;
+      const holdingTimeMs = Math.max(0, nowMs - openTime);
+      const makerFee = this.sizingCalc.getMakerFeeRate();
+      const takerFee = this.sizingCalc.getTakerFeeRate();
+      const feeBuffer = (makerFee + takerFee) * 2.5;
+
+      // Tier 4: Hard Harvest Timeout (t >= 1800s / 30 min)
+      if (holdingTimeMs >= 1800000) {
+        triggers.push({
+          slotId: slot.slotId,
+          side: slot.side,
+          reason: "LONG_HOLD_PROFIT_HARVEST",
+          quantity: slot.quantity,
+          entryPrice: slot.entryPrice,
+          markPrice,
+          isPartialClose: false,
+          cancelOrderIds: slot.activeTpOrderIds ? [...slot.activeTpOrderIds] : [],
+        });
+        return;
+      }
+
+      // Tier 3: Guaranteed Profit Lock (t >= 600s / 10 min) -> SL = Entry + Fee + 0.12%
+      if (holdingTimeMs >= 600000) {
+        const lockOffset = feeBuffer + 0.0012;
+        const lockedSl = isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset);
+        if (isLong ? lockedSl > slot.stopLossPrice : lockedSl < slot.stopLossPrice) {
+          slot.stopLossPrice = lockedSl;
+          slot.breakEvenLocked = true;
+          slot.timeDecayTier = 3;
+        }
+      }
+      // Tier 2: Micro-Profit Guard (t >= 180s / 3 min) -> SL = Entry + Fee + 0.05%
+      else if (holdingTimeMs >= 180000) {
+        const lockOffset = feeBuffer + 0.0005;
+        const lockedSl = isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset);
+        if (isLong ? lockedSl > slot.stopLossPrice : lockedSl < slot.stopLossPrice) {
+          slot.stopLossPrice = lockedSl;
+          slot.breakEvenLocked = true;
+          slot.timeDecayTier = 2;
+        }
+      }
+      // Tier 1: Breakeven Lock (t >= 30s) -> SL = Entry + Fee (0 Loss)
+      else if (holdingTimeMs >= 30000) {
+        const lockOffset = feeBuffer;
+        const lockedSl = isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset);
+        if (isLong ? lockedSl > slot.stopLossPrice : lockedSl < slot.stopLossPrice) {
+          slot.stopLossPrice = lockedSl;
+          slot.breakEvenLocked = true;
+          slot.timeDecayTier = 1;
+        }
+      }
 
       // 1. Evaluate 5-Stage Partial Take Profits (ONLY if no active exchange limit TP orders are registered)
       if (!hasActiveLimitOrders && tpPrices.length === 5) {

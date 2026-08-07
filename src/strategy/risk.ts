@@ -6,6 +6,7 @@ export interface RiskConfig {
   maxDailyLossUsdt: number;
   maxPriceSlippagePercent: number;
   dailyProfitLockTargetUsdt: number;
+  minRiskRewardRatio: number;
 }
 
 export interface OrderIntent {
@@ -32,6 +33,7 @@ export interface RiskCheckResult {
     | "INVALID_PRICE"
     | "UNCONFIGURED_CREDENTIALS"
     | "INVALID_STOP_LOSS"
+    | "INVALID_RISK_REWARD"
     | "REJECTED_TOXIC_FLOW"
     | "REJECTED_LIQUIDITY_SWEEP_TRAP"
     | "REJECTED_COUNTER_TREND_REGIME"
@@ -84,12 +86,16 @@ export class RiskGuard {
     const envDailyProfitLock = process.env.DAILY_PROFIT_LOCK_USDT ? parseFloat(process.env.DAILY_PROFIT_LOCK_USDT) : NaN;
     const defaultProfitLock = !isNaN(envDailyProfitLock) ? envDailyProfitLock : 10.0;
 
+    const envMinRrRatio = process.env.MIN_RISK_REWARD_RATIO ? parseFloat(process.env.MIN_RISK_REWARD_RATIO) : NaN;
+    const defaultMinRrRatio = !isNaN(envMinRrRatio) ? envMinRrRatio : 2.0;
+
     this.config = {
       maxPositionSizeUsdt: config?.maxPositionSizeUsdt ?? 1000.0,
       minCooldownMs: config?.minCooldownMs ?? 0,
       maxDailyLossUsdt: config?.maxDailyLossUsdt ?? 500.0,
       maxPriceSlippagePercent: config?.maxPriceSlippagePercent ?? 0.5,
       dailyProfitLockTargetUsdt: config?.dailyProfitLockTargetUsdt ?? defaultProfitLock,
+      minRiskRewardRatio: config?.minRiskRewardRatio ?? defaultMinRrRatio,
     };
   }
 
@@ -213,6 +219,31 @@ export class RiskGuard {
           reasonCode: "INVALID_STOP_LOSS",
           message: `Sell order Stop-Loss ($${intent.stopLossPrice}) must be above order price ($${intent.price}).`,
         };
+      }
+    }
+
+    // 8. Strict Minimum Risk/Reward Ratio Enforcement (Floor: 2.0)
+    if (!intent.isCloseOrder && intent.takeProfitPrice !== undefined && intent.stopLossPrice !== undefined && intent.price > 0) {
+      let rewardDistance = 0;
+      let riskDistance = 0;
+      if (intent.side === "BUY") {
+        rewardDistance = intent.takeProfitPrice - intent.price;
+        riskDistance = intent.price - intent.stopLossPrice;
+      } else {
+        rewardDistance = intent.price - intent.takeProfitPrice;
+        riskDistance = intent.stopLossPrice - intent.price;
+      }
+
+      if (riskDistance > 0) {
+        const rrRatio = rewardDistance / riskDistance;
+        const requiredMin = this.config.minRiskRewardRatio ?? 2.0;
+        if (rrRatio < requiredMin - 1e-4) {
+          return {
+            passed: false,
+            reasonCode: "INVALID_RISK_REWARD",
+            message: `Order rejected: Risk/Reward ratio (${rrRatio.toFixed(2)}) is below mandatory minimum floor (${requiredMin.toFixed(2)}).`,
+          };
+        }
       }
     }
 

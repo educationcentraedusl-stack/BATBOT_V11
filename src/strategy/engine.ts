@@ -115,10 +115,10 @@ export class StrategyEngine {
     const envVpinThreshold = process.env.VPIN_THRESHOLD ? parseFloat(process.env.VPIN_THRESHOLD) : NaN;
     const envVpinBucketVolume = process.env.VPIN_BUCKET_VOLUME ? parseFloat(process.env.VPIN_BUCKET_VOLUME) : NaN;
 
-    const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 0.25;
-    const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 0.20;
-    const defaultShortTp = !isNaN(envShortTp) ? envShortTp : 0.25;
-    const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.20;
+    const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 0.45;
+    const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 0.15;
+    const defaultShortTp = !isNaN(envShortTp) ? envShortTp : 0.45;
+    const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.15;
     const defaultProfitLock = !isNaN(envProfitLock) ? envProfitLock : 10.0;
     const defaultMaxShortSlots = !isNaN(envMaxShortSlots) ? envMaxShortSlots : 3;
     const defaultMinAiConfidence = !isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.65;
@@ -347,7 +347,11 @@ export class StrategyEngine {
       if (hedgeTriggers.length > 0) {
         const trigger = hedgeTriggers[0];
         const exitSide: "BUY" | "SELL" = trigger.side === "LONG" ? "SELL" : "BUY";
-        const isHardStopTrigger = trigger.reason === "STOP_LOSS" || trigger.reason === "BREAK_EVEN_STOP_LOSS";
+        const isHardStopTrigger =
+          trigger.reason === "STOP_LOSS" ||
+          trigger.reason === "BREAK_EVEN_STOP_LOSS" ||
+          trigger.reason === "LONG_HOLD_PROFIT_HARVEST" ||
+          trigger.reason === "TIME_DECAY_PROFIT_LOCK";
 
         console.log(
           `[HEDGE_DYNAMIC_MONITORING] Slot ${trigger.slotId} ${trigger.reason} TRIGGERED! Side: ${trigger.side}, Entry: $${trigger.entryPrice.toFixed(
