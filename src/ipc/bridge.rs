@@ -32,6 +32,15 @@ impl IngestionBridge {
     }
 
     pub fn start_consumer_loop_asset(&self, queue: LockFreeSpscQueue, asset_idx: usize) {
+        if asset_idx >= self.bridge.max_assets() {
+            eprintln!(
+                "[BATBOT_V11][Bridge Error] asset_idx {} out of bounds (max_assets: {})",
+                asset_idx,
+                self.bridge.max_assets()
+            );
+            return;
+        }
+
         let bridge = self.bridge;
         let is_running = self.is_running.clone();
         is_running.store(true, Ordering::Relaxed);
@@ -81,8 +90,8 @@ impl IngestionBridge {
                     // Execute AI inference pipeline on every 10th LOB snapshot using GLOBAL_AI_ENGINE (Lock-Free RCU)
                     if seq % 10 == 0 {
                         if let Some(engine) = GLOBAL_AI_ENGINE.load().as_ref() {
-                            if let Err(e) = engine.run_inference(&bridge) {
-                                eprintln!("[BATBOT_V11][AI Engine Error] Inference error: {}", e);
+                            if let Err(e) = engine.run_inference_asset(&bridge, asset_idx) {
+                                eprintln!("[BATBOT_V11][AI Engine Error][Asset {}] Inference error: {}", asset_idx, e);
                             }
                         }
 

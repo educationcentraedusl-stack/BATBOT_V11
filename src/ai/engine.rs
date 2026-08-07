@@ -92,10 +92,19 @@ impl StreamingFeaturePipeline {
         sab: &AtomicSharedMemoryBridge,
         lat_us_val: f64,
     ) -> Result<[f64; 40]> {
-        let best_bid = sab.load_f64(4);
-        let best_bid_qty = sab.load_f64(5);
-        let best_ask = sab.load_f64(6);
-        let best_ask_qty = sab.load_f64(7);
+        self.update_and_normalize_asset(sab, lat_us_val, 0)
+    }
+
+    pub fn update_and_normalize_asset(
+        &mut self,
+        sab: &AtomicSharedMemoryBridge,
+        lat_us_val: f64,
+        asset_idx: usize,
+    ) -> Result<[f64; 40]> {
+        let best_bid = sab.load_f64_asset(asset_idx, 4);
+        let best_bid_qty = sab.load_f64_asset(asset_idx, 5);
+        let best_ask = sab.load_f64_asset(asset_idx, 6);
+        let best_ask_qty = sab.load_f64_asset(asset_idx, 7);
 
         if best_bid <= 0.0 || best_ask <= 0.0 {
             return Err(Error::Msg("ORDERBOOK_COLLAPSE_DETECTED".to_string()));
@@ -105,7 +114,7 @@ impl StreamingFeaturePipeline {
         let spread = best_ask - best_bid;
         let relative_spread = spread / (mid_price + 1e-8);
 
-        let raw_obi = sab.load_f64(1);
+        let raw_obi = sab.load_f64_asset(asset_idx, 1);
         let obi = if raw_obi == 0.0 && (best_bid_qty + best_ask_qty) > 0.0 {
             (best_bid_qty - best_ask_qty) / (best_bid_qty + best_ask_qty)
         } else {
@@ -172,7 +181,7 @@ impl StreamingFeaturePipeline {
 
         let obi_press_ratio = obi * spread;
 
-        let cvd_raw = sab.load_f64(2);
+        let cvd_raw = sab.load_f64_asset(asset_idx, 2);
         let cvd_lag1 = *self.cvd_hist.get(0).unwrap_or(&cvd_raw);
         let cvd_delta_1 = cvd_raw - cvd_lag1;
 
@@ -188,7 +197,7 @@ impl StreamingFeaturePipeline {
         let cvd_lag100 = *self.cvd_hist.get(99).unwrap_or(&cvd_raw);
         let cvd_delta_100 = cvd_raw - cvd_lag100;
 
-        let trade_vel = sab.load_f64(3);
+        let trade_vel = sab.load_f64_asset(asset_idx, 3);
         let trade_vel_lag1 = *self.trade_vel_hist.get(0).unwrap_or(&trade_vel);
         let trade_vel_accel = trade_vel - trade_vel_lag1;
 
@@ -204,12 +213,12 @@ impl StreamingFeaturePipeline {
         let lat_us_std_50 = vec_std(&self.lat_us_hist, 50);
         let lat_us_jitter = (lat_us - lat_us_lag1).abs();
 
-        let seq_raw = sab.load_u64(92);
+        let seq_raw = sab.load_u64_asset(asset_idx, 92);
         let seq_gap = match self.seq_hist {
             Some(prev) => ((seq_raw.saturating_sub(prev) as f64) - 1.0).max(0.0).min(100.0),
             None => 0.0,
         };
-        let execution_latency_ms = sab.load_f64(98);
+        let execution_latency_ms = sab.load_f64_asset(asset_idx, 98);
 
         let vol_realized_10 = vec_std(&self.log_ret_1_hist, 10);
         let vol_realized_50 = vec_std(&self.log_ret_1_hist, 50);
@@ -398,6 +407,10 @@ impl AIEngine {
     }
 
     pub fn run_inference(&self, sab: &AtomicSharedMemoryBridge) -> Result<()> {
+        self.run_inference_asset(sab, 0)
+    }
+
+    pub fn run_inference_asset(&self, sab: &AtomicSharedMemoryBridge, asset_idx: usize) -> Result<()> {
         if self.status != AiEngineStatus::Calibrated || self.cell.is_none() {
             return Ok(());
         }
@@ -407,17 +420,17 @@ impl AIEngine {
             .unwrap_or_default()
             .as_nanos() as u64;
 
-        let best_bid = sab.load_f64(4);
-        let best_ask = sab.load_f64(6);
+        let best_bid = sab.load_f64_asset(asset_idx, 4);
+        let best_ask = sab.load_f64_asset(asset_idx, 6);
         if best_bid <= 0.0 || best_ask <= 0.0 {
             return Err(Error::Msg("ORDERBOOK_COLLAPSE_DETECTED".to_string()));
         }
         let current_mid = (best_bid + best_ask) / 2.0;
 
-        let lat_us_val = sab.load_f64(98) * 1000.0;
+        let lat_us_val = sab.load_f64_asset(asset_idx, 98) * 1000.0;
         let lob_features = {
             let mut pipeline = self.feature_pipeline.lock().unwrap_or_else(|e| e.into_inner());
-            pipeline.update_and_normalize(sab, lat_us_val)?
+            pipeline.update_and_normalize_asset(sab, lat_us_val, asset_idx)?
         };
 
         let last_mid = f64::from_bits(self.last_mid_price.load(Ordering::Relaxed));
@@ -469,7 +482,7 @@ impl AIEngine {
             .to_scalar::<f32>()?
             .sqrt() as f64;
 
-        let spread_vel = sab.load_f64(3);
+        let spread_vel = sab.load_f64_asset(asset_idx, 3);
         let slippage_ticks = (2.0 + (spread_vel.abs() / 0.5).floor()).min(20.0);
 
         self.last_mid_price.store(current_mid.to_bits(), Ordering::Relaxed);
@@ -477,13 +490,17 @@ impl AIEngine {
 
         let seq = self.inference_seq.fetch_add(1, Ordering::Relaxed);
 
-        sab.store_f64(93, direction);
-        sab.store_f64(94, confidence);
-        sab.store_f64(95, horizon_ms);
-        sab.store_u64(96, start_ns);
-        sab.store_f64(97, hidden_norm);
-        sab.store_f64(100, slippage_ticks);
-        sab.store_u64(103, latency_ns);
+        sab.store_f64_asset(asset_idx, 93, direction);
+        sab.store_f64_asset(asset_idx, 94, confidence);
+        sab.store_f64_asset(asset_idx, 95, horizon_ms);
+        sab.store_u64_asset(asset_idx, 96, start_ns);
+        sab.store_f64_asset(asset_idx, 97, hidden_norm);
+        sab.store_f64_asset(asset_idx, 100, slippage_ticks);
+        sab.store_u64_asset(asset_idx, 103, latency_ns);
+        sab.store_u64_asset(asset_idx, 104, seq);
+
+        Ok(())
+    }
         sab.store_u64(104, seq);
 
         Ok(())

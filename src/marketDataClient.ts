@@ -5,8 +5,13 @@ const BITCAST_BUF = new ArrayBuffer(8);
 const BITCAST_BIGINT = new BigInt64Array(BITCAST_BUF);
 const BITCAST_FLOAT = new Float64Array(BITCAST_BUF);
 
-const DEFAULT_MAX_CONCURRENT_ASSETS = parseInt(process.env.MAX_CONCURRENT_ASSETS || "10", 10);
-const DEFAULT_SAB_SLOTS_PER_ASSET = parseInt(process.env.SAB_SLOTS_PER_ASSET || "256", 10);
+const parsedDefaultMaxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || "10", 10);
+const DEFAULT_MAX_CONCURRENT_ASSETS =
+  Number.isFinite(parsedDefaultMaxAssets) && parsedDefaultMaxAssets > 0 ? parsedDefaultMaxAssets : 10;
+
+const parsedDefaultSlotsPerAsset = parseInt(process.env.SAB_SLOTS_PER_ASSET || "256", 10);
+const DEFAULT_SAB_SLOTS_PER_ASSET =
+  Number.isFinite(parsedDefaultSlotsPerAsset) && parsedDefaultSlotsPerAsset > 0 ? parsedDefaultSlotsPerAsset : 256;
 
 export class MarketDataClient {
   private bigIntView: BigInt64Array;
@@ -34,14 +39,21 @@ export class MarketDataClient {
   }
 
   /**
-   * Dynamically calculates offset slot for (assetIdx, slot)
+   * Dynamically calculates offset slot for (assetIdx, slot).
+   * Strict fail-fast boundary enforcement: throws RangeError if index or slot is out of bounds.
    */
   private getGlobalSlot(assetIdx: number, slot: number): number {
-    if (assetIdx < 0 || assetIdx >= this.maxAssets || slot < 0 || slot >= this.slotsPerAsset) {
-      return 0;
+    if (assetIdx < 0 || assetIdx >= this.maxAssets) {
+      throw new RangeError(`assetIdx ${assetIdx} out of bounds (maxAssets: ${this.maxAssets})`);
+    }
+    if (slot < 0 || slot >= this.slotsPerAsset) {
+      throw new RangeError(`slot ${slot} out of bounds (slotsPerAsset: ${this.slotsPerAsset})`);
     }
     const globalSlot = assetIdx * this.slotsPerAsset + slot;
-    return globalSlot < this.totalSlots ? globalSlot : 0;
+    if (globalSlot >= this.totalSlots) {
+      throw new RangeError(`globalSlot ${globalSlot} out of bounds (totalSlots: ${this.totalSlots})`);
+    }
+    return globalSlot;
   }
 
   /**
