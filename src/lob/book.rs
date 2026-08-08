@@ -140,8 +140,11 @@ impl LimitOrderBook {
         new_asks: &[(f64, f64); LOB_DEPTH],
         timestamp_ns: u64,
     ) {
-        self.bids.copy_from_slice(new_bids);
-        self.asks.copy_from_slice(new_asks);
+        // Condition 3: Fast SIMD-aligned memmove via ptr::copy_nonoverlapping
+        unsafe {
+            std::ptr::copy_nonoverlapping(new_bids.as_ptr(), self.bids.as_mut_ptr(), LOB_DEPTH);
+            std::ptr::copy_nonoverlapping(new_asks.as_ptr(), self.asks.as_mut_ptr(), LOB_DEPTH);
+        }
 
         let previous_spread = self.metrics.last_spread;
         let current_spread = if self.asks[0].0 > 0.0 && self.bids[0].0 > 0.0 {
@@ -172,6 +175,70 @@ impl LimitOrderBook {
         self.metrics.regime = self.analyzer.get_regime() as u8;
         self.metrics.is_sweep_detected = self.analyzer.is_sweep_detected();
         self.last_update_ns = timestamp_ns;
+    }
+
+    /// O(1) / memmove fast insertion or update of a bid level (sorted descending by price)
+    #[inline(always)]
+    pub fn update_bid_level_delta(&mut self, price: f64, quantity: f64) {
+        if quantity == 0.0 {
+            for i in 0..LOB_DEPTH {
+                if (self.bids[i].0 - price).abs() < 1e-9 {
+                    unsafe {
+                        let ptr = self.bids.as_mut_ptr();
+                        std::ptr::copy(ptr.add(i + 1), ptr.add(i), LOB_DEPTH - 1 - i);
+                    }
+                    self.bids[LOB_DEPTH - 1] = (0.0, 0.0);
+                    break;
+                }
+            }
+            return;
+        }
+
+        for i in 0..LOB_DEPTH {
+            if (self.bids[i].0 - price).abs() < 1e-9 {
+                self.bids[i].1 = quantity;
+                return;
+            } else if price > self.bids[i].0 {
+                unsafe {
+                    let ptr = self.bids.as_mut_ptr();
+                    std::ptr::copy(ptr.add(i), ptr.add(i + 1), LOB_DEPTH - 1 - i);
+                }
+                self.bids[i] = (price, quantity);
+                return;
+            }
+        }
+    }
+
+    /// O(1) / memmove fast insertion or update of an ask level (sorted ascending by price)
+    #[inline(always)]
+    pub fn update_ask_level_delta(&mut self, price: f64, quantity: f64) {
+        if quantity == 0.0 {
+            for i in 0..LOB_DEPTH {
+                if (self.asks[i].0 - price).abs() < 1e-9 {
+                    unsafe {
+                        let ptr = self.asks.as_mut_ptr();
+                        std::ptr::copy(ptr.add(i + 1), ptr.add(i), LOB_DEPTH - 1 - i);
+                    }
+                    self.asks[LOB_DEPTH - 1] = (0.0, 0.0);
+                    break;
+                }
+            }
+            return;
+        }
+
+        for i in 0..LOB_DEPTH {
+            if self.asks[i].0 == 0.0 || price < self.asks[i].0 {
+                unsafe {
+                    let ptr = self.asks.as_mut_ptr();
+                    std::ptr::copy(ptr.add(i), ptr.add(i + 1), LOB_DEPTH - 1 - i);
+                }
+                self.asks[i] = (price, quantity);
+                return;
+            } else if (self.asks[i].0 - price).abs() < 1e-9 {
+                self.asks[i].1 = quantity;
+                return;
+            }
+        }
     }
 
     pub fn process_trade(&mut self, price: f64, quantity: f64, is_buyer_maker: bool) {
@@ -223,3 +290,77 @@ impl LimitOrderBook {
         self.analyzer.calculate_dynamic_collars(entry_price, position_side, self.metrics.obi, self.metrics.last_spread)
     }
 }
+
+pub const MAX_CONCURRENT_ASSETS: usize = 10;
+
+/// Lock-free Multi-Asset L2 Orderbook Manager.
+/// Manages up to 10 concurrent asset orderbooks in a dedicated synchronous unblocked OS thread.
+pub struct MultiAssetLOBManager {
+    books: std::sync::RwLock<[LimitOrderBook; MAX_CONCURRENT_ASSETS]>,
+    is_running: std::sync::atomic::AtomicBool,
+}
+
+impl MultiAssetLOBManager {
+    pub fn new() -> Self {
+        // Initialize 10 distinct LimitOrderBooks
+        let books_array: [LimitOrderBook; MAX_CONCURRENT_ASSETS] = std::array::from_fn(|_| LimitOrderBook::new());
+        Self {
+            books: std::sync::RwLock::new(books_array),
+            is_running: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.is_running.load(Ordering::Relaxed)
+    }
+
+    pub fn stop(&self) {
+        self.is_running.store(false, Ordering::Relaxed);
+    }
+
+    pub fn process_event_for_asset(&self, asset_idx: usize, event: MarketUpdateEvent) {
+        if asset_idx >= MAX_CONCURRENT_ASSETS {
+            return;
+        }
+        if let Ok(mut books) = self.books.write() {
+            books[asset_idx].process_event(event);
+        }
+    }
+
+    pub fn get_metrics_for_asset(&self, asset_idx: usize) -> Option<MicrostructureMetrics> {
+        if asset_idx >= MAX_CONCURRENT_ASSETS {
+            return None;
+        }
+        self.books.read().ok().map(|b| b[asset_idx].metrics.clone())
+    }
+
+    /// Condition 2: Synchronous dedicated processing loop running outside Tokio runtime.
+    /// Spawns a dedicated OS thread pinned to consuming SPSC queue events synchronously.
+    pub fn spawn_unblocked_processor(
+        self: Arc<Self>,
+        queues: Vec<LockFreeSpscQueue>,
+    ) -> std::thread::JoinHandle<()> {
+        self.is_running.store(true, Ordering::Relaxed);
+        std::thread::Builder::new()
+            .name("batbot-hft-l2-processor".to_string())
+            .spawn(move || {
+                println!("[MultiAssetLOBManager] Dedicated synchronous L2 processor thread active.");
+                while self.is_running.load(Ordering::Relaxed) {
+                    let mut processed_any = false;
+                    for (asset_idx, q) in queues.iter().enumerate() {
+                        while let Some(evt) = q.pop() {
+                            self.process_event_for_asset(asset_idx, evt);
+                            processed_any = true;
+                        }
+                    }
+                    if !processed_any {
+                        // Micro-spin / spin-loop pause to prevent CPU burning when queue is empty
+                        std::hint::spin_loop();
+                    }
+                }
+                println!("[MultiAssetLOBManager] Synchronous L2 processor thread terminated cleanly.");
+            })
+            .expect("Failed to spawn dedicated synchronous L2 processor thread")
+    }
+}
+

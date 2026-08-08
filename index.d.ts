@@ -33,6 +33,10 @@ export declare function getMultiAssetOmsMetricsNapi(assetIdx: number): string
 export declare function popNextIntentPacketBytesNapi(): Buffer | null
 export declare function popNextIntentPacketNapi(): string | null
 export declare function syncMultiOmsSabNapi(sabBuffer: Buffer): boolean
+export declare function createMultiAssetLobManagerNapi(): boolean
+export declare function startPhase5OrchestratorNapi(symbols: Array<string>): boolean
+export declare function stopPhase5OrchestratorNapi(): boolean
+export declare function getPhase5OrchestratorMetricsNapi(): string
 export declare class NativeUniverseScanner {
   constructor(maxActiveAssets: number)
   updateTicker(symbol: string, high: number, low: number, open: number, close: number, volumeUsd5M: number, bestBid: number, bestAsk: number, priceChange5M: number, volume5M: number): void

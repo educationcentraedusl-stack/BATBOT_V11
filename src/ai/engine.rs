@@ -589,6 +589,39 @@ impl AIEngine {
 
         Ok((direction, confidence, horizon_ms, latency_ns, hidden_norm))
     }
+
+    pub fn evaluate_features(&self, features: &[f64; 40]) -> (f64, f64) {
+        if self.status != AiEngineStatus::Calibrated || self.cell.is_none() {
+            let obi = features[8];
+            let relative_spread = features[1];
+            let cvd_delta = features[16];
+            let raw_signal = obi * 0.6 + cvd_delta.signum() * 0.4;
+            let direction = raw_signal.clamp(-1.0, 1.0);
+            let confidence = (raw_signal.abs() * 0.8 + relative_spread * 0.2).clamp(0.0, 1.0);
+            return (direction, confidence);
+        }
+
+        let tkan_out = self.tkan.forward(features);
+        let tkan_f32: [f32; 16] = std::array::from_fn(|i| tkan_out[i] as f32);
+        if let Ok(tkan_tensor) = Tensor::from_slice(&tkan_f32, (1, 16), &Device::Cpu) {
+            if let Ok(mut hidden_guard) = self.hidden_state.lock() {
+                if let Some(cell) = &self.cell {
+                    if let Ok((output_tensor, next_hidden)) = cell.forward(&tkan_tensor, &*hidden_guard, 0.001) {
+                        *hidden_guard = next_hidden;
+                        if let Ok(flat_out) = output_tensor.flatten_all() {
+                            let num_elems = flat_out.elem_count();
+                            let raw_direction = if num_elems > 0 { flat_out.get(0).ok().and_then(|t| t.to_scalar::<f32>().ok()).unwrap_or(0.0) as f64 } else { 0.0 };
+                            let raw_confidence = if num_elems > 1 { flat_out.get(1).ok().and_then(|t| t.to_scalar::<f32>().ok()).unwrap_or(raw_direction.abs() as f32) as f64 } else { raw_direction.abs() };
+                            let direction = raw_direction.tanh();
+                            let confidence = (1.0 / (1.0 + (-raw_confidence).exp())).clamp(0.0, 1.0);
+                            return (direction, confidence);
+                        }
+                    }
+                }
+            }
+        }
+        (0.0, 0.0)
+    }
 }
 
 impl Default for AIEngine {

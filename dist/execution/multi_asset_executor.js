@@ -60,7 +60,6 @@ class MultiAssetExecutor {
         const reduceOnly = options?.reduceOnly ?? false;
         // Zero-copy 128-byte Buffer packing (OrderIntentPacket layout)
         const pktBuf = this.pktBuf;
-        pktBuf.fill(0);
         pktBuf.writeUInt32LE(assetIdx, 0);
         pktBuf.writeUInt8(side === "BUY" ? 0 : 1, 4);
         pktBuf.writeUInt8(isMarket ? 1 : 0, 5);
@@ -84,10 +83,20 @@ class MultiAssetExecutor {
         pktBuf.writeFloatLE(aiConfidence, 28);
         pktBuf.writeFloatLE(side === "BUY" ? 1.0 : -1.0, 32);
         pktBuf.writeUInt32LE(0, 36);
-        const creationNs = options?.creationNs ?? BigInt(Date.now()) * 1000000n;
-        pktBuf.writeBigUInt64LE(creationNs, 40);
-        const clientOrderId = options?.clientOrderId ?? `ord_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-        pktBuf.write(clientOrderId, 48, 64, "utf8");
+        if (options?.creationNs !== undefined) {
+            pktBuf.writeBigUInt64LE(options.creationNs, 40);
+        }
+        else {
+            pktBuf.writeBigUInt64LE(0n, 40);
+        }
+        if (options?.clientOrderId) {
+            const written = pktBuf.write(options.clientOrderId, 48, 64, "latin1");
+            if (written < 64)
+                pktBuf[48 + written] = 0;
+        }
+        else {
+            pktBuf[48] = 0;
+        }
         // Copy pre-allocated symbol buffer
         pktBuf.set(this.symbolBuffers[assetIdx], 112);
         try {
@@ -103,12 +112,21 @@ class MultiAssetExecutor {
                 };
                 return { status: "REJECTED", reason: reasonMap[reasonCode] || "REJECTED_UNKNOWN" };
             }
-            const numSlices = Math.floor(resBuf.length / 128);
-            const slices = [];
-            for (let i = 0; i < numSlices; i++) {
-                slices.push(this.parsePacketFromBuffer(resBuf, i * 128));
-            }
-            return { status: "SUBMITTED", slices };
+            let parsedSlices = null;
+            const self = this;
+            return {
+                status: "SUBMITTED",
+                get slices() {
+                    if (!parsedSlices) {
+                        const numSlices = Math.floor(resBuf.length / 128);
+                        parsedSlices = [];
+                        for (let i = 0; i < numSlices; i++) {
+                            parsedSlices.push(self.parsePacketFromBuffer(resBuf, i * 128));
+                        }
+                    }
+                    return parsedSlices;
+                },
+            };
         }
         catch (err) {
             const errorMsg = err instanceof Error ? err.message : String(err);
@@ -139,14 +157,12 @@ class MultiAssetExecutor {
         const aiConfidence = buf.readFloatLE(offset + 28);
         const aiDirection = buf.readFloatLE(offset + 32);
         const creationNs = buf.readBigUInt64LE(offset + 40);
-        let cidLen = 0;
-        while (cidLen < 64 && buf[offset + 48 + cidLen] !== 0)
-            cidLen++;
-        const clientOrderId = buf.toString("utf8", offset + 48, offset + 48 + cidLen);
-        let symLen = 0;
-        while (symLen < 16 && buf[offset + 112 + symLen] !== 0)
-            symLen++;
-        const symbol = buf.toString("utf8", offset + 112, offset + 112 + symLen);
+        const cidEnd = buf.indexOf(0, offset + 48);
+        const cidLen = (cidEnd === -1 || cidEnd > offset + 112) ? 64 : cidEnd - (offset + 48);
+        const clientOrderId = buf.toString("latin1", offset + 48, offset + 48 + cidLen);
+        const symEnd = buf.indexOf(0, offset + 112);
+        const symLen = (symEnd === -1 || symEnd > offset + 128) ? 16 : symEnd - (offset + 112);
+        const symbol = buf.toString("latin1", offset + 112, offset + 112 + symLen);
         const tifMap = ["Gtc", "Ioc", "Fok", "Gtx"];
         return {
             client_order_id: clientOrderId,

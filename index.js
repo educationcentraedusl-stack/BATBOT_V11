@@ -310,7 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { initCore, createLobEngine, loadAiModel, loadAiModelFull, resetIcTracker, getIcStatus, triggerPreflightWarmup, getPreflightStatus, startOmsEngine, evaluateOmsTick, getOmsMetrics, getPositionSnapshot, startIngestion, getMicrostructureMetrics, getDynamicCollars, calculateCsLvrScoreNapi, NativeUniverseScanner, NativeMultiStreamManager, updateAssetReturnNapi, getCovarianceMatrixNapi, getCorrelationMatrixNapi, calculateCcDfkSizeNapi, getMultiAssetCollarsNapi, evaluateMultiAssetSignalsNapi, startMultiAssetOmsNapi, submitMultiAssetIntentBytesNapi, submitMultiAssetIntentNapi, applyMultiAssetFillNapi, getMultiAssetOmsMetricsNapi, popNextIntentPacketBytesNapi, popNextIntentPacketNapi, syncMultiOmsSabNapi } = nativeBinding
+const { initCore, createLobEngine, loadAiModel, loadAiModelFull, resetIcTracker, getIcStatus, triggerPreflightWarmup, getPreflightStatus, startOmsEngine, evaluateOmsTick, getOmsMetrics, getPositionSnapshot, startIngestion, getMicrostructureMetrics, getDynamicCollars, calculateCsLvrScoreNapi, NativeUniverseScanner, NativeMultiStreamManager, updateAssetReturnNapi, getCovarianceMatrixNapi, getCorrelationMatrixNapi, calculateCcDfkSizeNapi, getMultiAssetCollarsNapi, evaluateMultiAssetSignalsNapi, startMultiAssetOmsNapi, submitMultiAssetIntentBytesNapi, submitMultiAssetIntentNapi, applyMultiAssetFillNapi, getMultiAssetOmsMetricsNapi, popNextIntentPacketBytesNapi, popNextIntentPacketNapi, syncMultiOmsSabNapi, createMultiAssetLobManagerNapi, startPhase5OrchestratorNapi, stopPhase5OrchestratorNapi, getPhase5OrchestratorMetricsNapi } = nativeBinding
 
 module.exports.initCore = initCore
 module.exports.createLobEngine = createLobEngine
@@ -344,3 +344,7 @@ module.exports.getMultiAssetOmsMetricsNapi = getMultiAssetOmsMetricsNapi
 module.exports.popNextIntentPacketBytesNapi = popNextIntentPacketBytesNapi
 module.exports.popNextIntentPacketNapi = popNextIntentPacketNapi
 module.exports.syncMultiOmsSabNapi = syncMultiOmsSabNapi
+module.exports.createMultiAssetLobManagerNapi = createMultiAssetLobManagerNapi
+module.exports.startPhase5OrchestratorNapi = startPhase5OrchestratorNapi
+module.exports.stopPhase5OrchestratorNapi = stopPhase5OrchestratorNapi
+module.exports.getPhase5OrchestratorMetricsNapi = getPhase5OrchestratorMetricsNapi

@@ -309,6 +309,24 @@ impl CovarianceRiskGuard {
             (sl, tp)
         }
     }
+
+    pub fn verify_pretrade_risk(
+        &self,
+        notional_usd: f64,
+        current_drawdown: f64,
+        current_exposure: f64,
+    ) -> bool {
+        if notional_usd <= 0.0 || !notional_usd.is_finite() {
+            return false;
+        }
+        if current_drawdown > self.limits.max_drawdown_limit_pct {
+            return false;
+        }
+        if current_exposure + notional_usd > 100_000.0 {
+            return false;
+        }
+        true
+    }
 }
 
 // Implement ArcSwap from_utf8_or_panic replacement helper: ArcSwap::new

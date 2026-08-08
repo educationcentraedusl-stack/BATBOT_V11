@@ -199,14 +199,14 @@ impl BinanceWsStream {
                     let mut valid = true;
 
                     for (i, pair) in depth.b.iter().take(LOB_DEPTH).enumerate() {
-                        let Ok(p) = pair[0].parse::<f64>() else { valid = false; break; };
-                        let Ok(q) = pair[1].parse::<f64>() else { valid = false; break; };
+                        let Ok(p) = fast_float::parse::<f64, _>(pair[0].as_bytes()) else { valid = false; break; };
+                        let Ok(q) = fast_float::parse::<f64, _>(pair[1].as_bytes()) else { valid = false; break; };
                         bids[i] = (p, q);
                     }
 
                     for (i, pair) in depth.a.iter().take(LOB_DEPTH).enumerate() {
-                        let Ok(p) = pair[0].parse::<f64>() else { valid = false; break; };
-                        let Ok(q) = pair[1].parse::<f64>() else { valid = false; break; };
+                        let Ok(p) = fast_float::parse::<f64, _>(pair[0].as_bytes()) else { valid = false; break; };
+                        let Ok(q) = fast_float::parse::<f64, _>(pair[1].as_bytes()) else { valid = false; break; };
                         asks[i] = (p, q);
                     }
 
@@ -233,11 +233,11 @@ impl BinanceWsStream {
         } else if combined.stream.contains("@aggTrade") {
             match serde_json::from_str::<BinanceTradePayload>(combined.data.get()) {
                 Ok(trade) => {
-                    let Ok(price) = trade.p.parse::<f64>() else {
+                    let Ok(price) = fast_float::parse::<f64, _>(trade.p.as_bytes()) else {
                         eprintln!("[Binance WS Error] Failed to parse trade price float");
                         return;
                     };
-                    let Ok(quantity) = trade.q.parse::<f64>() else {
+                    let Ok(quantity) = fast_float::parse::<f64, _>(trade.q.as_bytes()) else {
                         eprintln!("[Binance WS Error] Failed to parse trade quantity float");
                         return;
                     };
@@ -264,11 +264,11 @@ impl BinanceWsStream {
         } else if combined.stream.contains("@forceOrder") {
             match serde_json::from_str::<BinanceForceOrderOuter>(combined.data.get()) {
                 Ok(fo) => {
-                    let Ok(price) = fo.o.p.parse::<f64>() else {
+                    let Ok(price) = fast_float::parse::<f64, _>(fo.o.p.as_bytes()) else {
                         eprintln!("[Binance WS Error] Failed to parse liquidation price float");
                         return;
                     };
-                    let Ok(quantity) = fo.o.q.parse::<f64>() else {
+                    let Ok(quantity) = fast_float::parse::<f64, _>(fo.o.q.as_bytes()) else {
                         eprintln!("[Binance WS Error] Failed to parse liquidation quantity float");
                         return;
                     };

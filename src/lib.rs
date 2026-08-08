@@ -21,6 +21,9 @@ use oms::{BinanceWsConfig, OmsEngine};
 use ws::manager::ConnectionManager;
 use risk::CovarianceRiskGuard;
 use strategy::MultiAssetSignalEngine;
+use strategy::orchestrator::StrategyOrchestrator;
+use lob::book::MultiAssetLOBManager;
+use ws::manager::MultiStreamManager;
 use napi::bindgen_prelude::Buffer;
 use napi::Error;
 
@@ -33,12 +36,16 @@ lazy_static! {
     pub static ref GLOBAL_COVARIANCE_RISKGUARD: CovarianceRiskGuard = CovarianceRiskGuard::new_arc(None, None);
     pub static ref GLOBAL_MULTI_STRATEGY_ENGINE: MultiAssetSignalEngine = MultiAssetSignalEngine::default();
     pub static ref GLOBAL_MULTI_OMS_ENGINE: ArcSwapOption<oms::MultiAssetOmsEngine> = ArcSwapOption::from(None);
+    pub static ref GLOBAL_MULTI_LOB_MANAGER: ArcSwapOption<MultiAssetLOBManager> = ArcSwapOption::from(None);
+    pub static ref GLOBAL_MULTI_STREAM_MANAGER: ArcSwapOption<MultiStreamManager> = ArcSwapOption::from(None);
+    pub static ref GLOBAL_STRATEGY_ORCHESTRATOR: ArcSwapOption<StrategyOrchestrator> = ArcSwapOption::from(None);
     static ref GLOBAL_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_multi_thread()
 
         .enable_all()
         .build()
         .expect("Failed to initialize Tokio runtime for HFT ingestion");
 }
+
 
 
 #[napi]
@@ -709,6 +716,75 @@ pub fn sync_multi_oms_sab_napi(sab_buffer: Buffer) -> bool {
         false
     }
 }
+
+#[napi]
+pub fn create_multi_asset_lob_manager_napi() -> bool {
+    let mgr = Arc::new(MultiAssetLOBManager::new());
+    GLOBAL_MULTI_LOB_MANAGER.store(Some(mgr));
+    true
+}
+
+#[napi]
+pub fn start_phase5_orchestrator_napi(symbols: Vec<String>) -> bool {
+    let lob_mgr = match GLOBAL_MULTI_LOB_MANAGER.load().as_ref() {
+        Some(m) => m.clone(),
+        None => {
+            let m = Arc::new(MultiAssetLOBManager::new());
+            GLOBAL_MULTI_LOB_MANAGER.store(Some(m.clone()));
+            m
+        }
+    };
+
+    let stream_mgr = Arc::new(MultiStreamManager::new(symbols.len().min(10)));
+    GLOBAL_MULTI_STREAM_MANAGER.store(Some(stream_mgr.clone()));
+
+    let ai_engine = GLOBAL_AI_ENGINE.load().as_ref().cloned();
+    let oms_engine = GLOBAL_MULTI_OMS_ENGINE.load().as_ref().cloned();
+
+    let orchestrator = Arc::new(StrategyOrchestrator::new(
+        lob_mgr,
+        ai_engine,
+        None,
+        oms_engine,
+        None,
+    ));
+    GLOBAL_STRATEGY_ORCHESTRATOR.store(Some(orchestrator.clone()));
+
+    let queues = stream_mgr.queues().to_vec();
+    orchestrator.start_synchronous_orchestrator(queues);
+
+    let stream_mgr_clone = stream_mgr.clone();
+    GLOBAL_RUNTIME.spawn(async move {
+        let _ = stream_mgr_clone.update_subscriptions(&symbols).await;
+    });
+
+    true
+}
+
+#[napi]
+pub fn stop_phase5_orchestrator_napi() -> bool {
+    if let Some(orch) = GLOBAL_STRATEGY_ORCHESTRATOR.load().as_ref() {
+        orch.stop();
+    }
+    if let Some(stream_mgr) = GLOBAL_MULTI_STREAM_MANAGER.load().as_ref() {
+        stream_mgr.stop_all();
+    }
+    if let Some(lob_mgr) = GLOBAL_MULTI_LOB_MANAGER.load().as_ref() {
+        lob_mgr.stop();
+    }
+    true
+}
+
+#[napi]
+pub fn get_phase5_orchestrator_metrics_napi() -> String {
+    let tick_count = StrategyOrchestrator::tick_count();
+    let signal_count = StrategyOrchestrator::signal_count();
+    format!(
+        "{{\"tick_count\":{},\"signal_count\":{},\"status\":\"ACTIVE\"}}",
+        tick_count, signal_count
+    )
+}
+
 
 
 
