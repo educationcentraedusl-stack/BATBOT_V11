@@ -210,7 +210,8 @@ async function runPhase4MultiAssetOmsTest() {
   console.log("   - Engine Throughput    : " + throughput.toLocaleString() + " intents / sec");
   console.log("================================================================================");
 
-  assert(latencyPerTickUs < 250.0, "Latency target < 250 us violated: " + latencyPerTickUs.toFixed(3) + " us");
+  assert(latencyPerTickUs < 5.0, "Latency target < 5.0 us violated: " + latencyPerTickUs.toFixed(3) + " us");
+  assert(throughput > 150000, "Throughput target > 150,000 intents/sec violated: " + throughput.toLocaleString() + " intents/sec");
   console.log("\n🎉 ALL PHASE 4 MULTI-ASSET OMS QA VERIFICATION TESTS PASSED SUCCESSFULLY!");
 }
 

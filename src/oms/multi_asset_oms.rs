@@ -207,18 +207,18 @@ impl MultiAssetOmsEngine {
         }
     }
 
-    pub fn submit_intent(
+    pub fn submit_intent_packet(
         &self,
-        intent: OrderIntent,
+        pkt: OrderIntentPacket,
         mid_price: f64,
         top5_depth_usd: f64,
         step_size: f64,
         tick_size: f64,
         portfolio_leverage: f64,
         avg_correlation: f64,
-    ) -> Result<Vec<OrderIntent>, RejectionReason> {
-        self.submit_intent_full(
-            intent,
+    ) -> Result<Vec<OrderIntentPacket>, RejectionReason> {
+        self.submit_intent_packet_full(
+            pkt,
             mid_price,
             top5_depth_usd,
             step_size,
@@ -232,9 +232,9 @@ impl MultiAssetOmsEngine {
         )
     }
 
-    pub fn submit_intent_full(
+    pub fn submit_intent_packet_full(
         &self,
-        intent: OrderIntent,
+        pkt: OrderIntentPacket,
         mid_price: f64,
         top5_depth_usd: f64,
         step_size: f64,
@@ -245,22 +245,17 @@ impl MultiAssetOmsEngine {
         v_depletion: f64,
         flow_toxicity: f64,
         slippage_ticks: f64,
-    ) -> Result<Vec<OrderIntent>, RejectionReason> {
-        let asset_idx = intent.asset_idx.min(self.max_assets - 1);
+    ) -> Result<Vec<OrderIntentPacket>, RejectionReason> {
+        let asset_idx = (pkt.asset_idx as usize).min(self.max_assets - 1);
         let cur_pos = self.position_ledgers[asset_idx].snapshot().position_qty;
 
-        // Evaluate SOR Routing with real microstructure params & TS client order ID passthrough
         let half_spread = (tick_size * 0.5).max(1e-5);
         let best_bid = (mid_price - half_spread).max(tick_size);
         let best_ask = mid_price + half_spread;
-        let routed_intent = self
+        let routed_pkt = self
             .sor
-            .route_order_with_id(
-                &intent.symbol,
-                asset_idx,
-                intent.ai_direction,
-                intent.ai_confidence,
-                intent.target_horizon_ms,
+            .route_packet(
+                &pkt,
                 best_bid,
                 best_ask,
                 spread_vel,
@@ -268,15 +263,11 @@ impl MultiAssetOmsEngine {
                 flow_toxicity,
                 slippage_ticks,
                 tick_size,
-                intent.quantity,
-                intent.creation_ns,
-                Some(&intent.client_order_id),
-                Some(intent.price),
             )
-            .unwrap_or_else(|| intent.clone());
+            .unwrap_or(pkt);
 
-        if let Err(err) = self.risk_guard.validate_multi_asset_order(
-            &routed_intent,
+        if let Err(err) = self.risk_guard.validate_multi_asset_packet(
+            &routed_pkt,
             mid_price,
             cur_pos,
             portfolio_leverage,
@@ -293,24 +284,18 @@ impl MultiAssetOmsEngine {
             return Err(reason);
         }
 
-        // Slice intent if necessary
-        let slices = self.slicing.slice_intent(&routed_intent, top5_depth_usd, step_size, tick_size);
+        let slices = self.slicing.slice_packet(&routed_pkt, top5_depth_usd, step_size, tick_size);
+        let required_cap = slices.len();
 
-        // Convert all slices to fixed 128-byte OrderIntentPackets
-        let packets: Vec<OrderIntentPacket> = slices.iter().map(OrderIntentPacket::from_intent).collect();
-        let required_cap = packets.len();
-
-        // Strict capacity reservation pre-check before attempting any push
         let available_cap = self.intent_queue.capacity().saturating_sub(self.intent_queue.len());
         if available_cap < required_cap {
             self.metrics_orders_rejected[asset_idx].fetch_add(1, Ordering::Relaxed);
             return Err(RejectionReason::RateLimitExceeded);
         }
 
-        // Push slices into queue without calling pop() on failure (prevents popping head items from other threads)
         let mut pushed_count = 0usize;
-        for pkt in packets {
-            if self.intent_queue.push(pkt) {
+        for slice_pkt in &slices {
+            if self.intent_queue.push(*slice_pkt) {
                 pushed_count += 1;
             } else {
                 self.metrics_orders_rejected[asset_idx].fetch_add(1, Ordering::Relaxed);
@@ -320,6 +305,60 @@ impl MultiAssetOmsEngine {
 
         self.metrics_orders_submitted[asset_idx].fetch_add(pushed_count as u64, Ordering::Relaxed);
         Ok(slices)
+    }
+
+    pub fn submit_intent(
+        &self,
+        intent: OrderIntent,
+        mid_price: f64,
+        top5_depth_usd: f64,
+        step_size: f64,
+        tick_size: f64,
+        portfolio_leverage: f64,
+        avg_correlation: f64,
+    ) -> Result<Vec<OrderIntent>, RejectionReason> {
+        let pkt = OrderIntentPacket::from_intent(&intent);
+        let slice_pkts = self.submit_intent_packet(
+            pkt,
+            mid_price,
+            top5_depth_usd,
+            step_size,
+            tick_size,
+            portfolio_leverage,
+            avg_correlation,
+        )?;
+        Ok(slice_pkts.iter().map(|p| p.to_intent()).collect())
+    }
+
+    pub fn submit_intent_full(
+        &self,
+        intent: OrderIntent,
+        mid_price: f64,
+        top5_depth_usd: f64,
+        step_size: f64,
+        tick_size: f64,
+        portfolio_leverage: f64,
+        avg_correlation: f64,
+        spread_vel: f64,
+        v_depletion: f64,
+        flow_toxicity: f64,
+        slippage_ticks: f64,
+    ) -> Result<Vec<OrderIntent>, RejectionReason> {
+        let pkt = OrderIntentPacket::from_intent(&intent);
+        let slice_pkts = self.submit_intent_packet_full(
+            pkt,
+            mid_price,
+            top5_depth_usd,
+            step_size,
+            tick_size,
+            portfolio_leverage,
+            avg_correlation,
+            spread_vel,
+            v_depletion,
+            flow_toxicity,
+            slippage_ticks,
+        )?;
+        Ok(slice_pkts.iter().map(|p| p.to_intent()).collect())
     }
 
     pub fn apply_fill(&self, report: ExecutionReport) {

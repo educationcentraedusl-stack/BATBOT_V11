@@ -1,4 +1,4 @@
-use crate::oms::types::OrderIntent;
+use crate::oms::types::{OrderIntent, OrderIntentPacket};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExecutionSlicerConfig {
@@ -52,26 +52,32 @@ impl ExecutionSlicer {
         if res.is_finite() { res } else { price }
     }
 
-    /// Determines if an order intent exceeds the max participation threshold relative to book depth.
-    pub fn should_slice(&self, intent: &OrderIntent, top5_depth_usd: f64) -> bool {
+    /// Determines if an order intent packet exceeds the max participation threshold relative to book depth.
+    pub fn should_slice_packet(&self, pkt: &OrderIntentPacket, top5_depth_usd: f64) -> bool {
         if top5_depth_usd <= 0.0 || !top5_depth_usd.is_finite() {
             return false;
         }
-        let intent_notional = intent.notional_value();
+        let intent_notional = pkt.notional_value();
         let max_allowed_notional = top5_depth_usd * self.config.max_depth_participation_pct;
         intent_notional > max_allowed_notional && intent_notional >= (self.config.min_slice_notional_usd * 2.0)
     }
 
-    /// Splits a large OrderIntent into micro-slices, respecting step_size and tick_size.
-    pub fn slice_intent(
+    /// Determines if an order intent exceeds the max participation threshold relative to book depth.
+    pub fn should_slice(&self, intent: &OrderIntent, top5_depth_usd: f64) -> bool {
+        let pkt = OrderIntentPacket::from_intent(intent);
+        self.should_slice_packet(&pkt, top5_depth_usd)
+    }
+
+    /// Splits a large OrderIntentPacket into micro-slices without heap string allocations.
+    pub fn slice_packet(
         &self,
-        intent: &OrderIntent,
+        pkt: &OrderIntentPacket,
         top5_depth_usd: f64,
         step_size: f64,
         tick_size: f64,
-    ) -> Vec<OrderIntent> {
-        if !self.should_slice(intent, top5_depth_usd) {
-            let mut single = intent.clone();
+    ) -> Vec<OrderIntentPacket> {
+        if !self.should_slice_packet(pkt, top5_depth_usd) {
+            let mut single = *pkt;
             single.quantity = Self::quantize_qty(single.quantity, step_size);
             single.price = Self::quantize_price(single.price, tick_size);
             return vec![single];
@@ -79,23 +85,25 @@ impl ExecutionSlicer {
 
         let max_slice_notional = (top5_depth_usd * self.config.max_depth_participation_pct)
             .max(self.config.min_slice_notional_usd);
-        
-        let price = Self::quantize_price(intent.price, tick_size);
+
+        let price = Self::quantize_price(pkt.price, tick_size);
         if price <= 0.0 {
-            return vec![intent.clone()];
+            return vec![*pkt];
         }
 
         let max_slice_qty = Self::quantize_qty(max_slice_notional / price, step_size);
         if max_slice_qty <= 0.0 {
-            return vec![intent.clone()];
+            return vec![*pkt];
         }
 
-        let needed_slices = ((intent.quantity * price) / max_slice_notional).ceil() as usize;
+        let needed_slices = ((pkt.quantity * price) / max_slice_notional).ceil() as usize;
         let num_slices = needed_slices.clamp(2, self.config.max_slice_count);
-        let per_slice_qty = Self::quantize_qty(intent.quantity / num_slices as f64, step_size);
+        let per_slice_qty = Self::quantize_qty(pkt.quantity / num_slices as f64, step_size);
 
-        let mut remaining_qty = Self::quantize_qty(intent.quantity, step_size);
+        let mut remaining_qty = Self::quantize_qty(pkt.quantity, step_size);
         let mut slices = Vec::with_capacity(num_slices);
+
+        let base_cid_str = pkt.client_order_id_str();
 
         for i in 0..num_slices {
             if remaining_qty <= 0.0 {
@@ -112,41 +120,45 @@ impl ExecutionSlicer {
                 break;
             }
 
-            let suffix = format!("_s{}", i + 1);
-            let max_base_len = 64usize.saturating_sub(suffix.len());
-            let base_cid = if intent.client_order_id.len() > max_base_len {
-                &intent.client_order_id[..max_base_len]
-            } else {
-                &intent.client_order_id
-            };
-            let slice_cid = format!("{}{}", base_cid, suffix);
-            let slice_intent = OrderIntent {
-                client_order_id: slice_cid,
-                symbol: intent.symbol.clone(),
-                asset_idx: intent.asset_idx,
-                side: intent.side,
-                order_type: intent.order_type,
-                time_in_force: intent.time_in_force,
-                quantity: quantized_slice_qty,
-                price,
-                reduce_only: intent.reduce_only,
-                post_only: intent.post_only,
-                target_horizon_ms: intent.target_horizon_ms,
-                ai_confidence: intent.ai_confidence,
-                ai_direction: intent.ai_direction,
-                creation_ns: intent.creation_ns,
-            };
+            let mut slice_pkt = *pkt;
+            slice_pkt.quantity = quantized_slice_qty;
+            slice_pkt.price = price;
 
-            slices.push(slice_intent);
+            // Zero-allocation stack formatting for client_order_id
+            let suffix_idx = i + 1;
+            let suffix_bytes = [b'_', b's', b'0' + (suffix_idx as u8)];
+            let max_base_len = 64usize.saturating_sub(suffix_bytes.len());
+            let base_bytes = base_cid_str.as_bytes();
+            let base_len = base_bytes.len().min(max_base_len);
+
+            let mut cid_buf = [0u8; 64];
+            cid_buf[..base_len].copy_from_slice(&base_bytes[..base_len]);
+            cid_buf[base_len..base_len + suffix_bytes.len()].copy_from_slice(&suffix_bytes);
+            slice_pkt.client_order_id_bytes = cid_buf;
+
+            slices.push(slice_pkt);
             let diff = remaining_qty - quantized_slice_qty;
             remaining_qty = if diff.max(0.0) <= 1e-9 { 0.0 } else { Self::quantize_qty(diff, step_size) };
         }
 
         if slices.is_empty() {
-            vec![intent.clone()]
+            vec![*pkt]
         } else {
             slices
         }
+    }
+
+    /// Splits a large OrderIntent into micro-slices, respecting step_size and tick_size.
+    pub fn slice_intent(
+        &self,
+        intent: &OrderIntent,
+        top5_depth_usd: f64,
+        step_size: f64,
+        tick_size: f64,
+    ) -> Vec<OrderIntent> {
+        let pkt = OrderIntentPacket::from_intent(intent);
+        let slices = self.slice_packet(&pkt, top5_depth_usd, step_size, tick_size);
+        slices.iter().map(|p| p.to_intent()).collect()
     }
 }
 

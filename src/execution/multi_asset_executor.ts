@@ -2,9 +2,11 @@ import "dotenv/config";
 import {
   startMultiAssetOmsNapi,
   submitMultiAssetIntentNapi,
+  submitMultiAssetIntentBytesNapi,
   applyMultiAssetFillNapi,
   getMultiAssetOmsMetricsNapi,
   popNextIntentPacketNapi,
+  popNextIntentPacketBytesNapi,
   syncMultiOmsSabNapi,
 } from "../../index";
 import { BinanceExecutionClient, BinanceClientOptions } from "./binance";
@@ -65,9 +67,11 @@ export class MultiAssetExecutor {
   private initialBalanceUsd: number;
   private activeSymbols: string[];
   private symbolToIdxMap: Map<string, number> = new Map();
+  private symbolBuffers: Buffer[] = [];
   private client: BinanceExecutionClient;
   private userStream: BinanceUserDataStream;
   private isRunning: boolean = false;
+  private pktBuf: Buffer = Buffer.allocUnsafe(128);
 
   constructor(config: MultiAssetExecutorConfig) {
     this.initialBalanceUsd = config.initialBalanceUsd;
@@ -75,6 +79,9 @@ export class MultiAssetExecutor {
 
     this.activeSymbols.forEach((sym, idx) => {
       this.symbolToIdxMap.set(sym, idx);
+      const symBuf = Buffer.alloc(16);
+      symBuf.write(sym, 0, 16, "utf8");
+      this.symbolBuffers.push(symBuf);
     });
 
     this.client = new BinanceExecutionClient(config.clientOptions);
@@ -127,35 +134,43 @@ export class MultiAssetExecutor {
     const assetIdx = this.getAssetIndex(symbol);
     const isMarket = orderType === "MARKET";
     const postOnly = isMarket ? false : (options?.postOnly ?? true);
-    const timeInForce = isMarket ? "Ioc" : (options?.timeInForce ?? "Gtx");
+    const tifStr = isMarket ? "Ioc" : (options?.timeInForce ?? "Gtx");
     const targetHorizonMs = options?.targetHorizonMs ?? 100.0;
     const aiConfidence = options?.aiConfidence ?? 0.85;
     const reduceOnly = options?.reduceOnly ?? false;
 
-    const creationNsStr = process.hrtime.bigint().toString();
+    // Zero-copy 128-byte Buffer packing (OrderIntentPacket layout)
+    const pktBuf = this.pktBuf;
+    pktBuf.fill(0);
 
-    const intentPayload = {
-      client_order_id: `BAT_${assetIdx}_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-      symbol,
-      asset_idx: assetIdx,
-      side: side === "BUY" ? "Buy" : "Sell",
-      order_type: isMarket ? "Market" : "Limit",
-      time_in_force: timeInForce,
-      quantity,
-      price,
-      reduce_only: reduceOnly,
-      post_only: postOnly,
-      target_horizon_ms: targetHorizonMs,
-      ai_confidence: aiConfidence,
-      ai_direction: side === "BUY" ? 1.0 : -1.0,
-      creation_ns: 0,
-    };
-    const intentJson = JSON.stringify(intentPayload).replace('"creation_ns":0', `"creation_ns":${creationNsStr}`);
+    pktBuf.writeUInt32LE(assetIdx, 0);
+    pktBuf.writeUInt8(side === "BUY" ? 0 : 1, 4);
+    pktBuf.writeUInt8(isMarket ? 1 : 0, 5);
+
+    let tifCode = 3;
+    if (tifStr === "Gtc") tifCode = 0;
+    else if (tifStr === "Ioc") tifCode = 1;
+    else if (tifStr === "Fok") tifCode = 2;
+    pktBuf.writeUInt8(tifCode, 6);
+
+    let flags = 0;
+    if (reduceOnly) flags |= 1 << 0;
+    if (postOnly) flags |= 1 << 1;
+    pktBuf.writeUInt8(flags, 7);
+
+    pktBuf.writeDoubleLE(quantity, 8);
+    pktBuf.writeDoubleLE(price, 16);
+    pktBuf.writeFloatLE(targetHorizonMs, 24);
+    pktBuf.writeFloatLE(aiConfidence, 28);
+    pktBuf.writeFloatLE(side === "BUY" ? 1.0 : -1.0, 32);
+    pktBuf.writeUInt32LE(0, 36);
+
+    // Copy pre-allocated symbol buffer
+    pktBuf.set(this.symbolBuffers[assetIdx], 112);
 
     try {
-      const resStr = submitMultiAssetIntentNapi(
-        assetIdx,
-        intentJson,
+      const resBuf = submitMultiAssetIntentBytesNapi(
+        pktBuf,
         midPrice,
         top5DepthUsd,
         stepSize,
@@ -164,13 +179,25 @@ export class MultiAssetExecutor {
         avgCorrelation
       );
 
-      if (resStr.startsWith('{"status":"REJECTED"')) {
-        const parsed = JSON.parse(resStr) as { status: string; reason?: string };
-        return { status: "REJECTED", reason: parsed.reason };
-      } else {
-        const slices = JSON.parse(resStr) as OrderIntentSlice[];
-        return { status: "SUBMITTED", slices };
+      if (resBuf.length === 2 && resBuf[0] === 0xff) {
+        const reasonCode = resBuf[1];
+        const reasonMap: Record<number, string> = {
+          1: "REJECTED_RATE_LIMIT",
+          2: "REJECTED_PRICE_COLLAR",
+          3: "REJECTED_LEVERAGE_CAP",
+          4: "REJECTED_CORRELATION_SPIKE",
+          5: "REJECTED_INVALID_QTY_PRICE",
+        };
+        return { status: "REJECTED", reason: reasonMap[reasonCode] || "REJECTED_UNKNOWN" };
       }
+
+      const numSlices = Math.floor(resBuf.length / 128);
+      const slices: OrderIntentSlice[] = [];
+      for (let i = 0; i < numSlices; i++) {
+        slices.push(this.parsePacketFromBuffer(resBuf, i * 128));
+      }
+
+      return { status: "SUBMITTED", slices };
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       return { status: "REJECTED", reason: errorMsg };
@@ -179,13 +206,53 @@ export class MultiAssetExecutor {
 
   public popNextPacket(): OrderIntentSlice | null {
     try {
-      const pktStr = popNextIntentPacketNapi();
-      if (!pktStr) return null;
-      return JSON.parse(pktStr) as OrderIntentSlice;
+      const pktBuf = popNextIntentPacketBytesNapi();
+      if (!pktBuf || pktBuf.length < 128) return null;
+      return this.parsePacketFromBuffer(pktBuf, 0);
     } catch (err: unknown) {
       console.error("[MultiAssetExecutor] Failed to pop intent packet:", err);
       return null;
     }
+  }
+
+  private parsePacketFromBuffer(buf: Buffer, offset: number): OrderIntentSlice {
+    const assetIdx = buf.readUInt32LE(offset + 0);
+    const sideCode = buf.readUInt8(offset + 4);
+    const orderTypeCode = buf.readUInt8(offset + 5);
+    const tifCode = buf.readUInt8(offset + 6);
+    const flags = buf.readUInt8(offset + 7);
+    const quantity = buf.readDoubleLE(offset + 8);
+    const price = buf.readDoubleLE(offset + 16);
+    const targetHorizonMs = buf.readFloatLE(offset + 24);
+    const aiConfidence = buf.readFloatLE(offset + 28);
+    const aiDirection = buf.readFloatLE(offset + 32);
+    const creationNs = buf.readBigUInt64LE(offset + 40);
+
+    let cidLen = 0;
+    while (cidLen < 64 && buf[offset + 48 + cidLen] !== 0) cidLen++;
+    const clientOrderId = buf.toString("utf8", offset + 48, offset + 48 + cidLen);
+
+    let symLen = 0;
+    while (symLen < 16 && buf[offset + 112 + symLen] !== 0) symLen++;
+    const symbol = buf.toString("utf8", offset + 112, offset + 112 + symLen);
+
+    const tifMap = ["Gtc", "Ioc", "Fok", "Gtx"];
+    return {
+      client_order_id: clientOrderId,
+      symbol,
+      asset_idx: assetIdx,
+      side: sideCode === 0 ? "Buy" : "Sell",
+      order_type: orderTypeCode === 1 ? "Market" : "Limit",
+      time_in_force: tifMap[tifCode] || "Gtx",
+      quantity,
+      price,
+      reduce_only: (flags & (1 << 0)) !== 0,
+      post_only: (flags & (1 << 1)) !== 0,
+      target_horizon_ms: targetHorizonMs,
+      ai_confidence: aiConfidence,
+      ai_direction: aiDirection,
+      creation_ns: Number(creationNs),
+    };
   }
 
   public syncSab(sabBuffer: Buffer): boolean {

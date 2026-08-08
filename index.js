@@ -310,7 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { initCore, createLobEngine, loadAiModel, loadAiModelFull, resetIcTracker, getIcStatus, triggerPreflightWarmup, getPreflightStatus, startOmsEngine, evaluateOmsTick, getOmsMetrics, getPositionSnapshot, startIngestion, getMicrostructureMetrics, getDynamicCollars, calculateCsLvrScoreNapi, NativeUniverseScanner, NativeMultiStreamManager, updateAssetReturnNapi, getCovarianceMatrixNapi, getCorrelationMatrixNapi, calculateCcDfkSizeNapi, getMultiAssetCollarsNapi, evaluateMultiAssetSignalsNapi, startMultiAssetOmsNapi, submitMultiAssetIntentNapi, applyMultiAssetFillNapi, getMultiAssetOmsMetricsNapi, popNextIntentPacketNapi, syncMultiOmsSabNapi } = nativeBinding
+const { initCore, createLobEngine, loadAiModel, loadAiModelFull, resetIcTracker, getIcStatus, triggerPreflightWarmup, getPreflightStatus, startOmsEngine, evaluateOmsTick, getOmsMetrics, getPositionSnapshot, startIngestion, getMicrostructureMetrics, getDynamicCollars, calculateCsLvrScoreNapi, NativeUniverseScanner, NativeMultiStreamManager, updateAssetReturnNapi, getCovarianceMatrixNapi, getCorrelationMatrixNapi, calculateCcDfkSizeNapi, getMultiAssetCollarsNapi, evaluateMultiAssetSignalsNapi, startMultiAssetOmsNapi, submitMultiAssetIntentBytesNapi, submitMultiAssetIntentNapi, applyMultiAssetFillNapi, getMultiAssetOmsMetricsNapi, popNextIntentPacketBytesNapi, popNextIntentPacketNapi, syncMultiOmsSabNapi } = nativeBinding
 
 module.exports.initCore = initCore
 module.exports.createLobEngine = createLobEngine
@@ -337,8 +337,10 @@ module.exports.calculateCcDfkSizeNapi = calculateCcDfkSizeNapi
 module.exports.getMultiAssetCollarsNapi = getMultiAssetCollarsNapi
 module.exports.evaluateMultiAssetSignalsNapi = evaluateMultiAssetSignalsNapi
 module.exports.startMultiAssetOmsNapi = startMultiAssetOmsNapi
+module.exports.submitMultiAssetIntentBytesNapi = submitMultiAssetIntentBytesNapi
 module.exports.submitMultiAssetIntentNapi = submitMultiAssetIntentNapi
 module.exports.applyMultiAssetFillNapi = applyMultiAssetFillNapi
 module.exports.getMultiAssetOmsMetricsNapi = getMultiAssetOmsMetricsNapi
+module.exports.popNextIntentPacketBytesNapi = popNextIntentPacketBytesNapi
 module.exports.popNextIntentPacketNapi = popNextIntentPacketNapi
 module.exports.syncMultiOmsSabNapi = syncMultiOmsSabNapi

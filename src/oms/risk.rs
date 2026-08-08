@@ -1,7 +1,8 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
-use crate::oms::types::{OrderIntent, OrderSide};
+use crate::oms::types::{OrderIntent, OrderIntentPacket};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum OmsRiskError {
@@ -73,32 +74,25 @@ impl Default for RiskConfig {
     }
 }
 
-use std::sync::Mutex;
-
-#[derive(Debug)]
-struct SlidingWindowTracker {
-    count: u64,
-    last_reset_ns: u64,
-}
-
 pub struct OmsRiskGuard {
     config: RiskConfig,
-    window_tracker: Mutex<SlidingWindowTracker>,
+    /// Bit-packed lock-free 64-bit rate limiter:
+    /// Upper 32 bits: last_reset_sec (u32 timestamp in seconds)
+    /// Lower 32 bits: count (u32 order count in current 10s window)
+    window_state: AtomicU64,
 }
 
 impl OmsRiskGuard {
     pub fn new(config: RiskConfig) -> Self {
-        let now_ns = SystemTime::now()
+        let now_sec = (SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
-            .as_nanos() as u64;
+            .as_secs()) as u32;
 
+        let initial_state = (now_sec as u64) << 32;
         Self {
             config,
-            window_tracker: Mutex::new(SlidingWindowTracker {
-                count: 0,
-                last_reset_ns: now_ns,
-            }),
+            window_state: AtomicU64::new(initial_state),
         }
     }
 
@@ -106,11 +100,44 @@ impl OmsRiskGuard {
         Self::new(RiskConfig::default())
     }
 
-    fn now_ns() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64
+    #[inline(always)]
+    fn check_and_increment_rate_limit(&self, creation_ns: u64) -> Result<(), OmsRiskError> {
+        let now_sec = if creation_ns > 0 {
+            creation_ns / 1_000_000_000
+        } else {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        };
+
+        let mut current = self.window_state.load(Ordering::Relaxed);
+        loop {
+            let last_reset_sec = (current >> 32) as u32;
+            let count = (current & 0xFFFF_FFFF) as u32;
+
+            let (new_reset_sec, new_count) = if (now_sec as u32).saturating_sub(last_reset_sec) >= 10 {
+                (now_sec as u32, 1u32)
+            } else {
+                if count >= self.config.max_orders_per_10s {
+                    return Err(OmsRiskError::RateLimitExceeded(
+                        "Sliding 10s order limit exceeded".to_string(),
+                    ));
+                }
+                (last_reset_sec, count + 1)
+            };
+
+            let new_state = ((new_reset_sec as u64) << 32) | (new_count as u64);
+            match self.window_state.compare_exchange_weak(
+                current,
+                new_state,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(actual) => current = actual,
+            }
+        }
     }
 
     pub fn validate_order(
@@ -122,20 +149,20 @@ impl OmsRiskGuard {
         self.validate_multi_asset_order(intent, mid_price, current_position_qty, 0.0, 0.0)
     }
 
-    pub fn validate_multi_asset_order(
+    pub fn validate_multi_asset_packet(
         &self,
-        intent: &OrderIntent,
+        pkt: &OrderIntentPacket,
         mid_price: f64,
         current_position_qty: f64,
         projected_portfolio_leverage: f64,
         avg_correlation: f64,
     ) -> Result<(), OmsRiskError> {
         // 0. Non-finite / NaN Poisoning Check
-        if !intent.quantity.is_finite()
-            || !intent.price.is_finite()
-            || !intent.ai_confidence.is_finite()
-            || !intent.ai_direction.is_finite()
-            || !intent.target_horizon_ms.is_finite()
+        if !pkt.quantity.is_finite()
+            || !pkt.price.is_finite()
+            || !pkt.ai_confidence.is_finite()
+            || !pkt.ai_direction.is_finite()
+            || !pkt.target_horizon_ms.is_finite()
             || !mid_price.is_finite()
             || !current_position_qty.is_finite()
             || !projected_portfolio_leverage.is_finite()
@@ -146,36 +173,14 @@ impl OmsRiskGuard {
             ));
         }
 
-        // 0. Parameter Validation
-        if intent.quantity <= 0.0 || intent.price <= 0.0 {
+        if pkt.quantity <= 0.0 || pkt.price <= 0.0 || mid_price <= 0.0 {
             return Err(OmsRiskError::InvalidOrderParameters(
-                "Order quantity and price must be strictly positive".to_string(),
+                "Order quantity, price, and mid price must be strictly positive".to_string(),
             ));
         }
 
-        if mid_price <= 0.0 {
-            return Err(OmsRiskError::InvalidOrderParameters(
-                "Mid price must be strictly positive".to_string(),
-            ));
-        }
-
-        // 1. Rate Limiting Check (10-second sliding window inspection with atomic mutex update)
-        let now = Self::now_ns();
-        let window_duration_ns = 10_000_000_000u64; // 10 seconds in nanoseconds
-        {
-            let mut tracker = self.window_tracker.lock().unwrap_or_else(|e| e.into_inner());
-            if now.saturating_sub(tracker.last_reset_ns) > window_duration_ns {
-                tracker.last_reset_ns = now;
-                tracker.count = 0;
-            }
-
-            if tracker.count >= self.config.max_orders_per_10s as u64 {
-                return Err(OmsRiskError::RateLimitExceeded(format!(
-                    "Sliding 10s order count {} exceeded limit {}",
-                    tracker.count, self.config.max_orders_per_10s
-                )));
-            }
-        }
+        // 1. Lock-free Atomic Rate Limit Check & Increment
+        self.check_and_increment_rate_limit(pkt.creation_ns)?;
 
         // 2. Correlation Emergency Brake
         if avg_correlation > self.config.max_correlation_threshold {
@@ -194,7 +199,7 @@ impl OmsRiskGuard {
         }
 
         // 4. Max Notional Per Order Collar
-        let order_notional = intent.notional_value();
+        let order_notional = pkt.notional_value();
         if order_notional > self.config.max_notional_per_order {
             return Err(OmsRiskError::MaxNotionalExceeded {
                 notional: order_notional,
@@ -203,26 +208,22 @@ impl OmsRiskGuard {
         }
 
         // 5. Price Collar Guard
-        let dev_pct = ((intent.price - mid_price).abs() / mid_price) * 100.0;
+        let dev_pct = ((pkt.price - mid_price).abs() / mid_price) * 100.0;
         if dev_pct > self.config.max_price_deviation_pct {
             return Err(OmsRiskError::PriceCollarExceeded {
-                price: intent.price,
+                price: pkt.price,
                 mid_price,
                 deviation_pct: dev_pct,
             });
         }
 
-        // 6. Position Max Drift Collar (Exempt reduce_only & position-reducing orders for emergency stop-loss safety)
-        let fill_qty = if intent.side == OrderSide::Buy {
-            intent.quantity
-        } else {
-            -intent.quantity
-        };
+        // 6. Position Max Drift Collar
+        let fill_qty = if pkt.side == 0 { pkt.quantity } else { -pkt.quantity };
         let current_pos_usd = (current_position_qty * mid_price).abs();
         let projected_pos_qty = current_position_qty + fill_qty;
         let projected_pos_usd = (projected_pos_qty * mid_price).abs();
 
-        let is_reducing_exposure = intent.reduce_only || (projected_pos_usd <= current_pos_usd);
+        let is_reducing_exposure = pkt.is_reduce_only() || (projected_pos_usd <= current_pos_usd);
 
         if !is_reducing_exposure && projected_pos_usd > self.config.max_portfolio_notional {
             return Err(OmsRiskError::MaxPositionDriftExceeded {
@@ -231,12 +232,18 @@ impl OmsRiskGuard {
             });
         }
 
-        // Increment sliding window order counter ONLY after all checks have passed successfully
-        {
-            let mut tracker = self.window_tracker.lock().unwrap_or_else(|e| e.into_inner());
-            tracker.count += 1;
-        }
         Ok(())
     }
-}
 
+    pub fn validate_multi_asset_order(
+        &self,
+        intent: &OrderIntent,
+        mid_price: f64,
+        current_position_qty: f64,
+        projected_portfolio_leverage: f64,
+        avg_correlation: f64,
+    ) -> Result<(), OmsRiskError> {
+        let pkt = OrderIntentPacket::from_intent(intent);
+        self.validate_multi_asset_packet(&pkt, mid_price, current_position_qty, projected_portfolio_leverage, avg_correlation)
+    }
+}

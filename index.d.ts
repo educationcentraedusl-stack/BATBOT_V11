@@ -26,9 +26,11 @@ export declare function calculateCcDfkSizeNapi(assetIdx: number, expectedReturn:
 export declare function getMultiAssetCollarsNapi(entryPrice: number, gkVol: number, isLong: boolean): string
 export declare function evaluateMultiAssetSignalsNapi(sabBuffer: Buffer, activeSymbolsJson: string): string
 export declare function startMultiAssetOmsNapi(initialBalanceUsd: number, symbolsJson?: string | undefined | null): boolean
+export declare function submitMultiAssetIntentBytesNapi(packetBuffer: Buffer, midPrice: number, top5DepthUsd: number, stepSize: number, tickSize: number, portfolioLeverage: number, avgCorrelation: number): Buffer
 export declare function submitMultiAssetIntentNapi(assetIdx: number, intentJson: string, midPrice: number, top5DepthUsd: number, stepSize: number, tickSize: number, portfolioLeverage: number, avgCorrelation: number): string
 export declare function applyMultiAssetFillNapi(reportJson: string): boolean
 export declare function getMultiAssetOmsMetricsNapi(assetIdx: number): string
+export declare function popNextIntentPacketBytesNapi(): Buffer | null
 export declare function popNextIntentPacketNapi(): string | null
 export declare function syncMultiOmsSabNapi(sabBuffer: Buffer): boolean
 export declare class NativeUniverseScanner {

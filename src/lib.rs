@@ -551,6 +551,56 @@ pub fn start_multi_asset_oms_napi(
 }
 
 #[napi]
+pub fn submit_multi_asset_intent_bytes_napi(
+    packet_buffer: Buffer,
+    mid_price: f64,
+    top5_depth_usd: f64,
+    step_size: f64,
+    tick_size: f64,
+    portfolio_leverage: f64,
+    avg_correlation: f64,
+) -> napi::Result<Buffer> {
+    if packet_buffer.len() < 128 {
+        return Err(Error::from_reason("Invalid OrderIntentPacket buffer length (< 128 bytes)"));
+    }
+
+    let pkt_ptr = packet_buffer.as_ptr() as *const oms::OrderIntentPacket;
+    let pkt = unsafe { *pkt_ptr };
+
+    if let Some(engine) = GLOBAL_MULTI_OMS_ENGINE.load().as_ref() {
+        match engine.submit_intent_packet(
+            pkt,
+            mid_price,
+            top5_depth_usd,
+            step_size,
+            tick_size,
+            portfolio_leverage,
+            avg_correlation,
+        ) {
+            Ok(slices) => {
+                let n_slices = slices.len();
+                let bytes_len = n_slices * 128;
+                let slices_ptr = slices.as_ptr() as *const u8;
+                let buf_slice = unsafe { std::slice::from_raw_parts(slices_ptr, bytes_len) };
+                Ok(Buffer::from(buf_slice))
+            }
+            Err(reason) => {
+                let err_byte = match reason {
+                    oms::RejectionReason::RateLimitExceeded => 1u8,
+                    oms::RejectionReason::PriceCollarExceeded => 2u8,
+                    oms::RejectionReason::LeverageCapExceeded => 3u8,
+                    oms::RejectionReason::CorrelationSpikeEmergency => 4u8,
+                    _ => 5u8,
+                };
+                Ok(Buffer::from(vec![0xFF, err_byte]))
+            }
+        }
+    } else {
+        Err(Error::from_reason("MultiAssetOmsEngine not initialized"))
+    }
+}
+
+#[napi]
 pub fn submit_multi_asset_intent_napi(
     asset_idx: u32,
     intent_json: String,
@@ -611,6 +661,22 @@ pub fn get_multi_asset_oms_metrics_napi(asset_idx: u32) -> String {
         serde_json::to_string(&metrics).unwrap_or_else(|_| "{}".to_string())
     } else {
         "{}".to_string()
+    }
+}
+
+#[napi]
+pub fn pop_next_intent_packet_bytes_napi() -> Option<Buffer> {
+    if let Some(engine) = GLOBAL_MULTI_OMS_ENGINE.load().as_ref() {
+        if let Some(pkt) = engine.intent_queue().pop() {
+            let pkt_bytes = unsafe {
+                std::slice::from_raw_parts(&pkt as *const _ as *const u8, 128)
+            };
+            Some(Buffer::from(pkt_bytes))
+        } else {
+            None
+        }
+    } else {
+        None
     }
 }
 

@@ -227,6 +227,58 @@ impl Default for OrderIntentPacket {
 }
 
 impl OrderIntentPacket {
+    pub fn notional_value(&self) -> f64 {
+        self.quantity * self.price
+    }
+
+    #[inline(always)]
+    pub fn is_reduce_only(&self) -> bool {
+        (self.flags & (1 << 0)) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_post_only(&self) -> bool {
+        (self.flags & (1 << 1)) != 0
+    }
+
+    #[inline(always)]
+    pub fn set_reduce_only(&mut self, val: bool) {
+        if val { self.flags |= 1 << 0; } else { self.flags &= !(1 << 0); }
+    }
+
+    #[inline(always)]
+    pub fn set_post_only(&mut self, val: bool) {
+        if val { self.flags |= 1 << 1; } else { self.flags &= !(1 << 1); }
+    }
+
+    #[inline(always)]
+    pub fn client_order_id_str(&self) -> &str {
+        let len = self.client_order_id_bytes.iter().position(|&b| b == 0).unwrap_or(64);
+        std::str::from_utf8(&self.client_order_id_bytes[..len]).unwrap_or("")
+    }
+
+    #[inline(always)]
+    pub fn symbol_str(&self) -> &str {
+        let len = self.symbol_bytes.iter().position(|&b| b == 0).unwrap_or(16);
+        std::str::from_utf8(&self.symbol_bytes[..len]).unwrap_or("")
+    }
+
+    #[inline(always)]
+    pub fn set_client_order_id(&mut self, cid: &str) {
+        self.client_order_id_bytes = [0u8; 64];
+        let bytes = cid.as_bytes();
+        let len = bytes.len().min(64);
+        self.client_order_id_bytes[..len].copy_from_slice(&bytes[..len]);
+    }
+
+    #[inline(always)]
+    pub fn set_symbol(&mut self, sym: &str) {
+        self.symbol_bytes = [0u8; 16];
+        let bytes = sym.as_bytes();
+        let len = bytes.len().min(16);
+        self.symbol_bytes[..len].copy_from_slice(&bytes[..len]);
+    }
+
     pub fn from_intent(intent: &OrderIntent) -> Self {
         let mut pkt = Self::default();
         pkt.asset_idx = intent.asset_idx as u32;
