@@ -46,7 +46,7 @@ export interface OrderIntentSlice {
   target_horizon_ms: number;
   ai_confidence: number;
   ai_direction: number;
-  creation_ns: bigint;
+  creation_ns: string;
 }
 
 export interface IntentSubmissionResult {
@@ -61,6 +61,8 @@ export interface IntentOptions {
   aiConfidence?: number;
   timeInForce?: "Gtc" | "Ioc" | "Fok" | "Gtx";
   reduceOnly?: boolean;
+  clientOrderId?: string;
+  creationNs?: bigint;
 }
 
 export class MultiAssetExecutor {
@@ -165,6 +167,13 @@ export class MultiAssetExecutor {
     pktBuf.writeFloatLE(side === "BUY" ? 1.0 : -1.0, 32);
     pktBuf.writeUInt32LE(0, 36);
 
+    if (options?.creationNs !== undefined) {
+      pktBuf.writeBigUInt64LE(options.creationNs, 40);
+    }
+    if (options?.clientOrderId) {
+      pktBuf.write(options.clientOrderId, 48, 64, "utf8");
+    }
+
     // Copy pre-allocated symbol buffer
     pktBuf.set(this.symbolBuffers[assetIdx], 112);
 
@@ -251,7 +260,7 @@ export class MultiAssetExecutor {
       target_horizon_ms: targetHorizonMs,
       ai_confidence: aiConfidence,
       ai_direction: aiDirection,
-      creation_ns: creationNs,
+      creation_ns: creationNs.toString(),
     };
   }
 

@@ -84,6 +84,10 @@ class MultiAssetExecutor {
         pktBuf.writeFloatLE(aiConfidence, 28);
         pktBuf.writeFloatLE(side === "BUY" ? 1.0 : -1.0, 32);
         pktBuf.writeUInt32LE(0, 36);
+        const creationNs = options?.creationNs ?? BigInt(Date.now()) * 1000000n;
+        pktBuf.writeBigUInt64LE(creationNs, 40);
+        const clientOrderId = options?.clientOrderId ?? `ord_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+        pktBuf.write(clientOrderId, 48, 64, "utf8");
         // Copy pre-allocated symbol buffer
         pktBuf.set(this.symbolBuffers[assetIdx], 112);
         try {
@@ -158,7 +162,7 @@ class MultiAssetExecutor {
             target_horizon_ms: targetHorizonMs,
             ai_confidence: aiConfidence,
             ai_direction: aiDirection,
-            creation_ns: creationNs,
+            creation_ns: creationNs.toString(),
         };
     }
     syncSab(sabBuffer) {

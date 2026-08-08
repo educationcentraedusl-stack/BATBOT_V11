@@ -126,7 +126,7 @@ impl ExecutionSlicer {
 
             // Zero-allocation stack formatting for client_order_id suffix (_s1, _s10, _s100...)
             let suffix_idx = i + 1;
-            let mut num_buf = [0u8; 8];
+            let mut num_buf = [0u8; 32];
             let mut num_val = suffix_idx;
             let mut digits_len = 0usize;
             while num_val > 0 {
@@ -140,7 +140,7 @@ impl ExecutionSlicer {
             }
             num_buf[..digits_len].reverse();
 
-            let mut suffix_bytes = [0u8; 10];
+            let mut suffix_bytes = [0u8; 34];
             suffix_bytes[0] = b'_';
             suffix_bytes[1] = b's';
             suffix_bytes[2..2 + digits_len].copy_from_slice(&num_buf[..digits_len]);
@@ -148,7 +148,10 @@ impl ExecutionSlicer {
 
             let max_base_len = 64usize.saturating_sub(suffix_len);
             let base_bytes = base_cid_str.as_bytes();
-            let base_len = base_bytes.len().min(max_base_len);
+            let mut base_len = base_bytes.len().min(max_base_len);
+            while base_len > 0 && !base_cid_str.is_char_boundary(base_len) {
+                base_len -= 1;
+            }
 
             let mut cid_buf = [0u8; 64];
             cid_buf[..base_len].copy_from_slice(&base_bytes[..base_len]);
