@@ -2,12 +2,14 @@ import { MarketDataClient } from "../marketDataClient";
 
 export type AssetFocusCallback = (assetIdx: number) => void;
 export type LogNotificationCallback = (message: string) => void;
+export type ExitCallback = () => void;
 
 export class InteractiveKeypressEngine {
   private client: MarketDataClient;
   private isListening = false;
   private onAssetFocusChange?: AssetFocusCallback;
   private onNotification?: LogNotificationCallback;
+  private onExit?: ExitCallback;
   private rawModePreviousState = false;
 
   constructor(client: MarketDataClient) {
@@ -26,6 +28,13 @@ export class InteractiveKeypressEngine {
    */
   public setNotificationCallback(cb: LogNotificationCallback): void {
     this.onNotification = cb;
+  }
+
+  /**
+   * Registers callback for graceful terminal exit teardown.
+   */
+  public setExitCallback(cb: ExitCallback): void {
+    this.onExit = cb;
   }
 
   /**
@@ -57,7 +66,11 @@ export class InteractiveKeypressEngine {
     if (key === "\u0003" || key === "q" || key === "Q") {
       this.notify("[KEYBOARD_ENGINE] Graceful shutdown requested via terminal keypress.");
       this.stop();
-      process.exit(0);
+      if (this.onExit) {
+        this.onExit();
+      } else {
+        process.exit(0);
+      }
     }
 
     // Emergency Kill Switch ('K' / 'k')

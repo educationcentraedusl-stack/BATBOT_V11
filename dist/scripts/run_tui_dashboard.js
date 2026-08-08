@@ -46,23 +46,38 @@ async function runProductionTuiLauncher() {
     console.log("=========================================================================\n");
     // Step 1: Pre-Flight Verification of Environment & Native N-API Binaries
     console.log("[Pre-Flight 1/3] Verifying environment configurations...");
-    const maxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || "10", 10);
-    const slotsPerAsset = parseInt(process.env.SAB_SLOTS_PER_ASSET || "256", 10);
+    const parsedMaxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || "10", 10);
+    const maxAssets = Number.isFinite(parsedMaxAssets) && parsedMaxAssets > 0 ? parsedMaxAssets : 10;
+    const parsedSlotsPerAsset = parseInt(process.env.SAB_SLOTS_PER_ASSET || "256", 10);
+    const slotsPerAsset = Number.isFinite(parsedSlotsPerAsset) && parsedSlotsPerAsset > 0 ? parsedSlotsPerAsset : 256;
     const totalSABBytes = maxAssets * slotsPerAsset * 8;
     console.log(`  - Concurrency Capacity: ${maxAssets} Asset Slots`);
     console.log(`  - Slots Per Asset: ${slotsPerAsset}`);
     console.log(`  - SharedArrayBuffer Size: ${totalSABBytes} bytes`);
     console.log("\n[Pre-Flight 2/3] Verifying Native Rust N-API Binary Module...");
+    let platformBinary;
+    switch (process.platform) {
+        case "win32":
+            platformBinary = `index.win32-${process.arch}-msvc.node`;
+            break;
+        case "darwin":
+            platformBinary = `index.darwin-${process.arch}.node`;
+            break;
+        default:
+            platformBinary = `index.linux-${process.arch}-gnu.node`;
+            break;
+    }
+    const nativeBinaryPath = path.resolve(process.cwd(), platformBinary);
     const nativeIndexPath = path.resolve(process.cwd(), "index.js");
-    const nativeBinaryWin64 = path.resolve(process.cwd(), "index.win32-x64-msvc.node");
     let nativeModule = null;
     let isNativeVerified = false;
-    if (fs.existsSync(nativeBinaryWin64) || fs.existsSync(nativeIndexPath)) {
+    if (fs.existsSync(nativeIndexPath)) {
         try {
             nativeModule = require(nativeIndexPath);
-            if (nativeModule && (typeof nativeModule.startIngestion === "function" || typeof nativeModule.initCore === "function")) {
+            if (nativeModule &&
+                (typeof nativeModule.startIngestion === "function" || typeof nativeModule.initCore === "function")) {
                 isNativeVerified = true;
-                console.log("  ✅ Native Rust N-API binary verified online (Zero-Copy IPC Ready).");
+                console.log(`  ✅ Native Rust N-API binary verified online (Zero-Copy IPC Ready: ${platformBinary}).`);
             }
             else {
                 console.warn("  ⚠️ Native module loaded but missing expected export symbols.");
@@ -73,8 +88,11 @@ async function runProductionTuiLauncher() {
             console.warn(`  ⚠️ Rust N-API binary loading notice: ${msg}`);
         }
     }
+    else if (fs.existsSync(nativeBinaryPath)) {
+        console.warn(`  ⚠️ Platform binary '${platformBinary}' detected but root 'index.js' binding entry is missing. Run 'npm run build:rust' to generate binding exports.`);
+    }
     else {
-        console.warn("  ⚠️ Native N-API binary file not detected in root. Run 'npm run build:rust' if native acceleration is required.");
+        console.warn(`  ⚠️ Native N-API binary file ('${platformBinary}') not detected in root. Run 'npm run build:rust' if native acceleration is required.`);
     }
     // Step 2: Initialize SharedArrayBuffer & Market Data Client
     console.log("\n[Pre-Flight 3/3] Initializing Zero-Copy SharedArrayBuffer & Telemetry Engine...");
@@ -101,7 +119,7 @@ async function runProductionTuiLauncher() {
     const dashboard = new multiAssetDashboard_1.MultiAssetCLIDashboard(client, true, multiAssetDashboard_1.DEFAULT_ASSET_SYMBOLS);
     const keyEngine = new keypressHandler_1.InteractiveKeypressEngine(client);
     dashboard.pushNotification("BATBOT_V11 Production Launch Sequence Complete.");
-    dashboard.pushNotification(`10-Asset SharedArrayBuffer Active (${totalSABBytes} bytes).`);
+    dashboard.pushNotification(`${maxAssets}-Asset SharedArrayBuffer Active (${totalSABBytes} bytes).`);
     dashboard.pushNotification("Keyboard active: 0-9 = Focus Asset, K = Kill, P = Pause, C = Close All, Q = Quit.");
     keyEngine.setAssetFocusCallback((idx) => {
         dashboard.setFocusedAsset(idx);
@@ -126,6 +144,9 @@ async function runProductionTuiLauncher() {
         process.stdout.write(`\n[BATBOT_V11] System shutdown cleanly via signal ${signal}.\n`);
         process.exit(0);
     };
+    keyEngine.setExitCallback(() => {
+        handleShutdown("KEYBOARD_QUIT");
+    });
     process.on("SIGINT", () => handleShutdown("SIGINT"));
     process.on("SIGTERM", () => handleShutdown("SIGTERM"));
 }

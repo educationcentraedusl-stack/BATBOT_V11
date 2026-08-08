@@ -6,6 +6,7 @@ class InteractiveKeypressEngine {
     isListening = false;
     onAssetFocusChange;
     onNotification;
+    onExit;
     rawModePreviousState = false;
     constructor(client) {
         this.client = client;
@@ -21,6 +22,12 @@ class InteractiveKeypressEngine {
      */
     setNotificationCallback(cb) {
         this.onNotification = cb;
+    }
+    /**
+     * Registers callback for graceful terminal exit teardown.
+     */
+    setExitCallback(cb) {
+        this.onExit = cb;
     }
     /**
      * Starts capturing raw terminal keypress events and writing atomic control flags to SAB.
@@ -50,7 +57,12 @@ class InteractiveKeypressEngine {
         if (key === "\u0003" || key === "q" || key === "Q") {
             this.notify("[KEYBOARD_ENGINE] Graceful shutdown requested via terminal keypress.");
             this.stop();
-            process.exit(0);
+            if (this.onExit) {
+                this.onExit();
+            }
+            else {
+                process.exit(0);
+            }
         }
         // Emergency Kill Switch ('K' / 'k')
         if (key === "k" || key === "K") {
