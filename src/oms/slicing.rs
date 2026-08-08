@@ -112,7 +112,14 @@ impl ExecutionSlicer {
                 break;
             }
 
-            let slice_cid = format!("{}_s{}", intent.client_order_id, i + 1);
+            let suffix = format!("_s{}", i + 1);
+            let max_base_len = 64usize.saturating_sub(suffix.len());
+            let base_cid = if intent.client_order_id.len() > max_base_len {
+                &intent.client_order_id[..max_base_len]
+            } else {
+                &intent.client_order_id
+            };
+            let slice_cid = format!("{}{}", base_cid, suffix);
             let slice_intent = OrderIntent {
                 client_order_id: slice_cid,
                 symbol: intent.symbol.clone(),

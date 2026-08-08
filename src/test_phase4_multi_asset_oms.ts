@@ -78,7 +78,8 @@ async function runPhase4MultiAssetOmsTest() {
     0.001,
     0.01,
     1.0,
-    0.20
+    0.20,
+    { postOnly: false }
   );
   assert(priceCollarRes.status === "REJECTED", "Price collar violation should be REJECTED");
   assert(priceCollarRes.reason === "REJECTED_PRICE_COLLAR", "Expected REJECTED_PRICE_COLLAR got " + priceCollarRes.reason);

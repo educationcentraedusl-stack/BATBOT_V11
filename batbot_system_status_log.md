@@ -867,6 +867,18 @@
   9. Preserved TypeScript `client_order_id` in `SmartOrderRouter::route_order_with_id` via custom ID passthrough.
   10. Added native Rust unit test `test_multi_asset_oms_engine_lifecycle` in `tests/test_oms.rs` verifying multi-asset intent submission, queueing, SAB syncing, and fills.
   100% QA verified via `cargo test --test test_oms` (5/5 passed), `npx napi build --platform --release` (clean native binary), `npm run build:ts` (0 errors), and 100,000 intent benchmark harness (`node dist/test_phase4_multi_asset_oms.js` executing 100,000 intents in 528.79 ms at 189,111 intents/sec throughput and 5.288 µs latency per intent).
+- **Date:** 2026-08-08
+- **Feature/Task:** Phase 4 Zero-Tolerance 7-Point Remediation & Absolute Lockdown
+- **Artifacts Created/Modified:** `src/oms/types.rs`, `src/oms/sor.rs`, `src/oms/slicing.rs`, `src/oms/multi_asset_oms.rs`, `src/execution/multi_asset_executor.ts`, `src/test_phase4_multi_asset_oms.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Executed definitive 7-point remediation across Phase 4 OMS, SOR, slicing, risk, and execution modules:
+  1. Fixed telemetry metric corruption in `MultiAssetOmsEngine::sync_sab_slots` by setting `total_orders = submitted as f64` (strictly eliminating double-counting of filled/canceled/rejected orders).
+  2. Implemented directional price quantization in `SmartOrderRouter` (`.floor()` for Buy makers, `.ceil()` for Sell makers) with strict spread non-crossing protection (`price.min(best_ask - tick)` / `price.max(best_bid + tick)`).
+  3. Built atomic batch push staging in `submit_intent_full` with immediate rollback pops on failed pushes, eliminating orphan partial multi-slice leaks under MPSC queue contention.
+  4. Expanded `self.symbols` in `MultiAssetOmsEngine::new` to `max_assets` length to maintain 1:1 index alignment with `position_ledgers`.
+  5. Added explicit `pub _pad: u32` field in `OrderIntentPacket` (`src/oms/types.rs`) between `ai_direction` and `creation_ns` to eliminate uninitialized 4-byte padding memory across thread boundaries.
+  6. Eradicated string slicing hacks (`baseJson.substring`) in `multi_asset_executor.ts`, building clean JSON payloads via standard object properties and numeric nanosecond timestamps.
+  7. Implemented dynamic base ID pre-truncation in `ExecutionSlicer::slice_intent` (`max_base_len = 64 - suffix.len()`) guaranteeing slice client order IDs never exceed the 64-byte FFI buffer limit.
+  100% QA verified via `cargo test --lib` (35/35 passed clean), `cargo test --test test_oms` (5/5 passed clean), `npx napi build --platform --release` (clean native binary), `npm run build:ts` (0 errors), and automated 100,000 intent benchmark harness (`node dist/test_phase4_multi_asset_oms.js` executing 100,000 intents in 704.55 ms at 141,935 intents/sec throughput and 7.045 µs average latency per intent).
 - **Status:** ✅ Completed & QA Verified
 
 

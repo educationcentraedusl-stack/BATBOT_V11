@@ -47,7 +47,7 @@ async function runPhase4MultiAssetOmsTest() {
     // 2. Pre-Trade Risk Collar Rejection Verification
     console.log("\n[Test 2] Testing Pre-Trade Risk Guard rejection collars...");
     // 2A: Price Collar Violation (> 1.0% deviation)
-    const priceCollarRes = executor.submitIntent("ETHUSDT", "BUY", "LIMIT", 1.0, 3500.0, 3000.0, 50000.0, 0.001, 0.01, 1.0, 0.20);
+    const priceCollarRes = executor.submitIntent("ETHUSDT", "BUY", "LIMIT", 1.0, 3500.0, 3000.0, 50000.0, 0.001, 0.01, 1.0, 0.20, { postOnly: false });
     assert(priceCollarRes.status === "REJECTED", "Price collar violation should be REJECTED");
     assert(priceCollarRes.reason === "REJECTED_PRICE_COLLAR", "Expected REJECTED_PRICE_COLLAR got " + priceCollarRes.reason);
     console.log("  ✅ Price Collar Guard rejection verified.");

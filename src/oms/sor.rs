@@ -1,4 +1,3 @@
-use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use crate::oms::types::{OrderIntent, OrderSide, OrderType, TimeInForce};
 
@@ -150,7 +149,34 @@ impl SmartOrderRouter {
             raw_price
         };
 
-        let price = (target_price / effective_tick).round() * effective_tick;
+        let is_crossing = match side {
+            OrderSide::Buy => target_price >= best_ask,
+            OrderSide::Sell => target_price <= best_bid,
+        };
+
+        let effective_post_only = if is_crossing { false } else { post_only };
+
+        let unclamped_price = if effective_post_only {
+            match side {
+                OrderSide::Buy => (target_price / effective_tick).floor() * effective_tick,
+                OrderSide::Sell => (target_price / effective_tick).ceil() * effective_tick,
+            }
+        } else {
+            match side {
+                OrderSide::Buy => (target_price / effective_tick).ceil() * effective_tick,
+                OrderSide::Sell => (target_price / effective_tick).floor() * effective_tick,
+            }
+        };
+
+        // Strict spread non-crossing protection for maker post-only orders
+        let price = if effective_post_only {
+            match side {
+                OrderSide::Buy => unclamped_price.min((best_ask - effective_tick).max(effective_tick)),
+                OrderSide::Sell => unclamped_price.max(best_bid + effective_tick),
+            }
+        } else {
+            unclamped_price.max(effective_tick)
+        };
 
         let client_order_id = if let Some(cid) = custom_client_order_id {
             if !cid.is_empty() {

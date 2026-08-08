@@ -154,7 +154,7 @@ impl OmsRiskGuard {
         // 1. Rate Limiting Check (10-second sliding window inspection without polluting budget)
         let now = Self::now_ns();
         let window_duration_ns = 10_000_000_000u64; // 10 seconds in nanoseconds
-        let mut last_reset = self.last_window_reset_ns.load(Ordering::Acquire);
+        let last_reset = self.last_window_reset_ns.load(Ordering::Acquire);
         if now.saturating_sub(last_reset) > window_duration_ns {
             let _ = self.last_window_reset_ns.compare_exchange_weak(
                 last_reset,

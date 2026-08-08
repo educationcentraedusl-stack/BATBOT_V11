@@ -199,6 +199,7 @@ pub struct OrderIntentPacket {
     pub target_horizon_ms: f32,
     pub ai_confidence: f32,
     pub ai_direction: f32,
+    pub _pad: u32, // Explicit 4-byte padding to align creation_ns (u64) on 8-byte boundary
     pub creation_ns: u64,
     pub client_order_id_bytes: [u8; 64],
     pub symbol_bytes: [u8; 16],
@@ -217,6 +218,7 @@ impl Default for OrderIntentPacket {
             target_horizon_ms: 0.0,
             ai_confidence: 0.0,
             ai_direction: 0.0,
+            _pad: 0,
             creation_ns: 0,
             client_order_id_bytes: [0u8; 64],
             symbol_bytes: [0u8; 16],

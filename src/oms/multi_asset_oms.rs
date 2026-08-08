@@ -77,6 +77,7 @@ impl MultiAssetOmsEngine {
         risk_config: Option<RiskConfig>,
     ) -> Self {
         let max_assets = max_assets.clamp(1, MAX_OMS_ASSETS);
+        let mut expanded_symbols = Vec::with_capacity(max_assets);
         let mut position_ledgers = Vec::with_capacity(max_assets);
         let mut metrics_orders_submitted = Vec::with_capacity(max_assets);
         let mut metrics_orders_filled = Vec::with_capacity(max_assets);
@@ -86,6 +87,7 @@ impl MultiAssetOmsEngine {
 
         for i in 0..max_assets {
             let sym = symbols.get(i).cloned().unwrap_or_else(|| format!("ASSET_{}", i));
+            expanded_symbols.push(sym.clone());
             position_ledgers.push(Arc::new(PositionLedger::new(sym, 5.0)));
             metrics_orders_submitted.push(AtomicU64::new(0));
             metrics_orders_filled.push(AtomicU64::new(0));
@@ -96,7 +98,7 @@ impl MultiAssetOmsEngine {
 
         Self {
             max_assets,
-            symbols: RwLock::new(symbols),
+            symbols: RwLock::new(expanded_symbols),
             position_ledgers,
             risk_guard: OmsRiskGuard::new(risk_config.unwrap_or_default()),
             sor: SmartOrderRouter::default_hft(),
@@ -171,7 +173,7 @@ impl MultiAssetOmsEngine {
             let cancel_rate_pct = if submitted > 0 { (canceled as f64 / submitted as f64) * 100.0 } else { 0.0 };
             let reject_rate_pct = if submitted > 0 { (rejected as f64 / submitted as f64) * 100.0 } else { 0.0 };
             let net_pos_usd = (snap.position_qty * snap.avg_entry_price).abs();
-            let total_orders = (submitted + filled + canceled + rejected) as f64;
+            let total_orders = submitted as f64;
             let balance_usd = self.account_balance_usd();
 
             // Slots 181..190
@@ -289,22 +291,31 @@ impl MultiAssetOmsEngine {
         // Slice intent if necessary
         let slices = self.slicing.slice_intent(&routed_intent, top5_depth_usd, step_size, tick_size);
 
-        // Pre-check ring buffer capacity BEFORE pushing any slices to prevent partial order leaks
-        if self.intent_queue.len() + slices.len() > INTENT_RING_CAPACITY {
+        // Convert all slices to fixed 128-byte OrderIntentPackets
+        let packets: Vec<OrderIntentPacket> = slices.iter().map(OrderIntentPacket::from_intent).collect();
+        let required_cap = packets.len();
+
+        // Capacity reservation pre-check
+        if self.intent_queue.len() + required_cap > INTENT_RING_CAPACITY {
             self.metrics_orders_rejected[asset_idx].fetch_add(1, Ordering::Relaxed);
             return Err(RejectionReason::RateLimitExceeded);
         }
 
-        // Push slices to lock-free intent ring buffer
-        for slice in &slices {
-            let pkt = OrderIntentPacket::from_intent(slice);
-            if !self.intent_queue.push(pkt) {
+        // Atomic push with rollback staging to prevent orphan partial slice leaks
+        let mut pushed_count = 0usize;
+        for pkt in packets {
+            if self.intent_queue.push(pkt) {
+                pushed_count += 1;
+            } else {
+                for _ in 0..pushed_count {
+                    let _ = self.intent_queue.pop();
+                }
                 self.metrics_orders_rejected[asset_idx].fetch_add(1, Ordering::Relaxed);
                 return Err(RejectionReason::RateLimitExceeded);
             }
-            self.metrics_orders_submitted[asset_idx].fetch_add(1, Ordering::Relaxed);
         }
 
+        self.metrics_orders_submitted[asset_idx].fetch_add(pushed_count as u64, Ordering::Relaxed);
         Ok(slices)
     }
 
