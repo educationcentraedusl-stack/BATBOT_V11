@@ -214,3 +214,7 @@ export class CLIDashboard {
   }
 }
 
+export { MultiAssetCLIDashboard } from "./multiAssetDashboard";
+export { InteractiveKeypressEngine } from "./keypressHandler";
+
+

@@ -274,7 +274,11 @@ export class BacktestEngine {
     const variance = returns.reduce((sum, r) => sum + Math.pow(r - mean, 2), 0) / (returns.length - 1);
     const stdDev = Math.sqrt(variance);
     if (stdDev === 0) return 0;
-    // Assume risk-free rate of 0 for HFT intraday scale
     return (mean / stdDev) * Math.sqrt(252);
   }
 }
+
+
+export { MultiAssetBacktestEngine, MultiAssetBacktestResult, MultiAssetBacktestTick } from "./multiAssetBacktester";
+
+

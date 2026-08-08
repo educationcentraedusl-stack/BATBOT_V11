@@ -389,4 +389,75 @@ export class MarketDataClient {
   public setAiPlattOffset(val: number, assetIdx: number = 0): void {
     this.writeAtomicFloat64Asset(assetIdx, 129, val);
   }
+
+  // --- Slots 130 to 133: Atomic Interactive Control Flags & Emergency Kill Switches ---
+
+  public getKillSwitchFlag(assetIdx: number = 0): boolean {
+    return this.readAtomicFloat64Asset(assetIdx, 130) > 0.5;
+  }
+
+  public setKillSwitchFlag(active: boolean, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 130, active ? 1.0 : 0.0);
+  }
+
+  public getCloseAllPositionsFlag(assetIdx: number = 0): boolean {
+    return this.readAtomicFloat64Asset(assetIdx, 131) > 0.5;
+  }
+
+  public setCloseAllPositionsFlag(trigger: boolean, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 131, trigger ? 1.0 : 0.0);
+  }
+
+  public getEnginePausedFlag(assetIdx: number = 0): boolean {
+    return this.readAtomicFloat64Asset(assetIdx, 132) > 0.5;
+  }
+
+  public setEnginePausedFlag(paused: boolean, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 132, paused ? 1.0 : 0.0);
+  }
+
+  public getTriggerRecalibrationFlag(assetIdx: number = 0): boolean {
+    return this.readAtomicFloat64Asset(assetIdx, 133) > 0.5;
+  }
+
+  public setTriggerRecalibrationFlag(trigger: boolean, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 133, trigger ? 1.0 : 0.0);
+  }
+
+  /**
+   * Broadcasts atomic Kill-Switch activation across all asset slots simultaneously.
+   */
+  public setGlobalKillSwitch(active: boolean): void {
+    for (let i = 0; i < this.maxAssets; i++) {
+      this.setKillSwitchFlag(active, i);
+    }
+  }
+
+  /**
+   * Broadcasts atomic Close-All-Positions trigger across all asset slots simultaneously.
+   */
+  public setGlobalCloseAll(trigger: boolean): void {
+    for (let i = 0; i < this.maxAssets; i++) {
+      this.setCloseAllPositionsFlag(trigger, i);
+    }
+  }
+
+  /**
+   * Broadcasts atomic Engine-Pause state across all asset slots simultaneously.
+   */
+  public setGlobalPause(paused: boolean): void {
+    for (let i = 0; i < this.maxAssets; i++) {
+      this.setEnginePausedFlag(paused, i);
+    }
+  }
+
+  /**
+   * Broadcasts atomic Trigger-Recalibration state across all asset slots simultaneously.
+   */
+  public setGlobalRecalibration(trigger: boolean): void {
+    for (let i = 0; i < this.maxAssets; i++) {
+      this.setTriggerRecalibrationFlag(trigger, i);
+    }
+  }
 }
+

@@ -299,5 +299,62 @@ class MarketDataClient {
     setAiPlattOffset(val, assetIdx = 0) {
         this.writeAtomicFloat64Asset(assetIdx, 129, val);
     }
+    // --- Slots 130 to 133: Atomic Interactive Control Flags & Emergency Kill Switches ---
+    getKillSwitchFlag(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 130) > 0.5;
+    }
+    setKillSwitchFlag(active, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 130, active ? 1.0 : 0.0);
+    }
+    getCloseAllPositionsFlag(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 131) > 0.5;
+    }
+    setCloseAllPositionsFlag(trigger, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 131, trigger ? 1.0 : 0.0);
+    }
+    getEnginePausedFlag(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 132) > 0.5;
+    }
+    setEnginePausedFlag(paused, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 132, paused ? 1.0 : 0.0);
+    }
+    getTriggerRecalibrationFlag(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 133) > 0.5;
+    }
+    setTriggerRecalibrationFlag(trigger, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 133, trigger ? 1.0 : 0.0);
+    }
+    /**
+     * Broadcasts atomic Kill-Switch activation across all asset slots simultaneously.
+     */
+    setGlobalKillSwitch(active) {
+        for (let i = 0; i < this.maxAssets; i++) {
+            this.setKillSwitchFlag(active, i);
+        }
+    }
+    /**
+     * Broadcasts atomic Close-All-Positions trigger across all asset slots simultaneously.
+     */
+    setGlobalCloseAll(trigger) {
+        for (let i = 0; i < this.maxAssets; i++) {
+            this.setCloseAllPositionsFlag(trigger, i);
+        }
+    }
+    /**
+     * Broadcasts atomic Engine-Pause state across all asset slots simultaneously.
+     */
+    setGlobalPause(paused) {
+        for (let i = 0; i < this.maxAssets; i++) {
+            this.setEnginePausedFlag(paused, i);
+        }
+    }
+    /**
+     * Broadcasts atomic Trigger-Recalibration state across all asset slots simultaneously.
+     */
+    setGlobalRecalibration(trigger) {
+        for (let i = 0; i < this.maxAssets; i++) {
+            this.setTriggerRecalibrationFlag(trigger, i);
+        }
+    }
 }
 exports.MarketDataClient = MarketDataClient;

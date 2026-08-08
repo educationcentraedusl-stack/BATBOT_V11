@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.BacktestEngine = exports.MockMarketDataClient = void 0;
+exports.MultiAssetBacktestEngine = exports.BacktestEngine = exports.MockMarketDataClient = void 0;
 const engine_1 = require("../strategy/engine");
 const risk_1 = require("../strategy/risk");
 const binance_1 = require("../execution/binance");
@@ -205,8 +205,9 @@ class BacktestEngine {
         const stdDev = Math.sqrt(variance);
         if (stdDev === 0)
             return 0;
-        // Assume risk-free rate of 0 for HFT intraday scale
         return (mean / stdDev) * Math.sqrt(252);
     }
 }
 exports.BacktestEngine = BacktestEngine;
+var multiAssetBacktester_1 = require("./multiAssetBacktester");
+Object.defineProperty(exports, "MultiAssetBacktestEngine", { enumerable: true, get: function () { return multiAssetBacktester_1.MultiAssetBacktestEngine; } });
