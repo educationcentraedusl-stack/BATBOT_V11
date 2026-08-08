@@ -4,6 +4,7 @@ import * as fs from "fs";
 import { MarketDataClient } from "../marketDataClient";
 import { MultiAssetCLIDashboard, DEFAULT_ASSET_SYMBOLS } from "../telemetry/multiAssetDashboard";
 import { InteractiveKeypressEngine } from "../telemetry/keypressHandler";
+import { BinanceExecutionClient } from "../execution/binance";
 
 export interface NativeIngestionModule {
   startIngestion?: (sabBuffer: Buffer) => boolean;
@@ -98,6 +99,14 @@ export async function runProductionTuiLauncher(): Promise<void> {
   const dashboard = new MultiAssetCLIDashboard(client, true, DEFAULT_ASSET_SYMBOLS);
   const keyEngine = new InteractiveKeypressEngine(client);
 
+  const binanceClient = new BinanceExecutionClient();
+  if (binanceClient.isConfigured()) {
+    binanceClient.startBalancePolling(5000);
+    dashboard.pushNotification("Binance API credentials verified. Balance polling active.");
+  } else {
+    dashboard.pushNotification("Notice: Binance API credentials unconfigured (Balance default: $0.00).");
+  }
+
   dashboard.pushNotification("BATBOT_V11 Production Launch Sequence Complete.");
   dashboard.pushNotification(`${maxAssets}-Asset SharedArrayBuffer Active (${totalSABBytes} bytes).`);
   dashboard.pushNotification("Keyboard active: 0-9 = Focus Asset, K = Kill, P = Pause, C = Close All, Q = Quit.");
@@ -114,6 +123,9 @@ export async function runProductionTuiLauncher(): Promise<void> {
 
   // Active double-buffered ANSI refresh loop (~6.6 Hz / 150ms interval)
   const renderInterval = setInterval(() => {
+    if (binanceClient.isConfigured()) {
+      client.setAvailableBalance(binanceClient.getUsdtAvailableBalance());
+    }
     dashboard.render();
   }, 150);
 
@@ -123,6 +135,7 @@ export async function runProductionTuiLauncher(): Promise<void> {
     if (isShuttingDown) return;
     isShuttingDown = true;
 
+    binanceClient.stopBalancePolling();
     clearInterval(renderInterval);
     keyEngine.stop();
     dashboard.clear();

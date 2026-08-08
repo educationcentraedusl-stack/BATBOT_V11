@@ -324,6 +324,13 @@ class MarketDataClient {
     setTriggerRecalibrationFlag(trigger, assetIdx = 0) {
         this.writeAtomicFloat64Asset(assetIdx, 133, trigger ? 1.0 : 0.0);
     }
+    // --- Slot 134: Account Available Balance ---
+    getAvailableBalance(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 134);
+    }
+    setAvailableBalance(val, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 134, val);
+    }
     /**
      * Broadcasts atomic Kill-Switch activation across all asset slots simultaneously.
      */

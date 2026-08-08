@@ -424,6 +424,16 @@ export class MarketDataClient {
     this.writeAtomicFloat64Asset(assetIdx, 133, trigger ? 1.0 : 0.0);
   }
 
+  // --- Slot 134: Account Available Balance ---
+
+  public getAvailableBalance(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 134);
+  }
+
+  public setAvailableBalance(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 134, val);
+  }
+
   /**
    * Broadcasts atomic Kill-Switch activation across all asset slots simultaneously.
    */

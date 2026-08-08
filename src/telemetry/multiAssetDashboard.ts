@@ -166,8 +166,10 @@ export class MultiAssetCLIDashboard {
     out += `${cyan}${bold}                         BATBOT_V11 MULTI-ASSET HFT TELEMETRY & COMMAND MONITOR (10 ASSETS)                            ${reset}${clearLine}\n`;
     out += MultiAssetCLIDashboard.BORDER;
 
+    const availBalance = this.client.getAvailableBalance(0);
+
     out += ` Engine Status: ${statusStr}  |  Memory: ${memMb} MB  |  Sequence: #${seqNum.toString()}  |  Active Positions: ${activePositionCount}/10${clearLine}\n`;
-    out += ` Portfolio Unrealized PnL: ${totalUnrealizedPnl >= 0 ? green : red}${bold}$${totalUnrealizedPnl.toFixed(2)}${reset}  |  Realized PnL: ${totalRealizedPnl >= 0 ? green : red}${bold}$${totalRealizedPnl.toFixed(2)}${reset}  |  Total Trades Logged: ${totalTrades}${clearLine}\n`;
+    out += ` Available Balance: ${green}${bold}$${availBalance.toFixed(2)}${reset}  |  Portfolio Unrealized PnL: ${totalUnrealizedPnl >= 0 ? green : red}${bold}$${totalUnrealizedPnl.toFixed(2)}${reset}  |  Realized PnL: ${totalRealizedPnl >= 0 ? green : red}${bold}$${totalRealizedPnl.toFixed(2)}${reset}  |  Total Trades Logged: ${totalTrades}${clearLine}\n`;
 
     out += MultiAssetCLIDashboard.SUB_DIVIDER;
     out += `${bold}--- 10-ASSET CONCURRENCY REAL-TIME MATRIX ---${reset}${clearLine}\n`;
