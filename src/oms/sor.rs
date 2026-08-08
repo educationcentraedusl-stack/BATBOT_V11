@@ -51,6 +51,45 @@ impl SmartOrderRouter {
         quantity: f64,
         creation_ns: u64,
     ) -> Option<OrderIntent> {
+        self.route_order_with_id(
+            symbol,
+            asset_idx,
+            direction,
+            confidence,
+            horizon_ms,
+            best_bid,
+            best_ask,
+            spread_vel,
+            v_depletion,
+            flow_toxicity,
+            slippage_ticks,
+            tick_size,
+            quantity,
+            creation_ns,
+            None,
+            None,
+        )
+    }
+
+    pub fn route_order_with_id(
+        &self,
+        symbol: &str,
+        asset_idx: usize,
+        direction: f64,
+        confidence: f64,
+        horizon_ms: f64,
+        best_bid: f64,
+        best_ask: f64,
+        spread_vel: f64,
+        v_depletion: f64,
+        flow_toxicity: f64,
+        slippage_ticks: f64,
+        tick_size: f64,
+        quantity: f64,
+        creation_ns: u64,
+        custom_client_order_id: Option<&str>,
+        requested_price: Option<f64>,
+    ) -> Option<OrderIntent> {
         if !direction.is_finite()
             || !confidence.is_finite()
             || !horizon_ms.is_finite()
@@ -105,23 +144,26 @@ impl SmartOrderRouter {
             (maker_price, TimeInForce::Gtx, true)
         };
 
-        let price = ((raw_price / effective_tick) + 1e-9).floor() * effective_tick;
-
-        let seq = self.order_seq.fetch_add(1, Ordering::Relaxed);
-
-        // Stack-allocated buffer for zero-heap client_order_id formatting
-        let mut id_buf = [0u8; 64];
-        let id_len = {
-            let mut cursor = std::io::Cursor::new(&mut id_buf[..]);
-            let ts_mod = creation_ns % 1_000_000_000;
-            let _ = write!(cursor, "BAT_{}_{}_{}", asset_idx, ts_mod, seq);
-            cursor.position() as usize
+        let target_price = if let Some(req_p) = requested_price {
+            if req_p > 0.0 { req_p } else { raw_price }
+        } else {
+            raw_price
         };
 
-        let client_order_id = match std::str::from_utf8(&id_buf[..id_len]) {
-            Ok(s) => String::from(s),
-            Err(_) => String::from("BAT_0_0_0"),
+        let price = (target_price / effective_tick).round() * effective_tick;
+
+        let client_order_id = if let Some(cid) = custom_client_order_id {
+            if !cid.is_empty() {
+                String::from(cid)
+            } else {
+                let seq = self.order_seq.fetch_add(1, Ordering::Relaxed);
+                format!("BAT_{}_{}_{}", asset_idx, creation_ns % 1_000_000_000, seq)
+            }
+        } else {
+            let seq = self.order_seq.fetch_add(1, Ordering::Relaxed);
+            format!("BAT_{}_{}_{}", asset_idx, creation_ns % 1_000_000_000, seq)
         };
+
         let symbol_str = String::from(symbol);
 
         Some(

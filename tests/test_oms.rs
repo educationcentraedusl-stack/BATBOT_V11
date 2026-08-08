@@ -116,3 +116,85 @@ fn test_oms_engine_sab_evaluation() {
     let pos_qty_sab = bridge.load_f64(105);
     assert_eq!(pos_qty_sab, 0.0); // position flat prior to fills
 }
+
+#[test]
+fn test_multi_asset_oms_engine_lifecycle() {
+    use batbot_v11_core::oms::{ExecutionReport, MultiAssetOmsEngine, OrderIntent, OrderStatus};
+
+    let mut buffer = vec![0u8; 20480]; // 10 assets * 256 slots * 8 bytes
+    let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len())
+        .expect("Failed to create multi-asset bridge");
+
+    let symbols = vec![
+        "ETHUSDT".to_string(),
+        "SOLUSDT".to_string(),
+        "BNBUSDT".to_string(),
+    ];
+    let engine = MultiAssetOmsEngine::new(3, 100000.0, symbols, None);
+
+    let intent = OrderIntent::new(
+        "CUSTOM_TS_ID_101".to_string(),
+        "ETHUSDT".to_string(),
+        OrderSide::Buy,
+        OrderType::Limit,
+        TimeInForce::Gtx,
+        1.0,
+        3000.0,
+        false,
+        true,
+        50.0,
+        0.90,
+        1.0,
+        1700000000123456789,
+    ).with_asset_idx(0);
+
+    let submit_res = engine.submit_intent(
+        intent,
+        3000.0,
+        50000.0,
+        0.001,
+        0.01,
+        1.0,
+        0.20,
+    );
+
+    assert!(submit_res.is_ok(), "Multi-asset intent submission should succeed");
+    let slices = submit_res.unwrap();
+    assert!(!slices.is_empty());
+    assert!(slices[0].client_order_id.starts_with("CUSTOM_TS_ID_101"));
+
+    // Pop from intent queue
+    let popped = engine.intent_queue().pop();
+    assert!(popped.is_some());
+    let pkt_intent = popped.unwrap().to_intent();
+    assert!(pkt_intent.client_order_id.starts_with("CUSTOM_TS_ID_101"));
+
+    // Sync SAB slots
+    engine.sync_sab_slots(&bridge);
+    let submitted_count = bridge.load_f64_asset(0, 186);
+    assert_eq!(submitted_count, slices.len() as f64);
+
+    // Apply fill and check sanitized volume
+    let report = ExecutionReport {
+        client_order_id: "CUSTOM_TS_ID_101".to_string(),
+        order_id: 1,
+        symbol: "ETHUSDT".to_string(),
+        asset_idx: 0,
+        side: OrderSide::Buy,
+        status: OrderStatus::Filled,
+        last_filled_qty: 1.0,
+        last_filled_price: 3000.0,
+        cum_filled_qty: 1.0,
+        avg_price: 3000.0,
+        commission: 0.75,
+        commission_asset: "USDT".to_string(),
+        trade_id: 100,
+        event_time_ns: 1700000000123456789,
+        is_maker: true,
+    };
+    engine.apply_fill(report);
+
+    let metrics = engine.get_metrics(0);
+    assert_eq!(metrics.total_orders_filled, 1);
+    assert_eq!(metrics.total_volume_usd, 3000.0);
+}

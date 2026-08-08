@@ -200,9 +200,8 @@ pub struct OrderIntentPacket {
     pub ai_confidence: f32,
     pub ai_direction: f32,
     pub creation_ns: u64,
-    pub client_order_id_bytes: [u8; 32],
+    pub client_order_id_bytes: [u8; 64],
     pub symbol_bytes: [u8; 16],
-    pub padding: [u8; 32],
 }
 
 impl Default for OrderIntentPacket {
@@ -219,9 +218,8 @@ impl Default for OrderIntentPacket {
             ai_confidence: 0.0,
             ai_direction: 0.0,
             creation_ns: 0,
-            client_order_id_bytes: [0u8; 32],
+            client_order_id_bytes: [0u8; 64],
             symbol_bytes: [0u8; 16],
-            padding: [0u8; 32],
         }
     }
 }
@@ -258,7 +256,7 @@ impl OrderIntentPacket {
         pkt.creation_ns = intent.creation_ns;
 
         let cid_bytes = intent.client_order_id.as_bytes();
-        let len_cid = cid_bytes.len().min(32);
+        let len_cid = cid_bytes.len().min(64);
         pkt.client_order_id_bytes[..len_cid].copy_from_slice(&cid_bytes[..len_cid]);
 
         let sym_bytes = intent.symbol.as_bytes();
@@ -285,7 +283,7 @@ impl OrderIntentPacket {
         let reduce_only = (self.flags & (1 << 0)) != 0;
         let post_only = (self.flags & (1 << 1)) != 0;
 
-        let cid_len = self.client_order_id_bytes.iter().position(|&b| b == 0).unwrap_or(32);
+        let cid_len = self.client_order_id_bytes.iter().position(|&b| b == 0).unwrap_or(64);
         let client_order_id = String::from_utf8_lossy(&self.client_order_id_bytes[..cid_len]).to_string();
 
         let sym_len = self.symbol_bytes.iter().position(|&b| b == 0).unwrap_or(16);

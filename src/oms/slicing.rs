@@ -36,7 +36,7 @@ impl ExecutionSlicer {
         if step_size <= 0.0 || !step_size.is_finite() || !qty.is_finite() {
             return qty;
         }
-        let steps = ((qty / step_size) + 1e-9).floor();
+        let steps = (qty / step_size).round();
         let res = steps * step_size;
         if res.is_finite() { res } else { qty }
     }
@@ -47,7 +47,7 @@ impl ExecutionSlicer {
         if tick_size <= 0.0 || !tick_size.is_finite() || !price.is_finite() {
             return price;
         }
-        let ticks = ((price / tick_size) + 1e-9).floor();
+        let ticks = (price / tick_size).round();
         let res = ticks * tick_size;
         if res.is_finite() { res } else { price }
     }

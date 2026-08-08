@@ -151,34 +151,28 @@ impl OmsRiskGuard {
             ));
         }
 
-        // 1. Rate Limiting Check (10-second sliding window)
+        // 1. Rate Limiting Check (10-second sliding window inspection without polluting budget)
         let now = Self::now_ns();
         let window_duration_ns = 10_000_000_000u64; // 10 seconds in nanoseconds
         let mut last_reset = self.last_window_reset_ns.load(Ordering::Acquire);
-        loop {
-            if now.saturating_sub(last_reset) > window_duration_ns {
-                match self.last_window_reset_ns.compare_exchange_weak(
-                    last_reset,
-                    now,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                ) {
-                    Ok(_) => {
-                        self.order_count_window.store(1, Ordering::Release);
-                        break;
-                    }
-                    Err(actual) => last_reset = actual,
-                }
-            } else {
-                let current_count = self.order_count_window.fetch_add(1, Ordering::AcqRel);
-                if current_count >= self.config.max_orders_per_10s as u64 {
-                    return Err(OmsRiskError::RateLimitExceeded(format!(
-                        "Sliding 10s order count {} exceeded limit {}",
-                        current_count, self.config.max_orders_per_10s
-                    )));
-                }
-                break;
+        if now.saturating_sub(last_reset) > window_duration_ns {
+            let _ = self.last_window_reset_ns.compare_exchange_weak(
+                last_reset,
+                now,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            if self.last_window_reset_ns.load(Ordering::Acquire) == now {
+                self.order_count_window.store(0, Ordering::Release);
             }
+        }
+
+        let current_count = self.order_count_window.load(Ordering::Acquire);
+        if current_count >= self.config.max_orders_per_10s as u64 {
+            return Err(OmsRiskError::RateLimitExceeded(format!(
+                "Sliding 10s order count {} exceeded limit {}",
+                current_count, self.config.max_orders_per_10s
+            )));
         }
 
         // 2. Correlation Emergency Brake
@@ -216,22 +210,27 @@ impl OmsRiskGuard {
             });
         }
 
-        // 6. Position Max Drift Collar
+        // 6. Position Max Drift Collar (Exempt reduce_only & position-reducing orders for emergency stop-loss safety)
         let fill_qty = if intent.side == OrderSide::Buy {
             intent.quantity
         } else {
             -intent.quantity
         };
+        let current_pos_usd = (current_position_qty * mid_price).abs();
         let projected_pos_qty = current_position_qty + fill_qty;
         let projected_pos_usd = (projected_pos_qty * mid_price).abs();
 
-        if projected_pos_usd > self.config.max_portfolio_notional {
+        let is_reducing_exposure = intent.reduce_only || (projected_pos_usd <= current_pos_usd);
+
+        if !is_reducing_exposure && projected_pos_usd > self.config.max_portfolio_notional {
             return Err(OmsRiskError::MaxPositionDriftExceeded {
                 net_position_usd: projected_pos_usd,
                 limit_usd: self.config.max_portfolio_notional,
             });
         }
 
+        // Increment sliding window order counter ONLY after all checks have passed successfully
+        self.order_count_window.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 }

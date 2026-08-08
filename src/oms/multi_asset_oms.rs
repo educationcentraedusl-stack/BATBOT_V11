@@ -210,16 +210,45 @@ impl MultiAssetOmsEngine {
         portfolio_leverage: f64,
         avg_correlation: f64,
     ) -> Result<Vec<OrderIntent>, RejectionReason> {
+        self.submit_intent_full(
+            intent,
+            mid_price,
+            top5_depth_usd,
+            step_size,
+            tick_size,
+            portfolio_leverage,
+            avg_correlation,
+            0.1,
+            0.1,
+            0.1,
+            1.0,
+        )
+    }
+
+    pub fn submit_intent_full(
+        &self,
+        intent: OrderIntent,
+        mid_price: f64,
+        top5_depth_usd: f64,
+        step_size: f64,
+        tick_size: f64,
+        portfolio_leverage: f64,
+        avg_correlation: f64,
+        spread_vel: f64,
+        v_depletion: f64,
+        flow_toxicity: f64,
+        slippage_ticks: f64,
+    ) -> Result<Vec<OrderIntent>, RejectionReason> {
         let asset_idx = intent.asset_idx.min(self.max_assets - 1);
         let cur_pos = self.position_ledgers[asset_idx].snapshot().position_qty;
 
-        // Evaluate SOR Routing
+        // Evaluate SOR Routing with real microstructure params & TS client order ID passthrough
         let half_spread = (tick_size * 0.5).max(1e-5);
         let best_bid = (mid_price - half_spread).max(tick_size);
         let best_ask = mid_price + half_spread;
         let routed_intent = self
             .sor
-            .route_order(
+            .route_order_with_id(
                 &intent.symbol,
                 asset_idx,
                 intent.ai_direction,
@@ -227,13 +256,15 @@ impl MultiAssetOmsEngine {
                 intent.target_horizon_ms,
                 best_bid,
                 best_ask,
-                0.1,
-                0.1,
-                0.1,
-                1.0,
+                spread_vel,
+                v_depletion,
+                flow_toxicity,
+                slippage_ticks,
                 tick_size,
                 intent.quantity,
                 intent.creation_ns,
+                Some(&intent.client_order_id),
+                Some(intent.price),
             )
             .unwrap_or_else(|| intent.clone());
 
@@ -258,7 +289,13 @@ impl MultiAssetOmsEngine {
         // Slice intent if necessary
         let slices = self.slicing.slice_intent(&routed_intent, top5_depth_usd, step_size, tick_size);
 
-        // Push slices to lock-free intent ring buffer with overflow handling
+        // Pre-check ring buffer capacity BEFORE pushing any slices to prevent partial order leaks
+        if self.intent_queue.len() + slices.len() > INTENT_RING_CAPACITY {
+            self.metrics_orders_rejected[asset_idx].fetch_add(1, Ordering::Relaxed);
+            return Err(RejectionReason::RateLimitExceeded);
+        }
+
+        // Push slices to lock-free intent ring buffer
         for slice in &slices {
             let pkt = OrderIntentPacket::from_intent(slice);
             if !self.intent_queue.push(pkt) {
@@ -284,17 +321,19 @@ impl MultiAssetOmsEngine {
                 self.metrics_orders_filled[asset_idx].fetch_add(1, Ordering::Relaxed);
             }
             let fill_vol = report.last_filled_qty * report.last_filled_price;
-            let mut cur = self.metrics_volume_usd_bits[asset_idx].load(Ordering::Relaxed);
-            loop {
-                let new_val = f64::from_bits(cur) + fill_vol;
-                match self.metrics_volume_usd_bits[asset_idx].compare_exchange_weak(
-                    cur,
-                    new_val.to_bits(),
-                    Ordering::Acquire,
-                    Ordering::Relaxed,
-                ) {
-                    Ok(_) => break,
-                    Err(actual) => cur = actual,
+            if fill_vol.is_finite() && fill_vol >= 0.0 {
+                let mut cur = self.metrics_volume_usd_bits[asset_idx].load(Ordering::Relaxed);
+                loop {
+                    let new_val = f64::from_bits(cur) + fill_vol;
+                    match self.metrics_volume_usd_bits[asset_idx].compare_exchange_weak(
+                        cur,
+                        new_val.to_bits(),
+                        Ordering::Acquire,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => break,
+                        Err(actual) => cur = actual,
+                    }
                 }
             }
         } else if report.status == OrderStatus::Canceled {

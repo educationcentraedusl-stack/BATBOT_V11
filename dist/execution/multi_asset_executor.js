@@ -53,8 +53,8 @@ class MultiAssetExecutor {
         const targetHorizonMs = options?.targetHorizonMs ?? 100.0;
         const aiConfidence = options?.aiConfidence ?? 0.85;
         const reduceOnly = options?.reduceOnly ?? false;
-        const nanoTime = Number(process.hrtime.bigint() % BigInt(9_000_000_000_000_000));
-        const intentJson = JSON.stringify({
+        const nanoTimeStr = process.hrtime.bigint().toString();
+        const baseJson = JSON.stringify({
             client_order_id: `BAT_${assetIdx}_${Date.now()}`,
             symbol,
             asset_idx: assetIdx,
@@ -68,8 +68,8 @@ class MultiAssetExecutor {
             target_horizon_ms: targetHorizonMs,
             ai_confidence: aiConfidence,
             ai_direction: side === "BUY" ? 1.0 : -1.0,
-            creation_ns: nanoTime,
         });
+        const intentJson = baseJson.substring(0, baseJson.length - 1) + `,"creation_ns":${nanoTimeStr}}`;
         try {
             const resStr = (0, index_1.submitMultiAssetIntentNapi)(assetIdx, intentJson, midPrice, top5DepthUsd, stepSize, tickSize, portfolioLeverage, avgCorrelation);
             if (resStr.startsWith('{"status":"REJECTED"')) {

@@ -850,6 +850,23 @@
   4. Refactored `MultiAssetStrategyEngine` in `src/strategy/engine.ts` with a dynamic `symbolIndexMap` and `getAssetIndex(symbol)` slot resolution in `evaluateMultiAssetTick()`.
   5. Corrected synthetic return generation drift in `src/test_multi_asset_risk.ts` to use a centered zero-mean distribution `(Math.random() - 0.5) * 0.02`.
   6. 100% QA verified via native release compilation (`npx napi build --platform --release`), Rust unit test suite (`cargo test --lib`, 34/34 passed clean including new `test_nan_sanitization`), TypeScript build (`npm run build:ts`, 0 errors), and 100,000 tick synthetic stress harness (`node dist/test_multi_asset_risk.js` executing 100,000 ticks in 853 ms at 117,233 ticks/sec throughput and 8.53 μs latency per evaluation).
+## Development Changelog
+
+- **Date:** 2026-08-08
+- **Feature/Task:** Phase 4 10-Point Critical Remediation & Quant Hardening
+- **Artifacts Created/Modified:** `src/oms/types.rs`, `src/oms/multi_asset_oms.rs`, `src/oms/sor.rs`, `src/oms/slicing.rs`, `src/oms/risk.rs`, `src/execution/multi_asset_executor.ts`, `tests/test_oms.rs`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Executed 10-point critical remediation across Phase 4 modules:
+  1. Fixed partial order execution leaks in `MultiAssetOmsEngine::submit_intent_full` by pre-checking `intent_queue` capacity (`len() + slices.len() > INTENT_RING_CAPACITY`) before enqueueing slices.
+  2. Removed SOR dummy inputs, passing live `spread_vel`, `v_depletion`, `flow_toxicity`, and `slippage_ticks` to `sor.route_order_with_id`.
+  3. Sanitized `apply_fill` volume CAS loop against non-finite payload poisoning (`fill_vol.is_finite() && fill_vol >= 0.0`).
+  4. Eliminated IEEE-754 floor truncation loss on high-priced assets like BTC by using `.round() * tick_size` / `.round() * step_size` in `slicing.rs` and `sor.rs`.
+  5. Expanded `OrderIntentPacket` `client_order_id_bytes` buffer to `[u8; 64]` for zero-copy 128-byte alignment, preventing client ID slice suffix truncation.
+  6. Refactored `OmsRiskGuard::validate_multi_asset_order` to postpone `order_count_window` fetch_add until after all pre-trade risk checks pass.
+  7. Exempted `reduce_only == true` and exposure-reducing orders from `max_portfolio_notional` cap for emergency stop-loss safety.
+  8. Preserved 64-bit nanosecond creation timestamp in `multi_asset_executor.ts` without modulo precision loss.
+  9. Preserved TypeScript `client_order_id` in `SmartOrderRouter::route_order_with_id` via custom ID passthrough.
+  10. Added native Rust unit test `test_multi_asset_oms_engine_lifecycle` in `tests/test_oms.rs` verifying multi-asset intent submission, queueing, SAB syncing, and fills.
+  100% QA verified via `cargo test --test test_oms` (5/5 passed), `npx napi build --platform --release` (clean native binary), `npm run build:ts` (0 errors), and 100,000 intent benchmark harness (`node dist/test_phase4_multi_asset_oms.js` executing 100,000 intents in 528.79 ms at 189,111 intents/sec throughput and 5.288 µs latency per intent).
 - **Status:** ✅ Completed & QA Verified
 
 
