@@ -84,11 +84,15 @@ pub struct MicrostructureAnalyzer {
     depth_depletion_rate: f64,
     is_sweep_detected: bool,
 
+    // Rolling Volume Adaptation for Dynamic VPIN Bucketing
+    rolling_trade_volume: f64,
+
     // Cached Metrics
     cached_rv_gk: f64,
     cached_vpin: f64,
     cached_hurst: f64,
     cached_lob_entropy: f64,
+    cached_micro_price: f64,
     cached_regime: MicroRegime,
 }
 
@@ -100,6 +104,7 @@ impl Default for MicrostructureAnalyzer {
 
 impl MicrostructureAnalyzer {
     pub fn new(bucket_target_volume: f64) -> Self {
+        let target_vol = if bucket_target_volume > 1e-6 { bucket_target_volume } else { 50000.0 };
         Self {
             bars: [MicroBar::default(); TICK_WINDOW],
             bar_index: 0,
@@ -112,7 +117,7 @@ impl MicrostructureAnalyzer {
             vpin_bucket_count: 0,
             current_bucket_buy: 0.0,
             current_bucket_sell: 0.0,
-            bucket_target_volume: if bucket_target_volume > 1e-6 { bucket_target_volume } else { 50000.0 },
+            bucket_target_volume: target_vol,
 
             price_history: [0.0; HURST_WINDOW],
             price_index: 0,
@@ -124,10 +129,13 @@ impl MicrostructureAnalyzer {
             depth_depletion_rate: 0.0,
             is_sweep_detected: false,
 
+            rolling_trade_volume: target_vol / 20.0,
+
             cached_rv_gk: 0.0,
             cached_vpin: 0.0,
             cached_hurst: 0.5,
             cached_lob_entropy: 0.0,
+            cached_micro_price: 0.0,
             cached_regime: MicroRegime::MeanReverting,
         }
     }
@@ -172,9 +180,15 @@ impl MicrostructureAnalyzer {
             self.recalculate_rv_gk();
         }
 
-        // 3. Update VPIN Volume Buckets
+        // 3. Update VPIN Volume Buckets with Dynamic Adaptive Target Volume
         // Taker buy: is_buyer_maker == false
         let volume = price * quantity;
+        if volume > 0.0 {
+            self.rolling_trade_volume = self.rolling_trade_volume * 0.95 + volume * 0.05;
+            let min_target = (self.bucket_target_volume * 0.1).clamp(0.1, 100.0);
+            self.bucket_target_volume = (self.rolling_trade_volume * 20.0).clamp(min_target, 100000.0);
+        }
+
         if is_buyer_maker {
             self.current_bucket_sell += volume;
         } else {
@@ -200,7 +214,7 @@ impl MicrostructureAnalyzer {
         self.recalculate_hurst_and_regime();
     }
 
-    /// On LOB depth update event, calculate top-3 depth depletion and LOB entropy.
+    /// On LOB depth update event, calculate top-3 depth depletion, Micro-Price, and LOB entropy.
     pub fn on_depth_update(
         &mut self,
         bids: &[(f64, f64); 20],
@@ -241,7 +255,8 @@ impl MicrostructureAnalyzer {
         self.last_top3_ask_depth = current_top3_ask;
         self.last_depth_ts_ns = timestamp_ns;
 
-        // Calculate LOB Entropy across top 10 levels
+        // Calculate Micro-Price and LOB Entropy across top 10 levels
+        self.cached_micro_price = crate::lob::metrics::calculate_micro_price(bids, asks);
         self.recalculate_lob_entropy(bids, asks);
     }
 
@@ -427,6 +442,10 @@ impl MicrostructureAnalyzer {
 
     pub fn get_lob_entropy(&self) -> f64 {
         self.cached_lob_entropy
+    }
+
+    pub fn get_micro_price(&self) -> f64 {
+        self.cached_micro_price
     }
 
     pub fn get_regime(&self) -> MicroRegime {

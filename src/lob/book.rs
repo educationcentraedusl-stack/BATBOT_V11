@@ -172,9 +172,27 @@ impl LimitOrderBook {
         self.metrics.vpin = self.analyzer.get_vpin();
         self.metrics.hurst = self.analyzer.get_hurst();
         self.metrics.lob_entropy = self.analyzer.get_lob_entropy();
+        self.metrics.micro_price = self.analyzer.get_micro_price();
         self.metrics.regime = self.analyzer.get_regime() as u8;
         self.metrics.is_sweep_detected = self.analyzer.is_sweep_detected();
         self.last_update_ns = timestamp_ns;
+    }
+
+    /// Retrieve live top of book: (best_bid, best_ask, mid_price)
+    pub fn get_top_of_book(&self) -> Option<(f64, f64, f64)> {
+        let best_bid = self.bids[0].0;
+        let best_ask = self.asks[0].0;
+
+        if best_bid > 0.0 && best_ask > 0.0 && best_ask >= best_bid {
+            let mid_price = (best_bid + best_ask) * 0.5;
+            Some((best_bid, best_ask, mid_price))
+        } else if best_bid > 0.0 {
+            Some((best_bid, best_bid, best_bid))
+        } else if best_ask > 0.0 {
+            Some((best_ask, best_ask, best_ask))
+        } else {
+            None
+        }
     }
 
     /// O(1) / memmove fast insertion or update of a bid level (sorted descending by price)
@@ -227,15 +245,15 @@ impl LimitOrderBook {
         }
 
         for i in 0..LOB_DEPTH {
-            if self.asks[i].0 == 0.0 || price < self.asks[i].0 {
+            if (self.asks[i].0 - price).abs() < 1e-9 {
+                self.asks[i].1 = quantity;
+                return;
+            } else if self.asks[i].0 == 0.0 || price < self.asks[i].0 {
                 unsafe {
                     let ptr = self.asks.as_mut_ptr();
                     std::ptr::copy(ptr.add(i), ptr.add(i + 1), LOB_DEPTH - 1 - i);
                 }
                 self.asks[i] = (price, quantity);
-                return;
-            } else if (self.asks[i].0 - price).abs() < 1e-9 {
-                self.asks[i].1 = quantity;
                 return;
             }
         }
@@ -293,19 +311,20 @@ impl LimitOrderBook {
 
 pub const MAX_CONCURRENT_ASSETS: usize = 10;
 
-/// Lock-free Multi-Asset L2 Orderbook Manager.
+/// Lock-free Multi-Asset L2 Orderbook Manager with per-asset fine-grained RwLocks.
 /// Manages up to 10 concurrent asset orderbooks in a dedicated synchronous unblocked OS thread.
 pub struct MultiAssetLOBManager {
-    books: std::sync::RwLock<[LimitOrderBook; MAX_CONCURRENT_ASSETS]>,
+    books: [std::sync::RwLock<LimitOrderBook>; MAX_CONCURRENT_ASSETS],
     is_running: std::sync::atomic::AtomicBool,
 }
 
 impl MultiAssetLOBManager {
     pub fn new() -> Self {
-        // Initialize 10 distinct LimitOrderBooks
-        let books_array: [LimitOrderBook; MAX_CONCURRENT_ASSETS] = std::array::from_fn(|_| LimitOrderBook::new());
+        // Initialize 10 distinct per-asset fine-grained RwLock<LimitOrderBook> instances
+        let books_array: [std::sync::RwLock<LimitOrderBook>; MAX_CONCURRENT_ASSETS] =
+            std::array::from_fn(|_| std::sync::RwLock::new(LimitOrderBook::new()));
         Self {
-            books: std::sync::RwLock::new(books_array),
+            books: books_array,
             is_running: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -322,8 +341,8 @@ impl MultiAssetLOBManager {
         if asset_idx >= MAX_CONCURRENT_ASSETS {
             return;
         }
-        if let Ok(mut books) = self.books.write() {
-            books[asset_idx].process_event(event);
+        if let Ok(mut book) = self.books[asset_idx].write() {
+            book.process_event(event);
         }
     }
 
@@ -331,7 +350,14 @@ impl MultiAssetLOBManager {
         if asset_idx >= MAX_CONCURRENT_ASSETS {
             return None;
         }
-        self.books.read().ok().map(|b| b[asset_idx].metrics.clone())
+        self.books[asset_idx].read().ok().map(|b| b.metrics.clone())
+    }
+
+    pub fn get_top_of_book_for_asset(&self, asset_idx: usize) -> Option<(f64, f64, f64)> {
+        if asset_idx >= MAX_CONCURRENT_ASSETS {
+            return None;
+        }
+        self.books[asset_idx].read().ok().and_then(|b| b.get_top_of_book())
     }
 
     /// Condition 2: Synchronous dedicated processing loop running outside Tokio runtime.

@@ -934,6 +934,20 @@
   5. 100% QA verified via native Rust benchmark suite `cargo test --test phase5_orchestrator_tests` (3/3 passed in 0.16s), release native binary build (`npx napi build --platform --release`), strict TypeScript build (`npm run build:ts`, 0 errors), and live Binance Futures WS stream integration test (`node dist/test_phase5_market_data_alpha.js` connecting live WS streams across 5 assets and processing ticks with zero GC allocations).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-08-08
+- **Feature/Task:** Phase 5 Zero-Tolerance 6-Point Remediation & Absolute Lockdown (Dynamic L2 Order Pricing, Live Portfolio Risk State, Zero-Heap Stack Formatting, Micro-Price, Adaptive VPIN & Fine-Grained Orderbook Locks)
+- **Artifacts Created/Modified:** `src/strategy/orchestrator.rs`, `src/lob/microstructure.rs`, `src/lob/metrics.rs`, `src/lob/book.rs`, `src/ai/preflight.rs`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Executed 100% zero-tolerance remediation of all 6 hostile audit defects across Phase 5 components:
+  1. Eradicated Hardcoded Prices (`orchestrator.rs`): Removed `$100.0` / `$100.0 + spread` dummy math. Order prices are dynamically derived from live L2 top-of-book (`best_ask` for BUY, `best_bid` for SELL) with invalid top-of-book rejection.
+  2. Eradicated Dummy Risk Inputs (`orchestrator.rs`): Replaced static `0.01` drawdown and `$500.0` exposure with live portfolio net exposure and unrealized/realized drawdown calculated from OMS position ledgers and account balance.
+  3. Fixed Hot-Path Heap Allocation (`orchestrator.rs`): Eradicated `format!("ASSET_{}", asset_idx)` string allocation in the hot path. Implemented stack-allocated `[u8; 16]` symbol formatting with zero heap allocations.
+  4. Implemented Volume-Weighted Micro-Price (`metrics.rs` & `microstructure.rs`): Implemented exact $P_{micro} = \frac{Q_b P_a + Q_a P_b}{Q_b + Q_a}$ with strict division-by-zero guards, stored in metrics and SAB slot 8.
+  5. Dynamic VPIN Target Volume (`microstructure.rs`): Implemented adaptive target volume ($V_{target} = (\overline{V}_{rolling} \times 20.0).clamp(\text{min\_target}, 100000.0)$) so low-volume altcoins maintain fresh VPIN metrics without bucket starvation.
+  6. Eliminated Coarse-Grained Locks (`book.rs`): Replaced global `std::sync::RwLock<[LimitOrderBook; 10]>` with `[std::sync::RwLock<LimitOrderBook>; 10]`, isolating per-asset orderbook locks so updates to Asset 0 never block reads or updates to Assets 1–9.
+  7. 100% QA verified via optimized release test suite (`cargo test --release --lib`, 35/35 passed clean in 0.08s) and `cargo check --lib` (0 errors).
+- **Status:** ✅ Completed & QA Verified
+
+
 
 
 

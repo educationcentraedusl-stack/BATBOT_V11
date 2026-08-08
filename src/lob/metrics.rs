@@ -4,6 +4,7 @@ pub struct MicrostructureMetrics {
     pub cvd: f64,
     pub spread_velocity: f64,
     pub last_spread: f64,
+    pub micro_price: f64,
     pub last_timestamp_ns: u64,
     pub total_liquidation_vol: f64,
     pub buy_liquidation_vol: f64,
@@ -23,6 +24,7 @@ impl Default for MicrostructureMetrics {
             cvd: 0.0,
             spread_velocity: 0.0,
             last_spread: 0.0,
+            micro_price: 0.0,
             last_timestamp_ns: 0,
             total_liquidation_vol: 0.0,
             buy_liquidation_vol: 0.0,
@@ -53,6 +55,27 @@ pub fn calculate_obi(bids: &[(f64, f64); 20], asks: &[(f64, f64); 20]) -> f64 {
         0.0
     } else {
         (total_bid_vol - total_ask_vol) / denominator
+    }
+}
+
+/// Calculate Volume-Weighted Micro-Price: P_micro = (Q_b * P_a + Q_a * P_b) / (Q_b + Q_a)
+pub fn calculate_micro_price(bids: &[(f64, f64); 20], asks: &[(f64, f64); 20]) -> f64 {
+    let pb = bids[0].0;
+    let qb = bids[0].1;
+    let pa = asks[0].0;
+    let qa = asks[0].1;
+
+    let denominator = qb + qa;
+    if denominator <= 1e-12 {
+        if pb > 0.0 && pa > 0.0 {
+            (pb + pa) * 0.5
+        } else if pb > 0.0 {
+            pb
+        } else {
+            pa
+        }
+    } else {
+        (qb * pa + qa * pb) / denominator
     }
 }
 
@@ -90,3 +113,4 @@ pub fn update_liquidation(
         metrics.sell_liquidation_vol += vol;
     }
 }
+
