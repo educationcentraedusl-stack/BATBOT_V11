@@ -33,24 +33,28 @@ impl ExecutionSlicer {
     /// Fast scalar quantization to step size (e.g. 0.001) without string allocations.
     #[inline(always)]
     pub fn quantize_qty(qty: f64, step_size: f64) -> f64 {
-        if step_size <= 0.0 {
+        if step_size <= 0.0 || !step_size.is_finite() || !qty.is_finite() {
             return qty;
         }
-        ((qty / step_size) + 1e-9).floor() * step_size
+        let steps = ((qty / step_size) + 1e-9).floor();
+        let res = steps * step_size;
+        if res.is_finite() { res } else { qty }
     }
 
     /// Fast scalar quantization to tick size (e.g. 0.01) without string allocations.
     #[inline(always)]
     pub fn quantize_price(price: f64, tick_size: f64) -> f64 {
-        if tick_size <= 0.0 {
+        if tick_size <= 0.0 || !tick_size.is_finite() || !price.is_finite() {
             return price;
         }
-        ((price / tick_size) + 1e-9).floor() * tick_size
+        let ticks = ((price / tick_size) + 1e-9).floor();
+        let res = ticks * tick_size;
+        if res.is_finite() { res } else { price }
     }
 
     /// Determines if an order intent exceeds the max participation threshold relative to book depth.
     pub fn should_slice(&self, intent: &OrderIntent, top5_depth_usd: f64) -> bool {
-        if top5_depth_usd <= 0.0 {
+        if top5_depth_usd <= 0.0 || !top5_depth_usd.is_finite() {
             return false;
         }
         let intent_notional = intent.notional_value();
@@ -127,7 +131,8 @@ impl ExecutionSlicer {
             };
 
             slices.push(slice_intent);
-            remaining_qty = Self::quantize_qty(remaining_qty - quantized_slice_qty, step_size);
+            let diff = remaining_qty - quantized_slice_qty;
+            remaining_qty = if diff <= 1e-12 { 0.0 } else { Self::quantize_qty(diff, step_size) };
         }
 
         if slices.is_empty() {
@@ -167,7 +172,7 @@ mod tests {
         assert!(!slices.is_empty());
         assert!(slices.len() <= 5);
         let total_qty: f64 = slices.iter().map(|s| s.quantity).sum();
-        assert!((total_qty - 5.0).abs() < 1e-3);
+        assert!((total_qty - 5.0).abs() < 1e-9);
     }
 }
 

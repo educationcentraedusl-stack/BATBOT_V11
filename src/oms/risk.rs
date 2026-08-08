@@ -125,6 +125,9 @@ impl OmsRiskGuard {
         // 0. Non-finite / NaN Poisoning Check
         if !intent.quantity.is_finite()
             || !intent.price.is_finite()
+            || !intent.ai_confidence.is_finite()
+            || !intent.ai_direction.is_finite()
+            || !intent.target_horizon_ms.is_finite()
             || !mid_price.is_finite()
             || !current_position_qty.is_finite()
             || !projected_portfolio_leverage.is_finite()
@@ -142,21 +145,39 @@ impl OmsRiskGuard {
             ));
         }
 
+        if mid_price <= 0.0 {
+            return Err(OmsRiskError::InvalidOrderParameters(
+                "Mid price must be strictly positive".to_string(),
+            ));
+        }
+
         // 1. Rate Limiting Check (10-second sliding window)
         let now = Self::now_ns();
-        let last_reset = self.last_window_reset_ns.load(Ordering::Relaxed);
         let window_duration_ns = 10_000_000_000u64; // 10 seconds in nanoseconds
-
-        if now.saturating_sub(last_reset) > window_duration_ns {
-            self.order_count_window.store(1, Ordering::Relaxed);
-            self.last_window_reset_ns.store(now, Ordering::Relaxed);
-        } else {
-            let current_count = self.order_count_window.fetch_add(1, Ordering::Relaxed);
-            if current_count >= self.config.max_orders_per_10s as u64 {
-                return Err(OmsRiskError::RateLimitExceeded(format!(
-                    "Sliding 10s order count {} exceeded limit {}",
-                    current_count, self.config.max_orders_per_10s
-                )));
+        let mut last_reset = self.last_window_reset_ns.load(Ordering::Acquire);
+        loop {
+            if now.saturating_sub(last_reset) > window_duration_ns {
+                match self.last_window_reset_ns.compare_exchange_weak(
+                    last_reset,
+                    now,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
+                        self.order_count_window.store(1, Ordering::Release);
+                        break;
+                    }
+                    Err(actual) => last_reset = actual,
+                }
+            } else {
+                let current_count = self.order_count_window.fetch_add(1, Ordering::AcqRel);
+                if current_count >= self.config.max_orders_per_10s as u64 {
+                    return Err(OmsRiskError::RateLimitExceeded(format!(
+                        "Sliding 10s order count {} exceeded limit {}",
+                        current_count, self.config.max_orders_per_10s
+                    )));
+                }
+                break;
             }
         }
 
@@ -186,15 +207,13 @@ impl OmsRiskGuard {
         }
 
         // 5. Price Collar Guard
-        if mid_price > 0.0 {
-            let dev_pct = ((intent.price - mid_price).abs() / mid_price) * 100.0;
-            if dev_pct > self.config.max_price_deviation_pct {
-                return Err(OmsRiskError::PriceCollarExceeded {
-                    price: intent.price,
-                    mid_price,
-                    deviation_pct: dev_pct,
-                });
-            }
+        let dev_pct = ((intent.price - mid_price).abs() / mid_price) * 100.0;
+        if dev_pct > self.config.max_price_deviation_pct {
+            return Err(OmsRiskError::PriceCollarExceeded {
+                price: intent.price,
+                mid_price,
+                deviation_pct: dev_pct,
+            });
         }
 
         // 6. Position Max Drift Collar

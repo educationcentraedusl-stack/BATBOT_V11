@@ -71,6 +71,7 @@ impl SmartOrderRouter {
             || quantity <= 0.0
             || best_bid <= 0.0
             || best_ask <= 0.0
+            || best_bid >= best_ask
         {
             return None;
         }
@@ -89,7 +90,7 @@ impl SmartOrderRouter {
             && spread_vel.abs() > 0.5)
             || (v_depletion > 0.60 && flow_toxicity < 0.70);
 
-        let (price, time_in_force, post_only) = if is_aggressive_sweep {
+        let (raw_price, time_in_force, post_only) = if is_aggressive_sweep {
             let offset = slippage_ticks.max(1.0) * effective_tick;
             let sweep_price = match side {
                 OrderSide::Buy => best_ask + offset,
@@ -103,6 +104,8 @@ impl SmartOrderRouter {
             };
             (maker_price, TimeInForce::Gtx, true)
         };
+
+        let price = ((raw_price / effective_tick) + 1e-9).floor() * effective_tick;
 
         let seq = self.order_seq.fetch_add(1, Ordering::Relaxed);
 

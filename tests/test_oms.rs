@@ -1,7 +1,7 @@
 use batbot_v11_core::ipc::shared_memory::AtomicSharedMemoryBridge;
 use batbot_v11_core::oms::{
     KellySizer, OmsEngine, OmsRiskGuard, OrderSide, OrderType, PositionLedger, RiskConfig,
-    SizerConfig, SmartOrderRouter, TimeInForce,
+    SmartOrderRouter, TimeInForce,
 };
 
 #[test]
@@ -68,7 +68,7 @@ fn test_risk_guard_collars() {
     let sor = SmartOrderRouter::default_hft();
     let intent = sor
         .route_order(
-            "BTCUSDT", 1.0, 0.90, 30.0, 90000.0, 90001.0, 0.6, 2.0, 0.10, 0.5, 1000000,
+            "BTCUSDT", 0, 1.0, 0.90, 30.0, 90000.0, 90001.0, 0.6, 0.2, 0.1, 2.0, 0.10, 0.5, 1000000,
         )
         .expect("SOR should return OrderIntent");
 

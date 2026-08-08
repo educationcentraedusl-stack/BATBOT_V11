@@ -103,7 +103,11 @@ export class MultiAssetExecutor {
   }
 
   public getAssetIndex(symbol: string): number {
-    return this.symbolToIdxMap.get(symbol) ?? 0;
+    const idx = this.symbolToIdxMap.get(symbol);
+    if (idx === undefined) {
+      throw new Error(`[MultiAssetExecutor] Unmapped symbol '${symbol}' not found in activeSymbols`);
+    }
+    return idx;
   }
 
   public submitIntent(
@@ -128,6 +132,8 @@ export class MultiAssetExecutor {
     const aiConfidence = options?.aiConfidence ?? 0.85;
     const reduceOnly = options?.reduceOnly ?? false;
 
+    const nanoTime = Number(process.hrtime.bigint() % BigInt(9_000_000_000_000_000));
+
     const intentJson = JSON.stringify({
       client_order_id: `BAT_${assetIdx}_${Date.now()}`,
       symbol,
@@ -142,7 +148,7 @@ export class MultiAssetExecutor {
       target_horizon_ms: targetHorizonMs,
       ai_confidence: aiConfidence,
       ai_direction: side === "BUY" ? 1.0 : -1.0,
-      creation_ns: Date.now() * 1_000_000,
+      creation_ns: nanoTime,
     });
 
     try {
@@ -203,20 +209,9 @@ export class MultiAssetExecutor {
         currentPositionSize: raw.current_position_size ?? 0,
         avgEntryPrice: raw.avg_entry_price ?? 0,
       };
-    } catch {
-      return {
-        assetIdx,
-        symbol,
-        totalOrdersSubmitted: 0,
-        totalOrdersFilled: 0,
-        totalOrdersCanceled: 0,
-        totalOrdersRejected: 0,
-        totalVolumeUsd: 0,
-        realizedPnlUsd: 0,
-        unrealizedPnlUsd: 0,
-        currentPositionSize: 0,
-        avgEntryPrice: 0,
-      };
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      throw new Error(`[MultiAssetExecutor] Failed to parse metrics for ${symbol}: ${errorMsg}`);
     }
   }
 

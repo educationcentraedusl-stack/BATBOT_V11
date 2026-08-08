@@ -131,6 +131,14 @@ impl MultiAssetOmsEngine {
         self.intent_queue.clone()
     }
 
+    pub fn symbols(&self) -> Vec<String> {
+        self.symbols.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn sor(&self) -> &SmartOrderRouter {
+        &self.sor
+    }
+
     pub fn account_balance_usd(&self) -> f64 {
         f64::from_bits(self.account_balance_usd.load(Ordering::Relaxed))
     }
@@ -144,6 +152,10 @@ impl MultiAssetOmsEngine {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos() as f64;
+
+        let safe_f64 = |val: f64| -> f64 {
+            if val.is_finite() { val } else { 0.0 }
+        };
 
         for asset_idx in 0..self.max_assets {
             let ledger = &self.position_ledgers[asset_idx];
@@ -163,26 +175,26 @@ impl MultiAssetOmsEngine {
             let balance_usd = self.account_balance_usd();
 
             // Slots 181..190
-            bridge.store_f64_asset(asset_idx, 181, pending_orders);
-            bridge.store_f64_asset(asset_idx, 182, snap.position_qty);
-            bridge.store_f64_asset(asset_idx, 183, snap.avg_entry_price);
-            bridge.store_f64_asset(asset_idx, 184, snap.realized_pnl);
-            bridge.store_f64_asset(asset_idx, 185, snap.unrealized_pnl);
-            bridge.store_f64_asset(asset_idx, 186, submitted as f64);
-            bridge.store_f64_asset(asset_idx, 187, filled as f64);
-            bridge.store_f64_asset(asset_idx, 188, canceled as f64);
-            bridge.store_f64_asset(asset_idx, 189, rejected as f64);
-            bridge.store_f64_asset(asset_idx, 190, vol_usd);
+            bridge.store_f64_asset(asset_idx, 181, safe_f64(pending_orders));
+            bridge.store_f64_asset(asset_idx, 182, safe_f64(snap.position_qty));
+            bridge.store_f64_asset(asset_idx, 183, safe_f64(snap.avg_entry_price));
+            bridge.store_f64_asset(asset_idx, 184, safe_f64(snap.realized_pnl));
+            bridge.store_f64_asset(asset_idx, 185, safe_f64(snap.unrealized_pnl));
+            bridge.store_f64_asset(asset_idx, 186, safe_f64(submitted as f64));
+            bridge.store_f64_asset(asset_idx, 187, safe_f64(filled as f64));
+            bridge.store_f64_asset(asset_idx, 188, safe_f64(canceled as f64));
+            bridge.store_f64_asset(asset_idx, 189, safe_f64(rejected as f64));
+            bridge.store_f64_asset(asset_idx, 190, safe_f64(vol_usd));
 
             // Slots 191..200: Telemetry Metrics & Status Indicators
-            bridge.store_f64_asset(asset_idx, 191, fill_rate_pct);
-            bridge.store_f64_asset(asset_idx, 192, cancel_rate_pct);
-            bridge.store_f64_asset(asset_idx, 193, reject_rate_pct);
-            bridge.store_f64_asset(asset_idx, 194, net_pos_usd);
-            bridge.store_f64_asset(asset_idx, 195, total_orders);
-            bridge.store_f64_asset(asset_idx, 196, balance_usd);
-            bridge.store_f64_asset(asset_idx, 197, now_ns);
-            bridge.store_f64_asset(asset_idx, 198, asset_idx as f64);
+            bridge.store_f64_asset(asset_idx, 191, safe_f64(fill_rate_pct));
+            bridge.store_f64_asset(asset_idx, 192, safe_f64(cancel_rate_pct));
+            bridge.store_f64_asset(asset_idx, 193, safe_f64(reject_rate_pct));
+            bridge.store_f64_asset(asset_idx, 194, safe_f64(net_pos_usd));
+            bridge.store_f64_asset(asset_idx, 195, safe_f64(total_orders));
+            bridge.store_f64_asset(asset_idx, 196, safe_f64(balance_usd));
+            bridge.store_f64_asset(asset_idx, 197, safe_f64(now_ns));
+            bridge.store_f64_asset(asset_idx, 198, safe_f64(asset_idx as f64));
             bridge.store_f64_asset(asset_idx, 199, 1.0); // Health Status Indicator
             bridge.store_f64_asset(asset_idx, 200, 1.0); // Engine Active Status Indicator
         }
@@ -201,9 +213,32 @@ impl MultiAssetOmsEngine {
         let asset_idx = intent.asset_idx.min(self.max_assets - 1);
         let cur_pos = self.position_ledgers[asset_idx].snapshot().position_qty;
 
+        // Evaluate SOR Routing
+        let half_spread = (tick_size * 0.5).max(1e-5);
+        let best_bid = (mid_price - half_spread).max(tick_size);
+        let best_ask = mid_price + half_spread;
+        let routed_intent = self
+            .sor
+            .route_order(
+                &intent.symbol,
+                asset_idx,
+                intent.ai_direction,
+                intent.ai_confidence,
+                intent.target_horizon_ms,
+                best_bid,
+                best_ask,
+                0.1,
+                0.1,
+                0.1,
+                1.0,
+                tick_size,
+                intent.quantity,
+                intent.creation_ns,
+            )
+            .unwrap_or_else(|| intent.clone());
 
         if let Err(err) = self.risk_guard.validate_multi_asset_order(
-            &intent,
+            &routed_intent,
             mid_price,
             cur_pos,
             portfolio_leverage,
@@ -221,12 +256,15 @@ impl MultiAssetOmsEngine {
         }
 
         // Slice intent if necessary
-        let slices = self.slicing.slice_intent(&intent, top5_depth_usd, step_size, tick_size);
+        let slices = self.slicing.slice_intent(&routed_intent, top5_depth_usd, step_size, tick_size);
 
-        // Push slices to lock-free intent ring buffer
+        // Push slices to lock-free intent ring buffer with overflow handling
         for slice in &slices {
             let pkt = OrderIntentPacket::from_intent(slice);
-            self.intent_queue.push(pkt);
+            if !self.intent_queue.push(pkt) {
+                self.metrics_orders_rejected[asset_idx].fetch_add(1, Ordering::Relaxed);
+                return Err(RejectionReason::RateLimitExceeded);
+            }
             self.metrics_orders_submitted[asset_idx].fetch_add(1, Ordering::Relaxed);
         }
 

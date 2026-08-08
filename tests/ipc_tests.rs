@@ -1,8 +1,7 @@
 #[cfg(test)]
 mod tests {
     use batbot_v11_core::ipc::{AtomicSharedMemoryBridge, SHARED_MEMORY_BYTES};
-    use batbot_v11_core::lob::{LockFreeSpscQueue, MarketUpdateEvent, LOB_DEPTH};
-    use std::thread;
+    use batbot_v11_core::lob::LOB_DEPTH;
 
     #[test]
     fn test_atomic_shared_memory_alignment_and_bounds() {
