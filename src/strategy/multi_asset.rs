@@ -166,16 +166,15 @@ impl MultiAssetSignalEngine {
     pub fn evaluate_sab_matrix(
         &self,
         bridge: &AtomicSharedMemoryBridge,
-        symbols: &[String; MAX_ACTIVE_ASSETS],
+        symbols: &[String],
     ) -> MultiAssetSignalResult {
-        let mut signals = Vec::with_capacity(MAX_ACTIVE_ASSETS);
+        let mut signals = Vec::with_capacity(symbols.len());
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
 
-        for k in 0..MAX_ACTIVE_ASSETS {
-            let symbol = &symbols[k];
+        for (k, symbol) in symbols.iter().enumerate() {
             if symbol.is_empty() {
                 continue;
             }

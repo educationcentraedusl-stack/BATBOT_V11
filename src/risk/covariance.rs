@@ -179,9 +179,9 @@ impl CovarianceRiskGuard {
         bid_ask_spread_bp: f64,
         account_balance: f64,
         current_price: f64,
-        active_weights: &[f64; MAX_ACTIVE_ASSETS],
+        active_weights: &[f64],
     ) -> KellyPositionSize {
-        if asset_index >= MAX_ACTIVE_ASSETS
+        if asset_index >= active_weights.len()
             || !account_balance.is_finite()
             || account_balance <= 0.0
             || !current_price.is_finite()
@@ -225,9 +225,14 @@ impl CovarianceRiskGuard {
         // 1. Calculate Correlation Penalty Factor: (1 + sum_{j != i} rho_{ij} * (w_j / w_i))
         let current_w_i = active_weights[asset_index].max(0.01);
         let mut cross_corr_sum = 0.0;
-        for j in 0..MAX_ACTIVE_ASSETS {
+        let num_assets = active_weights.len();
+        for j in 0..num_assets {
             if j != asset_index {
-                let rho_ij = snap.correlation_matrix[asset_index][j];
+                let rho_ij = if asset_index < MAX_ACTIVE_ASSETS && j < MAX_ACTIVE_ASSETS {
+                    snap.correlation_matrix[asset_index][j]
+                } else {
+                    0.0
+                };
                 let w_j = active_weights[j];
                 cross_corr_sum += rho_ij * (w_j / current_w_i);
             }

@@ -512,12 +512,6 @@ pub fn calculate_cc_dfk_size_napi(
             parsed_weights = parsed;
         }
     }
-    let mut weights = [0.0; 10];
-    for (i, &w) in parsed_weights.iter().enumerate() {
-        if i < weights.len() {
-            weights[i] = w;
-        }
-    }
     let res = GLOBAL_COVARIANCE_RISKGUARD.calculate_cc_dfk_size(
         asset_idx as usize,
         expected_return,
@@ -525,7 +519,7 @@ pub fn calculate_cc_dfk_size_napi(
         bid_ask_spread_bp,
         account_balance,
         current_price,
-        &weights,
+        &parsed_weights,
     );
     serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string())
 }
@@ -551,16 +545,8 @@ pub fn evaluate_multi_asset_signals_napi(
     if let Ok(parsed_syms) = serde_json::from_str::<Vec<String>>(&active_symbols_json) {
         parsed_symbols = parsed_syms;
     }
-    let mut symbols = [String::new(), String::new(), String::new(), String::new(), String::new(),
-                       String::new(), String::new(), String::new(), String::new(), String::new()];
 
-    for (i, s) in parsed_symbols.iter().enumerate() {
-        if i < symbols.len() {
-            symbols[i] = s.clone();
-        }
-    }
-
-    let res = GLOBAL_MULTI_STRATEGY_ENGINE.evaluate_sab_matrix(&bridge, &symbols);
+    let res = GLOBAL_MULTI_STRATEGY_ENGINE.evaluate_sab_matrix(&bridge, &parsed_symbols);
     let json = serde_json::to_string(&res).map_err(|e| Error::from_reason(e.to_string()))?;
     Ok(json)
 }
