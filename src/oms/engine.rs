@@ -174,17 +174,21 @@ impl OmsEngine {
         let tick_size = self.sor.tick_size();
         let intent = self.sor.route_order(
             &self.symbol,
+            0, // asset_idx
             direction,
             confidence,
             horizon_ms,
             best_bid,
             best_ask,
             spread_vel,
+            0.0, // v_depletion
+            0.0, // flow_toxicity
             slippage_ticks,
             tick_size,
             order_qty,
             now_ns,
         )?;
+
 
         // 5. Pre-Trade Risk Verification
         if let Err(risk_err) = self.risk_guard.validate_order(&intent, mid_price, current_pos_qty) {
@@ -233,7 +237,9 @@ impl OmsEngine {
 
     pub fn get_metrics(&self) -> OmsMetrics {
         OmsMetrics {
+            asset_idx: 0,
             total_orders_submitted: self.metrics_orders_submitted.load(Ordering::Relaxed),
+
             total_orders_filled: self.metrics_orders_filled.load(Ordering::Relaxed),
             total_orders_canceled: self.metrics_orders_canceled.load(Ordering::Relaxed),
             total_orders_rejected: self.metrics_orders_rejected.load(Ordering::Relaxed),
@@ -313,17 +319,21 @@ mod tests {
 
         let intent = sor.route_order(
             "ETHUSDT",
+            0,
             1.0,
             0.90,
             20.0,
             3000.0,
             3000.5,
             0.6,
+            0.0,
+            0.0,
             2.0,
             0.05,
             1.5,
             1600000000000000000,
         );
+
 
         assert!(intent.is_some());
         let intent = intent.unwrap();

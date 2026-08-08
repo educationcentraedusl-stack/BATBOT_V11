@@ -25,6 +25,12 @@ export declare function getCorrelationMatrixNapi(): string
 export declare function calculateCcDfkSizeNapi(assetIdx: number, expectedReturn: number, gkVol: number, bidAskSpreadBp: number, accountBalance: number, currentPrice: number, activeWeightsJson?: string | undefined | null): string
 export declare function getMultiAssetCollarsNapi(entryPrice: number, gkVol: number, isLong: boolean): string
 export declare function evaluateMultiAssetSignalsNapi(sabBuffer: Buffer, activeSymbolsJson: string): string
+export declare function startMultiAssetOmsNapi(initialBalanceUsd: number, symbolsJson?: string | undefined | null): boolean
+export declare function submitMultiAssetIntentNapi(assetIdx: number, intentJson: string, midPrice: number, top5DepthUsd: number, stepSize: number, tickSize: number, portfolioLeverage: number, avgCorrelation: number): string
+export declare function applyMultiAssetFillNapi(reportJson: string): boolean
+export declare function getMultiAssetOmsMetricsNapi(assetIdx: number): string
+export declare function popNextIntentPacketNapi(): string | null
+export declare function syncMultiOmsSabNapi(sabBuffer: Buffer): boolean
 export declare class NativeUniverseScanner {
   constructor(maxActiveAssets: number)
   updateTicker(symbol: string, high: number, low: number, open: number, close: number, volumeUsd5M: number, bestBid: number, bestAsk: number, priceChange5M: number, volume5M: number): void

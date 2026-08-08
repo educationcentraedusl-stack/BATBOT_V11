@@ -37,12 +37,15 @@ impl SmartOrderRouter {
     pub fn route_order(
         &self,
         symbol: &str,
+        asset_idx: usize,
         direction: f64,
         confidence: f64,
         horizon_ms: f64,
         best_bid: f64,
         best_ask: f64,
         spread_vel: f64,
+        v_depletion: f64,
+        flow_toxicity: f64,
         slippage_ticks: f64,
         tick_size: f64,
         quantity: f64,
@@ -65,9 +68,11 @@ impl SmartOrderRouter {
             OrderSide::Sell
         };
 
-        let is_aggressive_sweep = confidence >= self.aggressive_confidence_threshold
+        // Determine aggressive taker sweep vs post-only maker
+        let is_aggressive_sweep = (confidence >= self.aggressive_confidence_threshold
             && horizon_ms <= self.max_horizon_for_sweep_ms
-            && spread_vel.abs() > 0.5;
+            && spread_vel.abs() > 0.5)
+            || (v_depletion > 0.60 && flow_toxicity < 0.70);
 
         let (price, time_in_force, post_only) = if is_aggressive_sweep {
             let offset = slippage_ticks.max(1.0) * effective_tick;
@@ -91,30 +96,34 @@ impl SmartOrderRouter {
         let id_len = {
             let mut cursor = std::io::Cursor::new(&mut id_buf[..]);
             let ts_mod = creation_ns % 1_000_000_000;
-            let _ = write!(cursor, "BAT_{}_{}", ts_mod, seq);
+            let _ = write!(cursor, "BAT_{}_{}_{}", asset_idx, ts_mod, seq);
             cursor.position() as usize
         };
 
         let client_order_id = match std::str::from_utf8(&id_buf[..id_len]) {
             Ok(s) => String::from(s),
-            Err(_) => String::from("BAT_0_0"),
+            Err(_) => String::from("BAT_0_0_0"),
         };
         let symbol_str = String::from(symbol);
 
-        Some(OrderIntent::new(
-            client_order_id,
-            symbol_str,
-            side,
-            OrderType::Limit,
-            time_in_force,
-            quantity,
-            price,
-            false,
-            post_only,
-            horizon_ms,
-            confidence,
-            direction,
-            creation_ns,
-        ))
+        Some(
+            OrderIntent::new(
+                client_order_id,
+                symbol_str,
+                side,
+                OrderType::Limit,
+                time_in_force,
+                quantity,
+                price,
+                false,
+                post_only,
+                horizon_ms,
+                confidence,
+                direction,
+                creation_ns,
+            )
+            .with_asset_idx(asset_idx),
+        )
     }
 }
+

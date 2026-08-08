@@ -274,8 +274,10 @@ impl BinanceWsApiClient {
                 client_order_id,
                 order_id,
                 symbol,
+                asset_idx: 0,
                 side,
                 status: OrderStatus::from_str(status_str),
+
                 last_filled_qty: executed_qty,
                 last_filled_price: avg_price,
                 cum_filled_qty: executed_qty,

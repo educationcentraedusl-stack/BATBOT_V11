@@ -4,12 +4,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::oms::types::{OrderIntent, OrderSide};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum OmsRiskError {
     RateLimitExceeded(String),
     MaxNotionalExceeded { notional: u64, limit: u64 },
     PriceCollarExceeded { price: u64, mid_price: u64, deviation_pct: u64 },
     MaxPositionDriftExceeded { net_position_usd: u64, limit_usd: u64 },
+    CorrelationSpikeEmergency { correlation: f64, limit: f64 },
+    LeverageCapExceeded { leverage: f64, limit: f64 },
     InvalidOrderParameters(String),
 }
 
@@ -30,6 +32,16 @@ impl std::fmt::Display for OmsRiskError {
                 "Max Position Drift Exceeded: Net USD ${} > limit ${}",
                 net_position_usd, limit_usd
             ),
+            OmsRiskError::CorrelationSpikeEmergency { correlation, limit } => write!(
+                f,
+                "Correlation Spike Emergency: Portfolio avg corr {:.3} > limit {:.3}",
+                correlation, limit
+            ),
+            OmsRiskError::LeverageCapExceeded { leverage, limit } => write!(
+                f,
+                "Leverage Cap Exceeded: Gross Leverage {:.2}x > Cap {:.2}x",
+                leverage, limit
+            ),
             OmsRiskError::InvalidOrderParameters(msg) => write!(f, "Invalid Order Params: {}", msg),
         }
     }
@@ -44,6 +56,8 @@ pub struct RiskConfig {
     pub max_price_deviation_pct: f64,
     pub max_orders_per_10s: u32,
     pub max_weight_per_min: u32,
+    pub max_gross_leverage: f64,
+    pub max_correlation_threshold: f64,
 }
 
 impl Default for RiskConfig {
@@ -54,6 +68,8 @@ impl Default for RiskConfig {
             max_price_deviation_pct: 1.0,        // 1% max distance from mid price
             max_orders_per_10s: 300,             // Binance order rate limit
             max_weight_per_min: 1200,            // Binance request weight limit
+            max_gross_leverage: 3.0,             // 3.0x max portfolio gross leverage
+            max_correlation_threshold: 0.85,     // 0.85 correlation emergency cap
         }
     }
 }
@@ -95,6 +111,17 @@ impl OmsRiskGuard {
         mid_price: f64,
         current_position_qty: f64,
     ) -> Result<(), OmsRiskError> {
+        self.validate_multi_asset_order(intent, mid_price, current_position_qty, 0.0, 0.0)
+    }
+
+    pub fn validate_multi_asset_order(
+        &self,
+        intent: &OrderIntent,
+        mid_price: f64,
+        current_position_qty: f64,
+        projected_portfolio_leverage: f64,
+        avg_correlation: f64,
+    ) -> Result<(), OmsRiskError> {
         // 0. Parameter Validation
         if intent.quantity <= 0.0 || intent.price <= 0.0 {
             return Err(OmsRiskError::InvalidOrderParameters(
@@ -120,7 +147,23 @@ impl OmsRiskGuard {
             }
         }
 
-        // 2. Max Notional Per Order Collar
+        // 2. Correlation Emergency Brake
+        if avg_correlation > self.config.max_correlation_threshold {
+            return Err(OmsRiskError::CorrelationSpikeEmergency {
+                correlation: avg_correlation,
+                limit: self.config.max_correlation_threshold,
+            });
+        }
+
+        // 3. Gross Leverage Cap Guard
+        if projected_portfolio_leverage > self.config.max_gross_leverage {
+            return Err(OmsRiskError::LeverageCapExceeded {
+                leverage: projected_portfolio_leverage,
+                limit: self.config.max_gross_leverage,
+            });
+        }
+
+        // 4. Max Notional Per Order Collar
         let order_notional = intent.notional_value();
         if order_notional > self.config.max_notional_per_order {
             return Err(OmsRiskError::MaxNotionalExceeded {
@@ -129,7 +172,7 @@ impl OmsRiskGuard {
             });
         }
 
-        // 3. Price Collar Guard
+        // 5. Price Collar Guard
         if mid_price > 0.0 {
             let dev_pct = ((intent.price - mid_price).abs() / mid_price) * 100.0;
             if dev_pct > self.config.max_price_deviation_pct {
@@ -141,7 +184,7 @@ impl OmsRiskGuard {
             }
         }
 
-        // 4. Position Max Drift Collar
+        // 6. Position Max Drift Collar
         let fill_qty = if intent.side == OrderSide::Buy {
             intent.quantity
         } else {
@@ -160,3 +203,4 @@ impl OmsRiskGuard {
         Ok(())
     }
 }
+

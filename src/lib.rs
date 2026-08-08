@@ -32,7 +32,9 @@ lazy_static! {
     pub static ref GLOBAL_INGESTION_BRIDGE: ArcSwapOption<IngestionBridge> = ArcSwapOption::from(None);
     pub static ref GLOBAL_COVARIANCE_RISKGUARD: CovarianceRiskGuard = CovarianceRiskGuard::new_arc(None, None);
     pub static ref GLOBAL_MULTI_STRATEGY_ENGINE: MultiAssetSignalEngine = MultiAssetSignalEngine::default();
+    pub static ref GLOBAL_MULTI_OMS_ENGINE: ArcSwapOption<oms::MultiAssetOmsEngine> = ArcSwapOption::from(None);
     static ref GLOBAL_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_multi_thread()
+
         .enable_all()
         .build()
         .expect("Failed to initialize Tokio runtime for HFT ingestion");
@@ -518,6 +520,130 @@ pub fn evaluate_multi_asset_signals_napi(
     let json = serde_json::to_string(&res).map_err(|e| Error::from_reason(e.to_string()))?;
     Ok(json)
 }
+
+#[napi]
+pub fn start_multi_asset_oms_napi(
+    initial_balance_usd: f64,
+    symbols_json: Option<String>,
+) -> bool {
+    let mut symbols = vec![
+        "ETHUSDT".to_string(),
+        "SOLUSDT".to_string(),
+        "BNBUSDT".to_string(),
+        "XRPUSDT".to_string(),
+        "ADAUSDT".to_string(),
+        "DOGEUSDT".to_string(),
+        "AVAXUSDT".to_string(),
+        "LINKUSDT".to_string(),
+        "SUIUSDT".to_string(),
+        "NEARUSDT".to_string(),
+    ];
+    if let Some(json_str) = symbols_json {
+        if let Ok(parsed) = serde_json::from_str::<Vec<String>>(&json_str) {
+            if !parsed.is_empty() {
+                symbols = parsed;
+            }
+        }
+    }
+    let engine = oms::MultiAssetOmsEngine::new(symbols.len(), initial_balance_usd, symbols, None);
+    GLOBAL_MULTI_OMS_ENGINE.store(Some(Arc::new(engine)));
+    true
+}
+
+#[napi]
+pub fn submit_multi_asset_intent_napi(
+    asset_idx: u32,
+    intent_json: String,
+    mid_price: f64,
+    top5_depth_usd: f64,
+    step_size: f64,
+    tick_size: f64,
+    portfolio_leverage: f64,
+    avg_correlation: f64,
+) -> napi::Result<String> {
+    if let Some(engine) = GLOBAL_MULTI_OMS_ENGINE.load().as_ref() {
+        let mut intent: oms::OrderIntent = serde_json::from_str(&intent_json)
+            .map_err(|e| Error::from_reason(format!("Invalid intent JSON: {}", e)))?;
+        intent.asset_idx = asset_idx as usize;
+
+        match engine.submit_intent(
+            intent,
+            mid_price,
+            top5_depth_usd,
+            step_size,
+            tick_size,
+            portfolio_leverage,
+            avg_correlation,
+        ) {
+            Ok(slices) => {
+                let res_json = serde_json::to_string(&slices)
+                    .map_err(|e| Error::from_reason(e.to_string()))?;
+                Ok(res_json)
+            }
+            Err(reason) => Ok(format!(
+                "{{\"status\":\"REJECTED\",\"reason\":\"{}\"}}",
+                reason.as_str()
+            )),
+        }
+    } else {
+        Err(Error::from_reason("MultiAssetOmsEngine not initialized"))
+    }
+}
+
+#[napi]
+pub fn apply_multi_asset_fill_napi(report_json: String) -> bool {
+    if let Some(engine) = GLOBAL_MULTI_OMS_ENGINE.load().as_ref() {
+        if let Ok(report) = serde_json::from_str::<oms::ExecutionReport>(&report_json) {
+            engine.apply_fill(report);
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
+#[napi]
+pub fn get_multi_asset_oms_metrics_napi(asset_idx: u32) -> String {
+    if let Some(engine) = GLOBAL_MULTI_OMS_ENGINE.load().as_ref() {
+        let metrics = engine.get_metrics(asset_idx as usize);
+        serde_json::to_string(&metrics).unwrap_or_else(|_| "{}".to_string())
+    } else {
+        "{}".to_string()
+    }
+}
+
+#[napi]
+pub fn pop_next_intent_packet_napi() -> Option<String> {
+    if let Some(engine) = GLOBAL_MULTI_OMS_ENGINE.load().as_ref() {
+        if let Some(pkt) = engine.intent_queue().pop() {
+            let intent = pkt.to_intent();
+            serde_json::to_string(&intent).ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+#[napi]
+pub fn sync_multi_oms_sab_napi(sab_buffer: Buffer) -> bool {
+    if let Some(engine) = GLOBAL_MULTI_OMS_ENGINE.load().as_ref() {
+        let raw_ptr = sab_buffer.as_ptr() as *mut u8;
+        let len = sab_buffer.len();
+        if let Ok(bridge) = AtomicSharedMemoryBridge::new(raw_ptr, len) {
+            engine.sync_sab_slots(&bridge);
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
 
 
 
