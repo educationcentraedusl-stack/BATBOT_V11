@@ -89,13 +89,13 @@ export class MultiAssetBacktestEngine {
   }
 
   private writeAtomicFloat(assetIdx: number, slot: number, val: number): void {
-    const globalSlot = assetIdx * 256 + slot;
+    const globalSlot = assetIdx * this.client.slotsPerAsset + slot;
     this.floatVal[0] = val;
     Atomics.store(this.bigIntView, globalSlot, this.floatBigInt[0]);
   }
 
   private writeAtomicBigInt(assetIdx: number, slot: number, val: bigint): void {
-    const globalSlot = assetIdx * 256 + slot;
+    const globalSlot = assetIdx * this.client.slotsPerAsset + slot;
     Atomics.store(this.bigIntView, globalSlot, val);
   }
 
@@ -126,28 +126,52 @@ export class MultiAssetBacktestEngine {
     }
   }
 
+  // State persistence variables for incremental chunked backtesting
+  private currentCapital = 100000.0;
+  private peakCapital = 100000.0;
+  private maxDrawdown = 0;
+  private grossProfitUsd = 0;
+  private grossLossUsd = 0;
+  private totalFeeDragUsd = 0;
+  private totalSlippageDragUsd = 0;
+  private totalSignalsGenerated = 0;
+  private totalOrderLegs = 0;
+  private completedRoundTrips = 0;
+  private winningTrades = 0;
+  private losingTrades = 0;
+  private totalTicksEvaluated = 0;
+  private tradeReturns: number[] = [];
+  private assetStats: AssetPerformance[] = [];
+  private positions: {
+    side: "LONG" | "SHORT" | "FLAT";
+    entryPrice: number;
+    qty: number;
+    notional: number;
+    entryFee: number;
+    entrySlippageUsd: number;
+  }[] = [];
+  private startTimeNs: bigint = 0n;
+
   /**
-   * Evaluates an array of historical ticks in memory with mathematically rigorous round-trip PnL accounting.
+   * Resets engine backtest accounting state variables for a new run.
    */
-  public runTicks(ticks: MultiAssetBacktestTick[]): MultiAssetBacktestResult {
-    let currentCapital = this.config.initialCapital;
-    let peakCapital = currentCapital;
-    let maxDrawdown = 0;
+  public resetState(): void {
+    this.currentCapital = this.config.initialCapital;
+    this.peakCapital = this.currentCapital;
+    this.maxDrawdown = 0;
+    this.grossProfitUsd = 0;
+    this.grossLossUsd = 0;
+    this.totalFeeDragUsd = 0;
+    this.totalSlippageDragUsd = 0;
+    this.totalSignalsGenerated = 0;
+    this.totalOrderLegs = 0;
+    this.completedRoundTrips = 0;
+    this.winningTrades = 0;
+    this.losingTrades = 0;
+    this.totalTicksEvaluated = 0;
+    this.tradeReturns = [];
 
-    let grossProfitUsd = 0;
-    let grossLossUsd = 0;
-    let totalFeeDragUsd = 0;
-    let totalSlippageDragUsd = 0;
-    let totalSignalsGenerated = 0;
-    let totalOrderLegs = 0;
-    let completedRoundTrips = 0;
-    let winningTrades = 0;
-    let losingTrades = 0;
-
-    const tradeReturns: number[] = [];
-
-    // Per-asset tracking maps
-    const assetStats: AssetPerformance[] = Array.from({ length: this.config.maxAssets }, (_, i) => ({
+    this.assetStats = Array.from({ length: this.config.maxAssets }, (_, i) => ({
       assetIdx: i,
       symbol: `ASSET_${i}`,
       totalTrades: 0,
@@ -159,9 +183,8 @@ export class MultiAssetBacktestEngine {
       slippageDragUsd: 0,
     }));
 
-    // Active position state per asset slot
-    const positions = Array.from({ length: this.config.maxAssets }, () => ({
-      side: "FLAT" as "LONG" | "SHORT" | "FLAT",
+    this.positions = Array.from({ length: this.config.maxAssets }, () => ({
+      side: "FLAT",
       entryPrice: 0,
       qty: 0,
       notional: 0,
@@ -169,15 +192,21 @@ export class MultiAssetBacktestEngine {
       entrySlippageUsd: 0,
     }));
 
-    const startTime = process.hrtime.bigint();
+    this.startTimeNs = process.hrtime.bigint();
+  }
 
+  /**
+   * Processes a slice or chunk of historical ticks incrementally against persistent engine state.
+   */
+  private processTicksChunk(ticks: MultiAssetBacktestTick[]): void {
     for (let i = 0; i < ticks.length; i++) {
       const tick = ticks[i];
       const idx = tick.assetIdx;
       if (idx < 0 || idx >= this.config.maxAssets) continue;
 
-      assetStats[idx].symbol = tick.symbol;
+      this.assetStats[idx].symbol = tick.symbol;
       this.updateSabTick(tick);
+      this.totalTicksEvaluated++;
 
       // Check atomic control flags (e.g. Kill Switch)
       if (this.client.getKillSwitchFlag(0)) break;
@@ -193,11 +222,11 @@ export class MultiAssetBacktestEngine {
       );
       const slippageCost = slippageTicks * this.config.tickSize;
 
-      const pos = positions[idx];
+      const pos = this.positions[idx];
 
       // Long Position Entry Trigger
       if (aiDir > 0.35 && pos.side === "FLAT") {
-        totalSignalsGenerated++;
+        this.totalSignalsGenerated++;
 
         const fillPrice = tick.askPrice + slippageCost;
         const qty = this.config.orderQuantityUsd / fillPrice;
@@ -212,19 +241,19 @@ export class MultiAssetBacktestEngine {
         pos.entryFee = fee;
         pos.entrySlippageUsd = slippageUsd;
 
-        currentCapital -= fee; // Deduct entry fee from cash capital
-        totalFeeDragUsd += fee;
-        totalSlippageDragUsd += slippageUsd;
-        totalOrderLegs++;
-        assetStats[idx].feeDragUsd += fee;
-        assetStats[idx].slippageDragUsd += slippageUsd;
+        this.currentCapital -= fee; // Deduct entry fee from cash capital
+        this.totalFeeDragUsd += fee;
+        this.totalSlippageDragUsd += slippageUsd;
+        this.totalOrderLegs++;
+        this.assetStats[idx].feeDragUsd += fee;
+        this.assetStats[idx].slippageDragUsd += slippageUsd;
 
         this.writeAtomicFloat(idx, 105, qty);
         this.writeAtomicFloat(idx, 106, fillPrice);
       }
       // Long Position Exit Trigger
       else if (aiDir < -0.35 && pos.side === "LONG") {
-        totalSignalsGenerated++;
+        this.totalSignalsGenerated++;
 
         const fillPrice = tick.bidPrice - slippageCost;
         const exitNotional = fillPrice * pos.qty;
@@ -235,40 +264,41 @@ export class MultiAssetBacktestEngine {
         const netRoundTripPnl = grossPnl - pos.entryFee - exitFee;
 
         // Cash update: gross PnL minus exit fee (entry fee was already deducted on entry)
-        currentCapital += grossPnl - exitFee;
+        this.currentCapital += grossPnl - exitFee;
 
-        totalFeeDragUsd += exitFee;
-        totalSlippageDragUsd += exitSlippageUsd;
-        totalOrderLegs++;
-        completedRoundTrips++;
-        assetStats[idx].totalTrades++;
-        assetStats[idx].feeDragUsd += exitFee;
-        assetStats[idx].slippageDragUsd += exitSlippageUsd;
+        this.totalFeeDragUsd += exitFee;
+        this.totalSlippageDragUsd += exitSlippageUsd;
+        this.totalOrderLegs++;
+        this.completedRoundTrips++;
+        this.assetStats[idx].totalTrades++;
+        this.assetStats[idx].feeDragUsd += exitFee;
+        this.assetStats[idx].slippageDragUsd += exitSlippageUsd;
 
         // Mathematically exact per-asset PnL accounting (includes entry fee + exit fee)
-        assetStats[idx].realizedPnlUsd += netRoundTripPnl;
+        this.assetStats[idx].realizedPnlUsd += netRoundTripPnl;
 
         const tradeReturnPercent = (netRoundTripPnl / pos.notional) * 100;
-        tradeReturns.push(tradeReturnPercent);
+        this.tradeReturns.push(tradeReturnPercent);
 
         if (netRoundTripPnl > 0) {
-          grossProfitUsd += netRoundTripPnl;
-          winningTrades++;
-          assetStats[idx].winningTrades++;
+          this.grossProfitUsd += netRoundTripPnl;
+          this.winningTrades++;
+          this.assetStats[idx].winningTrades++;
         } else {
-          grossLossUsd += Math.abs(netRoundTripPnl);
-          losingTrades++;
-          assetStats[idx].losingTrades++;
+          this.grossLossUsd += Math.abs(netRoundTripPnl);
+          this.losingTrades++;
+          this.assetStats[idx].losingTrades++;
         }
 
         pos.side = "FLAT";
         pos.qty = 0;
         this.writeAtomicFloat(idx, 105, 0);
-        this.writeAtomicFloat(idx, 107, assetStats[idx].realizedPnlUsd);
+        this.writeAtomicFloat(idx, 108, 0);
+        this.writeAtomicFloat(idx, 107, this.assetStats[idx].realizedPnlUsd);
       }
       // Short Position Entry Trigger
       else if (aiDir < -0.35 && pos.side === "FLAT") {
-        totalSignalsGenerated++;
+        this.totalSignalsGenerated++;
 
         const fillPrice = tick.bidPrice - slippageCost;
         const qty = this.config.orderQuantityUsd / fillPrice;
@@ -283,19 +313,19 @@ export class MultiAssetBacktestEngine {
         pos.entryFee = fee;
         pos.entrySlippageUsd = slippageUsd;
 
-        currentCapital -= fee; // Deduct entry fee from cash capital
-        totalFeeDragUsd += fee;
-        totalSlippageDragUsd += slippageUsd;
-        totalOrderLegs++;
-        assetStats[idx].feeDragUsd += fee;
-        assetStats[idx].slippageDragUsd += slippageUsd;
+        this.currentCapital -= fee; // Deduct entry fee from cash capital
+        this.totalFeeDragUsd += fee;
+        this.totalSlippageDragUsd += slippageUsd;
+        this.totalOrderLegs++;
+        this.assetStats[idx].feeDragUsd += fee;
+        this.assetStats[idx].slippageDragUsd += slippageUsd;
 
         this.writeAtomicFloat(idx, 105, -qty);
         this.writeAtomicFloat(idx, 106, fillPrice);
       }
       // Short Position Exit Trigger
       else if (aiDir > 0.35 && pos.side === "SHORT") {
-        totalSignalsGenerated++;
+        this.totalSignalsGenerated++;
 
         const fillPrice = tick.askPrice + slippageCost;
         const exitNotional = fillPrice * pos.qty;
@@ -306,128 +336,164 @@ export class MultiAssetBacktestEngine {
         const netRoundTripPnl = grossPnl - pos.entryFee - exitFee;
 
         // Cash update: gross PnL minus exit fee (entry fee was already deducted on entry)
-        currentCapital += grossPnl - exitFee;
+        this.currentCapital += grossPnl - exitFee;
 
-        totalFeeDragUsd += exitFee;
-        totalSlippageDragUsd += exitSlippageUsd;
-        totalOrderLegs++;
-        completedRoundTrips++;
-        assetStats[idx].totalTrades++;
-        assetStats[idx].feeDragUsd += exitFee;
-        assetStats[idx].slippageDragUsd += exitSlippageUsd;
+        this.totalFeeDragUsd += exitFee;
+        this.totalSlippageDragUsd += exitSlippageUsd;
+        this.totalOrderLegs++;
+        this.completedRoundTrips++;
+        this.assetStats[idx].totalTrades++;
+        this.assetStats[idx].feeDragUsd += exitFee;
+        this.assetStats[idx].slippageDragUsd += exitSlippageUsd;
 
         // Mathematically exact per-asset PnL accounting (includes entry fee + exit fee)
-        assetStats[idx].realizedPnlUsd += netRoundTripPnl;
+        this.assetStats[idx].realizedPnlUsd += netRoundTripPnl;
 
         const tradeReturnPercent = (netRoundTripPnl / pos.notional) * 100;
-        tradeReturns.push(tradeReturnPercent);
+        this.tradeReturns.push(tradeReturnPercent);
 
         if (netRoundTripPnl > 0) {
-          grossProfitUsd += netRoundTripPnl;
-          winningTrades++;
-          assetStats[idx].winningTrades++;
+          this.grossProfitUsd += netRoundTripPnl;
+          this.winningTrades++;
+          this.assetStats[idx].winningTrades++;
         } else {
-          grossLossUsd += Math.abs(netRoundTripPnl);
-          losingTrades++;
-          assetStats[idx].losingTrades++;
+          this.grossLossUsd += Math.abs(netRoundTripPnl);
+          this.losingTrades++;
+          this.assetStats[idx].losingTrades++;
         }
 
         pos.side = "FLAT";
         pos.qty = 0;
         this.writeAtomicFloat(idx, 105, 0);
-        this.writeAtomicFloat(idx, 107, assetStats[idx].realizedPnlUsd);
+        this.writeAtomicFloat(idx, 108, 0);
+        this.writeAtomicFloat(idx, 107, this.assetStats[idx].realizedPnlUsd);
       }
+
+      // Calculate and write mark-to-market Unrealized PnL to SAB Slot 108 for telemetry
+      const uPnl =
+        pos.side === "LONG"
+          ? (tick.bidPrice - pos.entryPrice) * pos.qty
+          : pos.side === "SHORT"
+          ? (pos.entryPrice - tick.askPrice) * pos.qty
+          : 0;
+      this.writeAtomicFloat(idx, 108, uPnl);
 
       // Equity Curve & Max Drawdown Tracking
-      if (currentCapital > peakCapital) {
-        peakCapital = currentCapital;
+      if (this.currentCapital > this.peakCapital) {
+        this.peakCapital = this.currentCapital;
       }
-      const currentDrawdown = ((peakCapital - currentCapital) / peakCapital) * 100;
-      if (currentDrawdown > maxDrawdown) {
-        maxDrawdown = currentDrawdown;
+      const currentDrawdown = ((this.peakCapital - this.currentCapital) / this.peakCapital) * 100;
+      if (currentDrawdown > this.maxDrawdown) {
+        this.maxDrawdown = currentDrawdown;
       }
     }
+  }
 
+  /**
+   * Finalizes backtest accounting metrics after tick stream completion.
+   */
+  private finalizeResult(): MultiAssetBacktestResult {
     // Mark-to-market accounting for any remaining open positions at backtest termination
     for (let i = 0; i < this.config.maxAssets; i++) {
-      const pos = positions[i];
+      const pos = this.positions[i];
       if (pos.side !== "FLAT" && pos.qty > 0) {
         const lastBid = this.client.getBestBidPrice(i);
         const lastAsk = this.client.getBestAskPrice(i);
         const exitPrice = pos.side === "LONG" ? lastBid : lastAsk;
         const exitNotional = exitPrice * pos.qty;
         const exitFee = exitNotional * this.config.takerFeeRate;
+        const terminalSlippageUsd = pos.entrySlippageUsd;
         const grossPnl = pos.side === "LONG" ? (exitPrice - pos.entryPrice) * pos.qty : (pos.entryPrice - exitPrice) * pos.qty;
         const netRoundTripPnl = grossPnl - pos.entryFee - exitFee;
 
-        currentCapital += grossPnl - exitFee;
-        completedRoundTrips++;
-        assetStats[i].totalTrades++;
-        assetStats[i].realizedPnlUsd += netRoundTripPnl;
+        this.currentCapital += grossPnl - exitFee;
+        this.totalFeeDragUsd += exitFee;
+        this.totalSlippageDragUsd += terminalSlippageUsd;
+        this.totalOrderLegs++;
+        this.completedRoundTrips++;
+        this.assetStats[i].totalTrades++;
+        this.assetStats[i].feeDragUsd += exitFee;
+        this.assetStats[i].slippageDragUsd += terminalSlippageUsd;
+        this.assetStats[i].realizedPnlUsd += netRoundTripPnl;
 
         if (netRoundTripPnl > 0) {
-          grossProfitUsd += netRoundTripPnl;
-          winningTrades++;
-          assetStats[i].winningTrades++;
+          this.grossProfitUsd += netRoundTripPnl;
+          this.winningTrades++;
+          this.assetStats[i].winningTrades++;
         } else {
-          grossLossUsd += Math.abs(netRoundTripPnl);
-          losingTrades++;
-          assetStats[i].losingTrades++;
+          this.grossLossUsd += Math.abs(netRoundTripPnl);
+          this.losingTrades++;
+          this.assetStats[i].losingTrades++;
         }
         pos.side = "FLAT";
+        this.writeAtomicFloat(i, 105, 0);
+        this.writeAtomicFloat(i, 108, 0);
+        this.writeAtomicFloat(i, 107, this.assetStats[i].realizedPnlUsd);
       }
     }
 
     const endTime = process.hrtime.bigint();
-    const elapsedNs = Number(endTime - startTime);
-    const avgTickProcessingTimeUs = ticks.length > 0 ? elapsedNs / 1000 / ticks.length : 0;
-    const throughputTicksPerSec = elapsedNs > 0 ? Math.round(ticks.length / (elapsedNs / 1e9)) : 0;
+    const elapsedNs = Number(endTime - this.startTimeNs);
+    const avgTickProcessingTimeUs = this.totalTicksEvaluated > 0 ? elapsedNs / 1000 / this.totalTicksEvaluated : 0;
+    const throughputTicksPerSec = elapsedNs > 0 ? Math.round(this.totalTicksEvaluated / (elapsedNs / 1e9)) : 0;
 
-    const netPnlUsd = currentCapital - this.config.initialCapital;
+    const netPnlUsd = this.currentCapital - this.config.initialCapital;
     const totalReturnPercent = (netPnlUsd / this.config.initialCapital) * 100;
-    const winRatePercent = completedRoundTrips > 0 ? (winningTrades / completedRoundTrips) * 100 : 0;
-    const profitFactor = grossLossUsd > 0 ? grossProfitUsd / grossLossUsd : grossProfitUsd > 0 ? 999.99 : 0;
+    const winRatePercent = this.completedRoundTrips > 0 ? (this.winningTrades / this.completedRoundTrips) * 100 : 0;
+    const profitFactor = this.grossLossUsd > 0 ? this.grossProfitUsd / this.grossLossUsd : this.grossProfitUsd > 0 ? 999.99 : 0;
 
     // Calculate per-asset win rates accurately
-    for (const stat of assetStats) {
+    for (const stat of this.assetStats) {
       stat.winRatePercent = stat.totalTrades > 0 ? (stat.winningTrades / stat.totalTrades) * 100 : 0;
       stat.realizedPnlUsd = Number(stat.realizedPnlUsd.toFixed(2));
       stat.feeDragUsd = Number(stat.feeDragUsd.toFixed(2));
       stat.slippageDragUsd = Number(stat.slippageDragUsd.toFixed(2));
     }
 
-    const sharpeRatio = this.calculateSharpeRatio(tradeReturns);
+    const sharpeRatio = this.calculateSharpeRatio(this.tradeReturns);
 
     return {
       initialCapital: this.config.initialCapital,
-      finalCapital: Number(currentCapital.toFixed(2)),
+      finalCapital: Number(this.currentCapital.toFixed(2)),
       netPnlUsd: Number(netPnlUsd.toFixed(2)),
       totalReturnPercent: Number(totalReturnPercent.toFixed(2)),
-      totalTicksEvaluated: ticks.length,
-      totalSignalsGenerated,
-      totalOrderLegs,
-      totalTradesExecuted: completedRoundTrips,
-      winningTrades,
-      losingTrades,
+      totalTicksEvaluated: this.totalTicksEvaluated,
+      totalSignalsGenerated: this.totalSignalsGenerated,
+      totalOrderLegs: this.totalOrderLegs,
+      totalTradesExecuted: this.completedRoundTrips,
+      winningTrades: this.winningTrades,
+      losingTrades: this.losingTrades,
       winRatePercent: Number(winRatePercent.toFixed(2)),
       profitFactor: Number(profitFactor.toFixed(2)),
-      maxDrawdownPercent: Number(maxDrawdown.toFixed(2)),
+      maxDrawdownPercent: Number(this.maxDrawdown.toFixed(2)),
       sharpeRatio: Number(sharpeRatio.toFixed(2)),
-      grossProfitUsd: Number(grossProfitUsd.toFixed(2)),
-      grossLossUsd: Number(grossLossUsd.toFixed(2)),
-      totalFeeDragUsd: Number(totalFeeDragUsd.toFixed(2)),
-      totalSlippageDragUsd: Number(totalSlippageDragUsd.toFixed(2)),
+      grossProfitUsd: Number(this.grossProfitUsd.toFixed(2)),
+      grossLossUsd: Number(this.grossLossUsd.toFixed(2)),
+      totalFeeDragUsd: Number(this.totalFeeDragUsd.toFixed(2)),
+      totalSlippageDragUsd: Number(this.totalSlippageDragUsd.toFixed(2)),
       avgTickProcessingTimeUs: Number(avgTickProcessingTimeUs.toFixed(3)),
       throughputTicksPerSec,
-      assetBreakdown: assetStats,
+      assetBreakdown: this.assetStats,
     };
   }
 
   /**
+   * Evaluates an array of historical ticks in memory with mathematically rigorous round-trip PnL accounting.
+   */
+  public runTicks(ticks: MultiAssetBacktestTick[]): MultiAssetBacktestResult {
+    this.resetState();
+    this.processTicksChunk(ticks);
+    return this.finalizeResult();
+  }
+
+  /**
    * Memory-safe streaming backtester executing over a historical CSV file stream line-by-line.
+   * Processes ticks in dynamically flushed chunks (chunkSize = 10,000) to keep memory usage at O(chunkSize).
    * CSV format: assetIdx,symbol,timestamp,bidPrice,askPrice,obi,cvd,hawkes,volatility,aiDirection
    */
-  public async runStream(filePathOrStream: string | Readable): Promise<MultiAssetBacktestResult> {
+  public async runStream(filePathOrStream: string | Readable, chunkSize = 10000): Promise<MultiAssetBacktestResult> {
+    this.resetState();
+
     const input: Readable =
       typeof filePathOrStream === "string" ? fs.createReadStream(filePathOrStream) : filePathOrStream;
 
@@ -474,10 +540,20 @@ export class MultiAssetBacktestEngine {
           realizedVol,
           aiDirection,
         });
+
+        if (ticksChunk.length >= chunkSize) {
+          this.processTicksChunk(ticksChunk);
+          ticksChunk.length = 0; // Empty chunk array immediately to free RAM
+        }
       }
     }
 
-    return this.runTicks(ticksChunk);
+    if (ticksChunk.length > 0) {
+      this.processTicksChunk(ticksChunk);
+      ticksChunk.length = 0;
+    }
+
+    return this.finalizeResult();
   }
 
   private calculateSharpeRatio(returns: number[]): number {

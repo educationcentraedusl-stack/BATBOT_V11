@@ -50,6 +50,12 @@ export class MultiAssetCLIDashboard {
     return "\x1b[32m" + "=".repeat(filled) + "\x1b[90m" + "-".repeat(empty) + "\x1b[0m";
   });
 
+  // Static pre-rendered ANSI UI dividers cached to eliminate hot-path string allocations in render loop
+  private static readonly BORDER = "\x1b[36m\x1b[1m======================================================================================================================\x1b[0m\x1b[K\n";
+  private static readonly SUB_DIVIDER = "\x1b[90m----------------------------------------------------------------------------------------------------------------------\x1b[0m\x1b[K\n";
+  private static readonly TABLE_DIVIDER = "\x1b[90m+------+----------+-----------+-----------+---------+--------------------+------------+----------+------------+---------+\x1b[0m\x1b[K\n";
+  private static readonly TRADES_DIVIDER = "\x1b[90m+------+----------+--------+-----------+--------------+--------------+------------+----------+--------------------+\x1b[0m\x1b[K\n";
+
   constructor(
     client: MarketDataClient,
     enabled: boolean = true,
@@ -154,25 +160,20 @@ export class MultiAssetCLIDashboard {
       }
     }
 
-    const border = `${cyan}${bold}======================================================================================================================${reset}${clearLine}\n`;
-    const subDivider = `${gray}----------------------------------------------------------------------------------------------------------------------${reset}${clearLine}\n`;
-    const tableDivider = `${gray}+------+----------+-----------+-----------+---------+--------------------+------------+----------+------------+---------+${reset}${clearLine}\n`;
-    const tradesDivider = `${gray}+------+----------+--------+-----------+--------------+--------------+------------+----------+--------------------+${reset}${clearLine}\n`;
-
     let out = "\x1b[H"; // Move cursor top-left
 
-    out += border;
+    out += MultiAssetCLIDashboard.BORDER;
     out += `${cyan}${bold}                         BATBOT_V11 MULTI-ASSET HFT TELEMETRY & COMMAND MONITOR (10 ASSETS)                            ${reset}${clearLine}\n`;
-    out += border;
+    out += MultiAssetCLIDashboard.BORDER;
 
     out += ` Engine Status: ${statusStr}  |  Memory: ${memMb} MB  |  Sequence: #${seqNum.toString()}  |  Active Positions: ${activePositionCount}/10${clearLine}\n`;
     out += ` Portfolio Unrealized PnL: ${totalUnrealizedPnl >= 0 ? green : red}${bold}$${totalUnrealizedPnl.toFixed(2)}${reset}  |  Realized PnL: ${totalRealizedPnl >= 0 ? green : red}${bold}$${totalRealizedPnl.toFixed(2)}${reset}  |  Total Trades Logged: ${totalTrades}${clearLine}\n`;
 
-    out += subDivider;
+    out += MultiAssetCLIDashboard.SUB_DIVIDER;
     out += `${bold}--- 10-ASSET CONCURRENCY REAL-TIME MATRIX ---${reset}${clearLine}\n`;
-    out += tableDivider;
+    out += MultiAssetCLIDashboard.TABLE_DIVIDER;
     out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Best Bid${reset}  | ${bold}Best Ask${reset}  | ${bold}Spread${reset}  | ${bold}OBI (-1..+1)${reset}        | ${bold}CVD${reset}        | ${bold}Hawkes${reset}   | ${bold}Garman-Klass${reset} | ${bold}Signal${reset}  |${clearLine}\n`;
-    out += tableDivider;
+    out += MultiAssetCLIDashboard.TABLE_DIVIDER;
 
     for (let i = 0; i < this.client.maxAssets; i++) {
       const sym = (this.assetSymbols[i] || `ASSET_${i}`).padEnd(8);
@@ -192,7 +193,7 @@ export class MultiAssetCLIDashboard {
 
       out += `| ${focusMarker}  | ${sym} | ${bid.toFixed(2).padEnd(9)} | ${ask.toFixed(2).padEnd(9)} | ${spread.padEnd(7)} | [${obiBar}] | ${cvd >= 0 ? "+" : ""}${cvd.toFixed(1).padEnd(9)} | ${hawkes.toFixed(3).padEnd(8)} | ${gkRv.toFixed(5).padEnd(12)} | ${signalStr}  |${clearLine}\n`;
     }
-    out += tableDivider;
+    out += MultiAssetCLIDashboard.TABLE_DIVIDER;
 
     // Focused Asset Deep Microstructure & L2 View
     const fIdx = this.focusedAssetIdx;
@@ -216,11 +217,11 @@ export class MultiAssetCLIDashboard {
     out += ` Top 3 Bids: [1] $${this.bidBuffer[0].toFixed(2)} (${this.bidBuffer[1].toFixed(3)})  [2] $${this.bidBuffer[2].toFixed(2)} (${this.bidBuffer[3].toFixed(3)})  [3] $${this.bidBuffer[4].toFixed(2)} (${this.bidBuffer[5].toFixed(3)})${clearLine}\n`;
     out += ` Top 3 Asks: [1] $${this.askBuffer[0].toFixed(2)} (${this.askBuffer[1].toFixed(3)})  [2] $${this.askBuffer[2].toFixed(2)} (${this.askBuffer[3].toFixed(3)})  [3] $${this.askBuffer[4].toFixed(2)} (${this.askBuffer[5].toFixed(3)})${clearLine}\n`;
 
-    out += subDivider;
+    out += MultiAssetCLIDashboard.SUB_DIVIDER;
     out += `${bold}--- MULTI-ASSET ACTIVE POSITIONS (10 OMS SLOTS) ---${reset}${clearLine}\n`;
-    out += tradesDivider;
+    out += MultiAssetCLIDashboard.TRADES_DIVIDER;
     out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Side${reset}   | ${bold}Position${reset}  | ${bold}Avg Entry${reset}   | ${bold}Mark Price${reset}   | ${bold}Leverage${reset} | ${bold}Realized${reset} | ${bold}Unrealized PnL ($)${reset}  |${clearLine}\n`;
-    out += tradesDivider;
+    out += MultiAssetCLIDashboard.TRADES_DIVIDER;
 
     let hasActivePosition = false;
     for (let i = 0; i < this.client.maxAssets; i++) {
@@ -245,7 +246,7 @@ export class MultiAssetCLIDashboard {
     if (!hasActivePosition) {
       out += `| ${yellow}NO ACTIVE OPEN POSITIONS ACROSS ALL 10 ASSET SLOTS (ALL POSITIONS FLAT)${reset}`.padEnd(132) + `|${clearLine}\n`;
     }
-    out += tradesDivider;
+    out += MultiAssetCLIDashboard.TRADES_DIVIDER;
 
     // Command Feedback & Real-Time Event Log
     out += `${bold}--- INTERACTIVE COMMAND FEEDBACK & NOTIFICATION LOG ---${reset}${clearLine}\n`;
@@ -256,7 +257,7 @@ export class MultiAssetCLIDashboard {
         out += ` ${logLine}${clearLine}\n`;
       }
     }
-    out += border;
+    out += MultiAssetCLIDashboard.BORDER;
 
     process.stdout.write(out);
   }
