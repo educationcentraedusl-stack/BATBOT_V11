@@ -51,6 +51,11 @@ impl LockFreeIntentQueue {
     pub fn len(&self) -> usize {
         self.queue.len()
     }
+
+    #[inline(always)]
+    pub fn capacity(&self) -> usize {
+        self.queue.capacity()
+    }
 }
 
 pub struct MultiAssetOmsEngine {
@@ -295,21 +300,19 @@ impl MultiAssetOmsEngine {
         let packets: Vec<OrderIntentPacket> = slices.iter().map(OrderIntentPacket::from_intent).collect();
         let required_cap = packets.len();
 
-        // Capacity reservation pre-check
-        if self.intent_queue.len() + required_cap > INTENT_RING_CAPACITY {
+        // Strict capacity reservation pre-check before attempting any push
+        let available_cap = self.intent_queue.capacity().saturating_sub(self.intent_queue.len());
+        if available_cap < required_cap {
             self.metrics_orders_rejected[asset_idx].fetch_add(1, Ordering::Relaxed);
             return Err(RejectionReason::RateLimitExceeded);
         }
 
-        // Atomic push with rollback staging to prevent orphan partial slice leaks
+        // Push slices into queue without calling pop() on failure (prevents popping head items from other threads)
         let mut pushed_count = 0usize;
         for pkt in packets {
             if self.intent_queue.push(pkt) {
                 pushed_count += 1;
             } else {
-                for _ in 0..pushed_count {
-                    let _ = self.intent_queue.pop();
-                }
                 self.metrics_orders_rejected[asset_idx].fetch_add(1, Ordering::Relaxed);
                 return Err(RejectionReason::RateLimitExceeded);
             }

@@ -1,4 +1,3 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
@@ -74,10 +73,17 @@ impl Default for RiskConfig {
     }
 }
 
+use std::sync::Mutex;
+
+#[derive(Debug)]
+struct SlidingWindowTracker {
+    count: u64,
+    last_reset_ns: u64,
+}
+
 pub struct OmsRiskGuard {
     config: RiskConfig,
-    order_count_window: AtomicU64,
-    last_window_reset_ns: AtomicU64,
+    window_tracker: Mutex<SlidingWindowTracker>,
 }
 
 impl OmsRiskGuard {
@@ -89,8 +95,10 @@ impl OmsRiskGuard {
 
         Self {
             config,
-            order_count_window: AtomicU64::new(0),
-            last_window_reset_ns: AtomicU64::new(now_ns),
+            window_tracker: Mutex::new(SlidingWindowTracker {
+                count: 0,
+                last_reset_ns: now_ns,
+            }),
         }
     }
 
@@ -151,28 +159,22 @@ impl OmsRiskGuard {
             ));
         }
 
-        // 1. Rate Limiting Check (10-second sliding window inspection without polluting budget)
+        // 1. Rate Limiting Check (10-second sliding window inspection with atomic mutex update)
         let now = Self::now_ns();
         let window_duration_ns = 10_000_000_000u64; // 10 seconds in nanoseconds
-        let last_reset = self.last_window_reset_ns.load(Ordering::Acquire);
-        if now.saturating_sub(last_reset) > window_duration_ns {
-            let _ = self.last_window_reset_ns.compare_exchange_weak(
-                last_reset,
-                now,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            );
-            if self.last_window_reset_ns.load(Ordering::Acquire) == now {
-                self.order_count_window.store(0, Ordering::Release);
+        {
+            let mut tracker = self.window_tracker.lock().unwrap_or_else(|e| e.into_inner());
+            if now.saturating_sub(tracker.last_reset_ns) > window_duration_ns {
+                tracker.last_reset_ns = now;
+                tracker.count = 0;
             }
-        }
 
-        let current_count = self.order_count_window.load(Ordering::Acquire);
-        if current_count >= self.config.max_orders_per_10s as u64 {
-            return Err(OmsRiskError::RateLimitExceeded(format!(
-                "Sliding 10s order count {} exceeded limit {}",
-                current_count, self.config.max_orders_per_10s
-            )));
+            if tracker.count >= self.config.max_orders_per_10s as u64 {
+                return Err(OmsRiskError::RateLimitExceeded(format!(
+                    "Sliding 10s order count {} exceeded limit {}",
+                    tracker.count, self.config.max_orders_per_10s
+                )));
+            }
         }
 
         // 2. Correlation Emergency Brake
@@ -230,7 +232,10 @@ impl OmsRiskGuard {
         }
 
         // Increment sliding window order counter ONLY after all checks have passed successfully
-        self.order_count_window.fetch_add(1, Ordering::AcqRel);
+        {
+            let mut tracker = self.window_tracker.lock().unwrap_or_else(|e| e.into_inner());
+            tracker.count += 1;
+        }
         Ok(())
     }
 }

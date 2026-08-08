@@ -36,7 +36,7 @@ impl ExecutionSlicer {
         if step_size <= 0.0 || !step_size.is_finite() || !qty.is_finite() {
             return qty;
         }
-        let steps = (qty / step_size).round();
+        let steps = ((qty / step_size) + 1e-9).floor();
         let res = steps * step_size;
         if res.is_finite() { res } else { qty }
     }
@@ -47,7 +47,7 @@ impl ExecutionSlicer {
         if tick_size <= 0.0 || !tick_size.is_finite() || !price.is_finite() {
             return price;
         }
-        let ticks = (price / tick_size).round();
+        let ticks = ((price / tick_size) + 1e-9).floor();
         let res = ticks * tick_size;
         if res.is_finite() { res } else { price }
     }
@@ -139,7 +139,7 @@ impl ExecutionSlicer {
 
             slices.push(slice_intent);
             let diff = remaining_qty - quantized_slice_qty;
-            remaining_qty = if diff <= 1e-12 { 0.0 } else { Self::quantize_qty(diff, step_size) };
+            remaining_qty = if diff.max(0.0) <= 1e-9 { 0.0 } else { Self::quantize_qty(diff, step_size) };
         }
 
         if slices.is_empty() {

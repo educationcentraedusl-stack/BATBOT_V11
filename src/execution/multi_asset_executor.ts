@@ -132,10 +132,10 @@ export class MultiAssetExecutor {
     const aiConfidence = options?.aiConfidence ?? 0.85;
     const reduceOnly = options?.reduceOnly ?? false;
 
-    const creationNs = Number(process.hrtime.bigint());
+    const creationNsStr = process.hrtime.bigint().toString();
 
     const intentPayload = {
-      client_order_id: `BAT_${assetIdx}_${Date.now()}`,
+      client_order_id: `BAT_${assetIdx}_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
       symbol,
       asset_idx: assetIdx,
       side: side === "BUY" ? "Buy" : "Sell",
@@ -148,9 +148,9 @@ export class MultiAssetExecutor {
       target_horizon_ms: targetHorizonMs,
       ai_confidence: aiConfidence,
       ai_direction: side === "BUY" ? 1.0 : -1.0,
-      creation_ns: creationNs,
+      creation_ns: 0,
     };
-    const intentJson = JSON.stringify(intentPayload);
+    const intentJson = JSON.stringify(intentPayload).replace('"creation_ns":0', `"creation_ns":${creationNsStr}`);
 
     try {
       const resStr = submitMultiAssetIntentNapi(

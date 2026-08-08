@@ -158,13 +158,13 @@ impl SmartOrderRouter {
 
         let unclamped_price = if effective_post_only {
             match side {
-                OrderSide::Buy => (target_price / effective_tick).floor() * effective_tick,
-                OrderSide::Sell => (target_price / effective_tick).ceil() * effective_tick,
+                OrderSide::Buy => ((target_price / effective_tick) + 1e-9).floor() * effective_tick,
+                OrderSide::Sell => ((target_price / effective_tick) - 1e-9).ceil() * effective_tick,
             }
         } else {
             match side {
-                OrderSide::Buy => (target_price / effective_tick).ceil() * effective_tick,
-                OrderSide::Sell => (target_price / effective_tick).floor() * effective_tick,
+                OrderSide::Buy => ((target_price / effective_tick) - 1e-9).ceil() * effective_tick,
+                OrderSide::Sell => ((target_price / effective_tick) + 1e-9).floor() * effective_tick,
             }
         };
 
@@ -202,7 +202,7 @@ impl SmartOrderRouter {
                 quantity,
                 price,
                 false,
-                post_only,
+                effective_post_only,
                 horizon_ms,
                 confidence,
                 direction,
