@@ -124,16 +124,35 @@ impl ExecutionSlicer {
             slice_pkt.quantity = quantized_slice_qty;
             slice_pkt.price = price;
 
-            // Zero-allocation stack formatting for client_order_id
+            // Zero-allocation stack formatting for client_order_id suffix (_s1, _s10, _s100...)
             let suffix_idx = i + 1;
-            let suffix_bytes = [b'_', b's', b'0' + (suffix_idx as u8)];
-            let max_base_len = 64usize.saturating_sub(suffix_bytes.len());
+            let mut num_buf = [0u8; 8];
+            let mut num_val = suffix_idx;
+            let mut digits_len = 0usize;
+            while num_val > 0 {
+                num_buf[digits_len] = b'0' + (num_val % 10) as u8;
+                num_val /= 10;
+                digits_len += 1;
+            }
+            if digits_len == 0 {
+                num_buf[0] = b'0';
+                digits_len = 1;
+            }
+            num_buf[..digits_len].reverse();
+
+            let mut suffix_bytes = [0u8; 10];
+            suffix_bytes[0] = b'_';
+            suffix_bytes[1] = b's';
+            suffix_bytes[2..2 + digits_len].copy_from_slice(&num_buf[..digits_len]);
+            let suffix_len = 2 + digits_len;
+
+            let max_base_len = 64usize.saturating_sub(suffix_len);
             let base_bytes = base_cid_str.as_bytes();
             let base_len = base_bytes.len().min(max_base_len);
 
             let mut cid_buf = [0u8; 64];
             cid_buf[..base_len].copy_from_slice(&base_bytes[..base_len]);
-            cid_buf[base_len..base_len + suffix_bytes.len()].copy_from_slice(&suffix_bytes);
+            cid_buf[base_len..base_len + suffix_len].copy_from_slice(&suffix_bytes[..suffix_len]);
             slice_pkt.client_order_id_bytes = cid_buf;
 
             slices.push(slice_pkt);

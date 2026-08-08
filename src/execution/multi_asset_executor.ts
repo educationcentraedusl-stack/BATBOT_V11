@@ -46,7 +46,7 @@ export interface OrderIntentSlice {
   target_horizon_ms: number;
   ai_confidence: number;
   ai_direction: number;
-  creation_ns: number;
+  creation_ns: bigint;
 }
 
 export interface IntentSubmissionResult {
@@ -251,7 +251,7 @@ export class MultiAssetExecutor {
       target_horizon_ms: targetHorizonMs,
       ai_confidence: aiConfidence,
       ai_direction: aiDirection,
-      creation_ns: Number(creationNs),
+      creation_ns: creationNs,
     };
   }
 

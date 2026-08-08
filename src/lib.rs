@@ -565,7 +565,7 @@ pub fn submit_multi_asset_intent_bytes_napi(
     }
 
     let pkt_ptr = packet_buffer.as_ptr() as *const oms::OrderIntentPacket;
-    let pkt = unsafe { *pkt_ptr };
+    let pkt = unsafe { std::ptr::read_unaligned(pkt_ptr) };
 
     if let Some(engine) = GLOBAL_MULTI_OMS_ENGINE.load().as_ref() {
         match engine.submit_intent_packet(

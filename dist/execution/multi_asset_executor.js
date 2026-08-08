@@ -158,7 +158,7 @@ class MultiAssetExecutor {
             target_horizon_ms: targetHorizonMs,
             ai_confidence: aiConfidence,
             ai_direction: aiDirection,
-            creation_ns: Number(creationNs),
+            creation_ns: creationNs,
         };
     }
     syncSab(sabBuffer) {
