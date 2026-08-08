@@ -41,21 +41,27 @@ class MultiAssetExecutor {
     getAssetIndex(symbol) {
         return this.symbolToIdxMap.get(symbol) ?? 0;
     }
-    submitIntent(symbol, side, orderType, quantity, price, midPrice, top5DepthUsd, stepSize = 0.001, tickSize = 0.01, portfolioLeverage = 0.0, avgCorrelation = 0.0) {
+    submitIntent(symbol, side, orderType, quantity, price, midPrice, top5DepthUsd, stepSize = 0.001, tickSize = 0.01, portfolioLeverage = 0.0, avgCorrelation = 0.0, options) {
         const assetIdx = this.getAssetIndex(symbol);
+        const isMarket = orderType === "MARKET";
+        const postOnly = isMarket ? false : (options?.postOnly ?? true);
+        const timeInForce = isMarket ? "Ioc" : (options?.timeInForce ?? "Gtx");
+        const targetHorizonMs = options?.targetHorizonMs ?? 100.0;
+        const aiConfidence = options?.aiConfidence ?? 0.85;
+        const reduceOnly = options?.reduceOnly ?? false;
         const intentJson = JSON.stringify({
             client_order_id: `BAT_${assetIdx}_${Date.now()}`,
             symbol,
             asset_idx: assetIdx,
             side: side === "BUY" ? "Buy" : "Sell",
-            order_type: orderType === "LIMIT" ? "Limit" : "Market",
-            time_in_force: "Gtx",
+            order_type: isMarket ? "Market" : "Limit",
+            time_in_force: timeInForce,
             quantity,
             price,
-            reduce_only: false,
-            post_only: true,
-            target_horizon_ms: 100.0,
-            ai_confidence: 0.85,
+            reduce_only: reduceOnly,
+            post_only: postOnly,
+            target_horizon_ms: targetHorizonMs,
+            ai_confidence: aiConfidence,
             ai_direction: side === "BUY" ? 1.0 : -1.0,
             creation_ns: Date.now() * 1_000_000,
         });
@@ -71,17 +77,19 @@ class MultiAssetExecutor {
             }
         }
         catch (err) {
-            return { status: "REJECTED", reason: err.message };
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            return { status: "REJECTED", reason: errorMsg };
         }
     }
     popNextPacket() {
-        const pktStr = (0, index_1.popNextIntentPacketNapi)();
-        if (!pktStr)
-            return null;
         try {
+            const pktStr = (0, index_1.popNextIntentPacketNapi)();
+            if (!pktStr)
+                return null;
             return JSON.parse(pktStr);
         }
-        catch {
+        catch (err) {
+            console.error("[MultiAssetExecutor] Failed to pop intent packet:", err);
             return null;
         }
     }
@@ -126,26 +134,31 @@ class MultiAssetExecutor {
     handleUserStreamUpdate(update) {
         if (!update || update.eventType !== "ORDER_TRADE_UPDATE")
             return;
-        const ord = update.order;
-        const assetIdx = this.getAssetIndex(ord.symbol);
-        const reportJson = JSON.stringify({
-            client_order_id: ord.clientOrderId,
-            order_id: ord.orderId,
-            symbol: ord.symbol,
-            asset_idx: assetIdx,
-            side: ord.side === "BUY" ? "Buy" : "Sell",
-            status: ord.orderStatus,
-            last_filled_qty: ord.lastFilledQuantity,
-            last_filled_price: ord.lastFilledPrice,
-            cum_filled_qty: ord.cumulativeFilledQuantity,
-            avg_price: ord.averagePrice,
-            commission: ord.commissionAmount,
-            commission_asset: ord.commissionAsset,
-            trade_id: ord.tradeId,
-            event_time_ns: ord.tradeTime * 1_000_000,
-            is_maker: ord.isMaker,
-        });
-        (0, index_1.applyMultiAssetFillNapi)(reportJson);
+        try {
+            const ord = update.order;
+            const assetIdx = this.getAssetIndex(ord.symbol);
+            const reportJson = JSON.stringify({
+                client_order_id: ord.clientOrderId,
+                order_id: ord.orderId,
+                symbol: ord.symbol,
+                asset_idx: assetIdx,
+                side: ord.side === "BUY" ? "Buy" : "Sell",
+                status: ord.orderStatus,
+                last_filled_qty: ord.lastFilledQuantity,
+                last_filled_price: ord.lastFilledPrice,
+                cum_filled_qty: ord.cumulativeFilledQuantity,
+                avg_price: ord.averagePrice,
+                commission: ord.commissionAmount,
+                commission_asset: ord.commissionAsset,
+                trade_id: ord.tradeId,
+                event_time_ns: ord.tradeTime * 1_000_000,
+                is_maker: ord.isMaker,
+            });
+            (0, index_1.applyMultiAssetFillNapi)(reportJson);
+        }
+        catch (err) {
+            console.error("[MultiAssetExecutor] Error in user stream fill update processing:", err);
+        }
     }
 }
 exports.MultiAssetExecutor = MultiAssetExecutor;

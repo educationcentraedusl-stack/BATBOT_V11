@@ -36,7 +36,7 @@ impl ExecutionSlicer {
         if step_size <= 0.0 {
             return qty;
         }
-        (qty / step_size).floor() * step_size
+        ((qty / step_size) + 1e-9).floor() * step_size
     }
 
     /// Fast scalar quantization to tick size (e.g. 0.01) without string allocations.
@@ -45,7 +45,7 @@ impl ExecutionSlicer {
         if tick_size <= 0.0 {
             return price;
         }
-        (price / tick_size).round() * tick_size
+        ((price / tick_size) + 1e-9).floor() * tick_size
     }
 
     /// Determines if an order intent exceeds the max participation threshold relative to book depth.

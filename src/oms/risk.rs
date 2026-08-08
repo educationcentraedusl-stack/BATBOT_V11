@@ -7,9 +7,9 @@ use crate::oms::types::{OrderIntent, OrderSide};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum OmsRiskError {
     RateLimitExceeded(String),
-    MaxNotionalExceeded { notional: u64, limit: u64 },
-    PriceCollarExceeded { price: u64, mid_price: u64, deviation_pct: u64 },
-    MaxPositionDriftExceeded { net_position_usd: u64, limit_usd: u64 },
+    MaxNotionalExceeded { notional: f64, limit: f64 },
+    PriceCollarExceeded { price: f64, mid_price: f64, deviation_pct: f64 },
+    MaxPositionDriftExceeded { net_position_usd: f64, limit_usd: f64 },
     CorrelationSpikeEmergency { correlation: f64, limit: f64 },
     LeverageCapExceeded { leverage: f64, limit: f64 },
     InvalidOrderParameters(String),
@@ -20,16 +20,16 @@ impl std::fmt::Display for OmsRiskError {
         match self {
             OmsRiskError::RateLimitExceeded(msg) => write!(f, "Rate Limit Exceeded: {}", msg),
             OmsRiskError::MaxNotionalExceeded { notional, limit } => {
-                write!(f, "Max Notional Exceeded: ${} > limit ${}", notional, limit)
+                write!(f, "Max Notional Exceeded: ${:.2} > limit ${:.2}", notional, limit)
             }
             OmsRiskError::PriceCollarExceeded { price, mid_price, deviation_pct } => write!(
                 f,
-                "Price Collar Violation: Price ${} deviates from Mid ${} by {}%",
+                "Price Collar Violation: Price ${:.4} deviates from Mid ${:.4} by {:.2}%",
                 price, mid_price, deviation_pct
             ),
             OmsRiskError::MaxPositionDriftExceeded { net_position_usd, limit_usd } => write!(
                 f,
-                "Max Position Drift Exceeded: Net USD ${} > limit ${}",
+                "Max Position Drift Exceeded: Net USD ${:.2} > limit ${:.2}",
                 net_position_usd, limit_usd
             ),
             OmsRiskError::CorrelationSpikeEmergency { correlation, limit } => write!(
@@ -122,6 +122,19 @@ impl OmsRiskGuard {
         projected_portfolio_leverage: f64,
         avg_correlation: f64,
     ) -> Result<(), OmsRiskError> {
+        // 0. Non-finite / NaN Poisoning Check
+        if !intent.quantity.is_finite()
+            || !intent.price.is_finite()
+            || !mid_price.is_finite()
+            || !current_position_qty.is_finite()
+            || !projected_portfolio_leverage.is_finite()
+            || !avg_correlation.is_finite()
+        {
+            return Err(OmsRiskError::InvalidOrderParameters(
+                "Non-finite numeric values (NaN or Infinity) rejected".to_string(),
+            ));
+        }
+
         // 0. Parameter Validation
         if intent.quantity <= 0.0 || intent.price <= 0.0 {
             return Err(OmsRiskError::InvalidOrderParameters(
@@ -167,8 +180,8 @@ impl OmsRiskGuard {
         let order_notional = intent.notional_value();
         if order_notional > self.config.max_notional_per_order {
             return Err(OmsRiskError::MaxNotionalExceeded {
-                notional: order_notional as u64,
-                limit: self.config.max_notional_per_order as u64,
+                notional: order_notional,
+                limit: self.config.max_notional_per_order,
             });
         }
 
@@ -177,9 +190,9 @@ impl OmsRiskGuard {
             let dev_pct = ((intent.price - mid_price).abs() / mid_price) * 100.0;
             if dev_pct > self.config.max_price_deviation_pct {
                 return Err(OmsRiskError::PriceCollarExceeded {
-                    price: intent.price as u64,
-                    mid_price: mid_price as u64,
-                    deviation_pct: dev_pct as u64,
+                    price: intent.price,
+                    mid_price,
+                    deviation_pct: dev_pct,
                 });
             }
         }
@@ -195,8 +208,8 @@ impl OmsRiskGuard {
 
         if projected_pos_usd > self.config.max_portfolio_notional {
             return Err(OmsRiskError::MaxPositionDriftExceeded {
-                net_position_usd: projected_pos_usd as u64,
-                limit_usd: self.config.max_portfolio_notional as u64,
+                net_position_usd: projected_pos_usd,
+                limit_usd: self.config.max_portfolio_notional,
             });
         }
 

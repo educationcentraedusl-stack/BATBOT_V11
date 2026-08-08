@@ -51,6 +51,21 @@ impl SmartOrderRouter {
         quantity: f64,
         creation_ns: u64,
     ) -> Option<OrderIntent> {
+        if !direction.is_finite()
+            || !confidence.is_finite()
+            || !horizon_ms.is_finite()
+            || !best_bid.is_finite()
+            || !best_ask.is_finite()
+            || !spread_vel.is_finite()
+            || !v_depletion.is_finite()
+            || !flow_toxicity.is_finite()
+            || !slippage_ticks.is_finite()
+            || !tick_size.is_finite()
+            || !quantity.is_finite()
+        {
+            return None;
+        }
+
         if confidence < self.min_confidence_threshold
             || direction.abs() < 1e-5
             || quantity <= 0.0

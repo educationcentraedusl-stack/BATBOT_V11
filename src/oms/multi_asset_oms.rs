@@ -12,65 +12,44 @@ use crate::oms::types::{
 };
 
 
+use crossbeam_queue::ArrayQueue;
+
 pub const MAX_OMS_ASSETS: usize = 10;
 pub const SAB_SLOTS_PER_ASSET: usize = 256;
 
 // Ring buffer capacity (must be power of 2)
 pub const INTENT_RING_CAPACITY: usize = 1024;
 
-/// SPSC Lock-free Ring Buffer for high-frequency OrderIntentPackets
+/// MPSC Lock-free Ring Buffer for high-frequency OrderIntentPackets using crossbeam_queue::ArrayQueue
 pub struct LockFreeIntentQueue {
-    buffer: Vec<OrderIntentPacket>,
-    head: AtomicU64,
-    tail: AtomicU64,
+    queue: ArrayQueue<OrderIntentPacket>,
 }
 
 impl LockFreeIntentQueue {
     pub fn new(capacity: usize) -> Self {
-        let cap = capacity.next_power_of_two();
-        let mut buffer = Vec::with_capacity(cap);
-        for _ in 0..cap {
-            buffer.push(OrderIntentPacket::default());
-        }
         Self {
-            buffer,
-            head: AtomicU64::new(0),
-            tail: AtomicU64::new(0),
+            queue: ArrayQueue::new(capacity),
         }
     }
 
+    #[inline(always)]
     pub fn push(&self, packet: OrderIntentPacket) -> bool {
-        let head = self.head.load(Ordering::Relaxed);
-        let tail = self.tail.load(Ordering::Acquire);
-        if head.wrapping_sub(tail) >= self.buffer.len() as u64 {
-            return false; // Queue full
-        }
-        let idx = (head as usize) & (self.buffer.len() - 1);
-        unsafe {
-            let slot_ptr = self.buffer.as_ptr().add(idx) as *mut OrderIntentPacket;
-            std::ptr::write_volatile(slot_ptr, packet);
-        }
-        self.head.store(head.wrapping_add(1), Ordering::Release);
-        true
+        self.queue.push(packet).is_ok()
     }
 
+    #[inline(always)]
     pub fn pop(&self) -> Option<OrderIntentPacket> {
-        let tail = self.tail.load(Ordering::Relaxed);
-        let head = self.head.load(Ordering::Acquire);
-        if tail == head {
-            return None; // Queue empty
-        }
-        let idx = (tail as usize) & (self.buffer.len() - 1);
-        let packet = unsafe {
-            let slot_ptr = self.buffer.as_ptr().add(idx);
-            std::ptr::read_volatile(slot_ptr)
-        };
-        self.tail.store(tail.wrapping_add(1), Ordering::Release);
-        Some(packet)
+        self.queue.pop()
     }
 
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.tail.load(Ordering::Relaxed) == self.head.load(Ordering::Acquire)
+        self.queue.is_empty()
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.queue.len()
     }
 }
 
@@ -161,6 +140,11 @@ impl MultiAssetOmsEngine {
     }
 
     pub fn sync_sab_slots(&self, bridge: &AtomicSharedMemoryBridge) {
+        let now_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as f64;
+
         for asset_idx in 0..self.max_assets {
             let ledger = &self.position_ledgers[asset_idx];
             let snap = ledger.snapshot();
@@ -170,7 +154,16 @@ impl MultiAssetOmsEngine {
             let rejected = self.metrics_orders_rejected[asset_idx].load(Ordering::Relaxed);
             let vol_usd = f64::from_bits(self.metrics_volume_usd_bits[asset_idx].load(Ordering::Relaxed));
 
-            bridge.store_f64_asset(asset_idx, 181, 0.0); // Active orders count
+            let pending_orders = submitted.saturating_sub(filled + canceled + rejected) as f64;
+            let fill_rate_pct = if submitted > 0 { (filled as f64 / submitted as f64) * 100.0 } else { 0.0 };
+            let cancel_rate_pct = if submitted > 0 { (canceled as f64 / submitted as f64) * 100.0 } else { 0.0 };
+            let reject_rate_pct = if submitted > 0 { (rejected as f64 / submitted as f64) * 100.0 } else { 0.0 };
+            let net_pos_usd = (snap.position_qty * snap.avg_entry_price).abs();
+            let total_orders = (submitted + filled + canceled + rejected) as f64;
+            let balance_usd = self.account_balance_usd();
+
+            // Slots 181..190
+            bridge.store_f64_asset(asset_idx, 181, pending_orders);
             bridge.store_f64_asset(asset_idx, 182, snap.position_qty);
             bridge.store_f64_asset(asset_idx, 183, snap.avg_entry_price);
             bridge.store_f64_asset(asset_idx, 184, snap.realized_pnl);
@@ -180,6 +173,18 @@ impl MultiAssetOmsEngine {
             bridge.store_f64_asset(asset_idx, 188, canceled as f64);
             bridge.store_f64_asset(asset_idx, 189, rejected as f64);
             bridge.store_f64_asset(asset_idx, 190, vol_usd);
+
+            // Slots 191..200: Telemetry Metrics & Status Indicators
+            bridge.store_f64_asset(asset_idx, 191, fill_rate_pct);
+            bridge.store_f64_asset(asset_idx, 192, cancel_rate_pct);
+            bridge.store_f64_asset(asset_idx, 193, reject_rate_pct);
+            bridge.store_f64_asset(asset_idx, 194, net_pos_usd);
+            bridge.store_f64_asset(asset_idx, 195, total_orders);
+            bridge.store_f64_asset(asset_idx, 196, balance_usd);
+            bridge.store_f64_asset(asset_idx, 197, now_ns);
+            bridge.store_f64_asset(asset_idx, 198, asset_idx as f64);
+            bridge.store_f64_asset(asset_idx, 199, 1.0); // Health Status Indicator
+            bridge.store_f64_asset(asset_idx, 200, 1.0); // Engine Active Status Indicator
         }
     }
 

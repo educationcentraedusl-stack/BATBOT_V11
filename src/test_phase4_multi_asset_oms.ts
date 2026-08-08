@@ -1,4 +1,4 @@
-import { MultiAssetExecutor } from "./execution/multi_asset_executor";
+import { MultiAssetExecutor, OrderIntentSlice } from "./execution/multi_asset_executor";
 import { performance } from "perf_hooks";
 
 function assert(condition: boolean, message: string) {
@@ -139,10 +139,10 @@ async function runPhase4MultiAssetOmsTest() {
   assert(largeOrderRes.slices!.length > 1, "Large order should be sliced into multiple packets");
   console.log("  ✅ Large intent sliced into " + largeOrderRes.slices!.length + " micro-packets successfully.");
 
-  // 4. Lock-Free SPSC Ring Buffer Queue Verification
-  console.log("\n[Test 4] Testing SPSC Lock-Free Ring Buffer Intent Packet Popping...");
+  // 4. Lock-Free MPSC Ring Buffer Queue Verification
+  console.log("\n[Test 4] Testing MPSC Lock-Free Ring Buffer Intent Packet Popping...");
   let poppedCount = 0;
-  let pkt: any = null;
+  let pkt: OrderIntentSlice | null = null;
   while ((pkt = executor.popNextPacket()) !== null) {
     poppedCount++;
     assert(pkt.asset_idx >= 0 && pkt.asset_idx < 10, "Popped packet must have valid asset_idx");
@@ -156,9 +156,19 @@ async function runPhase4MultiAssetOmsTest() {
   const syncSuccess = executor.syncSab(sabBuffer);
   assert(syncSuccess, "syncSab should return true");
   
+  const asset0Pending = floatsView[181];
   const asset0Submitted = floatsView[186];
+  const asset0Health = floatsView[199];
+  const asset0EngineActive = floatsView[200];
+
   assert(asset0Submitted > 0, "SAB Slot 186 (Submitted Orders) for Asset 0 should be > 0, got " + asset0Submitted);
+  assert(asset0Pending >= 0, "SAB Slot 181 (Pending Orders) for Asset 0 should be >= 0, got " + asset0Pending);
+  assert(asset0Health === 1.0, "SAB Slot 199 (Health Indicator) for Asset 0 should be 1.0, got " + asset0Health);
+  assert(asset0EngineActive === 1.0, "SAB Slot 200 (Engine Active) for Asset 0 should be 1.0, got " + asset0EngineActive);
+
+  console.log("  ✅ SAB Slot 181 (Pending Orders) verified: " + asset0Pending);
   console.log("  ✅ SAB Slot 186 (Submitted Orders) verified: " + asset0Submitted);
+  console.log("  ✅ SAB Slot 199 & 200 (Engine Health & Active Status) verified: " + asset0Health + ", " + asset0EngineActive);
 
   // 6. High-Frequency Latency & Throughput Benchmark Harness (100,000 intents)
   console.log("\n[Test 6] Executing 100,000 synthetic multi-asset order intents stress benchmark...");

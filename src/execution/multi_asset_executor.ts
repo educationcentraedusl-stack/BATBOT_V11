@@ -7,13 +7,13 @@ import {
   popNextIntentPacketNapi,
   syncMultiOmsSabNapi,
 } from "../../index";
-import { BinanceExecutionClient, BinanceOrderParams } from "./binance";
+import { BinanceExecutionClient, BinanceClientOptions } from "./binance";
 import { BinanceUserDataStream, OrderTradeUpdatePayload } from "./userDataStream";
 
 export interface MultiAssetExecutorConfig {
   initialBalanceUsd: number;
   activeSymbols: string[];
-  clientOptions?: any;
+  clientOptions?: BinanceClientOptions;
 }
 
 export interface ExecutionMetrics {
@@ -28,6 +28,37 @@ export interface ExecutionMetrics {
   unrealizedPnlUsd: number;
   currentPositionSize: number;
   avgEntryPrice: number;
+}
+
+export interface OrderIntentSlice {
+  client_order_id: string;
+  symbol: string;
+  asset_idx: number;
+  side: "Buy" | "Sell";
+  order_type: "Limit" | "Market";
+  time_in_force: string;
+  quantity: number;
+  price: number;
+  reduce_only: boolean;
+  post_only: boolean;
+  target_horizon_ms: number;
+  ai_confidence: number;
+  ai_direction: number;
+  creation_ns: number;
+}
+
+export interface IntentSubmissionResult {
+  status: "SUBMITTED" | "REJECTED";
+  slices?: OrderIntentSlice[];
+  reason?: string;
+}
+
+export interface IntentOptions {
+  postOnly?: boolean;
+  targetHorizonMs?: number;
+  aiConfidence?: number;
+  timeInForce?: "Gtc" | "Ioc" | "Fok" | "Gtx";
+  reduceOnly?: boolean;
 }
 
 export class MultiAssetExecutor {
@@ -86,22 +117,30 @@ export class MultiAssetExecutor {
     stepSize: number = 0.001,
     tickSize: number = 0.01,
     portfolioLeverage: number = 0.0,
-    avgCorrelation: number = 0.0
-  ): { status: string; slices?: any[]; reason?: string } {
+    avgCorrelation: number = 0.0,
+    options?: IntentOptions
+  ): IntentSubmissionResult {
     const assetIdx = this.getAssetIndex(symbol);
+    const isMarket = orderType === "MARKET";
+    const postOnly = isMarket ? false : (options?.postOnly ?? true);
+    const timeInForce = isMarket ? "Ioc" : (options?.timeInForce ?? "Gtx");
+    const targetHorizonMs = options?.targetHorizonMs ?? 100.0;
+    const aiConfidence = options?.aiConfidence ?? 0.85;
+    const reduceOnly = options?.reduceOnly ?? false;
+
     const intentJson = JSON.stringify({
       client_order_id: `BAT_${assetIdx}_${Date.now()}`,
       symbol,
       asset_idx: assetIdx,
       side: side === "BUY" ? "Buy" : "Sell",
-      order_type: orderType === "LIMIT" ? "Limit" : "Market",
-      time_in_force: "Gtx",
+      order_type: isMarket ? "Market" : "Limit",
+      time_in_force: timeInForce,
       quantity,
       price,
-      reduce_only: false,
-      post_only: true,
-      target_horizon_ms: 100.0,
-      ai_confidence: 0.85,
+      reduce_only: reduceOnly,
+      post_only: postOnly,
+      target_horizon_ms: targetHorizonMs,
+      ai_confidence: aiConfidence,
       ai_direction: side === "BUY" ? 1.0 : -1.0,
       creation_ns: Date.now() * 1_000_000,
     });
@@ -119,23 +158,25 @@ export class MultiAssetExecutor {
       );
 
       if (resStr.startsWith('{"status":"REJECTED"')) {
-        const parsed = JSON.parse(resStr);
+        const parsed = JSON.parse(resStr) as { status: string; reason?: string };
         return { status: "REJECTED", reason: parsed.reason };
       } else {
-        const slices = JSON.parse(resStr);
+        const slices = JSON.parse(resStr) as OrderIntentSlice[];
         return { status: "SUBMITTED", slices };
       }
-    } catch (err: any) {
-      return { status: "REJECTED", reason: err.message };
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      return { status: "REJECTED", reason: errorMsg };
     }
   }
 
-  public popNextPacket(): any | null {
-    const pktStr = popNextIntentPacketNapi();
-    if (!pktStr) return null;
+  public popNextPacket(): OrderIntentSlice | null {
     try {
-      return JSON.parse(pktStr);
-    } catch {
+      const pktStr = popNextIntentPacketNapi();
+      if (!pktStr) return null;
+      return JSON.parse(pktStr) as OrderIntentSlice;
+    } catch (err: unknown) {
+      console.error("[MultiAssetExecutor] Failed to pop intent packet:", err);
       return null;
     }
   }
@@ -148,7 +189,7 @@ export class MultiAssetExecutor {
     const assetIdx = this.getAssetIndex(symbol);
     const metricsStr = getMultiAssetOmsMetricsNapi(assetIdx);
     try {
-      const raw = JSON.parse(metricsStr);
+      const raw = JSON.parse(metricsStr) as Record<string, number>;
       return {
         assetIdx: raw.asset_idx ?? assetIdx,
         symbol,
@@ -181,27 +222,31 @@ export class MultiAssetExecutor {
 
   private handleUserStreamUpdate(update: OrderTradeUpdatePayload): void {
     if (!update || update.eventType !== "ORDER_TRADE_UPDATE") return;
-    const ord = update.order;
-    const assetIdx = this.getAssetIndex(ord.symbol);
+    try {
+      const ord = update.order;
+      const assetIdx = this.getAssetIndex(ord.symbol);
 
-    const reportJson = JSON.stringify({
-      client_order_id: ord.clientOrderId,
-      order_id: ord.orderId,
-      symbol: ord.symbol,
-      asset_idx: assetIdx,
-      side: ord.side === "BUY" ? "Buy" : "Sell",
-      status: ord.orderStatus,
-      last_filled_qty: ord.lastFilledQuantity,
-      last_filled_price: ord.lastFilledPrice,
-      cum_filled_qty: ord.cumulativeFilledQuantity,
-      avg_price: ord.averagePrice,
-      commission: ord.commissionAmount,
-      commission_asset: ord.commissionAsset,
-      trade_id: ord.tradeId,
-      event_time_ns: ord.tradeTime * 1_000_000,
-      is_maker: ord.isMaker,
-    });
+      const reportJson = JSON.stringify({
+        client_order_id: ord.clientOrderId,
+        order_id: ord.orderId,
+        symbol: ord.symbol,
+        asset_idx: assetIdx,
+        side: ord.side === "BUY" ? "Buy" : "Sell",
+        status: ord.orderStatus,
+        last_filled_qty: ord.lastFilledQuantity,
+        last_filled_price: ord.lastFilledPrice,
+        cum_filled_qty: ord.cumulativeFilledQuantity,
+        avg_price: ord.averagePrice,
+        commission: ord.commissionAmount,
+        commission_asset: ord.commissionAsset,
+        trade_id: ord.tradeId,
+        event_time_ns: ord.tradeTime * 1_000_000,
+        is_maker: ord.isMaker,
+      });
 
-    applyMultiAssetFillNapi(reportJson);
+      applyMultiAssetFillNapi(reportJson);
+    } catch (err: unknown) {
+      console.error("[MultiAssetExecutor] Error in user stream fill update processing:", err);
+    }
   }
 }
