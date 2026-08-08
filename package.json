@@ -12,7 +12,9 @@
     "build": "npm run build:ts && npm run build:dashboard",
     "check": "cargo check",
     "test": "tsc --noEmit",
-    "start": "node dist/index.js",
+    "start": "npm run start:live",
+    "start:live": "npm run build:ts && node dist/scripts/run_tui_dashboard.js",
+    "bot:run": "npm run build:ts && node dist/scripts/run_tui_dashboard.js",
     "dev": "vite",
     "trainmodels": "npm run build:ts && node dist/scripts/manual_train.js"
   },

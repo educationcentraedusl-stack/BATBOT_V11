@@ -75,12 +75,17 @@ async function runPhase6TuiCommandCenterTests() {
         writeFloat(i, 121, 0.015 + i * 0.002); // Garman-Klass RV
         writeFloat(i, 122, 0.35 + i * 0.03); // VPIN
         writeFloat(i, 123, 0.58 + i * 0.01); // Hurst Exponent
-        // Active OMS Trades on odd asset slots
+        // Active OMS Trades on odd asset slots (dynamically calculated metrics)
         if (i % 2 === 1) {
-            writeFloat(i, 105, 0.5 + i * 0.1); // Position Qty
-            writeFloat(i, 106, basePrice - 1.0); // Avg Entry
-            writeFloat(i, 107, 125.5); // Realized PnL
-            writeFloat(i, 108, 45.2); // Unrealized PnL
+            const qty = 0.5 + i * 0.1;
+            const entryPrice = basePrice - 1.0;
+            const markBidPrice = basePrice;
+            const calculatedUnrealizedPnl = (markBidPrice - entryPrice) * qty;
+            const calculatedRealizedPnl = 3 * (entryPrice * qty * 0.005);
+            writeFloat(i, 105, qty); // Position Qty
+            writeFloat(i, 106, entryPrice); // Avg Entry
+            writeFloat(i, 107, calculatedRealizedPnl); // Dynamically computed Realized PnL
+            writeFloat(i, 108, calculatedUnrealizedPnl); // Dynamically computed Unrealized PnL
             writeFloat(i, 109, 10.0); // Leverage
             writeBigInt(i, 111, BigInt(12 + i)); // Total Trades
         }
