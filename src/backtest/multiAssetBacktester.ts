@@ -151,6 +151,8 @@ export class MultiAssetBacktestEngine {
     entrySlippageUsd: number;
   }[] = [];
   private startTimeNs: bigint = 0n;
+  private firstTickTimestampMs: number = 0;
+  private lastTickTimestampMs: number = 0;
 
   /**
    * Resets engine backtest accounting state variables for a new run.
@@ -170,6 +172,8 @@ export class MultiAssetBacktestEngine {
     this.losingTrades = 0;
     this.totalTicksEvaluated = 0;
     this.tradeReturns = [];
+    this.firstTickTimestampMs = 0;
+    this.lastTickTimestampMs = 0;
 
     this.assetStats = Array.from({ length: this.config.maxAssets }, (_, i) => ({
       assetIdx: i,
@@ -203,6 +207,11 @@ export class MultiAssetBacktestEngine {
       const tick = ticks[i];
       const idx = tick.assetIdx;
       if (idx < 0 || idx >= this.config.maxAssets) continue;
+
+      if (this.firstTickTimestampMs === 0) {
+        this.firstTickTimestampMs = tick.timestamp;
+      }
+      this.lastTickTimestampMs = tick.timestamp;
 
       this.assetStats[idx].symbol = tick.symbol;
       this.updateSabTick(tick);
@@ -402,18 +411,18 @@ export class MultiAssetBacktestEngine {
         const exitPrice = pos.side === "LONG" ? lastBid : lastAsk;
         const exitNotional = exitPrice * pos.qty;
         const exitFee = exitNotional * this.config.takerFeeRate;
-        const terminalSlippageUsd = pos.entrySlippageUsd;
+        const terminalExitSlippageUsd = this.config.minSlippageTicks * this.config.tickSize * pos.qty;
         const grossPnl = pos.side === "LONG" ? (exitPrice - pos.entryPrice) * pos.qty : (pos.entryPrice - exitPrice) * pos.qty;
         const netRoundTripPnl = grossPnl - pos.entryFee - exitFee;
 
         this.currentCapital += grossPnl - exitFee;
         this.totalFeeDragUsd += exitFee;
-        this.totalSlippageDragUsd += terminalSlippageUsd;
+        this.totalSlippageDragUsd += terminalExitSlippageUsd;
         this.totalOrderLegs++;
         this.completedRoundTrips++;
         this.assetStats[i].totalTrades++;
         this.assetStats[i].feeDragUsd += exitFee;
-        this.assetStats[i].slippageDragUsd += terminalSlippageUsd;
+        this.assetStats[i].slippageDragUsd += terminalExitSlippageUsd;
         this.assetStats[i].realizedPnlUsd += netRoundTripPnl;
 
         if (netRoundTripPnl > 0) {
@@ -450,7 +459,12 @@ export class MultiAssetBacktestEngine {
       stat.slippageDragUsd = Number(stat.slippageDragUsd.toFixed(2));
     }
 
-    const sharpeRatio = this.calculateSharpeRatio(this.tradeReturns);
+    const durationSeconds =
+      this.lastTickTimestampMs > this.firstTickTimestampMs
+        ? (this.lastTickTimestampMs - this.firstTickTimestampMs) / 1000
+        : elapsedNs / 1e9;
+
+    const sharpeRatio = this.calculateSharpeRatio(this.tradeReturns, durationSeconds);
 
     return {
       initialCapital: this.config.initialCapital,
@@ -556,13 +570,20 @@ export class MultiAssetBacktestEngine {
     return this.finalizeResult();
   }
 
-  private calculateSharpeRatio(returns: number[]): number {
-    if (returns.length < 2) return 0;
+  private calculateSharpeRatio(returns: number[], durationSeconds: number): number {
+    if (returns.length < 2 || durationSeconds <= 0) return 0;
     const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
     const variance = returns.reduce((sum, r) => sum + Math.pow(r - mean, 2), 0) / (returns.length - 1);
     const stdDev = Math.sqrt(variance);
     if (stdDev === 0) return 0;
-    return (mean / stdDev) * Math.sqrt(252);
+
+    // HFT Annualized Sharpe Ratio: scale by sqrt(tradesPerYear) based on exact tick stream duration
+    const secondsInYear = 365.25 * 86400; // 31,557,600 seconds per year
+    const tradesPerSecond = returns.length / durationSeconds;
+    const tradesPerYear = tradesPerSecond * secondsInYear;
+    const annualizationFactor = Math.sqrt(tradesPerYear);
+
+    return (mean / stdDev) * annualizationFactor;
   }
 
   /**
