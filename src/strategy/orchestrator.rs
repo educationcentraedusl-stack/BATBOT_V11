@@ -123,11 +123,8 @@ impl StrategyOrchestrator {
                             processed_any = true;
                             ORCHESTRATOR_TICK_COUNT.fetch_add(1, Ordering::Relaxed);
 
-                            // 1. Synchronous L2 Orderbook update
-                            orchestrator.lob_manager.process_event_for_asset(asset_idx, evt);
-
-                            // 2. Fetch microstructure metrics
-                            if let Some(metrics) = orchestrator.lob_manager.get_metrics_for_asset(asset_idx) {
+                            // 1. Single-lock batch update & evaluation (takes RwLock write guard EXACTLY ONCE per tick)
+                            if let Some((top_of_book, metrics)) = orchestrator.lob_manager.process_and_evaluate_asset(asset_idx, evt) {
                                 // Update SAB zero-copy telemetry if attached
                                 if let Some(ref sab) = orchestrator.sab_bridge {
                                     sab.store_f64_asset(asset_idx, 0, metrics.obi);
@@ -142,7 +139,7 @@ impl StrategyOrchestrator {
                                     sab.store_u64_asset(asset_idx, 90, metrics.last_timestamp_ns);
                                 }
 
-                                // 3. Alpha Feature Extraction & AI Signal Evaluation
+                                // 2. Alpha Feature Extraction & AI Signal Evaluation
                                 if let Some(ref ai) = orchestrator.ai_engine {
                                     let lat_us = 1.0;
                                     let mut features = [0.0f64; 40];
@@ -160,7 +157,7 @@ impl StrategyOrchestrator {
                                     // If signal confidence exceeds threshold (e.g. 0.65)
                                     if confidence >= 0.65 && signal_direction.abs() > 0.5 {
                                         // Dynamic price derivation from live top of L2 orderbook
-                                        if let Some((best_bid, best_ask, mid_price)) = orchestrator.lob_manager.get_top_of_book_for_asset(asset_idx) {
+                                        if let Some((best_bid, best_ask, mid_price)) = top_of_book {
                                             let is_buy = signal_direction > 0.0;
                                             let price = if is_buy {
                                                 if best_ask > 0.0 { best_ask } else { mid_price }
@@ -174,33 +171,53 @@ impl StrategyOrchestrator {
 
                                             let target_notional = 100.0 * confidence;
 
-                                            // Dynamic portfolio risk state calculation
+                                            // Global Portfolio Risk State Aggregation across ALL active assets (0..K-1)
+                                            let mut total_portfolio_exposure = 0.0;
+                                            let mut total_portfolio_pnl = 0.0;
                                             let mut current_drawdown = 0.0;
-                                            let mut current_exposure = 0.0;
 
                                             if let Some(ref oms) = orchestrator.oms_engine {
                                                 let balance = oms.account_balance_usd();
-                                                let oms_m = oms.get_metrics(asset_idx);
-                                                current_exposure = (oms_m.current_position_size * oms_m.avg_entry_price).abs();
-                                                let total_pnl = oms_m.realized_pnl_usd + oms_m.unrealized_pnl_usd;
-                                                if balance > 0.0 && total_pnl < 0.0 {
-                                                    current_drawdown = (-total_pnl / balance).clamp(0.0, 1.0);
+                                                let symbols = oms.symbols();
+                                                let max_a = symbols.len().min(MAX_CONCURRENT_ASSETS);
+
+                                                for i in 0..max_a {
+                                                    let oms_m = oms.get_metrics(i);
+                                                    total_portfolio_exposure += (oms_m.current_position_size * oms_m.avg_entry_price).abs();
+                                                    total_portfolio_pnl += oms_m.realized_pnl_usd + oms_m.unrealized_pnl_usd;
+                                                }
+
+                                                if balance > 0.0 && total_portfolio_pnl < 0.0 {
+                                                    current_drawdown = (-total_portfolio_pnl / balance).clamp(0.0, 1.0);
                                                 }
                                             }
 
-                                            // 4. Pre-trade Risk Screening
+                                            // 3. Pre-trade Risk Screening against Global Portfolio Risk Limits
                                             let mut risk_passed = true;
                                             if let Some(ref risk) = orchestrator.risk_guard {
                                                 risk_passed = risk.verify_pretrade_risk(
                                                     target_notional,
                                                     current_drawdown,
-                                                    current_exposure,
+                                                    total_portfolio_exposure,
                                                 );
                                             }
 
                                             if risk_passed {
-                                                // Zero heap allocation stack formatting
-                                                let (symbol_buf, sym_len) = format_asset_symbol_bytes(asset_idx);
+                                                // Resolve actual asset symbol string from OMS ledger or fallback
+                                                let mut symbol_buf = [0u8; 16];
+                                                let sym_len;
+
+                                                if let Some(ref oms) = orchestrator.oms_engine {
+                                                    let symbols = oms.symbols();
+                                                    let sym_name = symbols.get(asset_idx).map(|s| s.as_str()).unwrap_or("ASSET");
+                                                    let bytes = sym_name.as_bytes();
+                                                    sym_len = bytes.len().min(16);
+                                                    symbol_buf[..sym_len].copy_from_slice(&bytes[..sym_len]);
+                                                } else {
+                                                    let (b, l) = format_asset_symbol_bytes(asset_idx);
+                                                    symbol_buf = b;
+                                                    sym_len = l;
+                                                }
 
                                                 let signal = OrchestratorSignal {
                                                     asset_idx,
@@ -216,10 +233,10 @@ impl StrategyOrchestrator {
                                                 let _ = orchestrator.signal_queue.push(signal);
                                                 ORCHESTRATOR_SIGNAL_COUNT.fetch_add(1, Ordering::Relaxed);
 
-                                                // 5. Direct Phase 4 OMS Dispatch if attached
+                                                // 4. Direct Phase 4 OMS Dispatch with explicit asset_idx
                                                 if let Some(ref oms) = orchestrator.oms_engine {
                                                     let sym_str = std::str::from_utf8(&symbol_buf[..sym_len]).unwrap_or("ASSET");
-                                                    let _ = oms.submit_sliced_order(sym_str, is_buy, price, target_notional, 3);
+                                                    let _ = oms.submit_sliced_order(asset_idx, sym_str, is_buy, price, target_notional, 3);
                                                 }
                                             }
                                         }

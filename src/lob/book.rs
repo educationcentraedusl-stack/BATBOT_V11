@@ -307,6 +307,13 @@ impl LimitOrderBook {
     ) -> (f64, f64) {
         self.analyzer.calculate_dynamic_collars(entry_price, position_side, self.metrics.obi, self.metrics.last_spread)
     }
+
+    /// Single-lock batch update and evaluation method (eliminates redundant RwLock acquisitions)
+    pub fn process_and_evaluate(&mut self, event: MarketUpdateEvent) -> (Option<(f64, f64, f64)>, MicrostructureMetrics) {
+        self.process_event(event);
+        let top_of_book = self.get_top_of_book();
+        (top_of_book, self.metrics.clone())
+    }
 }
 
 pub const MAX_CONCURRENT_ASSETS: usize = 10;
@@ -335,6 +342,22 @@ impl MultiAssetLOBManager {
 
     pub fn stop(&self) {
         self.is_running.store(false, Ordering::Relaxed);
+    }
+
+    /// Single-lock batch update and metric retrieval method taking RwLock write guard EXACTLY ONCE per tick.
+    pub fn process_and_evaluate_asset(
+        &self,
+        asset_idx: usize,
+        event: MarketUpdateEvent,
+    ) -> Option<(Option<(f64, f64, f64)>, MicrostructureMetrics)> {
+        if asset_idx >= MAX_CONCURRENT_ASSETS {
+            return None;
+        }
+        if let Ok(mut book) = self.books[asset_idx].write() {
+            Some(book.process_and_evaluate(event))
+        } else {
+            None
+        }
     }
 
     pub fn process_event_for_asset(&self, asset_idx: usize, event: MarketUpdateEvent) {

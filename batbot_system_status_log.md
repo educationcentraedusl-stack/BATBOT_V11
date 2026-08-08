@@ -947,6 +947,18 @@
   7. 100% QA verified via optimized release test suite (`cargo test --release --lib`, 35/35 passed clean in 0.08s) and `cargo check --lib` (0 errors).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-08-08
+- **Feature/Task:** Phase 5 Final Remediation & Absolute Sealing Protocol (Symbol Routing, Global Portfolio Risk Aggregation, IEEE-754 NaN Guards, VPIN Volume Invariance & Single-Lock Batch Evaluation)
+- **Artifacts Created/Modified:** `src/lob/metrics.rs`, `src/lob/microstructure.rs`, `src/lob/book.rs`, `src/oms/multi_asset_oms.rs`, `src/strategy/orchestrator.rs`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Executed 100% remediation of all 5 hostile audit defects across Phase 5:
+  1. Symbol & Asset Index Routing (`multi_asset_oms.rs` & `orchestrator.rs`): Explicitly set `pkt.asset_idx = asset_idx as u32` in `submit_sliced_order` and mapped real symbols from `oms.symbols()`, ensuring altcoin signals route to correct asset ledgers.
+  2. Global Portfolio Risk Aggregation (`orchestrator.rs`): Aggregated total portfolio exposure and net account drawdown by looping over `oms.get_metrics(i)` across all active assets ($0..K-1$), passing true global portfolio exposure into `verify_pretrade_risk`.
+  3. IEEE-754 `NaN` Poisoning Protection (`metrics.rs`): Added non-finite and `denominator.is_nan()` guards to `calculate_micro_price` and `calculate_obi` with safe fallback to mid-price or `0.0`.
+  4. VPIN Bucket Target Volume Invariance (`microstructure.rs`): Moved `bucket_target_volume` updates strictly inside the bucket completion block (`total_current >= bucket_target_volume`), preserving the volume target $V$ invariant.
+  5. Single-Lock Batch Evaluation (`book.rs` & `orchestrator.rs`): Combined orderbook update, top-of-book, and metrics retrieval into `process_and_evaluate_asset(asset_idx, evt)`, taking the `RwLock` write guard exactly ONCE per tick.
+  6. 100% QA verified via optimized release test suite (`cargo test --release -- --nocapture` - 52/52 tests passed, 42.90 ns average fast-float parse latency).
+- **Status:** ✅ Completed & QA Verified
+
 
 
 

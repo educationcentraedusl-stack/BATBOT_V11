@@ -183,11 +183,6 @@ impl MicrostructureAnalyzer {
         // 3. Update VPIN Volume Buckets with Dynamic Adaptive Target Volume
         // Taker buy: is_buyer_maker == false
         let volume = price * quantity;
-        if volume > 0.0 {
-            self.rolling_trade_volume = self.rolling_trade_volume * 0.95 + volume * 0.05;
-            let min_target = (self.bucket_target_volume * 0.1).clamp(0.1, 100.0);
-            self.bucket_target_volume = (self.rolling_trade_volume * 20.0).clamp(min_target, 100000.0);
-        }
 
         if is_buyer_maker {
             self.current_bucket_sell += volume;
@@ -205,6 +200,14 @@ impl MicrostructureAnalyzer {
             if self.vpin_bucket_count < VPIN_BUCKETS {
                 self.vpin_bucket_count += 1;
             }
+
+            // Update rolling trade volume and adapt bucket_target_volume ONLY upon bucket completion (preserving V invariant during bucket lifetime)
+            if volume > 0.0 {
+                self.rolling_trade_volume = self.rolling_trade_volume * 0.95 + volume * 0.05;
+                let min_target = 100.0;
+                self.bucket_target_volume = (self.rolling_trade_volume * 20.0).clamp(min_target, 100000.0);
+            }
+
             self.current_bucket_buy = 0.0;
             self.current_bucket_sell = 0.0;
             self.recalculate_vpin();

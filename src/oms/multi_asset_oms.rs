@@ -209,6 +209,7 @@ impl MultiAssetOmsEngine {
 
     pub fn submit_sliced_order(
         &self,
+        asset_idx: usize,
         symbol: &str,
         is_buy: bool,
         price: f64,
@@ -216,6 +217,7 @@ impl MultiAssetOmsEngine {
         _slice_count: usize,
     ) -> Result<Vec<OrderIntentPacket>, RejectionReason> {
         let mut pkt = OrderIntentPacket::default();
+        pkt.asset_idx = asset_idx as u32;
         pkt.set_symbol(symbol);
         pkt.side = if is_buy { 0 } else { 1 };
         pkt.order_type = 0; // Limit

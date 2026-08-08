@@ -45,16 +45,20 @@ pub fn calculate_obi(bids: &[(f64, f64); 20], asks: &[(f64, f64); 20]) -> f64 {
 
     let mut i = 0;
     while i < 20 {
-        total_bid_vol += bids[i].1;
-        total_ask_vol += asks[i].1;
+        if bids[i].1.is_finite() && bids[i].1 > 0.0 {
+            total_bid_vol += bids[i].1;
+        }
+        if asks[i].1.is_finite() && asks[i].1 > 0.0 {
+            total_ask_vol += asks[i].1;
+        }
         i += 1;
     }
 
     let denominator = total_bid_vol + total_ask_vol;
-    if denominator <= 1e-12 {
+    if denominator.is_nan() || !denominator.is_finite() || denominator <= 1e-12 {
         0.0
     } else {
-        (total_bid_vol - total_ask_vol) / denominator
+        ((total_bid_vol - total_ask_vol) / denominator).clamp(-1.0, 1.0)
     }
 }
 
@@ -65,17 +69,49 @@ pub fn calculate_micro_price(bids: &[(f64, f64); 20], asks: &[(f64, f64); 20]) -
     let pa = asks[0].0;
     let qa = asks[0].1;
 
-    let denominator = qb + qa;
-    if denominator <= 1e-12 {
-        if pb > 0.0 && pa > 0.0 {
+    let pb_valid = pb.is_finite() && pb > 0.0;
+    let pa_valid = pa.is_finite() && pa > 0.0;
+    let qb_valid = qb.is_finite() && qb >= 0.0;
+    let qa_valid = qa.is_finite() && qa >= 0.0;
+
+    if !qb_valid || !qa_valid {
+        return if pb_valid && pa_valid {
             (pb + pa) * 0.5
-        } else if pb > 0.0 {
+        } else if pb_valid {
             pb
-        } else {
+        } else if pa_valid {
             pa
+        } else {
+            0.0
+        };
+    }
+
+    let denominator = qb + qa;
+    if denominator.is_nan() || !denominator.is_finite() || denominator <= 1e-12 {
+        if pb_valid && pa_valid {
+            (pb + pa) * 0.5
+        } else if pb_valid {
+            pb
+        } else if pa_valid {
+            pa
+        } else {
+            0.0
         }
     } else {
-        (qb * pa + qa * pb) / denominator
+        let mp = (qb * pa + qa * pb) / denominator;
+        if mp.is_nan() || !mp.is_finite() || mp <= 0.0 {
+            if pb_valid && pa_valid {
+                (pb + pa) * 0.5
+            } else if pb_valid {
+                pb
+            } else if pa_valid {
+                pa
+            } else {
+                0.0
+            }
+        } else {
+            mp
+        }
     }
 }
 
