@@ -1,17 +1,21 @@
 import "dotenv/config";
+import { getTradingSymbols } from "./config/tradingSymbols";
 
 // Static 8-byte conversion buffer used for zero-allocation atomic float bitcasting
 const BITCAST_BUF = new ArrayBuffer(8);
 const BITCAST_BIGINT = new BigInt64Array(BITCAST_BUF);
 const BITCAST_FLOAT = new Float64Array(BITCAST_BUF);
 
-const parsedDefaultMaxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || "10", 10);
+const parsedDefaultMaxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || "", 10);
 const DEFAULT_MAX_CONCURRENT_ASSETS =
-  Number.isFinite(parsedDefaultMaxAssets) && parsedDefaultMaxAssets > 0 ? parsedDefaultMaxAssets : 10;
+  Number.isFinite(parsedDefaultMaxAssets) && parsedDefaultMaxAssets > 0
+    ? Math.max(parsedDefaultMaxAssets, getTradingSymbols().length)
+    : getTradingSymbols().length;
 
 const parsedDefaultSlotsPerAsset = parseInt(process.env.SAB_SLOTS_PER_ASSET || "256", 10);
 const DEFAULT_SAB_SLOTS_PER_ASSET =
   Number.isFinite(parsedDefaultSlotsPerAsset) && parsedDefaultSlotsPerAsset > 0 ? parsedDefaultSlotsPerAsset : 256;
+
 
 export class MarketDataClient {
   private bigIntView: BigInt64Array;

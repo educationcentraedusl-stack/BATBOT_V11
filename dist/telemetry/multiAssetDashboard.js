@@ -1,18 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MultiAssetCLIDashboard = exports.DEFAULT_ASSET_SYMBOLS = void 0;
-exports.DEFAULT_ASSET_SYMBOLS = [
-    "BTCUSDT",
-    "ETHUSDT",
-    "SOLUSDT",
-    "BNBUSDT",
-    "ADAUSDT",
-    "XRPUSDT",
-    "DOGEUSDT",
-    "AVAXUSDT",
-    "LINKUSDT",
-    "DOTUSDT",
-];
+const tradingSymbols_1 = require("../config/tradingSymbols");
+exports.DEFAULT_ASSET_SYMBOLS = (0, tradingSymbols_1.getTradingSymbols)();
 class MultiAssetCLIDashboard {
     client;
     enabled;
@@ -36,8 +26,8 @@ class MultiAssetCLIDashboard {
     static BORDER = "\x1b[36m\x1b[1m======================================================================================================================\x1b[0m\x1b[K\n";
     static SUB_DIVIDER = "\x1b[90m----------------------------------------------------------------------------------------------------------------------\x1b[0m\x1b[K\n";
     static TABLE_DIVIDER = "\x1b[90m+------+----------+-----------+-----------+---------+--------------------+------------+----------+------------+---------+\x1b[0m\x1b[K\n";
-    static TRADES_DIVIDER = "\x1b[90m+------+----------+--------+-----------+--------------+--------------+------------+----------+--------------------+\x1b[0m\x1b[K\n";
-    constructor(client, enabled = true, customSymbols = exports.DEFAULT_ASSET_SYMBOLS) {
+    static TRADES_DIVIDER = "\x1b[90m+------+----------+--------+-----------+--------------+--------------+------------+----------+--------------------+ \x1b[0m\x1b[K\n";
+    constructor(client, enabled = true, customSymbols = (0, tradingSymbols_1.getTradingSymbols)()) {
         this.client = client;
         this.enabled = enabled;
         this.assetSymbols = customSymbols;

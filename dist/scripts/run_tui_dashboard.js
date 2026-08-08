@@ -40,17 +40,21 @@ const fs = __importStar(require("fs"));
 const marketDataClient_1 = require("../marketDataClient");
 const multiAssetDashboard_1 = require("../telemetry/multiAssetDashboard");
 const keypressHandler_1 = require("../telemetry/keypressHandler");
+const binance_1 = require("../execution/binance");
+const tradingSymbols_1 = require("../config/tradingSymbols");
 async function runProductionTuiLauncher() {
     console.log("=========================================================================");
     console.log("  BATBOT_V11 HIGH-FREQUENCY TRADING SYSTEM - PRODUCTION TUI LAUNCHER     ");
     console.log("=========================================================================\n");
     // Step 1: Pre-Flight Verification of Environment & Native N-API Binaries
     console.log("[Pre-Flight 1/3] Verifying environment configurations...");
-    const parsedMaxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || "10", 10);
-    const maxAssets = Number.isFinite(parsedMaxAssets) && parsedMaxAssets > 0 ? parsedMaxAssets : 10;
+    const activeSymbols = (0, tradingSymbols_1.getTradingSymbols)();
+    const parsedMaxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || String(activeSymbols.length), 10);
+    const maxAssets = Math.max(activeSymbols.length, Number.isFinite(parsedMaxAssets) && parsedMaxAssets > 0 ? parsedMaxAssets : activeSymbols.length);
     const parsedSlotsPerAsset = parseInt(process.env.SAB_SLOTS_PER_ASSET || "256", 10);
     const slotsPerAsset = Number.isFinite(parsedSlotsPerAsset) && parsedSlotsPerAsset > 0 ? parsedSlotsPerAsset : 256;
     const totalSABBytes = maxAssets * slotsPerAsset * 8;
+    console.log(`  - Active Trading Symbols (${activeSymbols.length}): ${activeSymbols.join(", ")}`);
     console.log(`  - Concurrency Capacity: ${maxAssets} Asset Slots`);
     console.log(`  - Slots Per Asset: ${slotsPerAsset}`);
     console.log(`  - SharedArrayBuffer Size: ${totalSABBytes} bytes`);
@@ -101,9 +105,9 @@ async function runProductionTuiLauncher() {
     // Attempt starting native zero-copy ingestion if available
     if (isNativeVerified && nativeModule && typeof nativeModule.startIngestion === "function") {
         try {
-            const started = nativeModule.startIngestion(Buffer.from(sab));
+            const started = nativeModule.startIngestion(Buffer.from(sab), activeSymbols);
             if (started) {
-                console.log("  ✅ Rust Zero-Copy Ingestion Worker Thread Started Successfully.");
+                console.log(`  ✅ Rust Zero-Copy Multi-Asset Ingestion Workers Started (${activeSymbols.length} Coins Streaming).`);
             }
         }
         catch (err) {
@@ -116,8 +120,16 @@ async function runProductionTuiLauncher() {
     // Wait 1 second so pre-flight messages are readable before clearing terminal screen
     await new Promise((resolve) => setTimeout(resolve, 1000));
     // Step 3: Launch Multi-Asset TUI Dashboard & Keypress Control Engine
-    const dashboard = new multiAssetDashboard_1.MultiAssetCLIDashboard(client, true, multiAssetDashboard_1.DEFAULT_ASSET_SYMBOLS);
+    const dashboard = new multiAssetDashboard_1.MultiAssetCLIDashboard(client, true, activeSymbols);
     const keyEngine = new keypressHandler_1.InteractiveKeypressEngine(client);
+    const binanceClient = new binance_1.BinanceExecutionClient();
+    if (binanceClient.isConfigured()) {
+        binanceClient.startBalancePolling(5000);
+        dashboard.pushNotification("Binance API credentials verified. Balance polling active.");
+    }
+    else {
+        dashboard.pushNotification("Notice: Binance API credentials unconfigured (Balance default: $0.00).");
+    }
     dashboard.pushNotification("BATBOT_V11 Production Launch Sequence Complete.");
     dashboard.pushNotification(`${maxAssets}-Asset SharedArrayBuffer Active (${totalSABBytes} bytes).`);
     dashboard.pushNotification("Keyboard active: 0-9 = Focus Asset, K = Kill, P = Pause, C = Close All, Q = Quit.");
@@ -130,6 +142,9 @@ async function runProductionTuiLauncher() {
     keyEngine.start();
     // Active double-buffered ANSI refresh loop (~6.6 Hz / 150ms interval)
     const renderInterval = setInterval(() => {
+        if (binanceClient.isConfigured()) {
+            client.setAvailableBalance(binanceClient.getUsdtAvailableBalance());
+        }
         dashboard.render();
     }, 150);
     // Clean signal handling & terminal teardown
@@ -138,6 +153,7 @@ async function runProductionTuiLauncher() {
         if (isShuttingDown)
             return;
         isShuttingDown = true;
+        binanceClient.stopBalancePolling();
         clearInterval(renderInterval);
         keyEngine.stop();
         dashboard.clear();

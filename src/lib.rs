@@ -251,42 +251,71 @@ pub fn get_position_snapshot() -> String {
 }
 
 #[napi]
-pub fn start_ingestion(sab_buffer: Buffer) -> napi::Result<bool> {
+pub fn start_ingestion(sab_buffer: Buffer, symbols: Option<Vec<String>>) -> napi::Result<bool> {
     let raw_ptr = sab_buffer.as_ptr() as *mut u8;
     let len = sab_buffer.len();
 
     let atomic_bridge = AtomicSharedMemoryBridge::new(raw_ptr, len)
         .map_err(|err| Error::from_reason(err.to_string()))?;
 
-    let queue = LockFreeSpscQueue::new(4096);
+    let target_symbols = symbols.unwrap_or_else(|| {
+        if let Ok(env_syms) = std::env::var("TRADING_SYMBOLS") {
+            let parsed: Vec<String> = env_syms
+                .split(',')
+                .map(|s| s.trim().to_uppercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !parsed.is_empty() {
+                return parsed;
+            }
+        }
+        vec![
+            "BTCUSDT".to_string(),
+            "ETHUSDT".to_string(),
+            "SOLUSDT".to_string(),
+            "BNBUSDT".to_string(),
+            "ADAUSDT".to_string(),
+            "XRPUSDT".to_string(),
+            "DOGEUSDT".to_string(),
+            "AVAXUSDT".to_string(),
+            "LINKUSDT".to_string(),
+            "DOTUSDT".to_string(),
+        ]
+    });
+
+
     let bridge = Arc::new(IngestionBridge::new(atomic_bridge));
     GLOBAL_INGESTION_BRIDGE.store(Some(bridge.clone()));
 
-    let bridge_clone = bridge.clone();
-    let queue_consumer = queue.clone();
+    for (idx, sym) in target_symbols.iter().enumerate().take(10) {
+        let queue = LockFreeSpscQueue::new(4096);
+        let bridge_clone = bridge.clone();
+        let queue_consumer = queue.clone();
+        let queue_producer = queue.clone();
+        let asset_idx = idx;
+        let sym_str = sym.clone();
 
-    // Spawn consumer loop on Tokio runtime
-    GLOBAL_RUNTIME.spawn(async move {
-        bridge_clone.start_consumer_loop(queue_consumer);
-    });
+        // Spawn consumer loop for this asset slot
+        GLOBAL_RUNTIME.spawn(async move {
+            bridge_clone.start_consumer_loop_asset(queue_consumer, asset_idx);
+        });
 
-    // Spawn WebSocket Connection Manager on Tokio runtime
-    let symbol = std::env::var("SYMBOL").unwrap_or_else(|_| "BTCUSDT".to_string());
-    let conn_mgr = Arc::new(ConnectionManager::new(&symbol));
-    let queue_producer = queue.clone();
-
-    GLOBAL_RUNTIME.spawn(async move {
-        println!("[BATBOT_V11] Starting Binance Futures WebSocket Ingestion Stream for {}...", symbol);
-        if let Err(e) = conn_mgr.run_rotation_loop(queue_producer).await {
-            eprintln!("[BATBOT_V11][WS Manager Error] Rotation loop error: {}", e);
-        }
-    });
+        // Spawn WebSocket stream manager for this symbol
+        let conn_mgr = Arc::new(ConnectionManager::new(&sym_str));
+        GLOBAL_RUNTIME.spawn(async move {
+            println!("[BATBOT_V11] Starting Binance Futures WebSocket Stream for Slot #{}: {}...", asset_idx, sym_str);
+            if let Err(e) = conn_mgr.run_rotation_loop(queue_producer).await {
+                eprintln!("[BATBOT_V11][WS Manager Error][Slot #{}] Rotation loop error: {}", asset_idx, e);
+            }
+        });
+    }
 
     // Spawn Latency Monitor background task on Tokio runtime
     ai::spawn_latency_monitor(atomic_bridge);
 
     Ok(true)
 }
+
 
 
 #[napi]

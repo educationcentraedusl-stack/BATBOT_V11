@@ -1,4 +1,5 @@
 import { MarketDataClient } from "../marketDataClient";
+import { getTradingSymbols } from "../config/tradingSymbols";
 
 export interface ActiveTradeSlot {
   assetIdx: number;
@@ -15,18 +16,7 @@ export interface ActiveTradeSlot {
   durationMs: number;
 }
 
-export const DEFAULT_ASSET_SYMBOLS = [
-  "BTCUSDT",
-  "ETHUSDT",
-  "SOLUSDT",
-  "BNBUSDT",
-  "ADAUSDT",
-  "XRPUSDT",
-  "DOGEUSDT",
-  "AVAXUSDT",
-  "LINKUSDT",
-  "DOTUSDT",
-];
+export const DEFAULT_ASSET_SYMBOLS = getTradingSymbols();
 
 export class MultiAssetCLIDashboard {
   private client: MarketDataClient;
@@ -54,13 +44,14 @@ export class MultiAssetCLIDashboard {
   private static readonly BORDER = "\x1b[36m\x1b[1m======================================================================================================================\x1b[0m\x1b[K\n";
   private static readonly SUB_DIVIDER = "\x1b[90m----------------------------------------------------------------------------------------------------------------------\x1b[0m\x1b[K\n";
   private static readonly TABLE_DIVIDER = "\x1b[90m+------+----------+-----------+-----------+---------+--------------------+------------+----------+------------+---------+\x1b[0m\x1b[K\n";
-  private static readonly TRADES_DIVIDER = "\x1b[90m+------+----------+--------+-----------+--------------+--------------+------------+----------+--------------------+\x1b[0m\x1b[K\n";
+  private static readonly TRADES_DIVIDER = "\x1b[90m+------+----------+--------+-----------+--------------+--------------+------------+----------+--------------------+ \x1b[0m\x1b[K\n";
 
   constructor(
     client: MarketDataClient,
     enabled: boolean = true,
-    customSymbols: string[] = DEFAULT_ASSET_SYMBOLS
+    customSymbols: string[] = getTradingSymbols()
   ) {
+
     this.client = client;
     this.enabled = enabled;
     this.assetSymbols = customSymbols;

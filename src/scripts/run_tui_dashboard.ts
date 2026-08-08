@@ -2,12 +2,13 @@ import "dotenv/config";
 import * as path from "path";
 import * as fs from "fs";
 import { MarketDataClient } from "../marketDataClient";
-import { MultiAssetCLIDashboard, DEFAULT_ASSET_SYMBOLS } from "../telemetry/multiAssetDashboard";
+import { MultiAssetCLIDashboard } from "../telemetry/multiAssetDashboard";
 import { InteractiveKeypressEngine } from "../telemetry/keypressHandler";
 import { BinanceExecutionClient } from "../execution/binance";
+import { getTradingSymbols } from "../config/tradingSymbols";
 
 export interface NativeIngestionModule {
-  startIngestion?: (sabBuffer: Buffer) => boolean;
+  startIngestion?: (sabBuffer: Buffer, symbols?: string[]) => boolean;
   initCore?: (symbol: string, balance: number) => boolean;
   [key: string]: unknown;
 }
@@ -19,16 +20,22 @@ export async function runProductionTuiLauncher(): Promise<void> {
 
   // Step 1: Pre-Flight Verification of Environment & Native N-API Binaries
   console.log("[Pre-Flight 1/3] Verifying environment configurations...");
-  const parsedMaxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || "10", 10);
-  const maxAssets = Number.isFinite(parsedMaxAssets) && parsedMaxAssets > 0 ? parsedMaxAssets : 10;
+  const activeSymbols = getTradingSymbols();
+  const parsedMaxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || String(activeSymbols.length), 10);
+  const maxAssets = Math.max(
+    activeSymbols.length,
+    Number.isFinite(parsedMaxAssets) && parsedMaxAssets > 0 ? parsedMaxAssets : activeSymbols.length
+  );
 
   const parsedSlotsPerAsset = parseInt(process.env.SAB_SLOTS_PER_ASSET || "256", 10);
   const slotsPerAsset = Number.isFinite(parsedSlotsPerAsset) && parsedSlotsPerAsset > 0 ? parsedSlotsPerAsset : 256;
 
   const totalSABBytes = maxAssets * slotsPerAsset * 8;
+  console.log(`  - Active Trading Symbols (${activeSymbols.length}): ${activeSymbols.join(", ")}`);
   console.log(`  - Concurrency Capacity: ${maxAssets} Asset Slots`);
   console.log(`  - Slots Per Asset: ${slotsPerAsset}`);
   console.log(`  - SharedArrayBuffer Size: ${totalSABBytes} bytes`);
+
 
   console.log("\n[Pre-Flight 2/3] Verifying Native Rust N-API Binary Module...");
   let platformBinary: string;
@@ -79,9 +86,9 @@ export async function runProductionTuiLauncher(): Promise<void> {
   // Attempt starting native zero-copy ingestion if available
   if (isNativeVerified && nativeModule && typeof nativeModule.startIngestion === "function") {
     try {
-      const started = nativeModule.startIngestion(Buffer.from(sab));
+      const started = nativeModule.startIngestion(Buffer.from(sab), activeSymbols);
       if (started) {
-        console.log("  ✅ Rust Zero-Copy Ingestion Worker Thread Started Successfully.");
+        console.log(`  ✅ Rust Zero-Copy Multi-Asset Ingestion Workers Started (${activeSymbols.length} Coins Streaming).`);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -96,7 +103,8 @@ export async function runProductionTuiLauncher(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
   // Step 3: Launch Multi-Asset TUI Dashboard & Keypress Control Engine
-  const dashboard = new MultiAssetCLIDashboard(client, true, DEFAULT_ASSET_SYMBOLS);
+  const dashboard = new MultiAssetCLIDashboard(client, true, activeSymbols);
+
   const keyEngine = new InteractiveKeypressEngine(client);
 
   const binanceClient = new BinanceExecutionClient();
