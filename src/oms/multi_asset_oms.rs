@@ -424,16 +424,33 @@ impl MultiAssetOmsEngine {
         }
     }
 
+    pub fn max_assets(&self) -> usize {
+        self.max_assets
+    }
+
     pub fn get_metrics(&self, asset_idx: usize) -> OmsMetrics {
-        let idx = asset_idx.min(self.max_assets - 1);
-        let snap = self.position_ledgers[idx].snapshot();
+        if asset_idx >= self.max_assets {
+            return OmsMetrics {
+                asset_idx,
+                total_orders_submitted: 0,
+                total_orders_filled: 0,
+                total_orders_canceled: 0,
+                total_orders_rejected: 0,
+                total_volume_usd: 0.0,
+                realized_pnl_usd: 0.0,
+                unrealized_pnl_usd: 0.0,
+                current_position_size: 0.0,
+                avg_entry_price: 0.0,
+            };
+        }
+        let snap = self.position_ledgers[asset_idx].snapshot();
         OmsMetrics {
-            asset_idx: idx,
-            total_orders_submitted: self.metrics_orders_submitted[idx].load(Ordering::Relaxed),
-            total_orders_filled: self.metrics_orders_filled[idx].load(Ordering::Relaxed),
-            total_orders_canceled: self.metrics_orders_canceled[idx].load(Ordering::Relaxed),
-            total_orders_rejected: self.metrics_orders_rejected[idx].load(Ordering::Relaxed),
-            total_volume_usd: f64::from_bits(self.metrics_volume_usd_bits[idx].load(Ordering::Relaxed)),
+            asset_idx,
+            total_orders_submitted: self.metrics_orders_submitted[asset_idx].load(Ordering::Relaxed),
+            total_orders_filled: self.metrics_orders_filled[asset_idx].load(Ordering::Relaxed),
+            total_orders_canceled: self.metrics_orders_canceled[asset_idx].load(Ordering::Relaxed),
+            total_orders_rejected: self.metrics_orders_rejected[asset_idx].load(Ordering::Relaxed),
+            total_volume_usd: f64::from_bits(self.metrics_volume_usd_bits[asset_idx].load(Ordering::Relaxed)),
             realized_pnl_usd: snap.realized_pnl,
             unrealized_pnl_usd: snap.unrealized_pnl,
             current_position_size: snap.position_qty,

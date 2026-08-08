@@ -142,7 +142,7 @@ impl MicrostructureAnalyzer {
 
     /// On tick trade event, update Garman-Klass micro-bar, VPIN buckets, and price history for Hurst exponent.
     pub fn on_trade(&mut self, price: f64, quantity: f64, is_buyer_maker: bool) {
-        if price <= 0.0 || quantity <= 0.0 {
+        if !price.is_finite() || !quantity.is_finite() || price <= 0.0 || quantity <= 0.0 {
             return;
         }
 
@@ -180,37 +180,55 @@ impl MicrostructureAnalyzer {
             self.recalculate_rv_gk();
         }
 
-        // 3. Update VPIN Volume Buckets with Dynamic Adaptive Target Volume
+        // 3. Update VPIN Volume Buckets with Dynamic Adaptive Target Volume & Remainder Volume Carry-Over
         // Taker buy: is_buyer_maker == false
-        let volume = price * quantity;
+        let total_trade_vol = price * quantity;
 
-        if is_buyer_maker {
-            self.current_bucket_sell += volume;
-        } else {
-            self.current_bucket_buy += volume;
-        }
+        if total_trade_vol > 0.0 && total_trade_vol.is_finite() {
+            let mut rem_vol = total_trade_vol;
 
-        let total_current = self.current_bucket_buy + self.current_bucket_sell;
-        if total_current >= self.bucket_target_volume {
-            self.vpin_buckets[self.vpin_bucket_index] = VolumeBucket {
-                buy_vol: self.current_bucket_buy,
-                sell_vol: self.current_bucket_sell,
-            };
-            self.vpin_bucket_index = (self.vpin_bucket_index + 1) % VPIN_BUCKETS;
-            if self.vpin_bucket_count < VPIN_BUCKETS {
-                self.vpin_bucket_count += 1;
+            while rem_vol > 0.0 {
+                let current_filled = self.current_bucket_buy + self.current_bucket_sell;
+                let needed = (self.bucket_target_volume - current_filled).max(0.0);
+
+                if rem_vol >= needed && needed > 0.0 {
+                    // Slice exact volume needed to complete the bucket
+                    if is_buyer_maker {
+                        self.current_bucket_sell += needed;
+                    } else {
+                        self.current_bucket_buy += needed;
+                    }
+                    rem_vol -= needed;
+
+                    // Commit completed bucket (guaranteed buy_vol + sell_vol == bucket_target_volume)
+                    self.vpin_buckets[self.vpin_bucket_index] = VolumeBucket {
+                        buy_vol: self.current_bucket_buy,
+                        sell_vol: self.current_bucket_sell,
+                    };
+                    self.vpin_bucket_index = (self.vpin_bucket_index + 1) % VPIN_BUCKETS;
+                    if self.vpin_bucket_count < VPIN_BUCKETS {
+                        self.vpin_bucket_count += 1;
+                    }
+
+                    // Update rolling trade volume and adapt bucket_target_volume ONLY upon bucket completion
+                    self.rolling_trade_volume = self.rolling_trade_volume * 0.95 + total_trade_vol * 0.05;
+                    let min_target = 100.0;
+                    self.bucket_target_volume = (self.rolling_trade_volume * 20.0).clamp(min_target, 100000.0);
+
+                    // Reset current bucket counters for next bucket
+                    self.current_bucket_buy = 0.0;
+                    self.current_bucket_sell = 0.0;
+                    self.recalculate_vpin();
+                } else {
+                    // Accumulate remaining volume into current bucket and finish loop
+                    if is_buyer_maker {
+                        self.current_bucket_sell += rem_vol;
+                    } else {
+                        self.current_bucket_buy += rem_vol;
+                    }
+                    rem_vol = 0.0;
+                }
             }
-
-            // Update rolling trade volume and adapt bucket_target_volume ONLY upon bucket completion (preserving V invariant during bucket lifetime)
-            if volume > 0.0 {
-                self.rolling_trade_volume = self.rolling_trade_volume * 0.95 + volume * 0.05;
-                let min_target = 100.0;
-                self.bucket_target_volume = (self.rolling_trade_volume * 20.0).clamp(min_target, 100000.0);
-            }
-
-            self.current_bucket_buy = 0.0;
-            self.current_bucket_sell = 0.0;
-            self.recalculate_vpin();
         }
 
         // 4. Update Regime
@@ -554,6 +572,22 @@ mod tests {
         analyzer.on_depth_update(&bids, &asks, 110_000_000);
 
         assert!(analyzer.is_sweep_detected(), "Liquidity sweep should be flagged on rapid depth decay");
+    }
+
+    #[test]
+    fn test_vpin_remainder_carry_over_and_nan_guard() {
+        let mut analyzer = MicrostructureAnalyzer::new(100.0);
+        // Test NaN guard
+        analyzer.on_trade(f64::NAN, 1.0, true);
+        analyzer.on_trade(50000.0, f64::NAN, true);
+        assert_eq!(analyzer.current_bucket_sell, 0.0);
+
+        // Test multi-bucket block trade remainder carry-over
+        // Single trade of volume 250.0 into 100.0 initial bucket target:
+        // Slices 100.0 to fill bucket 1, target adapts to 345.0, carries over 150.0 into current_bucket_buy
+        analyzer.on_trade(100.0, 2.5, false); // 250.0 USDT volume taker buy
+        assert_eq!(analyzer.vpin_bucket_count, 1);
+        assert_eq!(analyzer.current_bucket_buy, 150.0);
     }
 }
 

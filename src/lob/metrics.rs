@@ -116,11 +116,19 @@ pub fn calculate_micro_price(bids: &[(f64, f64); 20], asks: &[(f64, f64); 20]) -
 }
 
 pub fn update_cvd(current_cvd: f64, trade_price: f64, trade_qty: f64, is_buyer_maker: bool) -> f64 {
-    if is_buyer_maker {
-        current_cvd - (trade_price * trade_qty)
-    } else {
-        current_cvd + (trade_price * trade_qty)
+    if !trade_price.is_finite() || !trade_qty.is_finite() || trade_price <= 0.0 || trade_qty <= 0.0 {
+        return if current_cvd.is_finite() { current_cvd } else { 0.0 };
     }
+    let delta = trade_price * trade_qty;
+    if !delta.is_finite() {
+        return if current_cvd.is_finite() { current_cvd } else { 0.0 };
+    }
+    let next_cvd = if is_buyer_maker {
+        current_cvd - delta
+    } else {
+        current_cvd + delta
+    };
+    if next_cvd.is_finite() { next_cvd } else { 0.0 }
 }
 
 pub fn calculate_spread_velocity(
@@ -128,10 +136,11 @@ pub fn calculate_spread_velocity(
     previous_spread: f64,
     elapsed_seconds: f64,
 ) -> f64 {
-    if elapsed_seconds <= 1e-9 {
+    if !current_spread.is_finite() || !previous_spread.is_finite() || !elapsed_seconds.is_finite() || elapsed_seconds <= 1e-9 {
         0.0
     } else {
-        (current_spread - previous_spread) / elapsed_seconds
+        let vel = (current_spread - previous_spread) / elapsed_seconds;
+        if vel.is_finite() { vel } else { 0.0 }
     }
 }
 
@@ -141,7 +150,13 @@ pub fn update_liquidation(
     quantity: f64,
     is_buy: bool,
 ) {
+    if !price.is_finite() || !quantity.is_finite() || price <= 0.0 || quantity <= 0.0 {
+        return;
+    }
     let vol = price * quantity;
+    if !vol.is_finite() {
+        return;
+    }
     metrics.total_liquidation_vol += vol;
     if is_buy {
         metrics.buy_liquidation_vol += vol;

@@ -957,6 +957,15 @@
   4. VPIN Bucket Target Volume Invariance (`microstructure.rs`): Moved `bucket_target_volume` updates strictly inside the bucket completion block (`total_current >= bucket_target_volume`), preserving the volume target $V$ invariant.
   5. Single-Lock Batch Evaluation (`book.rs` & `orchestrator.rs`): Combined orderbook update, top-of-book, and metrics retrieval into `process_and_evaluate_asset(asset_idx, evt)`, taking the `RwLock` write guard exactly ONCE per tick.
   6. 100% QA verified via optimized release test suite (`cargo test --release -- --nocapture` - 52/52 tests passed, 42.90 ns average fast-float parse latency).
+- **Date:** 2026-08-08
+- **Feature/Task:** Phase 5 Final 4-Point Purge & Absolute Production Sealing (VPIN Volume Remainder Carry-Over, Metric Non-Finite Sanitization, Hot-Path Allocation Eradication & Out-of-Bounds Metric Return Safety)
+- **Artifacts Created/Modified:** `src/lob/microstructure.rs`, `src/lob/metrics.rs`, `src/strategy/orchestrator.rs`, `src/oms/multi_asset_oms.rs`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Executed 100% zero-tolerance remediation of all 4 blind audit findings:
+  1. VPIN Remainder Carry-Over & NaN Guard (`src/lob/microstructure.rs`): Added explicit `!price.is_finite()` and `!quantity.is_finite()` entry guards. Implemented a `while` loop that slices exact volume required to complete `bucket_target_volume` and carries over remainder volume into the next bucket, preserving volume bucket invariance with 0 volume lost.
+  2. Non-Finite Metric Sanitization (`src/lob/metrics.rs`): Enforced strict `.is_finite()` checks before mutating state in `update_cvd`, `calculate_spread_velocity`, and `update_liquidation`, preventing `NaN`/`Infinity` metric poisoning.
+  3. Eradicated Hot-Path Allocations (`src/strategy/orchestrator.rs`): Eradicated `oms.symbols()` dynamic `Vec<String>` cloning from the hot tick path. Pre-cached symbol bytes into fixed stack buffers `[([u8; 16], usize); MAX_CONCURRENT_ASSETS]` during initialization and used `oms.max_assets()` for dynamic risk aggregation bounds.
+  4. Out-of-Bounds OMS Metric Return Safety (`src/oms/multi_asset_oms.rs`): Added `max_assets(&self) -> usize` getter and updated `get_metrics(asset_idx)` to return a safe zero-initialized `OmsMetrics` struct when `asset_idx >= self.max_assets` instead of silently clamping to index `max_assets - 1`.
+  5. 100% QA verified via optimized release test suite (`cargo test --release` - 53/53 tests passed clean, fast-float benchmark passing).
 - **Status:** ✅ Completed & QA Verified
 
 

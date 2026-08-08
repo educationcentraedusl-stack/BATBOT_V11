@@ -115,6 +115,23 @@ impl StrategyOrchestrator {
                 let mut feature_pipelines: [StreamingFeaturePipeline; MAX_CONCURRENT_ASSETS] =
                     std::array::from_fn(|_| StreamingFeaturePipeline::new());
 
+                // Pre-cache symbol bytes into fixed stack buffers (zero dynamic allocation in hot tick path)
+                let mut cached_symbols = [([0u8; 16], 0usize); MAX_CONCURRENT_ASSETS];
+                if let Some(ref oms) = orchestrator.oms_engine {
+                    let syms = oms.symbols();
+                    for (idx, sym) in syms.iter().enumerate().take(MAX_CONCURRENT_ASSETS) {
+                        let bytes = sym.as_bytes();
+                        let len = bytes.len().min(16);
+                        let mut buf = [0u8; 16];
+                        buf[..len].copy_from_slice(&bytes[..len]);
+                        cached_symbols[idx] = (buf, len);
+                    }
+                } else {
+                    for idx in 0..MAX_CONCURRENT_ASSETS {
+                        cached_symbols[idx] = format_asset_symbol_bytes(idx);
+                    }
+                }
+
                 while orchestrator.is_running.load(Ordering::Relaxed) {
                     let mut processed_any = false;
 
@@ -178,8 +195,7 @@ impl StrategyOrchestrator {
 
                                             if let Some(ref oms) = orchestrator.oms_engine {
                                                 let balance = oms.account_balance_usd();
-                                                let symbols = oms.symbols();
-                                                let max_a = symbols.len().min(MAX_CONCURRENT_ASSETS);
+                                                let max_a = oms.max_assets().min(MAX_CONCURRENT_ASSETS);
 
                                                 for i in 0..max_a {
                                                     let oms_m = oms.get_metrics(i);
@@ -203,21 +219,8 @@ impl StrategyOrchestrator {
                                             }
 
                                             if risk_passed {
-                                                // Resolve actual asset symbol string from OMS ledger or fallback
-                                                let mut symbol_buf = [0u8; 16];
-                                                let sym_len;
-
-                                                if let Some(ref oms) = orchestrator.oms_engine {
-                                                    let symbols = oms.symbols();
-                                                    let sym_name = symbols.get(asset_idx).map(|s| s.as_str()).unwrap_or("ASSET");
-                                                    let bytes = sym_name.as_bytes();
-                                                    sym_len = bytes.len().min(16);
-                                                    symbol_buf[..sym_len].copy_from_slice(&bytes[..sym_len]);
-                                                } else {
-                                                    let (b, l) = format_asset_symbol_bytes(asset_idx);
-                                                    symbol_buf = b;
-                                                    sym_len = l;
-                                                }
+                                                // Resolve actual asset symbol string from zero-allocation pre-cached stack buffer
+                                                let (symbol_buf, sym_len) = cached_symbols[asset_idx.min(MAX_CONCURRENT_ASSETS - 1)];
 
                                                 let signal = OrchestratorSignal {
                                                     asset_idx,
@@ -235,8 +238,9 @@ impl StrategyOrchestrator {
 
                                                 // 4. Direct Phase 4 OMS Dispatch with explicit asset_idx
                                                 if let Some(ref oms) = orchestrator.oms_engine {
-                                                    let sym_str = std::str::from_utf8(&symbol_buf[..sym_len]).unwrap_or("ASSET");
-                                                    let _ = oms.submit_sliced_order(asset_idx, sym_str, is_buy, price, target_notional, 3);
+                                                    if let Ok(sym_str) = std::str::from_utf8(&symbol_buf[..sym_len]) {
+                                                        let _ = oms.submit_sliced_order(asset_idx, sym_str, is_buy, price, target_notional, 3);
+                                                    }
                                                 }
                                             }
                                         }
