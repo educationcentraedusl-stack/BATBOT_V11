@@ -287,7 +287,7 @@ pub fn start_ingestion(sab_buffer: Buffer, symbols: Option<Vec<String>>) -> napi
     let bridge = Arc::new(IngestionBridge::new(atomic_bridge));
     GLOBAL_INGESTION_BRIDGE.store(Some(bridge.clone()));
 
-    for (idx, sym) in target_symbols.iter().enumerate().take(10) {
+    for (idx, sym) in target_symbols.iter().enumerate() {
         let queue = LockFreeSpscQueue::new(4096);
         let bridge_clone = bridge.clone();
         let queue_consumer = queue.clone();
@@ -506,12 +506,16 @@ pub fn calculate_cc_dfk_size_napi(
     current_price: f64,
     active_weights_json: Option<String>,
 ) -> String {
-    let mut weights = [0.0; 10];
+    let mut parsed_weights = Vec::new();
     if let Some(json_str) = active_weights_json {
         if let Ok(parsed) = serde_json::from_str::<Vec<f64>>(&json_str) {
-            for (i, w) in parsed.iter().enumerate().take(10) {
-                weights[i] = *w;
-            }
+            parsed_weights = parsed;
+        }
+    }
+    let mut weights = [0.0; 10];
+    for (i, &w) in parsed_weights.iter().enumerate() {
+        if i < weights.len() {
+            weights[i] = w;
         }
     }
     let res = GLOBAL_COVARIANCE_RISKGUARD.calculate_cc_dfk_size(
@@ -543,11 +547,15 @@ pub fn evaluate_multi_asset_signals_napi(
     let bridge = AtomicSharedMemoryBridge::new(raw_ptr, len)
         .map_err(|err| Error::from_reason(err.to_string()))?;
 
+    let mut parsed_symbols = Vec::new();
+    if let Ok(parsed_syms) = serde_json::from_str::<Vec<String>>(&active_symbols_json) {
+        parsed_symbols = parsed_syms;
+    }
     let mut symbols = [String::new(), String::new(), String::new(), String::new(), String::new(),
                        String::new(), String::new(), String::new(), String::new(), String::new()];
 
-    if let Ok(parsed_syms) = serde_json::from_str::<Vec<String>>(&active_symbols_json) {
-        for (i, s) in parsed_syms.iter().enumerate().take(10) {
+    for (i, s) in parsed_symbols.iter().enumerate() {
+        if i < symbols.len() {
             symbols[i] = s.clone();
         }
     }
@@ -764,7 +772,7 @@ pub fn start_phase5_orchestrator_napi(symbols: Vec<String>) -> bool {
         }
     };
 
-    let stream_mgr = Arc::new(MultiStreamManager::new(symbols.len().min(10)));
+    let stream_mgr = Arc::new(MultiStreamManager::new(symbols.len()));
     GLOBAL_MULTI_STREAM_MANAGER.store(Some(stream_mgr.clone()));
 
     let ai_engine = GLOBAL_AI_ENGINE.load().as_ref().cloned();

@@ -136,7 +136,7 @@ export class MultiAssetCLIDashboard {
     const memMb = this.cachedMemMb;
     const seqNum = this.client.getSequenceNum(this.focusedAssetIdx);
 
-    // Aggregate portfolio metrics across all 10 assets
+    // Aggregate portfolio metrics across all asset slots
     let totalUnrealizedPnl = 0;
     let totalRealizedPnl = 0;
     let totalTrades = 0n;
@@ -154,16 +154,16 @@ export class MultiAssetCLIDashboard {
     let out = "\x1b[H"; // Move cursor top-left
 
     out += MultiAssetCLIDashboard.BORDER;
-    out += `${cyan}${bold}                         BATBOT_V11 MULTI-ASSET HFT TELEMETRY & COMMAND MONITOR (10 ASSETS)                            ${reset}${clearLine}\n`;
+    out += `${cyan}${bold}                         BATBOT_V11 MULTI-ASSET HFT TELEMETRY & COMMAND MONITOR (${this.client.maxAssets} ASSETS)                            ${reset}${clearLine}\n`;
     out += MultiAssetCLIDashboard.BORDER;
 
     const availBalance = this.client.getAvailableBalance(0);
 
-    out += ` Engine Status: ${statusStr}  |  Memory: ${memMb} MB  |  Sequence: #${seqNum.toString()}  |  Active Positions: ${activePositionCount}/10${clearLine}\n`;
+    out += ` Engine Status: ${statusStr}  |  Memory: ${memMb} MB  |  Sequence: #${seqNum.toString()}  |  Active Positions: ${activePositionCount}/${this.client.maxAssets}${clearLine}\n`;
     out += ` Available Balance: ${green}${bold}$${availBalance.toFixed(2)}${reset}  |  Portfolio Unrealized PnL: ${totalUnrealizedPnl >= 0 ? green : red}${bold}$${totalUnrealizedPnl.toFixed(2)}${reset}  |  Realized PnL: ${totalRealizedPnl >= 0 ? green : red}${bold}$${totalRealizedPnl.toFixed(2)}${reset}  |  Total Trades Logged: ${totalTrades}${clearLine}\n`;
 
     out += MultiAssetCLIDashboard.SUB_DIVIDER;
-    out += `${bold}--- 10-ASSET CONCURRENCY REAL-TIME MATRIX ---${reset}${clearLine}\n`;
+    out += `${bold}--- ${this.client.maxAssets}-ASSET CONCURRENCY REAL-TIME MATRIX ---${reset}${clearLine}\n`;
     out += MultiAssetCLIDashboard.TABLE_DIVIDER;
     out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Best Bid${reset}  | ${bold}Best Ask${reset}  | ${bold}Spread${reset}  | ${bold}OBI (-1..+1)${reset}        | ${bold}CVD${reset}        | ${bold}Hawkes${reset}   | ${bold}Garman-Klass${reset} | ${bold}Signal${reset}  |${clearLine}\n`;
     out += MultiAssetCLIDashboard.TABLE_DIVIDER;
@@ -211,7 +211,7 @@ export class MultiAssetCLIDashboard {
     out += ` Top 3 Asks: [1] $${this.askBuffer[0].toFixed(2)} (${this.askBuffer[1].toFixed(3)})  [2] $${this.askBuffer[2].toFixed(2)} (${this.askBuffer[3].toFixed(3)})  [3] $${this.askBuffer[4].toFixed(2)} (${this.askBuffer[5].toFixed(3)})${clearLine}\n`;
 
     out += MultiAssetCLIDashboard.SUB_DIVIDER;
-    out += `${bold}--- MULTI-ASSET ACTIVE POSITIONS (10 OMS SLOTS) ---${reset}${clearLine}\n`;
+    out += `${bold}--- MULTI-ASSET ACTIVE POSITIONS (${this.client.maxAssets} OMS SLOTS) ---${reset}${clearLine}\n`;
     out += MultiAssetCLIDashboard.TRADES_DIVIDER;
     out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Side${reset}   | ${bold}Position${reset}  | ${bold}Avg Entry${reset}   | ${bold}Mark Price${reset}   | ${bold}Leverage${reset} | ${bold}Realized${reset} | ${bold}Unrealized PnL ($)${reset}  |${clearLine}\n`;
     out += MultiAssetCLIDashboard.TRADES_DIVIDER;
@@ -237,7 +237,7 @@ export class MultiAssetCLIDashboard {
     }
 
     if (!hasActivePosition) {
-      out += `| ${yellow}NO ACTIVE OPEN POSITIONS ACROSS ALL 10 ASSET SLOTS (ALL POSITIONS FLAT)${reset}`.padEnd(132) + `|${clearLine}\n`;
+      out += `| ${yellow}NO ACTIVE OPEN POSITIONS ACROSS ALL ${this.client.maxAssets} ASSET SLOTS (ALL POSITIONS FLAT)${reset}`.padEnd(132) + `|${clearLine}\n`;
     }
     out += MultiAssetCLIDashboard.TRADES_DIVIDER;
 
