@@ -620,17 +620,33 @@ class MultiAssetStrategyEngine {
     executionClient;
     positionLedger;
     activeSymbols;
+    symbolIndexMap = new Map();
     constructor(client, riskGuard, executionClient, activeSymbols = ["ETHUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "SUIUSDT"], positionLedger) {
         this.client = client;
         this.riskGuard = riskGuard;
         this.executionClient = executionClient;
         this.activeSymbols = activeSymbols;
         this.positionLedger = positionLedger ?? new positionLedger_1.MultiAssetPositionLedger(activeSymbols);
+        this.rebuildSymbolIndexMap();
     }
     updateActiveSymbols(symbols) {
         if (symbols && symbols.length > 0) {
             this.activeSymbols = symbols.slice(0, 10);
+            this.rebuildSymbolIndexMap();
         }
+    }
+    rebuildSymbolIndexMap() {
+        this.symbolIndexMap.clear();
+        for (let i = 0; i < this.activeSymbols.length; i++) {
+            const sym = this.activeSymbols[i];
+            if (sym) {
+                this.symbolIndexMap.set(sym, i);
+            }
+        }
+    }
+    getAssetIndex(symbol) {
+        const idx = this.symbolIndexMap.get(symbol);
+        return idx !== undefined ? idx : -1;
     }
     getActiveSymbols() {
         return this.activeSymbols;
@@ -638,15 +654,18 @@ class MultiAssetStrategyEngine {
     evaluateMultiAssetTick() {
         const timestamp = Date.now();
         const signals = [];
-        for (let k = 0; k < this.activeSymbols.length; k++) {
-            const symbol = this.activeSymbols[k];
+        for (let i = 0; i < this.activeSymbols.length; i++) {
+            const symbol = this.activeSymbols[i];
             if (!symbol)
                 continue;
-            const obi = this.client.getOBI(k);
-            const cvd = this.client.getCVD(k);
-            const hurst = this.client.getHurst(k);
-            const vpin = this.client.getVPIN(k);
-            const hawkes = this.client.getHawkesIntensity(k);
+            const assetIdx = this.getAssetIndex(symbol);
+            if (assetIdx < 0 || assetIdx >= this.client.maxAssets)
+                continue;
+            const obi = this.client.getOBI(assetIdx);
+            const cvd = this.client.getCVD(assetIdx);
+            const hurst = this.client.getHurst(assetIdx);
+            const vpin = this.client.getVPIN(assetIdx);
+            const hawkes = this.client.getHawkesIntensity(assetIdx);
             let signalType = "NONE";
             let confidence = 0;
             let isApproved = false;
@@ -668,7 +687,7 @@ class MultiAssetStrategyEngine {
                 isApproved = true;
             }
             signals.push({
-                assetIndex: k,
+                assetIndex: assetIdx,
                 symbol,
                 signalType,
                 confidence,

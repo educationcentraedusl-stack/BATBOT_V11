@@ -180,27 +180,39 @@ impl MultiAssetSignalEngine {
                 continue;
             }
 
-            // Read SAB slot metrics for asset k
+            // Read SAB slot metrics for asset k matching shared_memory.rs and marketDataClient.ts
             let obi = bridge.load_f64_asset(k, 1);
             let cvd = bridge.load_f64_asset(k, 2);
-            let rv_gk = bridge.load_f64_asset(k, 128);
-            let vpin = bridge.load_f64_asset(k, 129);
-            let hurst = bridge.load_f64_asset(k, 130);
-            let hawkes_buy = bridge.load_f64_asset(k, 131);
-            let hawkes_sell = bridge.load_f64_asset(k, 132);
-            let depletion = bridge.load_f64_asset(k, 133);
+            let spread_vel = bridge.load_f64_asset(k, 3);
+            let hawkes_intensity = bridge.load_f64_asset(k, 112);
+            let microburst_score = bridge.load_f64_asset(k, 113);
+            let _realized_vol = bridge.load_f64_asset(k, 114);
+            let rv_gk = bridge.load_f64_asset(k, 121);
+            let vpin = bridge.load_f64_asset(k, 122);
+            let hurst = bridge.load_f64_asset(k, 123);
+            let lob_entropy = bridge.load_f64_asset(k, 124);
+            let regime_code = bridge.load_f64_asset(k, 125) as u8;
+            let is_sweep_flag = bridge.load_f64_asset(k, 126) > 0.5;
 
             let metrics = MicrostructureMetrics {
                 obi,
                 cvd,
+                spread_velocity: spread_vel,
+                total_liquidation_vol: 0.0,
+                buy_liquidation_vol: 0.0,
+                sell_liquidation_vol: 0.0,
                 rv_gk,
                 vpin,
                 hurst: if hurst > 0.0 { hurst } else { 0.5 },
-                lob_entropy: 1.0,
-                regime: 1,
-                is_sweep_detected: vpin > 0.85,
+                lob_entropy: if lob_entropy > 0.0 { lob_entropy } else { 1.0 },
+                regime: if regime_code > 0 { regime_code } else { 1 },
+                is_sweep_detected: is_sweep_flag || vpin > 0.85,
                 ..Default::default()
             };
+
+            let hawkes_buy = if obi >= 0.0 { hawkes_intensity * 1.5 } else { hawkes_intensity * 0.5 };
+            let hawkes_sell = if obi <= 0.0 { hawkes_intensity * 1.5 } else { hawkes_intensity * 0.5 };
+            let depletion = microburst_score;
 
             let sig = self.evaluate_asset(k, symbol, &metrics, hawkes_buy, hawkes_sell, depletion);
             signals.push(sig);

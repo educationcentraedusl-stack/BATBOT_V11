@@ -87,10 +87,10 @@ async function runMultiAssetRiskVerification() {
     const calcCcDfkFn = nativeCore?.calculateCcDfkSizeNapi || nativeCore?.calculate_cc_dfk_size_napi;
     const getCollarsFn = nativeCore?.getMultiAssetCollarsNapi || nativeCore?.get_multi_asset_collars_napi;
     if (typeof updateRetFn === "function") {
-        // Feed synthetic returns for 10 assets
+        // Feed synthetic returns for 10 assets (centered zero-mean distribution)
         for (let tick = 0; tick < 100; tick++) {
             for (let k = 0; k < 10; k++) {
-                const ret = (Math.random() - 0.49) * 0.02; // Mean 0.02% drift
+                const ret = (Math.random() - 0.5) * 0.02; // Centered zero-mean distribution
                 updateRetFn(k, ret);
             }
         }

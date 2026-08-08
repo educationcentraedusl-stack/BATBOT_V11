@@ -88,6 +88,13 @@ impl CovarianceRiskGuard {
     /// Online update of rolling returns for all 10 assets using Exponentially Weighted Moving Covariance (EWMC).
     /// Safe for concurrent calls without blocking.
     pub fn update_returns(&self, new_returns: &[f64; MAX_ACTIVE_ASSETS]) {
+        // Sanitize inputs: drop update if any return value is non-finite (NaN/Inf)
+        for &ret in new_returns.iter() {
+            if !ret.is_finite() {
+                return;
+            }
+        }
+
         let current = self.snapshot.load();
         let mut next = (**current).clone();
 
@@ -138,7 +145,7 @@ impl CovarianceRiskGuard {
 
     /// Single asset return update for asset_index 0..9
     pub fn update_single_asset_return(&self, asset_index: usize, return_val: f64) {
-        if asset_index >= MAX_ACTIVE_ASSETS {
+        if asset_index >= MAX_ACTIVE_ASSETS || !return_val.is_finite() {
             return;
         }
         let current = self.snapshot.load();
@@ -174,7 +181,17 @@ impl CovarianceRiskGuard {
         current_price: f64,
         active_weights: &[f64; MAX_ACTIVE_ASSETS],
     ) -> KellyPositionSize {
-        if asset_index >= MAX_ACTIVE_ASSETS || account_balance <= 0.0 || current_price <= 0.0 {
+        if asset_index >= MAX_ACTIVE_ASSETS
+            || !account_balance.is_finite()
+            || account_balance <= 0.0
+            || !current_price.is_finite()
+            || current_price <= 0.0
+            || !expected_return.is_finite()
+            || !gk_volatility.is_finite()
+            || gk_volatility <= 0.0
+            || !bid_ask_spread_bp.is_finite()
+            || bid_ask_spread_bp < 0.0
+        {
             return KellyPositionSize {
                 asset_index,
                 fraction: 0.0,
@@ -183,8 +200,23 @@ impl CovarianceRiskGuard {
                 slippage_penalty: 0.0,
                 correlation_penalty: 0.0,
                 is_approved: false,
-                rejection_reason: Some("Invalid input parameters".to_string()),
+                rejection_reason: Some("Invalid non-finite or out-of-bounds input parameters".to_string()),
             };
+        }
+
+        for &w in active_weights.iter() {
+            if !w.is_finite() {
+                return KellyPositionSize {
+                    asset_index,
+                    fraction: 0.0,
+                    notional_usd: 0.0,
+                    contract_quantity: 0.0,
+                    slippage_penalty: 0.0,
+                    correlation_penalty: 0.0,
+                    is_approved: false,
+                    rejection_reason: Some("Non-finite weight parameter encountered".to_string()),
+                };
+            }
         }
 
         let snap = self.snapshot.load();
@@ -260,7 +292,7 @@ impl CovarianceRiskGuard {
         gk_volatility: f64,
         is_long: bool,
     ) -> (f64, f64) {
-        if entry_price <= 0.0 {
+        if !entry_price.is_finite() || entry_price <= 0.0 || !gk_volatility.is_finite() || gk_volatility <= 0.0 {
             return (0.0, 0.0);
         }
 
@@ -339,5 +371,44 @@ mod tests {
         assert!(tp > 100.0);
         assert!((100.0 - sl) > 0.0);
         assert!((tp - 100.0) > (100.0 - sl)); // Risk/reward >= 2.0
+    }
+
+    #[test]
+    fn test_nan_sanitization() {
+        let guard = CovarianceRiskGuard::new_arc(None, None);
+
+        // 1. Non-finite return update should be dropped without state poisoning
+        let nan_returns = [f64::NAN, 0.01, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        guard.update_returns(&nan_returns);
+        assert_eq!(guard.snapshot().sample_count, 0, "NaN return update must be dropped");
+
+        guard.update_single_asset_return(0, f64::INFINITY);
+        assert_eq!(guard.snapshot().sample_count, 0, "Infinity return update must be dropped");
+
+        // 2. Non-finite CC-DFK sizing inputs should return rejected position size
+        let active_weights = [0.0; MAX_ACTIVE_ASSETS];
+        let sizing_nan = guard.calculate_cc_dfk_size(
+            0,
+            f64::NAN,
+            0.015,
+            2.0,
+            100_000.0,
+            100.0,
+            &active_weights,
+        );
+        assert!(!sizing_nan.is_approved);
+        assert_eq!(sizing_nan.fraction, 0.0);
+
+        let sizing_inf_vol = guard.calculate_cc_dfk_size(
+            0,
+            0.005,
+            f64::INFINITY,
+            2.0,
+            100_000.0,
+            100.0,
+            &active_weights,
+        );
+        assert!(!sizing_inf_vol.is_approved);
+        assert_eq!(sizing_inf_vol.fraction, 0.0);
     }
 }
