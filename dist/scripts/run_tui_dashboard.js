@@ -45,6 +45,7 @@ const tradingSymbols_1 = require("../config/tradingSymbols");
 const engine_1 = require("../strategy/engine");
 const risk_1 = require("../strategy/risk");
 const index_1 = require("../index");
+const symbolPrecision_1 = require("../config/symbolPrecision");
 async function runProductionTuiLauncher() {
     console.log("=========================================================================");
     console.log("  BATBOT_V11 HIGH-FREQUENCY TRADING SYSTEM - PRODUCTION TUI LAUNCHER     ");
@@ -128,6 +129,13 @@ async function runProductionTuiLauncher() {
     const binanceClient = new binance_1.BinanceExecutionClient();
     const riskGuard = new risk_1.RiskGuard();
     const primarySymbol = process.env.SYMBOL ?? activeSymbols[0] ?? "BTCUSDT";
+    // Pre-fetch Binance Futures exchangeInfo to build dynamic LOT_SIZE & PRICE_FILTER precision map
+    try {
+        await symbolPrecision_1.SymbolPrecisionRegistry.initializeFromBinance(binanceClient);
+    }
+    catch (err) {
+        symbolPrecision_1.SymbolPrecisionRegistry.preseedOfflineDefaults(activeSymbols);
+    }
     const strategyEngine = new engine_1.StrategyEngine(client, riskGuard, binanceClient, { symbol: primarySymbol });
     if (binanceClient.isConfigured()) {
         binanceClient.startBalancePolling(5000);

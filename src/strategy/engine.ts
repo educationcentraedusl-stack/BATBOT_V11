@@ -626,21 +626,6 @@ export class StrategyEngine {
     const priceAdjustment = effectiveSlippage * this.config.tickSize;
     const basePrice = signalType === "BUY" ? askPrice : bidPrice;
 
-    // Dynamic .env driven USDT Sizing & LOT_SIZE Precision Rounding (Unlocks All 10 Assets)
-    let finalQuantity = 0.001;
-    if (basePrice > 0) {
-      const targetNotionalUsdt = this.config.tradeSizeUsdt > 0 ? this.config.tradeSizeUsdt : 60.0;
-      const rawQty = (targetNotionalUsdt / basePrice) * penaltyCoeff * targetSizeDecayCoeff;
-      finalQuantity = formatQuantityForSymbol(this.config.symbol, rawQty, false);
-
-      // Binance Futures Min Notional Guard: ensure order notional >= minNotionalUsdt
-      const minNotionalUsdt = this.config.minNotionalUsdt;
-      if (finalQuantity * basePrice < minNotionalUsdt) {
-        const requiredQty = minNotionalUsdt / basePrice;
-        finalQuantity = formatQuantityForSymbol(this.config.symbol, requiredQty, true);
-      }
-    }
-
     const isHighConfidence = aiConfidence >= this.config.aggressiveConfidenceThreshold;
     const isAggressive = isHighConfidence;
 
@@ -656,6 +641,24 @@ export class StrategyEngine {
       orderType = "LIMIT";
       timeInForce = "GTX";
       targetPrice = signalType === "BUY" ? bidPrice : askPrice;
+    }
+
+    // Dynamic .env driven USDT Sizing & LOT_SIZE Precision Rounding (Unlocks All 10 Assets)
+    let finalQuantity = 0.001;
+    if (basePrice > 0) {
+      const targetNotionalUsdt = this.config.tradeSizeUsdt > 0 ? this.config.tradeSizeUsdt : 60.0;
+      const rawQty = (targetNotionalUsdt / basePrice) * penaltyCoeff * targetSizeDecayCoeff;
+      finalQuantity = formatQuantityForSymbol(this.config.symbol, rawQty, false);
+
+      // Binance Futures Min Notional Guard: ensure order notional >= effectiveMinNotional using conservative price
+      const symbolRule = SymbolPrecisionRegistry.getPrecisionRule(this.config.symbol);
+      const effectiveMinNotional = Math.max(this.config.minNotionalUsdt, symbolRule.minNotional);
+      const effectivePrice = Math.min(basePrice, targetPrice);
+
+      if (effectivePrice > 0 && finalQuantity * effectivePrice < effectiveMinNotional) {
+        const requiredQty = effectiveMinNotional / effectivePrice;
+        finalQuantity = formatQuantityForSymbol(this.config.symbol, requiredQty, true);
+      }
     }
 
     // SPREAD GUARD: Explicitly block MARKET executions if spread is invalid or exceeds configured max threshold
@@ -708,7 +711,7 @@ export class StrategyEngine {
     };
 
     const riskProfile = this.dynamicRiskEngine.evaluateDynamicRisk(
-      basePrice,
+      targetPrice,
       targetPosSide === "LONG" ? "LONG" : "SHORT",
       microMetrics,
       Math.abs(askPrice - bidPrice)
@@ -720,12 +723,12 @@ export class StrategyEngine {
     this.reusableOrderIntent.symbol = this.config.symbol;
     this.reusableOrderIntent.side = signalType;
     this.reusableOrderIntent.quantity = finalQuantity;
-    this.reusableOrderIntent.price = Number(targetPrice.toFixed(2));
+    this.reusableOrderIntent.price = SymbolPrecisionRegistry.formatPrice(this.config.symbol, targetPrice);
     this.reusableOrderIntent.currentPositionSide = targetPosSide;
     this.reusableOrderIntent.isCloseOrder = false;
     this.reusableOrderIntent.riskProfile = riskProfile;
-    this.reusableOrderIntent.stopLossPrice = riskProfile.stopLossPrice;
-    this.reusableOrderIntent.takeProfitPrice = riskProfile.takeProfitPrice;
+    this.reusableOrderIntent.stopLossPrice = SymbolPrecisionRegistry.formatPrice(this.config.symbol, riskProfile.stopLossPrice);
+    this.reusableOrderIntent.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.config.symbol, riskProfile.takeProfitPrice);
 
     // Pass through Risk Management Guard with target position side
     const isConfigured = this.executionClient.isConfigured();

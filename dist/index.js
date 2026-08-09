@@ -55,6 +55,7 @@ Object.defineProperty(exports, "CLIDashboard", { enumerable: true, get: function
 const server_1 = require("./telemetry/server");
 Object.defineProperty(exports, "TelemetryWSServer", { enumerable: true, get: function () { return server_1.TelemetryWSServer; } });
 const recalibrationWorker_1 = require("./ai/recalibrationWorker");
+const symbolPrecision_1 = require("./config/symbolPrecision");
 exports.DEFAULT_TAKER_FEE_RATE = 0.0004;
 async function syncStateOnStartup(executionClient, strategyEngine, riskGuard) {
     if (!executionClient.isConfigured()) {
@@ -63,6 +64,8 @@ async function syncStateOnStartup(executionClient, strategyEngine, riskGuard) {
     }
     try {
         console.log("[StateSync] Initiating Binance Server Time & State Synchronization...");
+        // 0. Fetch Binance Futures exchangeInfo to initialize dynamic LOT_SIZE & PRICE_FILTER map
+        await symbolPrecision_1.SymbolPrecisionRegistry.initializeFromBinance(executionClient);
         // 1. Sync server time to fix timestamp error -1021
         await executionClient.syncServerTime();
         // 2. Enable Dual-Side Hedge Mode on Binance Futures

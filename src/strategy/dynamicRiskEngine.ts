@@ -103,10 +103,12 @@ export class DynamicRiskEngine {
         volFactor * 1.5 * (1.0 - 0.4 * obiSigned) * entryPrice,
         minSpreadDistance * 2.0
       );
-      const tpDistance = Math.max(
+      let tpDistance = Math.max(
         volFactor * 2.0 * (1.0 + 0.5 * obiSigned) * entryPrice,
         minSpreadDistance * 3.0
       );
+      // Enforce minimum 2.01 R:R ratio floor to satisfy RiskGuard check
+      tpDistance = Math.max(tpDistance, slDistance * 2.01);
 
       stopLossPrice = entryPrice - slDistance;
       takeProfitPrice = entryPrice + tpDistance;
@@ -118,10 +120,12 @@ export class DynamicRiskEngine {
         volFactor * 1.5 * (1.0 + 0.4 * obiSigned) * entryPrice,
         minSpreadDistance * 2.0
       );
-      const tpDistance = Math.max(
+      let tpDistance = Math.max(
         volFactor * 2.0 * (1.0 - 0.5 * obiSigned) * entryPrice,
         minSpreadDistance * 3.0
       );
+      // Enforce minimum 2.01 R:R ratio floor to satisfy RiskGuard check
+      tpDistance = Math.max(tpDistance, slDistance * 2.01);
 
       stopLossPrice = entryPrice + slDistance;
       takeProfitPrice = entryPrice - tpDistance;

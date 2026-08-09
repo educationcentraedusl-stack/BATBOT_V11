@@ -1,9 +1,23 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MultiAssetStrategyEngine = exports.StrategyEngine = void 0;
+exports.getSymbolQuantityPrecision = getSymbolQuantityPrecision;
+exports.formatQuantityForSymbol = formatQuantityForSymbol;
 const positionLedger_1 = require("./positionLedger");
 const dynamicRiskEngine_1 = require("./dynamicRiskEngine");
 const userDataStream_1 = require("../execution/userDataStream");
+const symbolPrecision_1 = require("../config/symbolPrecision");
+function getSymbolQuantityPrecision(symbol) {
+    const rule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(symbol);
+    return {
+        decimals: rule.qtyDecimals,
+        stepSize: rule.stepSize,
+        minNotional: rule.minNotional,
+    };
+}
+function formatQuantityForSymbol(symbol, rawQty, isMinNotionalGuard = false) {
+    return symbolPrecision_1.SymbolPrecisionRegistry.formatQuantity(symbol, rawQty, isMinNotionalGuard);
+}
 class StrategyEngine {
     client;
     riskGuard;
@@ -80,9 +94,12 @@ class StrategyEngine {
             ? envOrderQty
             : (targetSymbol.includes("ETH") ? 0.05 : 0.001);
         const defaultLeverage = !isNaN(envLeverage) ? envLeverage : 10;
+        const envTradeSizeUsdt = process.env.TRADE_SIZE_USDT ? parseFloat(process.env.TRADE_SIZE_USDT) : NaN;
+        const defaultTradeSizeUsdt = !isNaN(envTradeSizeUsdt) ? envTradeSizeUsdt : 60.0;
         this.config = {
             symbol: targetSymbol,
             orderQuantity: config?.orderQuantity ?? defaultOrderQty,
+            tradeSizeUsdt: config?.tradeSizeUsdt ?? defaultTradeSizeUsdt,
             obiBuyThreshold: config?.obiBuyThreshold ?? defaultObiBuy,
             obiSellThreshold: config?.obiSellThreshold ?? defaultObiSell,
             cvdBuyThreshold: config?.cvdBuyThreshold ?? defaultCvdBuy,
@@ -453,9 +470,6 @@ class StrategyEngine {
             this.staticResult.executionPromise = undefined;
             return this.staticResult;
         }
-        // Apply latency penalty & slot-index decay coefficients to orderQuantity BEFORE RiskGuard check
-        const scaledQuantity = Number((this.config.orderQuantity * penaltyCoeff * targetSizeDecayCoeff).toFixed(3));
-        let finalQuantity = Math.max(0.001, scaledQuantity);
         // Dynamic Taker Fallback (>75% Confidence) & 1-Tick Post-Only Offset (<=75%)
         const effectiveSlippage = Math.max(2, slippageTicks);
         const priceAdjustment = effectiveSlippage * this.config.tickSize;
@@ -474,6 +488,21 @@ class StrategyEngine {
             orderType = "LIMIT";
             timeInForce = "GTX";
             targetPrice = signalType === "BUY" ? bidPrice : askPrice;
+        }
+        // Dynamic .env driven USDT Sizing & LOT_SIZE Precision Rounding (Unlocks All 10 Assets)
+        let finalQuantity = 0.001;
+        if (basePrice > 0) {
+            const targetNotionalUsdt = this.config.tradeSizeUsdt > 0 ? this.config.tradeSizeUsdt : 60.0;
+            const rawQty = (targetNotionalUsdt / basePrice) * penaltyCoeff * targetSizeDecayCoeff;
+            finalQuantity = formatQuantityForSymbol(this.config.symbol, rawQty, false);
+            // Binance Futures Min Notional Guard: ensure order notional >= effectiveMinNotional using conservative price
+            const symbolRule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(this.config.symbol);
+            const effectiveMinNotional = Math.max(this.config.minNotionalUsdt, symbolRule.minNotional);
+            const effectivePrice = Math.min(basePrice, targetPrice);
+            if (effectivePrice > 0 && finalQuantity * effectivePrice < effectiveMinNotional) {
+                const requiredQty = effectiveMinNotional / effectivePrice;
+                finalQuantity = formatQuantityForSymbol(this.config.symbol, requiredQty, true);
+            }
         }
         // SPREAD GUARD: Explicitly block MARKET executions if spread is invalid or exceeds configured max threshold
         const isTickValid = askPrice > 0 && bidPrice > 0 && askPrice >= bidPrice;
@@ -507,13 +536,6 @@ class StrategyEngine {
         if (signalType === "SELL" && targetSlotIndex !== undefined && targetSlotIndex > 0) {
             targetPrice = targetPrice + targetSlotIndex * 2.0 * this.config.tickSize;
         }
-        // Binance Futures Min Notional Guard: ensure order notional >= minNotionalUsdt
-        if (basePrice > 0) {
-            const minNotionalUsdt = this.config.minNotionalUsdt;
-            if (finalQuantity * basePrice < minNotionalUsdt) {
-                finalQuantity = Number((minNotionalUsdt / basePrice).toFixed(3));
-            }
-        }
         // Evaluate Dynamic Risk & Microstructure Trap Avoidance Profile
         const microMetrics = {
             obi,
@@ -532,7 +554,7 @@ class StrategyEngine {
         this.reusableOrderIntent.symbol = this.config.symbol;
         this.reusableOrderIntent.side = signalType;
         this.reusableOrderIntent.quantity = finalQuantity;
-        this.reusableOrderIntent.price = Number(targetPrice.toFixed(2));
+        this.reusableOrderIntent.price = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.config.symbol, targetPrice);
         this.reusableOrderIntent.currentPositionSide = targetPosSide;
         this.reusableOrderIntent.isCloseOrder = false;
         this.reusableOrderIntent.riskProfile = riskProfile;

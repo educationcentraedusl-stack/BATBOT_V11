@@ -361,7 +361,7 @@ export class BinanceExecutionClient {
   }
 
   public async placeOrder(params: BinanceOrderParams): Promise<BinanceOrderResponse> {
-    const formattedQty = Number(params.quantity.toFixed(3));
+    const formattedQty = params.quantity;
     const payload: Record<string, string | number | boolean> = {
       symbol: params.symbol,
       side: params.side,
@@ -369,7 +369,7 @@ export class BinanceExecutionClient {
       quantity: formattedQty,
     };
 
-    if (params.price !== undefined) payload.price = Number(params.price.toFixed(2));
+    if (params.price !== undefined) payload.price = params.price;
     if (params.stopPrice !== undefined) payload.stopPrice = params.stopPrice;
     
     // Binance API Error -1106: Parameter 'timeinforce' sent when not required.
@@ -420,7 +420,7 @@ export class BinanceExecutionClient {
 
     const targetOrders = orders.slice(0, maxBatchLimit);
     const formattedOrders = targetOrders.map((params) => {
-      const formattedQty = Number(params.quantity.toFixed(3));
+      const formattedQty = params.quantity;
       const orderObj: Record<string, string | number | boolean> = {
         symbol: params.symbol,
         side: params.side,
@@ -428,7 +428,7 @@ export class BinanceExecutionClient {
         quantity: formattedQty,
       };
 
-      if (params.price !== undefined) orderObj.price = Number(params.price.toFixed(2));
+      if (params.price !== undefined) orderObj.price = params.price;
       if (params.stopPrice !== undefined) orderObj.stopPrice = params.stopPrice;
 
       if (

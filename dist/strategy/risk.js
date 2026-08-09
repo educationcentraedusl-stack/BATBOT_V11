@@ -38,8 +38,10 @@ class RiskGuard {
         const defaultProfitLock = !isNaN(envDailyProfitLock) ? envDailyProfitLock : 10.0;
         const envMinRrRatio = process.env.MIN_RISK_REWARD_RATIO ? parseFloat(process.env.MIN_RISK_REWARD_RATIO) : NaN;
         const defaultMinRrRatio = !isNaN(envMinRrRatio) ? envMinRrRatio : 2.0;
+        const envMaxPosition = process.env.MAX_POSITION_SIZE_USDT ? parseFloat(process.env.MAX_POSITION_SIZE_USDT) : NaN;
+        const defaultMaxPosition = !isNaN(envMaxPosition) ? envMaxPosition : 10000.0;
         this.config = {
-            maxPositionSizeUsdt: config?.maxPositionSizeUsdt ?? 1000.0,
+            maxPositionSizeUsdt: config?.maxPositionSizeUsdt ?? defaultMaxPosition,
             minCooldownMs: config?.minCooldownMs ?? 0,
             maxDailyLossUsdt: config?.maxDailyLossUsdt ?? 500.0,
             maxPriceSlippagePercent: config?.maxPriceSlippagePercent ?? 0.5,

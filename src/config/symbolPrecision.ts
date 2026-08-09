@@ -131,37 +131,36 @@ export class SymbolPrecisionRegistryManager {
    * Supports isMinNotionalGuard ceiling rounding (Math.ceil) to guarantee notional >= minNotional.
    */
   public formatQuantity(symbol: string, rawQty: number, isMinNotionalGuard: boolean = false): number {
+    if (isNaN(rawQty) || rawQty <= 0) return 0;
+
     const rule = this.getPrecisionRule(symbol);
     const { qtyDecimals, stepSize } = rule;
 
-    if (qtyDecimals === 0) {
-      return isMinNotionalGuard ? Math.max(1, Math.ceil(rawQty)) : Math.max(1, Math.floor(rawQty));
+    let rounded: number;
+    if (isMinNotionalGuard) {
+      // Ceiling rounding to stepSize guarantees order notional is strictly >= minNotional
+      rounded = Math.ceil(rawQty / stepSize - 1e-9) * stepSize;
+    } else {
+      // Standard floor truncation to stepSize to prevent INSUFFICIENT_BALANCE
+      rounded = Math.floor(rawQty / stepSize + 1e-9) * stepSize;
     }
 
-    const factor = Math.pow(10, qtyDecimals);
-    if (isMinNotionalGuard) {
-      // Ceiling rounding guarantees order notional is strictly >= minNotional
-      const rounded = Math.ceil(rawQty * factor - 1e-9) / factor;
-      return Math.max(stepSize, Number(rounded.toFixed(qtyDecimals)));
-    } else {
-      // Standard floor truncation to prevent INSUFFICIENT_BALANCE
-      const rounded = Math.floor(rawQty * factor + 1e-9) / factor;
-      return Math.max(stepSize, Number(rounded.toFixed(qtyDecimals)));
-    }
+    const clamped = Math.max(stepSize, rounded);
+    return Number(clamped.toFixed(qtyDecimals));
   }
 
   /**
    * Formats raw price dynamically according to symbol PRICE_FILTER rules.
    */
   public formatPrice(symbol: string, rawPrice: number): number {
+    if (isNaN(rawPrice) || rawPrice <= 0) return 0;
+
     const rule = this.getPrecisionRule(symbol);
     const { priceDecimals, tickSize } = rule;
-    if (priceDecimals === 0) {
-      return Math.max(tickSize, Math.round(rawPrice));
-    }
-    const factor = Math.pow(10, priceDecimals);
-    const rounded = Math.round(rawPrice * factor) / factor;
-    return Math.max(tickSize, Number(rounded.toFixed(priceDecimals)));
+
+    const rounded = Math.round(rawPrice / tickSize) * tickSize;
+    const clamped = Math.max(tickSize, rounded);
+    return Number(clamped.toFixed(priceDecimals));
   }
 
   /**

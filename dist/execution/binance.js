@@ -104,6 +104,9 @@ class BinanceExecutionClient {
         }
         return this.timeOffset;
     }
+    async fetchExchangeInfo() {
+        return this.request("GET", "/fapi/v1/exchangeInfo", {}, false);
+    }
     getUsdtAvailableBalance() {
         return this.cachedUsdtAvailableBalance;
     }
@@ -245,7 +248,7 @@ class BinanceExecutionClient {
         }
     }
     async placeOrder(params) {
-        const formattedQty = Number(params.quantity.toFixed(3));
+        const formattedQty = params.quantity;
         const payload = {
             symbol: params.symbol,
             side: params.side,
@@ -253,7 +256,7 @@ class BinanceExecutionClient {
             quantity: formattedQty,
         };
         if (params.price !== undefined)
-            payload.price = Number(params.price.toFixed(2));
+            payload.price = params.price;
         if (params.stopPrice !== undefined)
             payload.stopPrice = params.stopPrice;
         // Binance API Error -1106: Parameter 'timeinforce' sent when not required.
@@ -300,7 +303,7 @@ class BinanceExecutionClient {
         }
         const targetOrders = orders.slice(0, maxBatchLimit);
         const formattedOrders = targetOrders.map((params) => {
-            const formattedQty = Number(params.quantity.toFixed(3));
+            const formattedQty = params.quantity;
             const orderObj = {
                 symbol: params.symbol,
                 side: params.side,
@@ -308,7 +311,7 @@ class BinanceExecutionClient {
                 quantity: formattedQty,
             };
             if (params.price !== undefined)
-                orderObj.price = Number(params.price.toFixed(2));
+                orderObj.price = params.price;
             if (params.stopPrice !== undefined)
                 orderObj.stopPrice = params.stopPrice;
             if (params.type !== "MARKET" &&
