@@ -5,7 +5,7 @@ import { BinanceExecutionClient } from "./execution/binance";
 
 class MockMarketDataClient extends MarketDataClient {
   constructor() {
-    super(new SharedArrayBuffer(2048));
+    super(new SharedArrayBuffer(20480));
   }
 
   private seq: bigint = 0n;
