@@ -43,7 +43,7 @@ export class MultiAssetStrategyEngine {
         this.client,
         this.riskGuard,
         this.executionClient,
-        { symbol },
+        { symbol, assetIndex: i },
         hedgeLedger.getLegacyLedger(),
         hedgeLedger
       );
@@ -90,19 +90,26 @@ export class MultiAssetStrategyEngine {
 
   public reconcileStartupPositions(positions: BinancePositionRisk[]): void {
     let totalNotional = 0;
+    this.riskGuard.resetSymbolNotionals();
+
     for (const engine of this.engines.values()) {
       engine.reconcileStartupPositions(positions);
       const symbol = engine.getConfig().symbol;
+      let symbolGrossNotional = 0;
+
       for (const pos of positions) {
         if (pos.symbol === symbol) {
           const amt = Math.abs(parseFloat(pos.positionAmt || "0"));
           const entryPx = parseFloat(pos.entryPrice || "0");
           if (amt > 0 && entryPx > 0) {
-            const notional = amt * entryPx;
-            totalNotional += notional;
-            this.riskGuard.updateSymbolNotional(symbol, notional);
+            symbolGrossNotional += amt * entryPx;
           }
         }
+      }
+
+      if (symbolGrossNotional > 0) {
+        totalNotional += symbolGrossNotional;
+        this.riskGuard.updateSymbolNotional(symbol, symbolGrossNotional);
       }
     }
     this.riskGuard.updatePositionNotional(totalNotional);

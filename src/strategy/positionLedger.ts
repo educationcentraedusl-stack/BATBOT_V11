@@ -446,12 +446,26 @@ export class HedgePositionLedger {
   private maxShortSlots: number;
   private legacyLedger: PositionLedger;
   private sizingCalc: DynamicSizingCalculator;
+  private cachedSummary: PositionSummary;
 
   constructor(symbol: string = "BTCUSDT", maxShortSlots: number = 3) {
     this.symbol = symbol;
     this.maxShortSlots = maxShortSlots;
     this.legacyLedger = new PositionLedger(symbol);
     this.sizingCalc = new DynamicSizingCalculator();
+
+    this.cachedSummary = {
+      symbol: this.symbol,
+      side: "FLAT",
+      netQuantity: 0,
+      averageEntryPrice: 0,
+      unrealizedPnl: 0,
+      cumulativeRealizedPnl: 0,
+      cumulativeFees: 0,
+      totalTrades: 0,
+      winningTrades: 0,
+      losingTrades: 0,
+    };
 
     this.coreLong = {
       slotId: "CORE_LONG",
@@ -490,7 +504,42 @@ export class HedgePositionLedger {
   }
 
   public getSummary(currentMarkPrice: number = 0): PositionSummary {
-    return this.legacyLedger.getSummary(currentMarkPrice);
+    let longQty = 0;
+    let shortQty = 0;
+    let weightedEntrySum = 0;
+
+    if (this.coreLong.isOccupied && this.coreLong.quantity > 0) {
+      longQty += this.coreLong.quantity;
+      weightedEntrySum += this.coreLong.entryPrice * this.coreLong.quantity;
+    }
+
+    for (let i = 0; i < this.maxShortSlots; i++) {
+      const slot = this.shortSlots[i];
+      if (slot.isOccupied && slot.quantity > 0) {
+        shortQty += slot.quantity;
+        weightedEntrySum += slot.entryPrice * slot.quantity;
+      }
+    }
+
+    const netQty = longQty - shortQty;
+    const absQty = Math.abs(netQty);
+    const side: "FLAT" | "LONG" | "SHORT" = netQty > 1e-9 ? "LONG" : netQty < -1e-9 ? "SHORT" : "FLAT";
+    const totalPosQty = longQty + shortQty;
+    const avgEntry = totalPosQty > 0 ? weightedEntrySum / totalPosQty : 0;
+    const legacySummary = this.legacyLedger.getSummary(currentMarkPrice);
+
+    this.cachedSummary.symbol = this.symbol;
+    this.cachedSummary.side = side;
+    this.cachedSummary.netQuantity = Number(absQty.toFixed(6));
+    this.cachedSummary.averageEntryPrice = Number(avgEntry.toFixed(4));
+    this.cachedSummary.unrealizedPnl = Number(this.getUnrealizedPnl(currentMarkPrice).toFixed(4));
+    this.cachedSummary.cumulativeRealizedPnl = legacySummary.cumulativeRealizedPnl;
+    this.cachedSummary.cumulativeFees = legacySummary.cumulativeFees;
+    this.cachedSummary.totalTrades = legacySummary.totalTrades;
+    this.cachedSummary.winningTrades = legacySummary.winningTrades;
+    this.cachedSummary.losingTrades = legacySummary.losingTrades;
+
+    return this.cachedSummary;
   }
 
   /**

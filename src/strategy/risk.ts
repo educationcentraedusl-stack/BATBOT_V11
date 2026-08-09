@@ -301,6 +301,7 @@ export interface MultiAssetRiskConfig extends RiskConfig {
 
 export class MultiAssetRiskGuard extends RiskGuard {
   private activeSymbolNotionals: Map<string, number> = new Map();
+  private symbolExecutionTimestamps: Map<string, number> = new Map();
   private accountBalanceUsdt: number;
   private maxPortfolioLeverage: number;
   private maxAssetCorrelation: number;
@@ -312,10 +313,25 @@ export class MultiAssetRiskGuard extends RiskGuard {
     this.maxAssetCorrelation = config?.maxAssetCorrelation ?? 0.85;
   }
 
+  public override recordExecutionSuccess(
+    notionalUsdt: number,
+    side: "BUY" | "SELL" = "BUY",
+    symbol?: string
+  ): void {
+    super.recordExecutionSuccess(notionalUsdt, side);
+    if (symbol) {
+      this.symbolExecutionTimestamps.set(symbol, Date.now());
+    }
+  }
+
   public updateAccountBalance(balanceUsdt: number): void {
     if (balanceUsdt > 0) {
       this.accountBalanceUsdt = balanceUsdt;
     }
+  }
+
+  public resetSymbolNotionals(): void {
+    this.activeSymbolNotionals.clear();
   }
 
   public updateSymbolNotional(symbol: string, notionalUsdt: number): void {
@@ -337,6 +353,25 @@ export class MultiAssetRiskGuard extends RiskGuard {
   public getPortfolioLeverage(): number {
     if (this.accountBalanceUsdt <= 0) return 0;
     return this.getGrossPortfolioNotional() / this.accountBalanceUsdt;
+  }
+
+  public override validateOrder(
+    intent: OrderIntent,
+    isClientConfigured: boolean,
+    currentPositionSide: "FLAT" | "LONG" | "SHORT" = "FLAT"
+  ): RiskCheckResult {
+    // Isolated Per-Asset Cooldown Enforcement
+    if (intent.symbol && !(intent.isCloseOrder === true || intent.isHardStop === true)) {
+      const lastExec = this.symbolExecutionTimestamps.get(intent.symbol);
+      if (lastExec !== undefined) {
+        const now = Date.now();
+        if (now - lastExec < this.getConfig().minCooldownMs) {
+          return RISK_REJECTED_COOLDOWN;
+        }
+      }
+    }
+
+    return super.validateOrder(intent, isClientConfigured, currentPositionSide);
   }
 
   public validateMultiAssetOrder(
@@ -369,3 +404,4 @@ export class MultiAssetRiskGuard extends RiskGuard {
     return RISK_PASSED;
   }
 }
+

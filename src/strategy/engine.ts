@@ -34,6 +34,7 @@ export interface StrategyConfig {
   cooldownMs: number;
   vpinThreshold: number;
   vpinBucketVolume: number;
+  assetIndex?: number;
 }
 
 export function getSymbolQuantityPrecision(symbol: string): { decimals: number; stepSize: number; minNotional: number } {
@@ -79,6 +80,7 @@ export class StrategyEngine {
   private lastProcessedSequence: bigint = -1n;
   private state: EngineState = "LIVE_ACTIVE";
   private assetIndex: number = 0;
+  private isOrderInFlight: boolean = false;
 
   private reusableOrderIntent: OrderIntent = {
     symbol: process.env.SYMBOL ?? "BTCUSDT",
@@ -192,9 +194,13 @@ export class StrategyEngine {
 
     this.dynamicRiskEngine = new DynamicRiskEngine(this.config.vpinThreshold);
 
-    const activeSymbols = getTradingSymbols();
-    const symIdx = activeSymbols.indexOf(this.config.symbol);
-    this.assetIndex = symIdx >= 0 ? symIdx : 0;
+    if (typeof config?.assetIndex === "number" && config.assetIndex >= 0) {
+      this.assetIndex = config.assetIndex;
+    } else {
+      const activeSymbols = getTradingSymbols();
+      const symIdx = activeSymbols.indexOf(this.config.symbol);
+      this.assetIndex = symIdx >= 0 ? symIdx : 0;
+    }
 
     this.hedgeLedger = hedgeLedger ?? new HedgePositionLedger(this.config.symbol, this.config.maxShortSlots);
     this.positionLedger = positionLedger ?? this.hedgeLedger.getLegacyLedger();
@@ -344,9 +350,11 @@ export class StrategyEngine {
   public evaluateTick(): StrategySignalResult {
     const seq = this.client.getSequenceNum(this.assetIndex);
 
-    if (seq === this.lastProcessedSequence) {
+    if (seq === this.lastProcessedSequence || this.isOrderInFlight) {
       this.staticResult.sequenceNum = seq;
       this.staticResult.signalType = "NONE";
+      this.staticResult.riskResult = undefined;
+      this.staticResult.executionPromise = undefined;
       return this.staticResult;
     }
     this.lastProcessedSequence = seq;
@@ -405,14 +413,17 @@ export class StrategyEngine {
         this.reusableOrderIntent.isHardStop = isHardStopTrigger;
 
         const isConfigured = this.executionClient.isConfigured();
-        const riskResult = this.riskGuard.validateOrder(
-          this.reusableOrderIntent,
-          isConfigured,
-          trigger.side
-        );
+        const riskResult = (this.riskGuard instanceof MultiAssetRiskGuard)
+          ? (this.riskGuard as MultiAssetRiskGuard).validateMultiAssetOrder(this.reusableOrderIntent, isConfigured)
+          : this.riskGuard.validateOrder(
+              this.reusableOrderIntent,
+              isConfigured,
+              trigger.side
+            );
 
         let executionPromise: Promise<BinanceOrderResponse | null> | undefined = undefined;
         if (riskResult.passed) {
+          this.isOrderInFlight = true;
           executionPromise = (async () => {
             if (trigger.cancelOrderIds && trigger.cancelOrderIds.length > 0) {
               console.log(
@@ -475,7 +486,9 @@ export class StrategyEngine {
                 }
                 return null;
               });
-          })();
+          })().finally(() => {
+            this.isOrderInFlight = false;
+          });
         }
 
         return {
@@ -515,6 +528,7 @@ export class StrategyEngine {
         reasonCode,
         message: `Engine signal evaluation paused due to state: ${this.state}`,
       };
+      this.staticResult.executionPromise = undefined;
       return this.staticResult;
     }
 
@@ -750,11 +764,13 @@ export class StrategyEngine {
 
     // Pass through Risk Management Guard with target position side
     const isConfigured = this.executionClient.isConfigured();
-    const riskResult = this.riskGuard.validateOrder(
-      this.reusableOrderIntent,
-      isConfigured,
-      targetPosSide
-    );
+    const riskResult = (this.riskGuard instanceof MultiAssetRiskGuard)
+      ? (this.riskGuard as MultiAssetRiskGuard).validateMultiAssetOrder(this.reusableOrderIntent, isConfigured)
+      : this.riskGuard.validateOrder(
+          this.reusableOrderIntent,
+          isConfigured,
+          targetPosSide
+        );
 
     if (!riskResult.passed) {
       if (seq % 1000n === 0n) {
@@ -765,6 +781,8 @@ export class StrategyEngine {
     let executionPromise: Promise<BinanceOrderResponse | null> | undefined = undefined;
 
     if (riskResult.passed) {
+      this.isOrderInFlight = true;
+
       // Set atomic SAB hysteresis lockout (cooldown per side) to suppress microburst sweeps
       if (targetPosSide === "SHORT") {
         this.client.setShortCooldownLock(Date.now() + this.config.cooldownMs, this.assetIndex);
@@ -795,7 +813,11 @@ export class StrategyEngine {
         .placeOrder(orderParams)
         .then((res) => {
           if (res) {
-            this.riskGuard.recordExecutionSuccess(notional);
+            if (this.riskGuard instanceof MultiAssetRiskGuard) {
+              (this.riskGuard as MultiAssetRiskGuard).recordExecutionSuccess(notional, res.side as "BUY" | "SELL", this.config.symbol);
+            } else {
+              this.riskGuard.recordExecutionSuccess(notional);
+            }
             console.log(`[BinanceExecution][SUCCESS] Order Executed on Binance! OrderId: ${res.orderId}, Status: ${res.status}, ExecQty: ${res.executedQty}`);
             const execPx = parseFloat(res.price || res.avgPrice || "0") || targetPrice;
             if (targetPosSide === "LONG") {
@@ -812,6 +834,9 @@ export class StrategyEngine {
         .catch((err) => {
           console.error(`[BinanceExecution][REJECTED] Order Placement Failed: ${err.message}`);
           throw err;
+        })
+        .finally(() => {
+          this.isOrderInFlight = false;
         });
     }
 
