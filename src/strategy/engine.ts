@@ -4,6 +4,7 @@ import { BinanceExecutionClient, BinanceOrderResponse, BinanceOrderParams, Binan
 import { PositionLedger, HedgePositionLedger, MultiAssetPositionLedger, PositionSlot, SlotExitTrigger, ActiveTradeSlot } from "./positionLedger";
 import { DynamicRiskEngine, DynamicMicrostructureMetrics } from "./dynamicRiskEngine";
 import { BinanceUserDataStream, OrderTradeUpdatePayload } from "../execution/userDataStream";
+import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
 
 export interface StrategyConfig {
   symbol: string;
@@ -34,28 +35,17 @@ export interface StrategyConfig {
   vpinBucketVolume: number;
 }
 
-export function getSymbolQuantityPrecision(symbol: string): { decimals: number; stepSize: number } {
-  const sym = symbol.toUpperCase();
-  if (sym.includes("BTC") || sym.includes("ETH")) {
-    return { decimals: 3, stepSize: 0.001 };
-  } else if (sym.includes("SOL") || sym.includes("BNB") || sym.includes("LINK")) {
-    return { decimals: 2, stepSize: 0.01 };
-  } else if (sym.includes("XRP") || sym.includes("AVAX") || sym.includes("DOT")) {
-    return { decimals: 1, stepSize: 0.1 };
-  } else if (sym.includes("ADA") || sym.includes("DOGE")) {
-    return { decimals: 0, stepSize: 1.0 };
-  }
-  return { decimals: 2, stepSize: 0.01 };
+export function getSymbolQuantityPrecision(symbol: string): { decimals: number; stepSize: number; minNotional: number } {
+  const rule = SymbolPrecisionRegistry.getPrecisionRule(symbol);
+  return {
+    decimals: rule.qtyDecimals,
+    stepSize: rule.stepSize,
+    minNotional: rule.minNotional,
+  };
 }
 
-export function formatQuantityForSymbol(symbol: string, rawQty: number): number {
-  const { decimals, stepSize } = getSymbolQuantityPrecision(symbol);
-  if (decimals === 0) {
-    return Math.max(1, Math.floor(rawQty));
-  }
-  const factor = Math.pow(10, decimals);
-  const rounded = Math.floor(rawQty * factor + 1e-9) / factor;
-  return Math.max(stepSize, Number(rounded.toFixed(decimals)));
+export function formatQuantityForSymbol(symbol: string, rawQty: number, isMinNotionalGuard: boolean = false): number {
+  return SymbolPrecisionRegistry.formatQuantity(symbol, rawQty, isMinNotionalGuard);
 }
 
 export type EngineState = "LIVE_ACTIVE" | "TRAINING_LOCK" | "RECALIBRATING" | "PAUSED" | "EMERGENCY_HALT";
@@ -641,13 +631,13 @@ export class StrategyEngine {
     if (basePrice > 0) {
       const targetNotionalUsdt = this.config.tradeSizeUsdt > 0 ? this.config.tradeSizeUsdt : 60.0;
       const rawQty = (targetNotionalUsdt / basePrice) * penaltyCoeff * targetSizeDecayCoeff;
-      finalQuantity = formatQuantityForSymbol(this.config.symbol, rawQty);
+      finalQuantity = formatQuantityForSymbol(this.config.symbol, rawQty, false);
 
       // Binance Futures Min Notional Guard: ensure order notional >= minNotionalUsdt
       const minNotionalUsdt = this.config.minNotionalUsdt;
       if (finalQuantity * basePrice < minNotionalUsdt) {
         const requiredQty = minNotionalUsdt / basePrice;
-        finalQuantity = formatQuantityForSymbol(this.config.symbol, requiredQty);
+        finalQuantity = formatQuantityForSymbol(this.config.symbol, requiredQty, true);
       }
     }
 

@@ -176,11 +176,12 @@
   3. Eradicated hot-path heap allocations in `src/oms/slicing.rs` and `src/oms/sor.rs` by operating directly on fixed `[u8; 64]` client order IDs and pre-allocated `[u8; 16]` symbol byte buffers.
   4. Optimized price and quantity quantization loops by pre-computing inverse tick multipliers (`inv_tick = 1.0 / effective_tick`).
   5. 100% QA verified via `cargo test --lib` (35/35 passed in 0.34s), release N-API build (`npx napi build --platform --release`), strict TypeScript build (`npm run build:ts` - 0 errors), and automated 100,000 multi-asset intent stress benchmark (`node dist/test_phase4_multi_asset_oms.js` executing 100,000 intents in 334.88 ms at **298,611 intents/sec throughput** and **3.349 μs average latency per intent**).
+
+- **Date:** 2026-08-09
+- **Feature/Task:** Dynamic Binance Futures ExchangeInfo Precision Caching & Hardcoded LOT_SIZE Eradication
+- **Artifacts Created/Modified:** `src/config/symbolPrecision.ts`, `src/execution/binance.ts`, `src/strategy/engine.ts`, `src/scripts/run_tui_dashboard.ts`, `src/index.ts`, `src/tests/test_dynamic_precision_registry.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Eradicated all hardcoded `if-else` coin rules from `getSymbolQuantityPrecision`. Implemented `SymbolPrecisionRegistry` which fetches `/fapi/v1/exchangeInfo` on startup and dynamically parses `LOT_SIZE` (for `qtyDecimals` & `stepSize`), `PRICE_FILTER` (for `priceDecimals` & `tickSize`), and `MIN_NOTIONAL` (for `minNotional`) for all active `.env` trading pairs. Implemented `isMinNotionalGuard` ceiling rounding (`Math.ceil`) to guarantee order notional $\ge$ `minNotionalUsdt`, eliminating Binance API Error `-1013` / `-2019`. Enforced safe fallback throwing `[CRITICAL_PRECISION_ERROR]` for unmapped symbols.
 - **Status:** ✅ Completed & QA Verified
-
-
-
-
 - **Date:** 2026-08-08
 - **Feature/Task:** Phase 4 Level-4 Remediation & Quant Hardening (Slicing IEEE-754 Epsilon Guard, Sub-Dollar Altcoin Risk Error Formatting, Non-Finite NaN Sanitization, Lock-Free MPSC Queue, SAB Slot 181/191..200 Population & TypeScript Executor Refactoring)
 - **Artifacts Created/Modified:** `src/oms/slicing.rs`, `src/oms/risk.rs`, `src/oms/sor.rs`, `src/oms/multi_asset_oms.rs`, `src/execution/multi_asset_executor.ts`, `src/test_phase4_multi_asset_oms.ts`, `batbot_system_status_log.md`

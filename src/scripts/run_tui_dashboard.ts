@@ -9,6 +9,7 @@ import { getTradingSymbols } from "../config/tradingSymbols";
 import { StrategyEngine } from "../strategy/engine";
 import { RiskGuard } from "../strategy/risk";
 import { syncStateOnStartup } from "../index";
+import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
 
 export interface NativeIngestionModule {
   startIngestion?: (sabBuffer: Buffer, symbols?: string[]) => boolean;
@@ -113,6 +114,14 @@ export async function runProductionTuiLauncher(): Promise<void> {
   const binanceClient = new BinanceExecutionClient();
   const riskGuard = new RiskGuard();
   const primarySymbol = process.env.SYMBOL ?? activeSymbols[0] ?? "BTCUSDT";
+
+  // Pre-fetch Binance Futures exchangeInfo to build dynamic LOT_SIZE & PRICE_FILTER precision map
+  try {
+    await SymbolPrecisionRegistry.initializeFromBinance(binanceClient);
+  } catch (err: unknown) {
+    SymbolPrecisionRegistry.preseedOfflineDefaults(activeSymbols);
+  }
+
   const strategyEngine = new StrategyEngine(client, riskGuard, binanceClient, { symbol: primarySymbol });
 
   if (binanceClient.isConfigured()) {

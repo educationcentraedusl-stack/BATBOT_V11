@@ -10,6 +10,7 @@ import { CLIDashboard, TelemetryFrame } from "./telemetry/dashboard";
 import { TelemetryWSServer } from "./telemetry/server";
 import { ControlCommand } from "./telemetry/proto";
 import { AutoRecalibrationManager } from "./ai/recalibrationWorker";
+import { SymbolPrecisionRegistry } from "./config/symbolPrecision";
 
 export const DEFAULT_TAKER_FEE_RATE = 0.0004;
 
@@ -50,6 +51,9 @@ export async function syncStateOnStartup(
   }
   try {
     console.log("[StateSync] Initiating Binance Server Time & State Synchronization...");
+    // 0. Fetch Binance Futures exchangeInfo to initialize dynamic LOT_SIZE & PRICE_FILTER map
+    await SymbolPrecisionRegistry.initializeFromBinance(executionClient);
+
     // 1. Sync server time to fix timestamp error -1021
     await executionClient.syncServerTime();
 

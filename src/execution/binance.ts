@@ -83,6 +83,34 @@ export interface BinanceClientOptions {
   useTestnet?: boolean;
 }
 
+export interface BinanceSymbolFilter {
+  filterType: string;
+  minPrice?: string;
+  maxPrice?: string;
+  tickSize?: string;
+  minQty?: string;
+  maxQty?: string;
+  stepSize?: string;
+  notional?: string;
+  minNotional?: string;
+}
+
+export interface BinanceSymbolInfo {
+  symbol: string;
+  pair: string;
+  contractType: string;
+  status: string;
+  pricePrecision: number;
+  quantityPrecision: number;
+  filters: BinanceSymbolFilter[];
+}
+
+export interface BinanceExchangeInfoResponse {
+  timezone: string;
+  serverTime: number;
+  symbols: BinanceSymbolInfo[];
+}
+
 export class BinanceExecutionClient {
   private apiKey: string;
   private apiSecret: string;
@@ -162,6 +190,10 @@ export class BinanceExecutionClient {
       console.error(`[BinanceExecutionClient] Failed to sync Binance server time: ${err.message}`);
     }
     return this.timeOffset;
+  }
+
+  public async fetchExchangeInfo(): Promise<BinanceExchangeInfoResponse> {
+    return this.request<BinanceExchangeInfoResponse>("GET", "/fapi/v1/exchangeInfo", {}, false);
   }
 
   public getUsdtAvailableBalance(): number {
