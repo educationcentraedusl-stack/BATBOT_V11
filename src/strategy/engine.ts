@@ -5,6 +5,7 @@ import { PositionLedger, HedgePositionLedger, MultiAssetPositionLedger, Position
 import { DynamicRiskEngine, DynamicMicrostructureMetrics } from "./dynamicRiskEngine";
 import { BinanceUserDataStream, OrderTradeUpdatePayload } from "../execution/userDataStream";
 import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
+import { getTradingSymbols } from "../config/tradingSymbols";
 
 export interface StrategyConfig {
   symbol: string;
@@ -77,6 +78,7 @@ export class StrategyEngine {
   private userDataStream: BinanceUserDataStream | null = null;
   private lastProcessedSequence: bigint = -1n;
   private state: EngineState = "LIVE_ACTIVE";
+  private assetIndex: number = 0;
 
   private reusableOrderIntent: OrderIntent = {
     symbol: process.env.SYMBOL ?? "BTCUSDT",
@@ -189,6 +191,10 @@ export class StrategyEngine {
     };
 
     this.dynamicRiskEngine = new DynamicRiskEngine(this.config.vpinThreshold);
+
+    const activeSymbols = getTradingSymbols();
+    const symIdx = activeSymbols.indexOf(this.config.symbol);
+    this.assetIndex = symIdx >= 0 ? symIdx : 0;
 
     this.hedgeLedger = hedgeLedger ?? new HedgePositionLedger(this.config.symbol, this.config.maxShortSlots);
     this.positionLedger = positionLedger ?? this.hedgeLedger.getLegacyLedger();
@@ -336,7 +342,7 @@ export class StrategyEngine {
    * Zero GC heap allocation when no trade signals are generated.
    */
   public evaluateTick(): StrategySignalResult {
-    const seq = this.client.getSequenceNum();
+    const seq = this.client.getSequenceNum(this.assetIndex);
 
     if (seq === this.lastProcessedSequence) {
       this.staticResult.sequenceNum = seq;
@@ -346,18 +352,18 @@ export class StrategyEngine {
     this.lastProcessedSequence = seq;
 
     // Read scalar metrics atomically from SAB
-    const obi = this.client.getOBI();
-    const cvd = this.client.getCVD();
-    const spreadVelocity = this.client.getSpreadVelocity();
-    const bidPrice = this.client.getBestBidPrice();
-    const askPrice = this.client.getBestAskPrice();
+    const obi = this.client.getOBI(this.assetIndex);
+    const cvd = this.client.getCVD(this.assetIndex);
+    const spreadVelocity = this.client.getSpreadVelocity(this.assetIndex);
+    const bidPrice = this.client.getBestBidPrice(this.assetIndex);
+    const askPrice = this.client.getBestAskPrice(this.assetIndex);
 
     // Read AI predictions & latency metrics from SAB
-    const aiDirection = this.client.getAIPredictionDirection();
-    const aiConfidence = this.client.getAIPredictionConfidence();
-    const latencyPenalty = this.client.getLatencyPenaltyCoefficient();
+    const aiDirection = this.client.getAIPredictionDirection(this.assetIndex);
+    const aiConfidence = this.client.getAIPredictionConfidence(this.assetIndex);
+    const latencyPenalty = this.client.getLatencyPenaltyCoefficient(this.assetIndex);
     const penaltyCoeff = latencyPenalty > 0 ? Math.max(0.75, latencyPenalty) : 1.0;
-    const slippageTicks = this.client.getDynamicSlippageTicks();
+    const slippageTicks = this.client.getDynamicSlippageTicks(this.assetIndex);
 
     // 1. Dynamic Monitoring: Evaluate Unrealized PnL against dynamic TP/SL thresholds across Hedge Slots
     const markPrice = askPrice > 0 ? (askPrice + bidPrice) / 2 : bidPrice;
@@ -513,12 +519,12 @@ export class StrategyEngine {
     }
 
     // Read Hawkes & Microburst Metrics from SAB
-    const hawkesIntensity = this.client.getHawkesIntensity();
-    const realizedVol = this.client.getRealizedVolatility();
-    const rawShortCooldownLock = this.client.getShortCooldownLock();
-    const rawLongCooldownLock = this.client.getLongCooldownLock();
-    const hurstExponent = this.client.getHurstExponent();
-    const garmanKlassRV = this.client.getGarmanKlassRV();
+    const hawkesIntensity = this.client.getHawkesIntensity(this.assetIndex);
+    const realizedVol = this.client.getRealizedVolatility(this.assetIndex);
+    const rawShortCooldownLock = this.client.getShortCooldownLock(this.assetIndex);
+    const rawLongCooldownLock = this.client.getLongCooldownLock(this.assetIndex);
+    const hurstExponent = this.client.getHurstExponent(this.assetIndex);
+    const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
 
     const nowMs = Date.now();
     // Defensive ceiling guard: if cooldown lock is set to a future timestamp > 60s, reset lock to 0
@@ -702,12 +708,12 @@ export class StrategyEngine {
     const microMetrics: DynamicMicrostructureMetrics = {
       obi,
       cvd,
-      rvGk: this.client.getGarmanKlassRV(),
-      vpin: this.client.getVPIN(),
-      hurst: this.client.getHurstExponent(),
-      lobEntropy: this.client.getLOBEntropy(),
-      regime: this.client.getRegimeStateCode(),
-      isSweepDetected: this.client.getIsSweepDetected(),
+      rvGk: this.client.getGarmanKlassRV(this.assetIndex),
+      vpin: this.client.getVPIN(this.assetIndex),
+      hurst: this.client.getHurstExponent(this.assetIndex),
+      lobEntropy: this.client.getLOBEntropy(this.assetIndex),
+      regime: this.client.getRegimeStateCode(this.assetIndex),
+      isSweepDetected: this.client.getIsSweepDetected(this.assetIndex),
     };
 
     const riskProfile = this.dynamicRiskEngine.evaluateDynamicRisk(
@@ -749,11 +755,11 @@ export class StrategyEngine {
     if (riskResult.passed) {
       // Set atomic SAB hysteresis lockout (cooldown per side) to suppress microburst sweeps
       if (targetPosSide === "SHORT") {
-        this.client.setShortCooldownLock(Date.now() + this.config.cooldownMs);
-        this.client.setLastShortFillPrice(this.reusableOrderIntent.price);
+        this.client.setShortCooldownLock(Date.now() + this.config.cooldownMs, this.assetIndex);
+        this.client.setLastShortFillPrice(this.reusableOrderIntent.price, this.assetIndex);
       } else if (targetPosSide === "LONG") {
-        this.client.setLongCooldownLock(Date.now() + this.config.cooldownMs);
-        this.client.setLastLongFillPrice(this.reusableOrderIntent.price);
+        this.client.setLongCooldownLock(Date.now() + this.config.cooldownMs, this.assetIndex);
+        this.client.setLastLongFillPrice(this.reusableOrderIntent.price, this.assetIndex);
       }
 
       const notional = this.reusableOrderIntent.price * this.reusableOrderIntent.quantity;

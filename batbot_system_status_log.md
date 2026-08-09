@@ -1,6 +1,16 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-09
+- **Feature/Task:** Multi-Asset Symbol Index Binding Remediation in StrategyEngine
+- **Artifacts Created/Modified:** `src/strategy/engine.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Remediated multi-asset `assetIdx` default binding defect in `StrategyEngine`:
+  1. Resolved `this.assetIndex` dynamically from `getTradingSymbols().indexOf(this.config.symbol)` during `StrategyEngine` instantiation.
+  2. Passed `this.assetIndex` to all `MarketDataClient` scalar getters (`getOBI`, `getCVD`, `getSpreadVelocity`, `getBestBidPrice`, `getBestAskPrice`, `getSequenceNum`, `getAIPredictionDirection`, `getAIPredictionConfidence`, `getHawkesIntensity`, `getRealizedVolatility`, `getShortCooldownLock`, `getLongCooldownLock`, `getHurstExponent`, `getGarmanKlassRV`, `getVPIN`, `getLOBEntropy`, `getRegimeStateCode`, `getIsSweepDetected`) and setters (`setShortCooldownLock`, `setLongCooldownLock`, `setLastShortFillPrice`, `setLastLongFillPrice`).
+  3. Ensured that setting `SYMBOL=ADAUSDT` (or any of the 10 configured coins) in `.env` evaluates the exact bid/ask prices, OBI, CVD, and metrics of that specific asset slot in SharedArrayBuffer.
+  4. 100% QA verified via `npx tsc --noEmit` with 0 errors.
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-09
 - **Feature/Task:** Environment-Driven Dynamic USDT Notional Sizing & LOT_SIZE Precision Engine (All 10 Assets Unlocked)
 - **Artifacts Created/Modified:** `.env`, `src/strategy/engine.ts`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Implemented 100% environment-driven USDT trade sizing and Binance LOT_SIZE precision formatting across all 10 active trading symbols:

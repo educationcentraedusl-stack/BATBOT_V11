@@ -547,7 +547,7 @@ class StrategyEngine {
             regime: this.client.getRegimeStateCode(),
             isSweepDetected: this.client.getIsSweepDetected(),
         };
-        const riskProfile = this.dynamicRiskEngine.evaluateDynamicRisk(basePrice, targetPosSide === "LONG" ? "LONG" : "SHORT", microMetrics, Math.abs(askPrice - bidPrice));
+        const riskProfile = this.dynamicRiskEngine.evaluateDynamicRisk(targetPrice, targetPosSide === "LONG" ? "LONG" : "SHORT", microMetrics, Math.abs(askPrice - bidPrice));
         riskProfile.isHighConfidenceAi = isHighConfidenceAi;
         riskProfile.aiConfidence = aiConfidence;
         // Populate pre-allocated intent
@@ -558,8 +558,8 @@ class StrategyEngine {
         this.reusableOrderIntent.currentPositionSide = targetPosSide;
         this.reusableOrderIntent.isCloseOrder = false;
         this.reusableOrderIntent.riskProfile = riskProfile;
-        this.reusableOrderIntent.stopLossPrice = riskProfile.stopLossPrice;
-        this.reusableOrderIntent.takeProfitPrice = riskProfile.takeProfitPrice;
+        this.reusableOrderIntent.stopLossPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.config.symbol, riskProfile.stopLossPrice);
+        this.reusableOrderIntent.takeProfitPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.config.symbol, riskProfile.takeProfitPrice);
         // Pass through Risk Management Guard with target position side
         const isConfigured = this.executionClient.isConfigured();
         const riskResult = this.riskGuard.validateOrder(this.reusableOrderIntent, isConfigured, targetPosSide);

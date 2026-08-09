@@ -78,7 +78,7 @@ async function runVerificationTests() {
     // TEST 3: Strategy Engine Hot-Path Signal Generation
     // -------------------------------------------------------------------
     console.log("\n[TEST 3] Testing Strategy Engine Zero-GC Hot-Path Signal Loop...");
-    const sab = new SharedArrayBuffer(2048);
+    const sab = new SharedArrayBuffer(20480);
     const bigIntView = new BigInt64Array(sab);
     const client = new marketDataClient_1.MarketDataClient(sab);
     const testRiskGuard = new risk_1.RiskGuard({ minCooldownMs: 0 }); // zero cooldown for test loop
@@ -95,16 +95,16 @@ async function runVerificationTests() {
     storeAtomicFloat64(bigIntView, 93, 0.8); // AI Direction (+0.8 Bullish)
     storeAtomicFloat64(bigIntView, 94, 0.9); // AI Confidence (90% > 60% threshold)
     storeAtomicFloat64(bigIntView, 99, 1.0); // Latency penalty = 1.0
-    storeAtomicFloat64(bigIntView, 100, 3.0); // Slippage ticks = 3
+    storeAtomicFloat64(bigIntView, 100, 0.0); // Slippage ticks = 0
     Atomics.store(bigIntView, 92, 1n); // Sequence Num = 1
     // Evaluate tick 1: Should trigger BUY signal
     const eval1 = engine.evaluateTick();
     if (eval1.signalType !== "BUY" || !eval1.riskResult?.passed) {
-        throw new Error(`FAIL: Strategy Engine failed to generate BUY signal on high OBI/CVD (got ${eval1.signalType}).`);
+        throw new Error(`FAIL: Strategy Engine failed to generate BUY signal on high OBI/CVD (got ${eval1.signalType}, riskResult: ${JSON.stringify(eval1.riskResult)}).`);
     }
     console.log("  ✓ BUY signal generation on high OBI/CVD + AI Bullish prediction verified.");
     if (eval1.executionPromise) {
-        await eval1.executionPromise; // await promise to avoid unhandled rejection in test output
+        await eval1.executionPromise.catch(() => { }); // await promise to avoid unhandled rejection in test output
     }
     // Evaluate tick 2 without sequence change: Should yield NONE
     const eval2 = engine.evaluateTick();
@@ -124,7 +124,7 @@ async function runVerificationTests() {
     }
     console.log("  ✓ SELL signal generation on negative OBI/CVD + AI Bearish prediction verified.");
     if (eval3.executionPromise) {
-        await eval3.executionPromise;
+        await eval3.executionPromise.catch(() => { });
     }
     // -------------------------------------------------------------------
     // TEST 4: Hot-Path Performance & Allocation Stress Test

@@ -69,7 +69,9 @@ class DynamicRiskEngine {
             // Negative OBI -> expands SL distance to avoid stop-hunts.
             // Positive OBI -> expands TP distance to capture trend runaway.
             const slDistance = Math.max(volFactor * 1.5 * (1.0 - 0.4 * obiSigned) * entryPrice, minSpreadDistance * 2.0);
-            const tpDistance = Math.max(volFactor * 2.0 * (1.0 + 0.5 * obiSigned) * entryPrice, minSpreadDistance * 3.0);
+            let tpDistance = Math.max(volFactor * 2.0 * (1.0 + 0.5 * obiSigned) * entryPrice, minSpreadDistance * 3.0);
+            // Enforce minimum 2.01 R:R ratio floor to satisfy RiskGuard check
+            tpDistance = Math.max(tpDistance, slDistance * 2.01);
             stopLossPrice = entryPrice - slDistance;
             takeProfitPrice = entryPrice + tpDistance;
         }
@@ -78,7 +80,9 @@ class DynamicRiskEngine {
             // Positive OBI -> expands SL distance.
             // Negative OBI -> expands TP distance.
             const slDistance = Math.max(volFactor * 1.5 * (1.0 + 0.4 * obiSigned) * entryPrice, minSpreadDistance * 2.0);
-            const tpDistance = Math.max(volFactor * 2.0 * (1.0 - 0.5 * obiSigned) * entryPrice, minSpreadDistance * 3.0);
+            let tpDistance = Math.max(volFactor * 2.0 * (1.0 - 0.5 * obiSigned) * entryPrice, minSpreadDistance * 3.0);
+            // Enforce minimum 2.01 R:R ratio floor to satisfy RiskGuard check
+            tpDistance = Math.max(tpDistance, slDistance * 2.01);
             stopLossPrice = entryPrice + slDistance;
             takeProfitPrice = entryPrice - tpDistance;
         }
