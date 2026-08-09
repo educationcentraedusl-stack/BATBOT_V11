@@ -117,17 +117,18 @@ export async function runProductionTuiLauncher(): Promise<void> {
 
   if (binanceClient.isConfigured()) {
     binanceClient.startBalancePolling(5000);
-    dashboard.pushNotification("Binance API credentials verified. Balance polling active.");
+    dashboard.pushNotification("✅ Binance API credentials verified. Balance polling active.");
     syncStateOnStartup(binanceClient, strategyEngine, riskGuard)
       .then(() => {
-        dashboard.pushNotification(`State synchronized with Binance API for ${primarySymbol}.`);
+        dashboard.pushNotification(`✅ State synchronized with Binance API for ${primarySymbol}.`);
       })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
-        dashboard.pushNotification(`[StateSync Notice] ${msg}`);
+        dashboard.pushNotification(`⚠️ [StateSync Notice] ${msg}`);
       });
   } else {
-    dashboard.pushNotification("Notice: Binance API credentials unconfigured (Balance default: $0.00).");
+    dashboard.pushNotification("⛔ [CRITICAL_WARNING] BINANCE API KEYS MISSING IN .env! TRADING IN SHADOW MODE ONLY.");
+    dashboard.pushNotification("⛔ [CRITICAL_WARNING] Set BINANCE_API_KEY and BINANCE_API_SECRET in .env to enable live execution.");
   }
 
   dashboard.pushNotification("BATBOT_V11 Production Launch Sequence Complete.");
@@ -153,6 +154,41 @@ export async function runProductionTuiLauncher(): Promise<void> {
         dashboard.pushNotification(
           `[STRATEGY_SIGNAL] ${result.signalType} | Sym: ${primarySymbol} | Seq #${result.sequenceNum} | Bid: $${result.bidPrice.toFixed(2)} / Ask: $${result.askPrice.toFixed(2)}`
         );
+
+        if (result.riskResult && !result.riskResult.passed) {
+          dashboard.pushNotification(
+            `[RISK_BLOCK] ${primarySymbol} ${result.signalType} Blocked: [${result.riskResult.reasonCode}] ${result.riskResult.message}`
+          );
+        }
+
+        if (result.executionPromise) {
+          result.executionPromise
+            .then((res) => {
+              if (res && res.orderId) {
+                dashboard.pushNotification(
+                  `[ORDER_FILLED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${res.executedQty} @ $${res.avgPrice || res.price}`
+                );
+              }
+            })
+            .catch((err: unknown) => {
+              const errorMsg = err instanceof Error ? err.message : String(err);
+              let userAlert = `[EXECUTION_ERROR] ${primarySymbol} ${result.signalType} Failed: ${errorMsg}`;
+
+              if (errorMsg.includes("-4059") || errorMsg.includes("position side")) {
+                userAlert = `⛔ [CRITICAL_API_ALERT] Error -4059: HEDGE MODE REQUIRED! Go to Binance Futures -> Preferences -> Position Mode -> Enable "Hedge Mode".`;
+              } else if (errorMsg.includes("-1013") || errorMsg.includes("MIN_NOTIONAL") || errorMsg.includes("Filter failure")) {
+                userAlert = `⛔ [CRITICAL_API_ALERT] Error -1013: MIN NOTIONAL TOO LOW! Order value is below $55 USDT minimum notional threshold.`;
+              } else if (errorMsg.includes("-2019") || errorMsg.includes("Margin is insufficient")) {
+                userAlert = `⛔ [CRITICAL_API_ALERT] Error -2019: INSUFFICIENT MARGIN! Account balance is too low for this order size.`;
+              } else if (errorMsg.includes("-2015") || errorMsg.includes("Invalid API-key")) {
+                userAlert = `⛔ [CRITICAL_API_ALERT] Error -2015: INVALID API KEY / PERMISSIONS! Verify API Key and enable Futures Trading in Binance.`;
+              } else if (errorMsg.includes("-1021") || errorMsg.includes("Timestamp")) {
+                userAlert = `⛔ [CRITICAL_API_ALERT] Error -1021: SYSTEM CLOCK DESYNC! Local machine time is out of sync with Binance server time.`;
+              }
+
+              dashboard.pushNotification(userAlert);
+            });
+        }
       }
     } catch (err: unknown) {
       // Non-blocking tick error handling

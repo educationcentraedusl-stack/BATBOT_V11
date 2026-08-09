@@ -768,7 +768,7 @@ export class StrategyEngine {
         })
         .catch((err) => {
           console.error(`[BinanceExecution][REJECTED] Order Placement Failed: ${err.message}`);
-          return null;
+          throw err;
         });
     }
 
