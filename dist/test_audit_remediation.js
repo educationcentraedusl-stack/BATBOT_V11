@@ -6,7 +6,7 @@ const risk_1 = require("./strategy/risk");
 const binance_1 = require("./execution/binance");
 class MockMarketDataClient extends marketDataClient_1.MarketDataClient {
     constructor() {
-        super(new SharedArrayBuffer(2048));
+        super(new SharedArrayBuffer(20480));
     }
     seq = 0n;
     obiVal = 0.50;

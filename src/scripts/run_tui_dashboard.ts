@@ -6,6 +6,9 @@ import { MultiAssetCLIDashboard } from "../telemetry/multiAssetDashboard";
 import { InteractiveKeypressEngine } from "../telemetry/keypressHandler";
 import { BinanceExecutionClient } from "../execution/binance";
 import { getTradingSymbols } from "../config/tradingSymbols";
+import { StrategyEngine } from "../strategy/engine";
+import { RiskGuard } from "../strategy/risk";
+import { syncStateOnStartup } from "../index";
 
 export interface NativeIngestionModule {
   startIngestion?: (sabBuffer: Buffer, symbols?: string[]) => boolean;
@@ -108,15 +111,28 @@ export async function runProductionTuiLauncher(): Promise<void> {
   const keyEngine = new InteractiveKeypressEngine(client);
 
   const binanceClient = new BinanceExecutionClient();
+  const riskGuard = new RiskGuard();
+  const primarySymbol = process.env.SYMBOL ?? activeSymbols[0] ?? "BTCUSDT";
+  const strategyEngine = new StrategyEngine(client, riskGuard, binanceClient, { symbol: primarySymbol });
+
   if (binanceClient.isConfigured()) {
     binanceClient.startBalancePolling(5000);
     dashboard.pushNotification("Binance API credentials verified. Balance polling active.");
+    syncStateOnStartup(binanceClient, strategyEngine, riskGuard)
+      .then(() => {
+        dashboard.pushNotification(`State synchronized with Binance API for ${primarySymbol}.`);
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        dashboard.pushNotification(`[StateSync Notice] ${msg}`);
+      });
   } else {
     dashboard.pushNotification("Notice: Binance API credentials unconfigured (Balance default: $0.00).");
   }
 
   dashboard.pushNotification("BATBOT_V11 Production Launch Sequence Complete.");
   dashboard.pushNotification(`${maxAssets}-Asset SharedArrayBuffer Active (${totalSABBytes} bytes).`);
+  dashboard.pushNotification(`Strategy Engine Live on ${primarySymbol} (10ms High-Frequency Signal Loop).`);
   dashboard.pushNotification("Keyboard active: 0-9 = Focus Asset, K = Kill, P = Pause, C = Close All, Q = Quit.");
 
   keyEngine.setAssetFocusCallback((idx: number) => {
@@ -128,6 +144,20 @@ export async function runProductionTuiLauncher(): Promise<void> {
   });
 
   keyEngine.start();
+
+  // Active High-Frequency 10ms Strategy Engine Tick Evaluation Loop
+  const strategyInterval = setInterval(() => {
+    try {
+      const result = strategyEngine.evaluateTick();
+      if (result.signalType !== "NONE") {
+        dashboard.pushNotification(
+          `[STRATEGY_SIGNAL] ${result.signalType} | Sym: ${primarySymbol} | Seq #${result.sequenceNum} | Bid: $${result.bidPrice.toFixed(2)} / Ask: $${result.askPrice.toFixed(2)}`
+        );
+      }
+    } catch (err: unknown) {
+      // Non-blocking tick error handling
+    }
+  }, 10);
 
   // Active double-buffered ANSI refresh loop (~6.6 Hz / 150ms interval)
   const renderInterval = setInterval(() => {
@@ -144,6 +174,7 @@ export async function runProductionTuiLauncher(): Promise<void> {
     isShuttingDown = true;
 
     binanceClient.stopBalancePolling();
+    clearInterval(strategyInterval);
     clearInterval(renderInterval);
     keyEngine.stop();
     dashboard.clear();

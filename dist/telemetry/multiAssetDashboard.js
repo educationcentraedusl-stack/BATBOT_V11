@@ -140,8 +140,31 @@ class MultiAssetCLIDashboard {
             const hawkes = this.client.getHawkesIntensity(i);
             const gkRv = this.client.getGarmanKlassRV(i);
             const aiDir = this.client.getAIPredictionDirection(i);
+            const aiConf = this.client.getAIPredictionConfidence(i);
+            const obiBuyThreshold = 0.35;
+            const obiSellThreshold = -0.35;
+            let signalStr = `${gray}NONE${reset}`;
+            if (aiConf >= 0.75) {
+                if (aiDir > 0 && obi >= obiBuyThreshold) {
+                    signalStr = `${green}${bold}BUY ${reset}`;
+                }
+                else if (aiDir < 0 && obi <= obiSellThreshold) {
+                    signalStr = `${red}${bold}SELL${reset}`;
+                }
+            }
+            else {
+                const aiScore = Math.max(-1.0, Math.min(1.0, aiDir * aiConf));
+                const obiScore = Math.max(-1.0, Math.min(1.0, obi));
+                const cvdScore = cvd > 0 ? 1.0 : cvd < 0 ? -1.0 : 0.0;
+                const compScore = 0.50 * aiScore + 0.25 * obiScore + 0.25 * cvdScore;
+                if (compScore > 0.12 && aiConf >= 0.65 && obi >= obiBuyThreshold) {
+                    signalStr = `${green}BUY ${reset}`;
+                }
+                else if (compScore < -0.12 && aiConf >= 0.65 && obi <= obiSellThreshold) {
+                    signalStr = `${red}SELL${reset}`;
+                }
+            }
             const obiBar = this.getFastMiniBar(obi, -1, 1);
-            const signalStr = aiDir > 0.3 ? `${green}BUY ${reset}` : aiDir < -0.3 ? `${red}SELL${reset}` : `${gray}NONE${reset}`;
             const focusMarker = i === this.focusedAssetIdx ? `${yellow}${bold}#${i}${reset}` : ` #${i}`;
             out += `| ${focusMarker}  | ${sym} | ${bid.toFixed(2).padEnd(9)} | ${ask.toFixed(2).padEnd(9)} | ${spread.padEnd(7)} | [${obiBar}] | ${cvd >= 0 ? "+" : ""}${cvd.toFixed(1).padEnd(9)} | ${hawkes.toFixed(3).padEnd(8)} | ${gkRv.toFixed(5).padEnd(12)} | ${signalStr}  |${clearLine}\n`;
         }

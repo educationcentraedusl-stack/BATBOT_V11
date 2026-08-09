@@ -42,6 +42,9 @@ const multiAssetDashboard_1 = require("../telemetry/multiAssetDashboard");
 const keypressHandler_1 = require("../telemetry/keypressHandler");
 const binance_1 = require("../execution/binance");
 const tradingSymbols_1 = require("../config/tradingSymbols");
+const engine_1 = require("../strategy/engine");
+const risk_1 = require("../strategy/risk");
+const index_1 = require("../index");
 async function runProductionTuiLauncher() {
     console.log("=========================================================================");
     console.log("  BATBOT_V11 HIGH-FREQUENCY TRADING SYSTEM - PRODUCTION TUI LAUNCHER     ");
@@ -123,15 +126,27 @@ async function runProductionTuiLauncher() {
     const dashboard = new multiAssetDashboard_1.MultiAssetCLIDashboard(client, true, activeSymbols);
     const keyEngine = new keypressHandler_1.InteractiveKeypressEngine(client);
     const binanceClient = new binance_1.BinanceExecutionClient();
+    const riskGuard = new risk_1.RiskGuard();
+    const primarySymbol = process.env.SYMBOL ?? activeSymbols[0] ?? "BTCUSDT";
+    const strategyEngine = new engine_1.StrategyEngine(client, riskGuard, binanceClient, { symbol: primarySymbol });
     if (binanceClient.isConfigured()) {
         binanceClient.startBalancePolling(5000);
         dashboard.pushNotification("Binance API credentials verified. Balance polling active.");
+        (0, index_1.syncStateOnStartup)(binanceClient, strategyEngine, riskGuard)
+            .then(() => {
+            dashboard.pushNotification(`State synchronized with Binance API for ${primarySymbol}.`);
+        })
+            .catch((err) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            dashboard.pushNotification(`[StateSync Notice] ${msg}`);
+        });
     }
     else {
         dashboard.pushNotification("Notice: Binance API credentials unconfigured (Balance default: $0.00).");
     }
     dashboard.pushNotification("BATBOT_V11 Production Launch Sequence Complete.");
     dashboard.pushNotification(`${maxAssets}-Asset SharedArrayBuffer Active (${totalSABBytes} bytes).`);
+    dashboard.pushNotification(`Strategy Engine Live on ${primarySymbol} (10ms High-Frequency Signal Loop).`);
     dashboard.pushNotification("Keyboard active: 0-9 = Focus Asset, K = Kill, P = Pause, C = Close All, Q = Quit.");
     keyEngine.setAssetFocusCallback((idx) => {
         dashboard.setFocusedAsset(idx);
@@ -140,6 +155,18 @@ async function runProductionTuiLauncher() {
         dashboard.pushNotification(msg);
     });
     keyEngine.start();
+    // Active High-Frequency 10ms Strategy Engine Tick Evaluation Loop
+    const strategyInterval = setInterval(() => {
+        try {
+            const result = strategyEngine.evaluateTick();
+            if (result.signalType !== "NONE") {
+                dashboard.pushNotification(`[STRATEGY_SIGNAL] ${result.signalType} | Sym: ${primarySymbol} | Seq #${result.sequenceNum} | Bid: $${result.bidPrice.toFixed(2)} / Ask: $${result.askPrice.toFixed(2)}`);
+            }
+        }
+        catch (err) {
+            // Non-blocking tick error handling
+        }
+    }, 10);
     // Active double-buffered ANSI refresh loop (~6.6 Hz / 150ms interval)
     const renderInterval = setInterval(() => {
         if (binanceClient.isConfigured()) {
@@ -154,6 +181,7 @@ async function runProductionTuiLauncher() {
             return;
         isShuttingDown = true;
         binanceClient.stopBalancePolling();
+        clearInterval(strategyInterval);
         clearInterval(renderInterval);
         keyEngine.stop();
         dashboard.clear();
