@@ -8,6 +8,7 @@ import { BinanceUserDataStream, OrderTradeUpdatePayload } from "../execution/use
 export interface StrategyConfig {
   symbol: string;
   orderQuantity: number;
+  tradeSizeUsdt: number;
   obiBuyThreshold: number;
   obiSellThreshold: number;
   cvdBuyThreshold: number;
@@ -31,6 +32,30 @@ export interface StrategyConfig {
   cooldownMs: number;
   vpinThreshold: number;
   vpinBucketVolume: number;
+}
+
+export function getSymbolQuantityPrecision(symbol: string): { decimals: number; stepSize: number } {
+  const sym = symbol.toUpperCase();
+  if (sym.includes("BTC") || sym.includes("ETH")) {
+    return { decimals: 3, stepSize: 0.001 };
+  } else if (sym.includes("SOL") || sym.includes("BNB") || sym.includes("LINK")) {
+    return { decimals: 2, stepSize: 0.01 };
+  } else if (sym.includes("XRP") || sym.includes("AVAX") || sym.includes("DOT")) {
+    return { decimals: 1, stepSize: 0.1 };
+  } else if (sym.includes("ADA") || sym.includes("DOGE")) {
+    return { decimals: 0, stepSize: 1.0 };
+  }
+  return { decimals: 2, stepSize: 0.01 };
+}
+
+export function formatQuantityForSymbol(symbol: string, rawQty: number): number {
+  const { decimals, stepSize } = getSymbolQuantityPrecision(symbol);
+  if (decimals === 0) {
+    return Math.max(1, Math.floor(rawQty));
+  }
+  const factor = Math.pow(10, decimals);
+  const rounded = Math.floor(rawQty * factor + 1e-9) / factor;
+  return Math.max(stepSize, Number(rounded.toFixed(decimals)));
 }
 
 export type EngineState = "LIVE_ACTIVE" | "TRAINING_LOCK" | "RECALIBRATING" | "PAUSED" | "EMERGENCY_HALT";
@@ -140,9 +165,13 @@ export class StrategyEngine {
       : (targetSymbol.includes("ETH") ? 0.05 : 0.001);
     const defaultLeverage = !isNaN(envLeverage) ? envLeverage : 10;
 
+    const envTradeSizeUsdt = process.env.TRADE_SIZE_USDT ? parseFloat(process.env.TRADE_SIZE_USDT) : NaN;
+    const defaultTradeSizeUsdt = !isNaN(envTradeSizeUsdt) ? envTradeSizeUsdt : 60.0;
+
     this.config = {
       symbol: targetSymbol,
       orderQuantity: config?.orderQuantity ?? defaultOrderQty,
+      tradeSizeUsdt: config?.tradeSizeUsdt ?? defaultTradeSizeUsdt,
       obiBuyThreshold: config?.obiBuyThreshold ?? defaultObiBuy,
       obiSellThreshold: config?.obiSellThreshold ?? defaultObiSell,
       cvdBuyThreshold: config?.cvdBuyThreshold ?? defaultCvdBuy,
@@ -602,14 +631,25 @@ export class StrategyEngine {
       return this.staticResult;
     }
 
-    // Apply latency penalty & slot-index decay coefficients to orderQuantity BEFORE RiskGuard check
-    const scaledQuantity = Number((this.config.orderQuantity * penaltyCoeff * targetSizeDecayCoeff).toFixed(3));
-    let finalQuantity = Math.max(0.001, scaledQuantity);
-
     // Dynamic Taker Fallback (>75% Confidence) & 1-Tick Post-Only Offset (<=75%)
     const effectiveSlippage = Math.max(2, slippageTicks);
     const priceAdjustment = effectiveSlippage * this.config.tickSize;
     const basePrice = signalType === "BUY" ? askPrice : bidPrice;
+
+    // Dynamic .env driven USDT Sizing & LOT_SIZE Precision Rounding (Unlocks All 10 Assets)
+    let finalQuantity = 0.001;
+    if (basePrice > 0) {
+      const targetNotionalUsdt = this.config.tradeSizeUsdt > 0 ? this.config.tradeSizeUsdt : 60.0;
+      const rawQty = (targetNotionalUsdt / basePrice) * penaltyCoeff * targetSizeDecayCoeff;
+      finalQuantity = formatQuantityForSymbol(this.config.symbol, rawQty);
+
+      // Binance Futures Min Notional Guard: ensure order notional >= minNotionalUsdt
+      const minNotionalUsdt = this.config.minNotionalUsdt;
+      if (finalQuantity * basePrice < minNotionalUsdt) {
+        const requiredQty = minNotionalUsdt / basePrice;
+        finalQuantity = formatQuantityForSymbol(this.config.symbol, requiredQty);
+      }
+    }
 
     const isHighConfidence = aiConfidence >= this.config.aggressiveConfidenceThreshold;
     const isAggressive = isHighConfidence;
@@ -663,14 +703,6 @@ export class StrategyEngine {
     // Avellaneda-Stoikov Inventory Shift: Skew sell target higher for deeper short slots
     if (signalType === "SELL" && targetSlotIndex !== undefined && targetSlotIndex > 0) {
       targetPrice = targetPrice + targetSlotIndex * 2.0 * this.config.tickSize;
-    }
-
-    // Binance Futures Min Notional Guard: ensure order notional >= minNotionalUsdt
-    if (basePrice > 0) {
-      const minNotionalUsdt = this.config.minNotionalUsdt;
-      if (finalQuantity * basePrice < minNotionalUsdt) {
-        finalQuantity = Number((minNotionalUsdt / basePrice).toFixed(3));
-      }
     }
 
     // Evaluate Dynamic Risk & Microstructure Trap Avoidance Profile
