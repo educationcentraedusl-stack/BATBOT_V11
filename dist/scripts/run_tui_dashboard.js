@@ -177,7 +177,13 @@ async function runProductionTuiLauncher() {
                     result.executionPromise
                         .then((res) => {
                         if (res && res.orderId) {
-                            dashboard.pushNotification(`[ORDER_FILLED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${res.executedQty} @ $${res.avgPrice || res.price}`);
+                            const rawQty = parseFloat(res.executedQty || "0") > 0 ? res.executedQty : (res.origQty || "0");
+                            const avgPx = parseFloat(res.avgPrice || "0");
+                            const px = parseFloat(res.price || "0");
+                            const cumQuote = parseFloat(res.cumQuote || "0");
+                            const qtyNum = parseFloat(rawQty);
+                            const displayPrice = avgPx > 0 ? avgPx : (px > 0 ? px : (cumQuote > 0 && qtyNum > 0 ? cumQuote / qtyNum : (result.bidPrice || result.askPrice)));
+                            dashboard.pushNotification(`[ORDER_FILLED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${rawQty} @ $${displayPrice.toFixed(2)}`);
                         }
                     })
                         .catch((err) => {

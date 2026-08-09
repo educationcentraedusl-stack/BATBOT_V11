@@ -12,12 +12,17 @@ import { ControlCommand } from "./telemetry/proto";
 import { AutoRecalibrationManager } from "./ai/recalibrationWorker";
 import { SymbolPrecisionRegistry } from "./config/symbolPrecision";
 
+import { MultiAssetStrategyEngine } from "./strategy/multiEngine";
+import { MultiAssetRiskGuard } from "./strategy/risk";
+
 export const DEFAULT_TAKER_FEE_RATE = 0.0004;
 
 export {
   MarketDataClient,
   StrategyEngine,
+  MultiAssetStrategyEngine,
   RiskGuard,
+  MultiAssetRiskGuard,
   BinanceExecutionClient,
   TradeLogger,
   CsvTradeLogger,
@@ -42,8 +47,8 @@ export interface SystemControlPlane {
 
 export async function syncStateOnStartup(
   executionClient: BinanceExecutionClient,
-  strategyEngine: StrategyEngine,
-  riskGuard: RiskGuard
+  strategyEngine: StrategyEngine | MultiAssetStrategyEngine,
+  riskGuard: RiskGuard | MultiAssetRiskGuard
 ): Promise<void> {
   if (!executionClient.isConfigured()) {
     console.log("[StateSync] BinanceExecutionClient unconfigured. Skipping remote state sync.");
@@ -64,24 +69,35 @@ export async function syncStateOnStartup(
     const balance = await executionClient.fetchUsdtBalanceAsync();
     console.log(`[StateSync] Binance Wallet Available Balance Synced: $${balance.toFixed(2)} USDT`);
 
-    // 4. Fetch Position Risk & Reconcile Active Positions for StrategyEngine
-    const symbol = strategyEngine.getConfig().symbol;
-    const positions = await executionClient.getPositionRisk(symbol);
-    if (Array.isArray(positions)) {
-      strategyEngine.reconcileStartupPositions(positions);
+    if (riskGuard instanceof MultiAssetRiskGuard) {
+      riskGuard.updateAccountBalance(balance);
+    }
 
-      // Update Risk Guard position notional baseline
-      let totalNotional = 0;
-      for (const pos of positions) {
-        if (pos.symbol === symbol) {
-          const amt = Math.abs(parseFloat(pos.positionAmt || "0"));
-          const entryPx = parseFloat(pos.entryPrice || "0");
-          if (amt > 0 && entryPx > 0) {
-            totalNotional += amt * entryPx;
+    // 4. Fetch Position Risk & Reconcile Active Positions for StrategyEngine
+    if ("getConfig" in strategyEngine && typeof (strategyEngine as any).getConfig === "function") {
+      const symbol = (strategyEngine as any).getConfig().symbol;
+      const positions = await executionClient.getPositionRisk(symbol);
+      if (Array.isArray(positions)) {
+        (strategyEngine as StrategyEngine).reconcileStartupPositions(positions);
+
+        // Update Risk Guard position notional baseline
+        let totalNotional = 0;
+        for (const pos of positions) {
+          if (pos.symbol === symbol) {
+            const amt = Math.abs(parseFloat(pos.positionAmt || "0"));
+            const entryPx = parseFloat(pos.entryPrice || "0");
+            if (amt > 0 && entryPx > 0) {
+              totalNotional += amt * entryPx;
+            }
           }
         }
+        riskGuard.updatePositionNotional(totalNotional);
       }
-      riskGuard.updatePositionNotional(totalNotional);
+    } else if (strategyEngine instanceof MultiAssetStrategyEngine) {
+      const positions = await executionClient.getPositionRisk();
+      if (Array.isArray(positions)) {
+        strategyEngine.reconcileStartupPositions(positions);
+      }
     }
   } catch (err: any) {
     console.warn(`[StateSync Warning] Temporary issue during startup state sync: ${err.message}. System starting in resilient mode.`);

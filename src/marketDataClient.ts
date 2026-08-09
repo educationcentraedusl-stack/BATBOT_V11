@@ -210,20 +210,40 @@ export class MarketDataClient {
     return this.readAtomicFloat64Asset(assetIdx, 105);
   }
 
+  public setOmsPositionQty(qty: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 105, qty);
+  }
+
   public getOmsAvgEntryPrice(assetIdx: number = 0): number {
     return this.readAtomicFloat64Asset(assetIdx, 106);
+  }
+
+  public setOmsAvgEntryPrice(price: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 106, price);
   }
 
   public getOmsRealizedPnl(assetIdx: number = 0): number {
     return this.readAtomicFloat64Asset(assetIdx, 107);
   }
 
+  public setOmsRealizedPnl(pnl: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 107, pnl);
+  }
+
   public getOmsUnrealizedPnl(assetIdx: number = 0): number {
     return this.readAtomicFloat64Asset(assetIdx, 108);
   }
 
+  public setOmsUnrealizedPnl(pnl: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 108, pnl);
+  }
+
   public getOmsLeverage(assetIdx: number = 0): number {
     return this.readAtomicFloat64Asset(assetIdx, 109);
+  }
+
+  public setOmsLeverage(lev: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 109, lev);
   }
 
   public getOmsCumVolumeUsd(assetIdx: number = 0): number {

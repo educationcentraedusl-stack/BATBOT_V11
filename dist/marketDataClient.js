@@ -165,17 +165,32 @@ class MarketDataClient {
     getOmsPositionQty(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 105);
     }
+    setOmsPositionQty(qty, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 105, qty);
+    }
     getOmsAvgEntryPrice(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 106);
+    }
+    setOmsAvgEntryPrice(price, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 106, price);
     }
     getOmsRealizedPnl(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 107);
     }
+    setOmsRealizedPnl(pnl, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 107, pnl);
+    }
     getOmsUnrealizedPnl(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 108);
     }
+    setOmsUnrealizedPnl(pnl, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 108, pnl);
+    }
     getOmsLeverage(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 109);
+    }
+    setOmsLeverage(lev, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 109, lev);
     }
     getOmsCumVolumeUsd(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 110);

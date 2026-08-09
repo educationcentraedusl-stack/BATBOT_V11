@@ -367,6 +367,18 @@ export class StrategyEngine {
 
     // 1. Dynamic Monitoring: Evaluate Unrealized PnL against dynamic TP/SL thresholds across Hedge Slots
     const markPrice = askPrice > 0 ? (askPrice + bidPrice) / 2 : bidPrice;
+
+    // Sync active position state to SharedArrayBuffer for TUI Table telemetry
+    if (markPrice > 0) {
+      const summary = this.hedgeLedger.getSummary(markPrice);
+      const netSignedQty = summary.side === "SHORT" ? -summary.netQuantity : summary.netQuantity;
+      this.client.setOmsPositionQty(netSignedQty, this.assetIndex);
+      this.client.setOmsAvgEntryPrice(summary.averageEntryPrice, this.assetIndex);
+      this.client.setOmsRealizedPnl(summary.cumulativeRealizedPnl, this.assetIndex);
+      this.client.setOmsUnrealizedPnl(summary.unrealizedPnl, this.assetIndex);
+      this.client.setOmsLeverage(this.config.leverageMultiplier, this.assetIndex);
+    }
+
     if (markPrice > 0) {
       const hedgeTriggers = this.hedgeLedger.evaluateHedgeDynamicTpSl(markPrice);
       if (hedgeTriggers.length > 0) {
@@ -824,130 +836,5 @@ export class StrategyEngine {
   }
 }
 
-export interface MultiAssetSignalBatch {
-  timestamp: number;
-  signals: Array<{
-    assetIndex: number;
-    symbol: string;
-    signalType: "NONE" | "BUY" | "SELL";
-    confidence: number;
-    obi: number;
-    cvd: number;
-    hurst: number;
-    isApproved: boolean;
-    rejectReason?: string;
-  }>;
-}
+export { MultiAssetStrategyEngine, MultiAssetSignalBatch } from "./multiEngine";
 
-export class MultiAssetStrategyEngine {
-  private client: MarketDataClient;
-  private riskGuard: MultiAssetRiskGuard;
-  private executionClient: BinanceExecutionClient;
-  private positionLedger: MultiAssetPositionLedger;
-  private activeSymbols: string[];
-  private symbolIndexMap: Map<string, number> = new Map();
-
-  constructor(
-    client: MarketDataClient,
-    riskGuard: MultiAssetRiskGuard,
-    executionClient: BinanceExecutionClient,
-    activeSymbols: string[] = ["ETHUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "SUIUSDT"],
-    positionLedger?: MultiAssetPositionLedger
-  ) {
-    this.client = client;
-    this.riskGuard = riskGuard;
-    this.executionClient = executionClient;
-    this.activeSymbols = activeSymbols;
-    this.positionLedger = positionLedger ?? new MultiAssetPositionLedger(activeSymbols);
-    this.rebuildSymbolIndexMap();
-  }
-
-  public updateActiveSymbols(symbols: string[]): void {
-    if (symbols && symbols.length > 0) {
-      this.activeSymbols = symbols.slice(0, 10);
-      this.rebuildSymbolIndexMap();
-    }
-  }
-
-  private rebuildSymbolIndexMap(): void {
-    this.symbolIndexMap.clear();
-    for (let i = 0; i < this.activeSymbols.length; i++) {
-      const sym = this.activeSymbols[i];
-      if (sym) {
-        this.symbolIndexMap.set(sym, i);
-      }
-    }
-  }
-
-  public getAssetIndex(symbol: string): number {
-    const idx = this.symbolIndexMap.get(symbol);
-    return idx !== undefined ? idx : -1;
-  }
-
-  public getActiveSymbols(): ReadonlyArray<string> {
-    return this.activeSymbols;
-  }
-
-  public evaluateMultiAssetTick(): MultiAssetSignalBatch {
-    const timestamp = Date.now();
-    const signals: MultiAssetSignalBatch["signals"] = [];
-
-    for (let i = 0; i < this.activeSymbols.length; i++) {
-      const symbol = this.activeSymbols[i];
-      if (!symbol) continue;
-
-      const assetIdx = this.getAssetIndex(symbol);
-      if (assetIdx < 0 || assetIdx >= this.client.maxAssets) continue;
-
-      const obi = this.client.getOBI(assetIdx);
-      const cvd = this.client.getCVD(assetIdx);
-      const hurst = this.client.getHurst(assetIdx);
-      const vpin = this.client.getVPIN(assetIdx);
-      const hawkes = this.client.getHawkesIntensity(assetIdx);
-
-      let signalType: "NONE" | "BUY" | "SELL" = "NONE";
-      let confidence = 0;
-      let isApproved = false;
-      let rejectReason: string | undefined = undefined;
-
-      if (vpin > 0.75) {
-        rejectReason = "REJECTED_TOXIC_FLOW";
-      } else if (hurst < 0.45) {
-        rejectReason = "REJECTED_COUNTER_TREND_REGIME";
-      } else if (obi >= 0.35 && cvd >= 0.0 && hawkes >= 0.5) {
-        signalType = "BUY";
-        confidence = Math.min(0.99, 0.5 + obi * 0.3 + (hurst - 0.45) * 0.5);
-        isApproved = true;
-      } else if (obi <= -0.35 && cvd <= 0.0 && hawkes >= 0.5) {
-        signalType = "SELL";
-        confidence = Math.min(0.99, 0.5 + Math.abs(obi) * 0.3 + (hurst - 0.45) * 0.5);
-        isApproved = true;
-      }
-
-      signals.push({
-        assetIndex: assetIdx,
-        symbol,
-        signalType,
-        confidence,
-        obi,
-        cvd,
-        hurst,
-        isApproved,
-        rejectReason,
-      });
-    }
-
-    return {
-      timestamp,
-      signals,
-    };
-  }
-
-  public getPositionLedger(): MultiAssetPositionLedger {
-    return this.positionLedger;
-  }
-
-  public getRiskGuard(): MultiAssetRiskGuard {
-    return this.riskGuard;
-  }
-}
