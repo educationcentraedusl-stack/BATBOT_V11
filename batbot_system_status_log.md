@@ -1,6 +1,16 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-13
+- **Feature/Task:** Production Hotfix: Binance API [-5022] POST_ONLY Maker Rejections & TUI Race Condition Remediation
+- **Artifacts Created/Modified:** `src/config/symbolPrecision.ts`, `src/execution/binance.ts`, `src/strategy/engine.ts`, `src/telemetry/multiAssetDashboard.ts`, `src/tests/test_post_only_5022_and_tui_race.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Implemented 100% deterministic remediation for live market execution rejections and console race conditions:
+  1. **SymbolPrecisionRegistry (symbolPrecision.ts):** Exposed `getTickSize(symbol: string)` helper returning exact symbol minimum price tick sizes.
+  2. **Binance API [-5022] Rejection Mitigation (binance.ts & engine.ts):** Implemented automatic catching for `-5022` `POST_ONLY` (`GTX`) order rejections. Dynamically shifts order price by 1 tick away (`BUY`: price - tickSize, `SELL`: price + tickSize) using precision rules and instantly retries. Automatically falls back to standard `GTC` LIMIT execution if Maker enforcement repeatedly fails to guarantee position safety. Updated batch TP order dispatchers (`dispatchBatchPostOnlyTpOrders`) to catch and retry batch/item rejections.
+  3. **TUI Console Interception & Bounded Buffer (multiAssetDashboard.ts):** Hooked `console.log`, `console.warn`, and `console.error` inside `MultiAssetCLIDashboard`. Intercepted log messages are captured in a bounded circular buffer (`notificationLog`, max 5 entries) rendered synchronously within the TUI frame. Appended `\x1b[J` after the bottom border line to clear trailing un-cleared text and eliminate TUI ASCII geometry corruption.
+  4. **Verification:** Passed `npx tsc --noEmit` and `npm run build:ts` with 0 compilation errors, and verified 100% test pass via `npx ts-node --transpile-only src/tests/test_post_only_5022_and_tui_race.ts`.
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-13
 - **Feature/Task:** Post-Desync Remediation Ultimate Blind Deep-Scan Audit & Technical Fixes
 - **Artifacts Created/Modified:** `src/telemetry/multiAssetDashboard.ts`, `src/strategy/engine.ts`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Executed byte-by-byte zero-trust blind audit across `multiAssetDashboard.ts` and `engine.ts`. Identified and remediated 3 critical defects:

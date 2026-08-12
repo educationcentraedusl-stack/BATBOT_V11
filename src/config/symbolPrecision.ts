@@ -127,6 +127,14 @@ export class SymbolPrecisionRegistryManager {
   }
 
   /**
+   * Helper utility to retrieve the minimum price tick size for a symbol.
+   */
+  public getTickSize(symbol: string): number {
+    return this.getPrecisionRule(symbol).tickSize;
+  }
+
+
+  /**
    * Formats raw quantity dynamically according to symbol LOT_SIZE rules.
    * Supports isMinNotionalGuard ceiling rounding (Math.ceil) to guarantee notional >= minNotional.
    */

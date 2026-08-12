@@ -6,6 +6,9 @@ exports.formatQuantityForSymbol = formatQuantityForSymbol;
 const risk_1 = require("./risk");
 const positionLedger_1 = require("./positionLedger");
 const dynamicRiskEngine_1 = require("./dynamicRiskEngine");
+const microstructureHazardEngine_1 = require("./microstructureHazardEngine");
+const volatilitySurfaceEngine_1 = require("./volatilitySurfaceEngine");
+const hjbReservationEngine_1 = require("./hjbReservationEngine");
 const userDataStream_1 = require("../execution/userDataStream");
 const symbolPrecision_1 = require("../config/symbolPrecision");
 const tradingSymbols_1 = require("../config/tradingSymbols");
@@ -28,6 +31,9 @@ class StrategyEngine {
     hedgeLedger;
     config;
     dynamicRiskEngine = new dynamicRiskEngine_1.DynamicRiskEngine();
+    hazardEngine;
+    hjbEngine;
+    volEngine;
     userDataStream = null;
     lastProcessedSequence = -1n;
     state = "LIVE_ACTIVE";
@@ -134,6 +140,9 @@ class StrategyEngine {
         }
         this.hedgeLedger = hedgeLedger ?? new positionLedger_1.HedgePositionLedger(this.config.symbol, this.config.maxShortSlots);
         this.positionLedger = positionLedger ?? this.hedgeLedger.getLegacyLedger();
+        this.hazardEngine = new microstructureHazardEngine_1.MicrostructureHazardEngine(this.config.symbol);
+        this.hjbEngine = new hjbReservationEngine_1.HJBReservationEngine(this.config.symbol);
+        this.volEngine = new volatilitySurfaceEngine_1.VolatilitySurfaceEngine(this.config.symbol);
         this.reusableOrderIntent = {
             symbol: this.config.symbol,
             side: "BUY",
@@ -262,15 +271,68 @@ class StrategyEngine {
         try {
             const resList = await this.executionClient.placeBatchOrders(intents);
             if (Array.isArray(resList) && resList.length > 0) {
-                const orderIds = resList
-                    .map((r) => r.orderId)
-                    .filter((id) => typeof id === "number" || typeof id === "string");
-                this.hedgeLedger.registerActiveTpOrderIds(slotId, orderIds);
-                console.log(`[MAKER_TP_ENGINE][SUCCESS] Registered ${orderIds.length} POST_ONLY TP limit order IDs on Binance orderbook: [${orderIds.join(", ")}]`);
+                const validOrderIds = [];
+                const rejectedIntents = [];
+                resList.forEach((res, idx) => {
+                    if (res && res.orderId) {
+                        validOrderIds.push(res.orderId);
+                    }
+                    else if (res && (res.code === -5022 || (res.msg && String(res.msg).includes("-5022")))) {
+                        if (intents[idx])
+                            rejectedIntents.push({ intent: intents[idx], code: res.code });
+                    }
+                });
+                if (validOrderIds.length > 0) {
+                    this.hedgeLedger.registerActiveTpOrderIds(slotId, validOrderIds);
+                    console.log(`[MAKER_TP_ENGINE][SUCCESS] Registered ${validOrderIds.length} POST_ONLY TP limit order IDs on Binance orderbook: [${validOrderIds.join(", ")}]`);
+                }
+                // Retry any individual -5022 rejections within the batch response with 1-tick price shift
+                for (const rej of rejectedIntents) {
+                    try {
+                        const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(rej.intent.symbol);
+                        const currentPx = rej.intent.price || entryPrice;
+                        const adjustedPx = rej.intent.side === "BUY" ? currentPx - tickSize : currentPx + tickSize;
+                        const newPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(rej.intent.symbol, adjustedPx);
+                        console.warn(`[MAKER_TP_ENGINE][-5022 ITEM RETRY] Retrying rejected TP order 1 tick away @ ${newPrice}...`);
+                        const retryRes = await this.executionClient.placeOrder({
+                            ...rej.intent,
+                            price: newPrice,
+                        });
+                        if (retryRes && retryRes.orderId) {
+                            this.hedgeLedger.registerActiveTpOrderIds(slotId, [retryRes.orderId]);
+                        }
+                    }
+                    catch (retryErr) {
+                        console.error(`[MAKER_TP_ENGINE][-5022 ITEM RETRY FAILED] ${retryErr.message}`);
+                    }
+                }
             }
         }
         catch (err) {
-            console.error(`[MAKER_TP_ENGINE][ERROR] Failed to submit batch POST_ONLY TP orders: ${err.message}`);
+            if (err.message && (err.message.includes("-5022") || err.message.includes("5022"))) {
+                console.warn(`[MAKER_TP_ENGINE][-5022 BATCH REJECTION] Entire TP batch rejected with -5022. Retrying target orders individually with 1-tick price shift...`);
+                for (const intent of intents) {
+                    try {
+                        const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(intent.symbol);
+                        const currentPx = intent.price || entryPrice;
+                        const adjustedPx = intent.side === "BUY" ? currentPx - tickSize : currentPx + tickSize;
+                        const newPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(intent.symbol, adjustedPx);
+                        const retryRes = await this.executionClient.placeOrder({
+                            ...intent,
+                            price: newPrice,
+                        });
+                        if (retryRes && retryRes.orderId) {
+                            this.hedgeLedger.registerActiveTpOrderIds(slotId, [retryRes.orderId]);
+                        }
+                    }
+                    catch (retryErr) {
+                        console.error(`[MAKER_TP_ENGINE][-5022 INDIVIDUAL RETRY FAILED] ${retryErr.message}`);
+                    }
+                }
+            }
+            else {
+                console.error(`[MAKER_TP_ENGINE][ERROR] Failed to submit batch POST_ONLY TP orders: ${err.message}`);
+            }
         }
     }
     getEngineState() {
@@ -481,11 +543,49 @@ class StrategyEngine {
             const latencyPenalty = this.client.getLatencyPenaltyCoefficient(this.assetIndex);
             const penaltyCoeff = latencyPenalty > 0 ? Math.max(0.75, latencyPenalty) : 1.0;
             const slippageTicks = this.client.getDynamicSlippageTicks(this.assetIndex);
-            // 1. Dynamic Monitoring: Evaluate Unrealized PnL against dynamic TP/SL thresholds across Hedge Slots
+            // 1. Dynamic Monitoring: Evaluate Microstructure, Volatility & Dynamic Exit Boundaries
             const markPrice = askPrice > 0 ? (askPrice + bidPrice) / 2 : bidPrice;
+            // Feed live orderbook & price ticks into SOTA microstructure & volatility engines
+            const bestBidQty = this.client.getBestBidQuantity(this.assetIndex);
+            const bestAskQty = this.client.getBestAskQuantity(this.assetIndex);
+            this.hazardEngine.updateOrderBook(bidPrice, bestBidQty, askPrice, bestAskQty);
+            this.volEngine.updatePrice(markPrice);
+            const summary = this.hedgeLedger.getSummary(markPrice > 0 ? markPrice : 0);
+            const activePosSide = summary.side === "FLAT" ? "LONG" : summary.side;
+            let holdingDurationMs = 0;
+            if (summary.side === "LONG") {
+                const coreLong = this.hedgeLedger.getCoreLong();
+                holdingDurationMs = coreLong.isOccupied && coreLong.openTime > 0 ? Math.max(0, Date.now() - coreLong.openTime) : 0;
+            }
+            else if (summary.side === "SHORT") {
+                const shortSlots = this.hedgeLedger.getShortSlots();
+                let oldestOpenTime = 0;
+                for (const slot of shortSlots) {
+                    if (slot.isOccupied && slot.openTime > 0) {
+                        if (oldestOpenTime === 0 || slot.openTime < oldestOpenTime) {
+                            oldestOpenTime = slot.openTime;
+                        }
+                    }
+                }
+                holdingDurationMs = oldestOpenTime > 0 ? Math.max(0, Date.now() - oldestOpenTime) : 0;
+            }
+            const hazardMetrics = this.hazardEngine.getHazardMetrics(activePosSide, aiConfidence, holdingDurationMs);
+            const volMetrics = this.volEngine.getVolatilitySurfaceMetrics();
+            const signedInventory = summary.side === "SHORT" ? -summary.netQuantity : summary.netQuantity;
+            const hjbResPrice = this.hjbEngine.calculateReservationPrice(markPrice, signedInventory, holdingDurationMs, volMetrics.garmanKlass1s);
+            // Atomically sync SAB Telemetry Slots 138-141 for Live TUI Monitor & OMS
+            this.client.setOFI(hazardMetrics.ofi, this.assetIndex);
+            this.client.setHJBReservationPrice(hjbResPrice, this.assetIndex);
+            this.client.setSurvivalProbability(hazardMetrics.survivalProbability, this.assetIndex);
+            const hasActivePos = summary.netQuantity > 0 || summary.side !== "FLAT";
+            const dynamicSlPx = hasActivePos
+                ? (summary.side === "LONG"
+                    ? summary.averageEntryPrice * (1.0 - this.config.longStopLossPercent / 100)
+                    : summary.averageEntryPrice * (1.0 + this.config.shortStopLossPercent / 100))
+                : 0;
+            this.client.setDynamicStopLossPrice(dynamicSlPx, this.assetIndex);
             // Sync active position state to SharedArrayBuffer for TUI Table telemetry
             if (markPrice > 0) {
-                const summary = this.hedgeLedger.getSummary(markPrice);
                 const netSignedQty = summary.side === "SHORT" ? -summary.netQuantity : summary.netQuantity;
                 this.client.setOmsPositionQty(netSignedQty, this.assetIndex);
                 this.client.setOmsAvgEntryPrice(summary.averageEntryPrice, this.assetIndex);
@@ -497,11 +597,20 @@ class StrategyEngine {
                 this.client.setOmsLosingTrades(summary.losingTrades, this.assetIndex);
             }
             if (markPrice > 0) {
+                // Priority 1: Evaluate SOTA Dynamic Exits (Cox Hazard Survival Flush, HJB Liquidation Boundary, MVA-TS)
+                const sotaTriggers = hasActivePos
+                    ? this.hedgeLedger.evaluateSotaDynamicExits(markPrice, hazardMetrics, this.hjbEngine, volMetrics)
+                    : [];
+                // Priority 2: Evaluate Hedge Slot Dynamic TP/SL (Fixed/Trailing TP/SL, Profit Lock)
                 const hedgeTriggers = this.hedgeLedger.evaluateHedgeDynamicTpSl(markPrice);
-                if (hedgeTriggers.length > 0) {
-                    const trigger = hedgeTriggers[0];
+                const activeTriggers = sotaTriggers.length > 0 ? sotaTriggers : hedgeTriggers;
+                if (activeTriggers.length > 0) {
+                    const trigger = activeTriggers[0];
                     const exitSide = trigger.side === "LONG" ? "SELL" : "BUY";
-                    const isHardStopTrigger = trigger.reason === "STOP_LOSS" ||
+                    const isHardStopTrigger = trigger.reason.includes("HAZARD") ||
+                        trigger.reason.includes("HJB") ||
+                        trigger.reason.includes("MVA_TS") ||
+                        trigger.reason === "STOP_LOSS" ||
                         trigger.reason === "BREAK_EVEN_STOP_LOSS" ||
                         trigger.reason === "LONG_HOLD_PROFIT_HARVEST" ||
                         trigger.reason === "TIME_DECAY_PROFIT_LOCK";

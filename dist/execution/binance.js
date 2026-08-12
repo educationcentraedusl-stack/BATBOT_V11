@@ -39,6 +39,7 @@ const crypto = __importStar(require("node:crypto"));
 const https = __importStar(require("node:https"));
 const http = __importStar(require("node:http"));
 const node_url_1 = require("node:url");
+const symbolPrecision_1 = require("../config/symbolPrecision");
 class BinanceExecutionClient {
     apiKey;
     apiSecret;
@@ -287,7 +288,39 @@ class BinanceExecutionClient {
         else {
             delete payload.reduceOnly;
         }
-        return this.request("POST", "/fapi/v1/order", payload, true);
+        try {
+            return await this.request("POST", "/fapi/v1/order", payload, true);
+        }
+        catch (err) {
+            const errMsg = err?.message || String(err);
+            if (params.timeInForce === "GTX" && (errMsg.includes("-5022") || errMsg.includes("5022"))) {
+                const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(params.symbol);
+                const currentPrice = params.price || 0;
+                // Shift 1 tick away from spread to guarantee Maker placement
+                const adjustedPrice = params.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
+                const newPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, adjustedPrice);
+                console.warn(`[BinanceExecutionClient][-5022 REJECTION] POST_ONLY order for ${params.symbol} ${params.side} @ ${currentPrice} crossed spread. Shifting 1 tick away to ${newPrice} and retrying...`);
+                try {
+                    return await this.placeOrder({
+                        ...params,
+                        price: newPrice,
+                    });
+                }
+                catch (retryErr) {
+                    const retryErrMsg = retryErr?.message || String(retryErr);
+                    if (retryErrMsg.includes("-5022") || retryErrMsg.includes("5022")) {
+                        console.warn(`[BinanceExecutionClient][-5022 FALLBACK] GTX retry failed for ${params.symbol}. Falling back to standard LIMIT (GTC) order @ ${newPrice} to safeguard position...`);
+                        return await this.placeOrder({
+                            ...params,
+                            price: newPrice,
+                            timeInForce: "GTC",
+                        });
+                    }
+                    throw retryErr;
+                }
+            }
+            throw err;
+        }
     }
     /**
      * Submits a batch of orders in a single low-latency HTTP REST request (POST /fapi/v1/batchOrders).
@@ -336,7 +369,30 @@ class BinanceExecutionClient {
             batchOrders: JSON.stringify(formattedOrders),
             recvWindow,
         };
-        return this.request("POST", "/fapi/v1/batchOrders", payload, true);
+        try {
+            const resList = await this.request("POST", "/fapi/v1/batchOrders", payload, true);
+            return resList;
+        }
+        catch (err) {
+            const errMsg = err?.message || String(err);
+            if (errMsg.includes("-5022") || errMsg.includes("5022")) {
+                console.warn(`[BinanceExecutionClient][-5022 BATCH REJECTION] Batch POST_ONLY order rejected with -5022. Retrying target orders individually with 1-tick price shift...`);
+                const fallbackResults = [];
+                for (const orderParams of targetOrders) {
+                    const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(orderParams.symbol);
+                    const currentPrice = orderParams.price || 0;
+                    const adjustedPrice = orderParams.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
+                    const newPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(orderParams.symbol, adjustedPrice);
+                    const singleRes = await this.placeOrder({
+                        ...orderParams,
+                        price: newPrice,
+                    });
+                    fallbackResults.push(singleRes);
+                }
+                return fallbackResults;
+            }
+            throw err;
+        }
     }
     /**
      * Cancels a list of open orders for a symbol in a single batch request (DELETE /fapi/v1/batchOrders).

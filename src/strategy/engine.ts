@@ -387,14 +387,67 @@ export class StrategyEngine {
     try {
       const resList = await this.executionClient.placeBatchOrders(intents);
       if (Array.isArray(resList) && resList.length > 0) {
-        const orderIds = resList
-          .map((r) => r.orderId)
-          .filter((id) => typeof id === "number" || typeof id === "string");
-        this.hedgeLedger.registerActiveTpOrderIds(slotId, orderIds as any[]);
-        console.log(`[MAKER_TP_ENGINE][SUCCESS] Registered ${orderIds.length} POST_ONLY TP limit order IDs on Binance orderbook: [${orderIds.join(", ")}]`);
+        const validOrderIds: any[] = [];
+        const rejectedIntents: { intent: BinanceOrderParams; code?: number }[] = [];
+
+        resList.forEach((res: any, idx: number) => {
+          if (res && res.orderId) {
+            validOrderIds.push(res.orderId);
+          } else if (res && (res.code === -5022 || (res.msg && String(res.msg).includes("-5022")))) {
+            if (intents[idx]) rejectedIntents.push({ intent: intents[idx], code: res.code });
+          }
+        });
+
+        if (validOrderIds.length > 0) {
+          this.hedgeLedger.registerActiveTpOrderIds(slotId, validOrderIds as any[]);
+          console.log(`[MAKER_TP_ENGINE][SUCCESS] Registered ${validOrderIds.length} POST_ONLY TP limit order IDs on Binance orderbook: [${validOrderIds.join(", ")}]`);
+        }
+
+        // Retry any individual -5022 rejections within the batch response with 1-tick price shift
+        for (const rej of rejectedIntents) {
+          try {
+            const tickSize = SymbolPrecisionRegistry.getTickSize(rej.intent.symbol);
+            const currentPx = rej.intent.price || entryPrice;
+            const adjustedPx = rej.intent.side === "BUY" ? currentPx - tickSize : currentPx + tickSize;
+            const newPrice = SymbolPrecisionRegistry.formatPrice(rej.intent.symbol, adjustedPx);
+
+            console.warn(`[MAKER_TP_ENGINE][-5022 ITEM RETRY] Retrying rejected TP order 1 tick away @ ${newPrice}...`);
+            const retryRes = await this.executionClient.placeOrder({
+              ...rej.intent,
+              price: newPrice,
+            });
+            if (retryRes && retryRes.orderId) {
+              this.hedgeLedger.registerActiveTpOrderIds(slotId, [retryRes.orderId as any]);
+            }
+          } catch (retryErr: any) {
+            console.error(`[MAKER_TP_ENGINE][-5022 ITEM RETRY FAILED] ${retryErr.message}`);
+          }
+        }
       }
     } catch (err: any) {
-      console.error(`[MAKER_TP_ENGINE][ERROR] Failed to submit batch POST_ONLY TP orders: ${err.message}`);
+      if (err.message && (err.message.includes("-5022") || err.message.includes("5022"))) {
+        console.warn(`[MAKER_TP_ENGINE][-5022 BATCH REJECTION] Entire TP batch rejected with -5022. Retrying target orders individually with 1-tick price shift...`);
+        for (const intent of intents) {
+          try {
+            const tickSize = SymbolPrecisionRegistry.getTickSize(intent.symbol);
+            const currentPx = intent.price || entryPrice;
+            const adjustedPx = intent.side === "BUY" ? currentPx - tickSize : currentPx + tickSize;
+            const newPrice = SymbolPrecisionRegistry.formatPrice(intent.symbol, adjustedPx);
+
+            const retryRes = await this.executionClient.placeOrder({
+              ...intent,
+              price: newPrice,
+            });
+            if (retryRes && retryRes.orderId) {
+              this.hedgeLedger.registerActiveTpOrderIds(slotId, [retryRes.orderId as any]);
+            }
+          } catch (retryErr: any) {
+            console.error(`[MAKER_TP_ENGINE][-5022 INDIVIDUAL RETRY FAILED] ${retryErr.message}`);
+          }
+        }
+      } else {
+        console.error(`[MAKER_TP_ENGINE][ERROR] Failed to submit batch POST_ONLY TP orders: ${err.message}`);
+      }
     }
   }
 

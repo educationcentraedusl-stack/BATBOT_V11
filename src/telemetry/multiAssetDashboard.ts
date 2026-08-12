@@ -31,6 +31,11 @@ export class MultiAssetCLIDashboard {
   private cachedMemMb = "0.00";
   private renderCount = 0;
 
+  private originalConsoleLog: typeof console.log;
+  private originalConsoleWarn: typeof console.warn;
+  private originalConsoleError: typeof console.error;
+  private isConsoleIntercepted = false;
+
   // Pre-allocated static buffers for zero-allocation L2 depth reading
   private bidBuffer = new Float64Array(40); // 20 price/qty pairs
   private askBuffer = new Float64Array(40); // 20 price/qty pairs
@@ -57,12 +62,60 @@ export class MultiAssetCLIDashboard {
     this.enabled = enabled;
     this.assetSymbols = customSymbols;
 
+    this.originalConsoleLog = console.log.bind(console);
+    this.originalConsoleWarn = console.warn.bind(console);
+    this.originalConsoleError = console.error.bind(console);
+
+    if (this.enabled) {
+      this.interceptConsole();
+    }
+
     // Listen for terminal resize event to cleanly clear and re-render frame
     if (process.stdout.isTTY) {
       process.stdout.on("resize", () => {
         this.clear();
       });
     }
+  }
+
+  /**
+   * Intercepts standard console output to prevent race conditions and stdout overlap with ANSI TUI.
+   */
+  public interceptConsole(): void {
+    if (this.isConsoleIntercepted) return;
+    this.isConsoleIntercepted = true;
+
+    console.log = (...args: any[]) => {
+      const msg = args
+        .map((a) => (typeof a === "string" ? a : typeof a === "object" ? JSON.stringify(a) : String(a)))
+        .join(" ");
+      this.pushNotification(msg);
+    };
+
+    console.warn = (...args: any[]) => {
+      const msg = args
+        .map((a) => (typeof a === "string" ? a : typeof a === "object" ? JSON.stringify(a) : String(a)))
+        .join(" ");
+      this.pushNotification(`\x1b[33m[WARN] ${msg}\x1b[0m`);
+    };
+
+    console.error = (...args: any[]) => {
+      const msg = args
+        .map((a) => (typeof a === "string" ? a : typeof a === "object" ? JSON.stringify(a) : String(a)))
+        .join(" ");
+      this.pushNotification(`\x1b[31m[ERROR] ${msg}\x1b[0m`);
+    };
+  }
+
+  /**
+   * Restores original console logging behavior upon TUI teardown.
+   */
+  public restoreConsole(): void {
+    if (!this.isConsoleIntercepted) return;
+    console.log = this.originalConsoleLog;
+    console.warn = this.originalConsoleWarn;
+    console.error = this.originalConsoleError;
+    this.isConsoleIntercepted = false;
   }
 
   /**
@@ -94,9 +147,18 @@ export class MultiAssetCLIDashboard {
    * Appends notification message to TUI event log buffer.
    */
   public pushNotification(message: string): void {
-    const timestamp = new Date().toISOString().substring(11, 19);
-    this.notificationLog.push(`[${timestamp}] ${message}`);
-    if (this.notificationLog.length > this.maxLogEntries) {
+    if (!message) return;
+    const cleanMsg = message.replace(/[\r\n]+/g, " ").trim();
+    if (!cleanMsg) return;
+
+    let formattedMsg = cleanMsg;
+    if (!/^\[\d{2}:\d{2}:\d{2}\]/.test(cleanMsg)) {
+      const timestamp = new Date().toISOString().substring(11, 19);
+      formattedMsg = `[${timestamp}] ${cleanMsg}`;
+    }
+
+    this.notificationLog.push(formattedMsg);
+    while (this.notificationLog.length > this.maxLogEntries) {
       this.notificationLog.shift();
     }
   }
@@ -334,12 +396,21 @@ export class MultiAssetCLIDashboard {
     out += `${bold}--- INTERACTIVE COMMAND FEEDBACK & NOTIFICATION LOG ---${reset}${clearLine}\n`;
     if (this.notificationLog.length === 0) {
       out += ` ${gray}[SYSTEM READY] Listening for raw keyboard controls...${reset}${clearLine}\n`;
+      for (let k = 1; k < this.maxLogEntries; k++) {
+        out += `${clearLine}\n`;
+      }
     } else {
-      for (const logLine of this.notificationLog) {
-        out += ` ${logLine}${clearLine}\n`;
+      for (let k = 0; k < this.maxLogEntries; k++) {
+        if (k < this.notificationLog.length) {
+          const logLine = this.notificationLog[k];
+          out += ` ${this.formatCell(logLine, 145, false)}${clearLine}\n`;
+        } else {
+          out += `${clearLine}\n`;
+        }
       }
     }
     out += MultiAssetCLIDashboard.BORDER;
+    out += "\x1b[J";
 
     process.stdout.write(out);
   }

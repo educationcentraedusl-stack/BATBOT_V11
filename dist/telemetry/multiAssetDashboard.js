@@ -15,6 +15,10 @@ class MultiAssetCLIDashboard {
     maxLogEntries = 5;
     cachedMemMb = "0.00";
     renderCount = 0;
+    originalConsoleLog;
+    originalConsoleWarn;
+    originalConsoleError;
+    isConsoleIntercepted = false;
     // Pre-allocated static buffers for zero-allocation L2 depth reading
     bidBuffer = new Float64Array(40); // 20 price/qty pairs
     askBuffer = new Float64Array(40); // 20 price/qty pairs
@@ -32,12 +36,55 @@ class MultiAssetCLIDashboard {
         this.client = client;
         this.enabled = enabled;
         this.assetSymbols = customSymbols;
+        this.originalConsoleLog = console.log.bind(console);
+        this.originalConsoleWarn = console.warn.bind(console);
+        this.originalConsoleError = console.error.bind(console);
+        if (this.enabled) {
+            this.interceptConsole();
+        }
         // Listen for terminal resize event to cleanly clear and re-render frame
         if (process.stdout.isTTY) {
             process.stdout.on("resize", () => {
                 this.clear();
             });
         }
+    }
+    /**
+     * Intercepts standard console output to prevent race conditions and stdout overlap with ANSI TUI.
+     */
+    interceptConsole() {
+        if (this.isConsoleIntercepted)
+            return;
+        this.isConsoleIntercepted = true;
+        console.log = (...args) => {
+            const msg = args
+                .map((a) => (typeof a === "string" ? a : typeof a === "object" ? JSON.stringify(a) : String(a)))
+                .join(" ");
+            this.pushNotification(msg);
+        };
+        console.warn = (...args) => {
+            const msg = args
+                .map((a) => (typeof a === "string" ? a : typeof a === "object" ? JSON.stringify(a) : String(a)))
+                .join(" ");
+            this.pushNotification(`\x1b[33m[WARN] ${msg}\x1b[0m`);
+        };
+        console.error = (...args) => {
+            const msg = args
+                .map((a) => (typeof a === "string" ? a : typeof a === "object" ? JSON.stringify(a) : String(a)))
+                .join(" ");
+            this.pushNotification(`\x1b[31m[ERROR] ${msg}\x1b[0m`);
+        };
+    }
+    /**
+     * Restores original console logging behavior upon TUI teardown.
+     */
+    restoreConsole() {
+        if (!this.isConsoleIntercepted)
+            return;
+        console.log = this.originalConsoleLog;
+        console.warn = this.originalConsoleWarn;
+        console.error = this.originalConsoleError;
+        this.isConsoleIntercepted = false;
     }
     /**
      * Helper utility to format cell content with strict width bounds and pad/truncation protection.
@@ -65,9 +112,18 @@ class MultiAssetCLIDashboard {
      * Appends notification message to TUI event log buffer.
      */
     pushNotification(message) {
-        const timestamp = new Date().toISOString().substring(11, 19);
-        this.notificationLog.push(`[${timestamp}] ${message}`);
-        if (this.notificationLog.length > this.maxLogEntries) {
+        if (!message)
+            return;
+        const cleanMsg = message.replace(/[\r\n]+/g, " ").trim();
+        if (!cleanMsg)
+            return;
+        let formattedMsg = cleanMsg;
+        if (!/^\[\d{2}:\d{2}:\d{2}\]/.test(cleanMsg)) {
+            const timestamp = new Date().toISOString().substring(11, 19);
+            formattedMsg = `[${timestamp}] ${cleanMsg}`;
+        }
+        this.notificationLog.push(formattedMsg);
+        while (this.notificationLog.length > this.maxLogEntries) {
             this.notificationLog.shift();
         }
     }
@@ -219,8 +275,10 @@ class MultiAssetCLIDashboard {
         const fInfLat = (Number(this.client.getAIInferenceLatencyNs(fIdx)) / 1000).toFixed(1);
         const fHjb = this.client.getHJBReservationPrice(fIdx);
         const fSurvival = this.client.getSurvivalProbability(fIdx);
+        const hjbStr = (fHjb > 0 ? fHjb : 0).toFixed(fDec);
+        const survivalStr = (fSurvival > 0 ? fSurvival * 100 : 100.0).toFixed(1);
         out += `${bold}--- FOCUSED ASSET METRICS & LEVEL-2 BOOK (#${fIdx} - ${fSym}) ---${reset}${clearLine}\n`;
-        out += ` OBI: ${fObi >= 0 ? "+" : ""}${fObi.toFixed(4)} | CVD: ${fCvd >= 0 ? "+" : ""}${fCvd.toFixed(2)} | Hawkes: ${fHawkes.toFixed(3)} | VPIN: ${fVpin.toFixed(4)} | HJB Res: $${fHjb > 0 ? fHjb.toFixed(fDec) : "N/A"} | Survival: ${(fSurvival * 100).toFixed(1)}%${clearLine}\n`;
+        out += ` OBI: ${fObi >= 0 ? "+" : ""}${fObi.toFixed(4)} | CVD: ${fCvd >= 0 ? "+" : ""}${fCvd.toFixed(2)} | Hawkes: ${fHawkes.toFixed(3)} | VPIN: ${fVpin.toFixed(4)} | HJB Res: $${hjbStr} | Survival: ${survivalStr}%${clearLine}\n`;
         out += ` AI Prediction Direction: ${fAiDir >= 0 ? green : red}${fAiDir >= 0 ? "+" : ""}${fAiDir.toFixed(4)}${reset}  |  Confidence: ${yellow}${fAiConf}%${reset}  |  Inference Latency: ${fInfLat} µs${clearLine}\n`;
         out += ` Top 3 Bids: [1] $${this.bidBuffer[0].toFixed(fDec)} (${this.bidBuffer[1].toFixed(3)})  [2] $${this.bidBuffer[2].toFixed(fDec)} (${this.bidBuffer[3].toFixed(3)})  [3] $${this.bidBuffer[4].toFixed(fDec)} (${this.bidBuffer[5].toFixed(3)})${clearLine}\n`;
         out += ` Top 3 Asks: [1] $${this.askBuffer[0].toFixed(fDec)} (${this.askBuffer[1].toFixed(3)})  [2] $${this.askBuffer[2].toFixed(fDec)} (${this.askBuffer[3].toFixed(3)})  [3] $${this.askBuffer[4].toFixed(fDec)} (${this.askBuffer[5].toFixed(3)})${clearLine}\n`;
@@ -264,13 +322,23 @@ class MultiAssetCLIDashboard {
         out += `${bold}--- INTERACTIVE COMMAND FEEDBACK & NOTIFICATION LOG ---${reset}${clearLine}\n`;
         if (this.notificationLog.length === 0) {
             out += ` ${gray}[SYSTEM READY] Listening for raw keyboard controls...${reset}${clearLine}\n`;
+            for (let k = 1; k < this.maxLogEntries; k++) {
+                out += `${clearLine}\n`;
+            }
         }
         else {
-            for (const logLine of this.notificationLog) {
-                out += ` ${logLine}${clearLine}\n`;
+            for (let k = 0; k < this.maxLogEntries; k++) {
+                if (k < this.notificationLog.length) {
+                    const logLine = this.notificationLog[k];
+                    out += ` ${this.formatCell(logLine, 145, false)}${clearLine}\n`;
+                }
+                else {
+                    out += `${clearLine}\n`;
+                }
             }
         }
         out += MultiAssetCLIDashboard.BORDER;
+        out += "\x1b[J";
         process.stdout.write(out);
     }
     /**
