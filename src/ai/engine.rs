@@ -480,9 +480,8 @@ impl AIEngine {
         let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale };
         let offset = sab_offset;
 
-        let z_dir = raw_confidence / 1e-3;
-        let calibrated_logit: f64 = (scale * z_dir + offset) / temp.max(0.05);
-        let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.9999f64);
+        let calibrated_logit: f64 = ((scale * raw_confidence + offset) / temp.max(0.05)).clamp(0.0, 4.6);
+        let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.99f64);
 
         let end_ns = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -578,9 +577,8 @@ impl AIEngine {
         let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale };
         let offset = sab_offset;
 
-        let z_dir = raw_confidence / 1e-3;
-        let calibrated_logit: f64 = (scale * z_dir + offset) / temp.max(0.05);
-        let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.9999f64);
+        let calibrated_logit: f64 = ((scale * raw_confidence + offset) / temp.max(0.05)).clamp(0.0, 4.6);
+        let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.99f64);
 
         let end_ns = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -622,8 +620,8 @@ impl AIEngine {
                             let raw_direction = if num_elems > 0 { flat_out.get(0).ok().and_then(|t| t.to_scalar::<f32>().ok()).unwrap_or(0.0) as f64 } else { 0.0 };
                             let raw_confidence = if num_elems > 1 { flat_out.get(1).ok().and_then(|t| t.to_scalar::<f32>().ok()).unwrap_or(raw_direction.abs() as f32) as f64 } else { raw_direction.abs() };
                             let direction = raw_direction.tanh();
-                            let calibrated_logit: f64 = (self.calibration_params.platt_scale * raw_confidence + self.calibration_params.platt_offset) / self.calibration_params.temperature.max(0.05);
-                            let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.0f64, 1.0f64);
+                            let calibrated_logit: f64 = ((self.calibration_params.platt_scale * raw_confidence + self.calibration_params.platt_offset) / self.calibration_params.temperature.max(0.05)).clamp(0.0, 4.6);
+                            let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.99f64);
                             return (direction, confidence);
                         }
                     }

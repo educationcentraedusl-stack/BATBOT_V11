@@ -149,8 +149,7 @@ def fit_platt_temperature_calibration(model: nn.Module, val_loader: DataLoader, 
 
     directional_match = (preds * targets > 0).float()
     magnitudes = preds.abs()
-    mag_std = magnitudes.std() + 1e-8
-    z_dir = magnitudes / mag_std
+    z_dir = magnitudes
 
     platt_scale = nn.Parameter(torch.tensor([1.0], device=device))
     platt_offset = nn.Parameter(torch.tensor([0.0], device=device))
