@@ -466,11 +466,11 @@ export class StrategyEngine {
    * Zero GC heap allocation when no trade signals are generated.
    */
   public evaluateTick(): StrategySignalResult {
+    let finalizedSignalVal = 0.0;
     try {
       const seq = this.client.getSequenceNum(this.assetIndex);
 
       if (seq === this.lastProcessedSequence || this.isOrderInFlight) {
-        this.client.setFinalizedSignal(0.0, this.assetIndex);
         this.staticResult.sequenceNum = seq;
         this.staticResult.signalType = "NONE";
         this.staticResult.riskResult = undefined;
@@ -664,8 +664,7 @@ export class StrategyEngine {
             });
           }
 
-          const sigVal = riskResult.passed ? (exitSide === "BUY" ? 1.0 : exitSide === "SELL" ? 2.0 : 0.0) : 0.0;
-          this.client.setFinalizedSignal(sigVal, this.assetIndex);
+          finalizedSignalVal = riskResult.passed ? (exitSide === "BUY" ? 1.0 : exitSide === "SELL" ? 2.0 : 0.0) : 0.0;
 
           return {
             sequenceNum: seq,
@@ -686,7 +685,6 @@ export class StrategyEngine {
 
       // Safety Clamp: Suppress new signal generation when engine is in TRAINING_LOCK, RECALIBRATING, PAUSED or EMERGENCY_HALT state
       if (this.state === "TRAINING_LOCK" || this.state === "RECALIBRATING" || this.state === "PAUSED" || this.state === "EMERGENCY_HALT") {
-        this.client.setFinalizedSignal(0.0, this.assetIndex);
         if (seq % 500n === 0n) {
           console.log(`[StrategyEngine][StateLock] Seq #${seq} | Engine locked in [${this.state}] state. Signal evaluation suppressed.`);
         }
@@ -834,7 +832,6 @@ export class StrategyEngine {
       }
 
       if (signalType === "NONE") {
-        this.client.setFinalizedSignal(0.0, this.assetIndex);
         if (seq % 500n === 0n) {
           console.log(
             `[StrategyEngine][SignalGate] Seq #${seq} | Composite: ${compositeScore.toFixed(4)} | AI: (dir=${aiDirection.toFixed(2)}, conf=${(aiConfidence * 100).toFixed(0)}%) | OBI: ${obi.toFixed(2)} | CVD: ${cvd.toFixed(0)} | Status: NO SIGNAL TRIGGERED`
@@ -892,7 +889,6 @@ export class StrategyEngine {
         !this.reusableOrderIntent.isCloseOrder &&
         !this.reusableOrderIntent.isHardStop
       ) {
-        this.client.setFinalizedSignal(0.0, this.assetIndex);
         const reasonCode = !isTickValid ? "INVALID_TICK_DATA" : "REJECTED_LIQUIDITY_SWEEP_TRAP";
         const message = !isTickValid
           ? `Market execution blocked: invalid tick prices (bid: ${bidPrice}, ask: ${askPrice})`
@@ -965,13 +961,11 @@ export class StrategyEngine {
           );
 
       if (!riskResult.passed) {
-        this.client.setFinalizedSignal(0.0, this.assetIndex);
         if (seq % 1000n === 0n) {
           console.log(`[StrategyEngine][RISK_REJECTED] Seq #${seq} | Reason: ${riskResult.reasonCode} - ${riskResult.message}`);
         }
       } else {
-        const sigVal = signalType === "BUY" ? 1.0 : signalType === "SELL" ? 2.0 : 0.0;
-        this.client.setFinalizedSignal(sigVal, this.assetIndex);
+        finalizedSignalVal = signalType === "BUY" ? 1.0 : signalType === "SELL" ? 2.0 : 0.0;
       }
 
       let executionPromise: Promise<BinanceOrderResponse | null> | undefined = undefined;
@@ -1058,8 +1052,7 @@ export class StrategyEngine {
         executionPromise,
       };
     } catch (err: any) {
-      // Non-Negotiable Safety Invariant: Guarantee SAB finalizedSignal is reset to 0.0 on exception unwind
-      this.client.setFinalizedSignal(0.0, this.assetIndex);
+      finalizedSignalVal = 0.0;
       console.error(`[ENGINE_EVALUATE_TICK_ERROR][Asset #${this.assetIndex}] Exception in evaluateTick: ${err.message}`);
       this.staticResult.sequenceNum = this.lastProcessedSequence;
       this.staticResult.signalType = "NONE";
@@ -1070,6 +1063,9 @@ export class StrategyEngine {
       };
       this.staticResult.executionPromise = undefined;
       return this.staticResult;
+    } finally {
+      // NON-NEGOTIABLE SAFETY INVARIANT: Enforce atomic SAB Slot 137 synchronization across ALL exit paths
+      this.client.setFinalizedSignal(finalizedSignalVal, this.assetIndex);
     }
   }
 

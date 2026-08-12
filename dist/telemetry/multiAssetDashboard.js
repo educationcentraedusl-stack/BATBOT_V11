@@ -41,12 +41,14 @@ class MultiAssetCLIDashboard {
     }
     /**
      * Helper utility to format cell content with strict width bounds and pad/truncation protection.
+     * Strips ANSI escape sequences prior to length evaluation to prevent ANSI butchering and layout misalignment.
      */
     formatCell(val, width, alignRight = true) {
-        if (val.length > width) {
-            return val.substring(0, width);
+        const plainVal = val.replace(/\x1b\[[0-9;]*m/g, "");
+        if (plainVal.length > width) {
+            return plainVal.substring(0, width);
         }
-        return alignRight ? val.padStart(width) : val.padEnd(width);
+        return alignRight ? plainVal.padStart(width) : plainVal.padEnd(width);
     }
     /**
      * Sets current focused asset index slot (0 to maxAssets-1) for detailed L2 view.

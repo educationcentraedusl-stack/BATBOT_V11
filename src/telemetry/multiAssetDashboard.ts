@@ -67,12 +67,14 @@ export class MultiAssetCLIDashboard {
 
   /**
    * Helper utility to format cell content with strict width bounds and pad/truncation protection.
+   * Strips ANSI escape sequences prior to length evaluation to prevent ANSI butchering and layout misalignment.
    */
   private formatCell(val: string, width: number, alignRight: boolean = true): string {
-    if (val.length > width) {
-      return val.substring(0, width);
+    const plainVal = val.replace(/\x1b\[[0-9;]*m/g, "");
+    if (plainVal.length > width) {
+      return plainVal.substring(0, width);
     }
-    return alignRight ? val.padStart(width) : val.padEnd(width);
+    return alignRight ? plainVal.padStart(width) : plainVal.padEnd(width);
   }
 
   /**
