@@ -258,6 +258,26 @@ export class MarketDataClient {
     return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 111));
   }
 
+  public setOmsTotalTrades(trades: bigint | number, assetIdx: number = 0): void {
+    Atomics.store(this.bigIntView, this.getGlobalSlot(assetIdx, 111), BigInt(trades));
+  }
+
+  public getOmsWinningTrades(assetIdx: number = 0): bigint {
+    return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 135));
+  }
+
+  public setOmsWinningTrades(trades: bigint | number, assetIdx: number = 0): void {
+    Atomics.store(this.bigIntView, this.getGlobalSlot(assetIdx, 135), BigInt(trades));
+  }
+
+  public getOmsLosingTrades(assetIdx: number = 0): bigint {
+    return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 136));
+  }
+
+  public setOmsLosingTrades(trades: bigint | number, assetIdx: number = 0): void {
+    Atomics.store(this.bigIntView, this.getGlobalSlot(assetIdx, 136), BigInt(trades));
+  }
+
   // --- Slots 112 to 120: Micro-Burst & Dynamic Dispersion Metrics ---
 
   public getHawkesIntensity(assetIdx: number = 0): number {

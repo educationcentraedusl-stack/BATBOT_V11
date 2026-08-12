@@ -88,6 +88,8 @@ async function runPhase6TuiCommandCenterTests() {
             writeFloat(i, 108, calculatedUnrealizedPnl); // Dynamically computed Unrealized PnL
             writeFloat(i, 109, 10.0); // Leverage
             writeBigInt(i, 111, BigInt(12 + i)); // Total Trades
+            writeBigInt(i, 135, BigInt(8 + i)); // Winning Trades
+            writeBigInt(i, 136, BigInt(4)); // Losing Trades
         }
     }
     console.log("  ✅ Synthetic 10-Asset orderbook and OMS state populated in SAB.\n");

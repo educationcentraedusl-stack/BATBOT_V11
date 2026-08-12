@@ -359,6 +359,9 @@ class StrategyEngine {
             this.client.setOmsRealizedPnl(summary.cumulativeRealizedPnl, this.assetIndex);
             this.client.setOmsUnrealizedPnl(summary.unrealizedPnl, this.assetIndex);
             this.client.setOmsLeverage(this.config.leverageMultiplier, this.assetIndex);
+            this.client.setOmsTotalTrades(summary.totalTrades, this.assetIndex);
+            this.client.setOmsWinningTrades(summary.winningTrades, this.assetIndex);
+            this.client.setOmsLosingTrades(summary.losingTrades, this.assetIndex);
         }
         if (markPrice > 0) {
             const hedgeTriggers = this.hedgeLedger.evaluateHedgeDynamicTpSl(markPrice);

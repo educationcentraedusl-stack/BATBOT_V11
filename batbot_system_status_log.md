@@ -1293,6 +1293,19 @@
   4. Addition of Fee & Spread Friction Guard (`TargetReturn >= 2.5 * Fees`) and 30s minimum holding time hysteresis.
 - **Status:** ⏳ In Progress (Plan Approved by Lead Architect)
 
+- **Date:** 2026-08-12
+- **Feature/Task:** TUI Header Enhancement - Win/Loss & Win Rate Telemetry Injection
+- **Artifacts Created/Modified:** `src/ipc/sabSchema.ts`, `src/marketDataClient.ts`, `src/strategy/engine.ts`, `src/telemetry/multiAssetDashboard.ts`, `src/test_phase6_tui_command_center.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Zero-allocation atomic telemetry header injection:
+  1. Integrated SAB Slots 135 (`OMS_WINNING_TRADES`) and 136 (`OMS_LOSING_TRADES`) into `sabSchema.ts` and `marketDataClient.ts`.
+  2. Implemented zero-GC atomic getters/setters (`getOmsWinningTrades`, `setOmsWinningTrades`, `getOmsLosingTrades`, `setOmsLosingTrades`, `setOmsTotalTrades`) via `Atomics.load` / `Atomics.store`.
+  3. Synchronized OMS position ledger summary counters to SAB on every tick loop in `src/strategy/engine.ts`.
+  4. Dynamically aggregated portfolio win/loss metrics and calculated `winRatePct = numTrades > 0 ? (numWins / numTrades) * 100 : 0` guarded against zero-division and NaN in `multiAssetDashboard.ts`.
+  5. Injected ANSI color-coded Win/Loss and Win Rate header line (`Green` for Wins, `Red` for Losses, `Yellow` for Win Rate) into `multiAssetDashboard.ts` using zero-allocation string assembly.
+  6. 100% QA verified via `npm run build:ts` (0 compilation errors) and `npx tsx src/test_phase6_tui_command_center.ts` (10-Asset TUI rendering verified cleanly).
+- **Status:** ✅ Completed & QA Verified
+
+
 
 
 
