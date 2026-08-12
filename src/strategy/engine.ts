@@ -487,6 +487,7 @@ export class StrategyEngine {
     // Read AI predictions & latency metrics from SAB
     const aiDirection = this.client.getAIPredictionDirection(this.assetIndex);
     const aiConfidence = this.client.getAIPredictionConfidence(this.assetIndex);
+    const aiDirectionMag = this.client.getAIDirectionMagnitude(this.assetIndex) || Math.abs(aiDirection);
     const latencyPenalty = this.client.getLatencyPenaltyCoefficient(this.assetIndex);
     const penaltyCoeff = latencyPenalty > 0 ? Math.max(0.75, latencyPenalty) : 1.0;
     const slippageTicks = this.client.getDynamicSlippageTicks(this.assetIndex);
@@ -746,17 +747,24 @@ export class StrategyEngine {
     let isBuySignal = false;
     let isSellSignal = false;
 
-    if (isHighConfidenceAi) {
-      // AI-Override Rule: High-confidence AI must also satisfy strict OBI directional pressure threshold (+/- 0.35)
-      isBuySignal = aiDirection > 0 && obi >= this.config.obiBuyThreshold;
-      isSellSignal = aiDirection < 0 && obi <= this.config.obiSellThreshold;
-      if (isBuySignal || isSellSignal) {
-        console.log(`[StrategyEngine][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)}, Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
+    // Directional Conviction Floor: Reject micro-noise predictions with magnitude < 0.15
+    const isConvictionValid = aiDirectionMag >= 0.15 && Math.abs(aiDirection) >= 0.15;
+
+    if (isConvictionValid) {
+      if (isHighConfidenceAi) {
+        // AI-Override Rule: High-confidence AI must also satisfy strict OBI directional pressure threshold (+/- 0.35)
+        isBuySignal = aiDirection > 0 && obi >= this.config.obiBuyThreshold;
+        isSellSignal = aiDirection < 0 && obi <= this.config.obiSellThreshold;
+        if (isBuySignal || isSellSignal) {
+          console.log(`[StrategyEngine][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)}), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
+        }
+      } else {
+        // Weighted Composite Rule with dynamic effective confidence thresholding
+        isBuySignal = compositeScore > 0.12 && aiConfidence >= effectiveMinConfidence && obi >= this.config.obiBuyThreshold;
+        isSellSignal = compositeScore < -0.12 && aiConfidence >= effectiveMinConfidence && obi <= this.config.obiSellThreshold;
       }
-    } else {
-      // Weighted Composite Rule with dynamic effective confidence thresholding
-      isBuySignal = compositeScore > 0.12 && aiConfidence >= effectiveMinConfidence && obi >= this.config.obiBuyThreshold;
-      isSellSignal = compositeScore < -0.12 && aiConfidence >= effectiveMinConfidence && obi <= this.config.obiSellThreshold;
+    } else if (seq % 1000n === 0n) {
+      console.log(`[StrategyEngine][CONVICTION_FLOOR_GATE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)} < 0.15 floor) -> Signals Filtered`);
     }
 
     // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
@@ -825,22 +833,12 @@ export class StrategyEngine {
     const priceAdjustment = effectiveSlippage * this.config.tickSize;
     const basePrice = signalType === "BUY" ? askPrice : bidPrice;
 
-    const isHighConfidence = aiConfidence >= this.config.aggressiveConfidenceThreshold;
-    const isAggressive = isHighConfidence;
-
-    let targetPrice: number;
-    let orderType: "LIMIT" | "MARKET";
-    let timeInForce: "GTC" | "IOC" | "GTX";
-
-    if (isHighConfidence) {
-      orderType = "MARKET";
-      timeInForce = "IOC";
-      targetPrice = signalType === "BUY" ? askPrice + priceAdjustment : bidPrice - priceAdjustment;
-    } else {
-      orderType = "LIMIT";
-      timeInForce = "GTX";
-      targetPrice = signalType === "BUY" ? bidPrice : askPrice;
-    }
+    // 100% SOTA Maker-Dominant Execution Architecture (POST_ONLY GTX Order Routing)
+    // Completely eradicates MARKET/IOC taker fee dispatches for entry signals.
+    // Forces limit orders directly on the order book at best bid (BUY) and best ask (SELL), guaranteeing zero spread loss & Maker fee execution.
+    let orderType: "LIMIT" | "MARKET" = "LIMIT";
+    const timeInForce: "GTC" | "IOC" | "GTX" = "GTX";
+    let targetPrice: number = signalType === "BUY" ? bidPrice : askPrice;
 
     // Dynamic .env driven USDT Sizing & LOT_SIZE Precision Rounding (Unlocks All 10 Assets)
     let finalQuantity = 0.001;
@@ -865,7 +863,7 @@ export class StrategyEngine {
     const currentSpread = isTickValid ? askPrice - bidPrice : Infinity;
     const maxSpreadAllowed = this.config.symbol.includes("ETH") ? this.config.maxSpreadEth : this.config.maxSpreadBtc;
     if (
-      orderType === "MARKET" &&
+      (orderType as string) === "MARKET" &&
       currentSpread > maxSpreadAllowed &&
       !this.reusableOrderIntent.isCloseOrder &&
       !this.reusableOrderIntent.isHardStop

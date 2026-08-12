@@ -32,7 +32,11 @@
   - **Defect 3 (Isolated Exit Cooldown Synchronization):** Centralized dual-tier cooldown synchronization in `onExecutionCompleted` in `src/strategy/engine.ts` and `src/strategy/risk.ts`. Position close orders (`isCloseOrder` / `isHardStop`) bypass entry cooldowns to prevent exit delays, while post-exit execution immediately locks Tier 1 (`symbolExecutionTimestamps`) and Tier 2 (SAB `setLongCooldownLock` / `setShortCooldownLock`) against microburst sweep traps. Verified via `npx tsx src/test_multi_asset_risk.ts`.
   - **Defect 4 (IEEE 754 Zero-Division, NaN & Sub-Normal Precision Guards):** Implemented 5-Layer Mathematical Guard Architecture in `calculatePartialExitChunk` in `src/strategy/positionLedger.ts` and `SPREAD_GUARD` in `src/strategy/engine.ts`. Sanitized input boundaries against non-finite values, clamped precision ($0 \le \text{precision} \le 8$), and handled step-size quantization and lot-size merge protection. Verified via `npx tsx src/test_multi_tp_zero_loss.ts`.
   - **Defect 5 (Zero-GC Order Intent Reset & Cross-Asset Isolation):** Implemented zero-GC mutator `prepareOrderIntent()` in `StrategyEngine` (`src/strategy/engine.ts`), enforcing strict constructor-bound symbol invariance and resetting ALL transient intent fields across evaluation ticks and assets, eradicating state leakage. Verified via `npx tsx src/test_strategy_execution.ts`.
+* 2026-08-12 - SOTA Zero-Loss Maker-Dominant Remediation Architecture Initiated:
+  - Formulated comprehensive Master Plan (`implementation_plan.md`) to eradicate live realized losses ($65.33 bleed) caused by artificial logit multiplier inflation (`50.0` in `src/ai/engine.rs`), forced MARKET IOC taker order dispatches, missing minimum directional conviction thresholds (`|aiDirection| >= 0.15`), and rapid spread-crossing churn. Approved by Lead Architect.
 
 ## Next Actions
-1. Proceed to final live system integration QA and production trading deployment on Binance Futures stream.
-2. Continuously monitor multi-asset dynamic risk collars and TUI Command Center telemetry.
+1. Execute Phase 1: Rust AI Engine Calibration & Logit Multiplier Eradication in `src/ai/engine.rs`.
+2. Execute Phase 2: Strategy Engine 100% POST_ONLY GTX Maker Order Routing, `minAiDirection` thresholding, and 30s minimum holding time hysteresis in `src/strategy/engine.ts`.
+3. Execute Phase 3: RiskGuard Fee & Spread Friction Guard implementation in `src/strategy/risk.ts`.
+4. Execute Phase 4: Full QA build, test harness verification, and live shadow simulation.

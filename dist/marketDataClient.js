@@ -140,6 +140,9 @@ class MarketDataClient {
     getAIPredictionTimestampNs(assetIdx = 0) {
         return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 96));
     }
+    getAIDirectionMagnitude(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 97);
+    }
     getMeasuredRttMs(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 98);
     }

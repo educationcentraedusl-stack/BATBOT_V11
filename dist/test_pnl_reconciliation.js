@@ -16,7 +16,7 @@ async function testPnlReconciliationIntegration() {
     console.log("==================================================");
     console.log("   RUNNING PnL RECONCILIATION INTEGRATION HARNESS ");
     console.log("==================================================");
-    const sab = new SharedArrayBuffer(2048);
+    const sab = new SharedArrayBuffer(20480);
     const bigIntView = new BigInt64Array(sab);
     const client = new marketDataClient_1.MarketDataClient(sab);
     const riskGuard = new risk_1.RiskGuard({ minCooldownMs: 0 });
@@ -32,11 +32,16 @@ async function testPnlReconciliationIntegration() {
     setAtomicFloat(bigIntView, 5, 1.0);
     setAtomicFloat(bigIntView, 6, 60001.0); // BestAsk
     setAtomicFloat(bigIntView, 7, 1.0);
+    setAtomicFloat(bigIntView, 93, 1.0); // AI Direction: BUY
+    setAtomicFloat(bigIntView, 94, 0.95); // AI Confidence: 95%
     console.log("\n[STEP 1] Evaluating tick 1 (BUY Signal)...");
     const tick1 = strategyEngine.evaluateTick();
     console.log("  Signal 1:", tick1.signalType, "| Bid:", tick1.bidPrice, "| Ask:", tick1.askPrice);
     if (tick1.signalType !== "BUY") {
         throw new Error("Expected BUY signal on tick 1");
+    }
+    if (tick1.executionPromise) {
+        await tick1.executionPromise;
     }
     // Simulate execution fill for BUY order filled at 60001
     const buyFillQty = 0.001;
@@ -75,6 +80,8 @@ async function testPnlReconciliationIntegration() {
     setAtomicFloat(bigIntView, 3, 0.01);
     setAtomicFloat(bigIntView, 4, 61000.0);
     setAtomicFloat(bigIntView, 6, 61001.0);
+    setAtomicFloat(bigIntView, 93, -1.0); // AI Direction: SELL
+    setAtomicFloat(bigIntView, 94, 0.95); // AI Confidence: 95%
     console.log("\n[STEP 3] Evaluating tick 3 (SELL Signal)...");
     const tick3 = strategyEngine.evaluateTick();
     console.log("  Signal 3:", tick3.signalType);

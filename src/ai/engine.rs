@@ -468,8 +468,9 @@ impl AIEngine {
         let raw_confidence = if num_elems > 1 { flat_out.get(1)?.to_scalar::<f32>()? as f64 } else { raw_direction.abs() };
         let horizon_ms = if num_elems > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
         let direction = raw_direction.tanh();
+        let direction_magnitude = direction.abs();
 
-        // Temperature Scaling (T) & Platt Calibration Transformation with Micro-Logit Multiplier (50.0)
+        // Temperature Scaling (T) & Mathematically Sound Platt Calibration Transformation (No Artificial Inflation Multipliers)
         let sab_temp = sab.load_f64_asset(asset_idx, 127);
         let sab_scale = sab.load_f64_asset(asset_idx, 128);
         let sab_offset = sab.load_f64_asset(asset_idx, 129);
@@ -478,8 +479,7 @@ impl AIEngine {
         let scale = if sab_scale > 0.05 { sab_scale } else { self.calibration_params.platt_scale };
         let offset = sab_offset;
 
-        let logit_scale_factor = 50.0;
-        let calibrated_logit: f64 = (scale * (raw_confidence * logit_scale_factor) + offset) / temp.max(0.05);
+        let calibrated_logit: f64 = (scale * raw_confidence + offset) / temp.max(0.05);
         let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.0f64, 1.0f64);
 
         let end_ns = SystemTime::now()
@@ -487,12 +487,6 @@ impl AIEngine {
             .unwrap_or_default()
             .as_nanos() as u64;
         let latency_ns = end_ns.saturating_sub(start_ns);
-
-        let hidden_norm = hidden_guard
-            .sqr()?
-            .sum_all()?
-            .to_scalar::<f32>()?
-            .sqrt() as f64;
 
         let spread_vel = sab.load_f64_asset(asset_idx, 3);
         let slippage_ticks = (2.0 + (spread_vel.abs() / 0.5).floor()).min(20.0);
@@ -506,7 +500,7 @@ impl AIEngine {
         sab.store_f64_asset(asset_idx, 94, confidence);
         sab.store_f64_asset(asset_idx, 95, horizon_ms);
         sab.store_u64_asset(asset_idx, 96, start_ns);
-        sab.store_f64_asset(asset_idx, 97, hidden_norm);
+        sab.store_f64_asset(asset_idx, 97, direction_magnitude);
         sab.store_f64_asset(asset_idx, 100, slippage_ticks);
         sab.store_u64_asset(asset_idx, 103, latency_ns);
         sab.store_u64_asset(asset_idx, 104, seq);
@@ -573,7 +567,7 @@ impl AIEngine {
         let horizon_ms = if num_elems > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
         let direction = raw_direction.tanh();
 
-        // Temperature Scaling (T) & Platt Calibration Transformation (A * raw + B) / T
+        // Temperature Scaling (T) & Mathematically Sound Platt Calibration Transformation (No Inflation Multipliers)
         let sab_temp = sab.load_f64(127);
         let sab_scale = sab.load_f64(128);
         let sab_offset = sab.load_f64(129);
@@ -582,8 +576,7 @@ impl AIEngine {
         let scale = if sab_scale > 0.05 { sab_scale } else { self.calibration_params.platt_scale };
         let offset = sab_offset;
 
-        let logit_scale_factor = 50.0;
-        let calibrated_logit: f64 = (scale * (raw_confidence * logit_scale_factor) + offset) / temp.max(0.05);
+        let calibrated_logit: f64 = (scale * raw_confidence + offset) / temp.max(0.05);
         let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.0f64, 1.0f64);
 
         let end_ns = SystemTime::now()
@@ -626,9 +619,8 @@ impl AIEngine {
                             let raw_direction = if num_elems > 0 { flat_out.get(0).ok().and_then(|t| t.to_scalar::<f32>().ok()).unwrap_or(0.0) as f64 } else { 0.0 };
                             let raw_confidence = if num_elems > 1 { flat_out.get(1).ok().and_then(|t| t.to_scalar::<f32>().ok()).unwrap_or(raw_direction.abs() as f32) as f64 } else { raw_direction.abs() };
                             let direction = raw_direction.tanh();
-                            let logit_scale_factor = 50.0;
-                            let calibrated_logit = raw_confidence * logit_scale_factor;
-                            let confidence = (1.0 / (1.0 + (-calibrated_logit).exp())).clamp(0.0, 1.0);
+                            let calibrated_logit: f64 = (self.calibration_params.platt_scale * raw_confidence + self.calibration_params.platt_offset) / self.calibration_params.temperature.max(0.05);
+                            let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.0f64, 1.0f64);
                             return (direction, confidence);
                         }
                     }

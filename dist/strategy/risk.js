@@ -33,6 +33,7 @@ class RiskGuard {
     cumulativeDailyRealizedPnl = 0;
     isProfitLocked = false;
     currentPositionNotionalUsdt = 0;
+    symbolExecutionHistory = new Map();
     constructor(config) {
         const envDailyProfitLock = process.env.DAILY_PROFIT_LOCK_USDT ? parseFloat(process.env.DAILY_PROFIT_LOCK_USDT) : NaN;
         const defaultProfitLock = !isNaN(envDailyProfitLock) ? envDailyProfitLock : 10.0;
@@ -69,6 +70,35 @@ class RiskGuard {
         // 2. Profit Lock Enforcement (Only allow position close orders when profit locked)
         if (this.isProfitLocked && !intent.isCloseOrder) {
             return exports.RISK_REJECTED_PROFIT_LOCKED;
+        }
+        // 2.1 Rolling Trade Frequency Limit: Max 5 trades per 5-minute (300,000ms) rolling window per symbol
+        if (intent.symbol && !intent.isCloseOrder && !intent.isHardStop) {
+            const history = this.symbolExecutionHistory.get(intent.symbol) ?? [];
+            const windowStart = now - 300000;
+            const recentTrades = history.filter((t) => t >= windowStart);
+            if (recentTrades.length >= 5) {
+                return {
+                    passed: false,
+                    reasonCode: "REJECTED_OVER_TRADING",
+                    message: `Order rejected: Execution frequency cap reached for ${intent.symbol} (5 trades per 5min window).`,
+                };
+            }
+        }
+        // 2.2 Fee & Spread Friction Guard: Target Return >= 2.5 * (MakerFee + TakerFee)
+        if (!intent.isCloseOrder && !intent.isHardStop && intent.price > 0) {
+            const makerFee = 0.0002;
+            const takerFee = 0.0004;
+            const minFrictionFloorPct = 2.5 * (makerFee + takerFee); // 0.0015 (0.15%)
+            if (intent.takeProfitPrice !== undefined && intent.takeProfitPrice > 0) {
+                const returnPct = Math.abs(intent.takeProfitPrice - intent.price) / intent.price;
+                if (returnPct < minFrictionFloorPct - 1e-6) {
+                    return {
+                        passed: false,
+                        reasonCode: "REJECTED_FRICTION_GUARD",
+                        message: `Order rejected: Expected profit margin (${(returnPct * 100).toFixed(3)}%) is below mandatory friction defense floor (${(minFrictionFloorPct * 100).toFixed(3)}%).`,
+                    };
+                }
+            }
         }
         // 3. Dynamic Microstructure Trap & Toxic Flow Enforcement
         // High-confidence AI signals (>= 65% confidence) bypass VPIN toxic flow traps
@@ -186,7 +216,15 @@ class RiskGuard {
         return exports.RISK_PASSED;
     }
     recordExecutionSuccess(notionalUsdt, side = "BUY", symbol, isCloseOrder = false) {
-        this.lastExecutionTimestampMs = Date.now();
+        const now = Date.now();
+        this.lastExecutionTimestampMs = now;
+        if (symbol && !isCloseOrder) {
+            const history = this.symbolExecutionHistory.get(symbol) ?? [];
+            const windowStart = now - 300000;
+            const updated = history.filter((t) => t >= windowStart);
+            updated.push(now);
+            this.symbolExecutionHistory.set(symbol, updated);
+        }
     }
     recordExitExecution(notionalUsdt, realizedPnl = 0, side = "BUY", symbol) {
         this.recordExecutionSuccess(notionalUsdt, side, symbol, true);
