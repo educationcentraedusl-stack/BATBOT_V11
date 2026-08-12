@@ -130,8 +130,8 @@ class MultiAssetCLIDashboard {
         out += `${cyan}${bold}                           BATBOT_V11 MULTI-ASSET HFT TELEMETRY & COMMAND MONITOR (${this.client.maxAssets} ASSETS)                              ${reset}${clearLine}\n`;
         out += MultiAssetCLIDashboard.BORDER;
         const availBalance = this.client.getAvailableBalance(0);
-        out += ` Engine Status: ${statusStr}  |  Memory: ${memMb} MB  |  Sequence: #${seqNum.toString()}  |  Active Positions: ${activePositionCount}/${this.client.maxAssets}${clearLine}\n`;
-        out += ` Available Balance: ${green}${bold}$${availBalance.toFixed(2)}${reset}  |  Portfolio Unrealized PnL: ${totalUnrealizedPnl >= 0 ? green : red}${bold}$${totalUnrealizedPnl.toFixed(2)}${reset}  |  Realized PnL: ${totalRealizedPnl >= 0 ? green : red}${bold}$${totalRealizedPnl.toFixed(2)}${reset}  |  Total Trades Logged: ${totalTrades} | Total Win: ${green}${bold}${totalWinningTrades}${reset} | Loss: ${red}${bold}${totalLosingTrades}${reset} | Win Rate: ${yellow}${bold}${winRatePct.toFixed(1)}%${reset}${clearLine}\n`;
+        out += ` Engine Status: ${statusStr} | Memory: ${memMb} MB | Seq: #${seqNum.toString()} | Active Pos: ${activePositionCount}/${this.client.maxAssets}${clearLine}\n`;
+        out += ` Avail Bal: ${green}${bold}$${availBalance.toFixed(2)}${reset} | Unr PnL: ${totalUnrealizedPnl >= 0 ? green : red}${bold}$${totalUnrealizedPnl.toFixed(2)}${reset} | Real PnL: ${totalRealizedPnl >= 0 ? green : red}${bold}$${totalRealizedPnl.toFixed(2)}${reset} | Trades: ${totalTrades} | Win: ${green}${bold}${totalWinningTrades}${reset} | Loss: ${red}${bold}${totalLosingTrades}${reset} | Win Rate: ${yellow}${bold}${winRatePct.toFixed(1)}%${reset}${clearLine}\n`;
         out += MultiAssetCLIDashboard.SUB_DIVIDER;
         out += `${bold}--- ${this.client.maxAssets}-ASSET CONCURRENCY REAL-TIME MATRIX ---${reset}${clearLine}\n`;
         out += MultiAssetCLIDashboard.TABLE_DIVIDER;
