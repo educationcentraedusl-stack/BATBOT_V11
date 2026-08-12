@@ -42,7 +42,8 @@ export interface RiskCheckResult {
     | "TRAINING_LOCK_ACTIVE"
     | "RECALIBRATING_ACTIVE"
     | "ENGINE_PAUSED"
-    | "INVALID_TICK_DATA";
+    | "INVALID_TICK_DATA"
+    | "CRITICAL_EVALUATION_EXCEPTION";
   message: string;
 }
 

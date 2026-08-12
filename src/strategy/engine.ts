@@ -466,596 +466,611 @@ export class StrategyEngine {
    * Zero GC heap allocation when no trade signals are generated.
    */
   public evaluateTick(): StrategySignalResult {
-    const seq = this.client.getSequenceNum(this.assetIndex);
+    try {
+      const seq = this.client.getSequenceNum(this.assetIndex);
 
-    if (seq === this.lastProcessedSequence || this.isOrderInFlight) {
-      this.client.setFinalizedSignal(0.0, this.assetIndex);
-      this.staticResult.sequenceNum = seq;
-      this.staticResult.signalType = "NONE";
-      this.staticResult.riskResult = undefined;
-      this.staticResult.executionPromise = undefined;
-      return this.staticResult;
-    }
-    this.lastProcessedSequence = seq;
+      if (seq === this.lastProcessedSequence || this.isOrderInFlight) {
+        this.client.setFinalizedSignal(0.0, this.assetIndex);
+        this.staticResult.sequenceNum = seq;
+        this.staticResult.signalType = "NONE";
+        this.staticResult.riskResult = undefined;
+        this.staticResult.executionPromise = undefined;
+        return this.staticResult;
+      }
+      this.lastProcessedSequence = seq;
 
-    // Read scalar metrics atomically from SAB
-    const obi = this.client.getOBI(this.assetIndex);
-    const cvd = this.client.getCVD(this.assetIndex);
-    const spreadVelocity = this.client.getSpreadVelocity(this.assetIndex);
-    const bidPrice = this.client.getBestBidPrice(this.assetIndex);
-    const askPrice = this.client.getBestAskPrice(this.assetIndex);
+      // Read scalar metrics atomically from SAB
+      const obi = this.client.getOBI(this.assetIndex);
+      const cvd = this.client.getCVD(this.assetIndex);
+      const spreadVelocity = this.client.getSpreadVelocity(this.assetIndex);
+      const bidPrice = this.client.getBestBidPrice(this.assetIndex);
+      const askPrice = this.client.getBestAskPrice(this.assetIndex);
 
-    // Read AI predictions & latency metrics from SAB
-    const aiDirection = this.client.getAIPredictionDirection(this.assetIndex);
-    const aiConfidence = this.client.getAIPredictionConfidence(this.assetIndex);
-    const aiDirectionMag = this.client.getAIDirectionMagnitude(this.assetIndex) || Math.abs(aiDirection);
-    const latencyPenalty = this.client.getLatencyPenaltyCoefficient(this.assetIndex);
-    const penaltyCoeff = latencyPenalty > 0 ? Math.max(0.75, latencyPenalty) : 1.0;
-    const slippageTicks = this.client.getDynamicSlippageTicks(this.assetIndex);
+      // Read AI predictions & latency metrics from SAB
+      const aiDirection = this.client.getAIPredictionDirection(this.assetIndex);
+      const aiConfidence = this.client.getAIPredictionConfidence(this.assetIndex);
+      const aiDirectionMag = this.client.getAIDirectionMagnitude(this.assetIndex) || Math.abs(aiDirection);
+      const latencyPenalty = this.client.getLatencyPenaltyCoefficient(this.assetIndex);
+      const penaltyCoeff = latencyPenalty > 0 ? Math.max(0.75, latencyPenalty) : 1.0;
+      const slippageTicks = this.client.getDynamicSlippageTicks(this.assetIndex);
 
-    // 1. Dynamic Monitoring: Evaluate Unrealized PnL against dynamic TP/SL thresholds across Hedge Slots
-    const markPrice = askPrice > 0 ? (askPrice + bidPrice) / 2 : bidPrice;
+      // 1. Dynamic Monitoring: Evaluate Unrealized PnL against dynamic TP/SL thresholds across Hedge Slots
+      const markPrice = askPrice > 0 ? (askPrice + bidPrice) / 2 : bidPrice;
 
-    // Sync active position state to SharedArrayBuffer for TUI Table telemetry
-    if (markPrice > 0) {
-      const summary = this.hedgeLedger.getSummary(markPrice);
-      const netSignedQty = summary.side === "SHORT" ? -summary.netQuantity : summary.netQuantity;
-      this.client.setOmsPositionQty(netSignedQty, this.assetIndex);
-      this.client.setOmsAvgEntryPrice(summary.averageEntryPrice, this.assetIndex);
-      this.client.setOmsRealizedPnl(summary.cumulativeRealizedPnl, this.assetIndex);
-      this.client.setOmsUnrealizedPnl(summary.unrealizedPnl, this.assetIndex);
-      this.client.setOmsLeverage(this.config.leverageMultiplier, this.assetIndex);
-      this.client.setOmsTotalTrades(summary.totalTrades, this.assetIndex);
-      this.client.setOmsWinningTrades(summary.winningTrades, this.assetIndex);
-      this.client.setOmsLosingTrades(summary.losingTrades, this.assetIndex);
-    }
+      // Sync active position state to SharedArrayBuffer for TUI Table telemetry
+      if (markPrice > 0) {
+        const summary = this.hedgeLedger.getSummary(markPrice);
+        const netSignedQty = summary.side === "SHORT" ? -summary.netQuantity : summary.netQuantity;
+        this.client.setOmsPositionQty(netSignedQty, this.assetIndex);
+        this.client.setOmsAvgEntryPrice(summary.averageEntryPrice, this.assetIndex);
+        this.client.setOmsRealizedPnl(summary.cumulativeRealizedPnl, this.assetIndex);
+        this.client.setOmsUnrealizedPnl(summary.unrealizedPnl, this.assetIndex);
+        this.client.setOmsLeverage(this.config.leverageMultiplier, this.assetIndex);
+        this.client.setOmsTotalTrades(summary.totalTrades, this.assetIndex);
+        this.client.setOmsWinningTrades(summary.winningTrades, this.assetIndex);
+        this.client.setOmsLosingTrades(summary.losingTrades, this.assetIndex);
+      }
 
-    if (markPrice > 0) {
-      const hedgeTriggers = this.hedgeLedger.evaluateHedgeDynamicTpSl(markPrice);
-      if (hedgeTriggers.length > 0) {
-        const trigger = hedgeTriggers[0];
-        const exitSide: "BUY" | "SELL" = trigger.side === "LONG" ? "SELL" : "BUY";
-        const isHardStopTrigger =
-          trigger.reason === "STOP_LOSS" ||
-          trigger.reason === "BREAK_EVEN_STOP_LOSS" ||
-          trigger.reason === "LONG_HOLD_PROFIT_HARVEST" ||
-          trigger.reason === "TIME_DECAY_PROFIT_LOCK";
+      if (markPrice > 0) {
+        const hedgeTriggers = this.hedgeLedger.evaluateHedgeDynamicTpSl(markPrice);
+        if (hedgeTriggers.length > 0) {
+          const trigger = hedgeTriggers[0];
+          const exitSide: "BUY" | "SELL" = trigger.side === "LONG" ? "SELL" : "BUY";
+          const isHardStopTrigger =
+            trigger.reason === "STOP_LOSS" ||
+            trigger.reason === "BREAK_EVEN_STOP_LOSS" ||
+            trigger.reason === "LONG_HOLD_PROFIT_HARVEST" ||
+            trigger.reason === "TIME_DECAY_PROFIT_LOCK";
 
-        console.log(
-          `[HEDGE_DYNAMIC_MONITORING] Slot ${trigger.slotId} ${trigger.reason} TRIGGERED! Side: ${trigger.side}, Entry: $${trigger.entryPrice.toFixed(
-            2
-          )}, Mark: $${markPrice.toFixed(2)}. Dispatching MARKET close with positionSide: ${trigger.side}.${isHardStopTrigger ? " [RUTHLESS HARD STOP OVERRIDE ACTIVE]" : ""}`
-        );
+          console.log(
+            `[HEDGE_DYNAMIC_MONITORING] Slot ${trigger.slotId} ${trigger.reason} TRIGGERED! Side: ${trigger.side}, Entry: $${trigger.entryPrice.toFixed(
+              2
+            )}, Mark: $${markPrice.toFixed(2)}. Dispatching MARKET close with positionSide: ${trigger.side}.${isHardStopTrigger ? " [RUTHLESS HARD STOP OVERRIDE ACTIVE]" : ""}`
+          );
 
-        this.prepareOrderIntent(
-          exitSide,
-          trigger.quantity,
-          markPrice,
-          trigger.side,
-          true,
-          isHardStopTrigger
-        );
+          this.prepareOrderIntent(
+            exitSide,
+            trigger.quantity,
+            markPrice,
+            trigger.side,
+            true,
+            isHardStopTrigger
+          );
 
-        const isConfigured = this.executionClient.isConfigured();
-        const riskResult = (this.riskGuard instanceof MultiAssetRiskGuard)
-          ? (this.riskGuard as MultiAssetRiskGuard).validateMultiAssetOrder(this.reusableOrderIntent, isConfigured)
-          : this.riskGuard.validateOrder(
-              this.reusableOrderIntent,
-              isConfigured,
-              trigger.side
-            );
-
-        let executionPromise: Promise<BinanceOrderResponse | null> | undefined = undefined;
-        if (riskResult.passed) {
-          this.isOrderInFlight = true;
-          executionPromise = (async () => {
-            if (trigger.cancelOrderIds && trigger.cancelOrderIds.length > 0) {
-              console.log(
-                `[MAKER_TP_ENGINE][EMERGENCY_CANCEL] Cancelling ${trigger.cancelOrderIds.length} open POST_ONLY limit TP orders for ${trigger.slotId} before MARKET SL dispatch...`
+          const isConfigured = this.executionClient.isConfigured();
+          const riskResult = (this.riskGuard instanceof MultiAssetRiskGuard)
+            ? (this.riskGuard as MultiAssetRiskGuard).validateMultiAssetOrder(this.reusableOrderIntent, isConfigured)
+            : this.riskGuard.validateOrder(
+                this.reusableOrderIntent,
+                isConfigured,
+                trigger.side
               );
-              try {
-                await this.executionClient.cancelBatchOrders(this.config.symbol, trigger.cancelOrderIds);
-                console.log(`[MAKER_TP_ENGINE][EMERGENCY_CANCEL] Batch order cancellation confirmed by exchange.`);
-              } catch (err: any) {
-                console.warn(`[MAKER_TP_ENGINE][CANCEL_WARN] Batch order cancellation warning: ${err.message}`);
+
+          let executionPromise: Promise<BinanceOrderResponse | null> | undefined = undefined;
+          if (riskResult.passed) {
+            this.isOrderInFlight = true;
+            executionPromise = (async () => {
+              if (trigger.cancelOrderIds && trigger.cancelOrderIds.length > 0) {
+                console.log(
+                  `[MAKER_TP_ENGINE][EMERGENCY_CANCEL] Cancelling ${trigger.cancelOrderIds.length} open POST_ONLY limit TP orders for ${trigger.slotId} before MARKET SL dispatch...`
+                );
+                try {
+                  await this.executionClient.cancelBatchOrders(this.config.symbol, trigger.cancelOrderIds);
+                  console.log(`[MAKER_TP_ENGINE][EMERGENCY_CANCEL] Batch order cancellation confirmed by exchange.`);
+                } catch (err: any) {
+                  console.warn(`[MAKER_TP_ENGINE][CANCEL_WARN] Batch order cancellation warning: ${err.message}`);
+                }
               }
-            }
 
-            return this.executionClient
-              .placeOrder({
-                symbol: this.config.symbol,
-                side: exitSide,
-                type: "MARKET",
-                quantity: trigger.quantity,
-                positionSide: trigger.side,
-              })
-              .then((res) => {
-                if (res) {
-                  const execPx = parseFloat(res.price || res.avgPrice || "0") || markPrice;
-                  const takerFeeRate = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
-                  let realizedPnl = 0;
+              return this.executionClient
+                .placeOrder({
+                  symbol: this.config.symbol,
+                  side: exitSide,
+                  type: "MARKET",
+                  quantity: trigger.quantity,
+                  positionSide: trigger.side,
+                })
+                .then((res) => {
+                  if (res) {
+                    const execPx = parseFloat(res.price || res.avgPrice || "0") || markPrice;
+                    const takerFeeRate = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
+                    let realizedPnl = 0;
 
-                  if (trigger.isPartialClose && trigger.quantity > 0) {
-                    if (trigger.side === "LONG") {
-                      const entryPx = this.hedgeLedger.getCoreLong().entryPrice;
-                      const closedQty = Math.min(this.hedgeLedger.getCoreLong().quantity, trigger.quantity);
-                      if (entryPx > 0) {
-                        const grossPnl = (execPx - entryPx) * closedQty;
-                        const fees = (entryPx * closedQty + execPx * closedQty) * takerFeeRate;
-                        realizedPnl = grossPnl - fees;
+                    if (trigger.isPartialClose && trigger.quantity > 0) {
+                      if (trigger.side === "LONG") {
+                        const entryPx = this.hedgeLedger.getCoreLong().entryPrice;
+                        const closedQty = Math.min(this.hedgeLedger.getCoreLong().quantity, trigger.quantity);
+                        if (entryPx > 0) {
+                          const grossPnl = (execPx - entryPx) * closedQty;
+                          const fees = (entryPx * closedQty + execPx * closedQty) * takerFeeRate;
+                          realizedPnl = grossPnl - fees;
+                        }
+                        this.hedgeLedger.deductCoreLongQuantity(trigger.quantity, execPx, takerFeeRate, trigger.reason);
+                      } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
+                        const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
+                        const slot = this.hedgeLedger.getShortSlots().find((s) => s.slotId === trigger.slotId);
+                        if (slot && slot.entryPrice > 0) {
+                          const entryPx = slot.entryPrice;
+                          const closedQty = Math.min(slot.quantity, trigger.quantity);
+                          const grossPnl = (entryPx - execPx) * closedQty;
+                          const fees = (entryPx * closedQty + execPx * closedQty) * takerFeeRate;
+                          realizedPnl = grossPnl - fees;
+                        }
+                        this.hedgeLedger.deductShortSlotQuantity(sIdx, trigger.quantity, execPx, takerFeeRate, trigger.reason);
                       }
-                      this.hedgeLedger.deductCoreLongQuantity(trigger.quantity, execPx, takerFeeRate, trigger.reason);
+                    } else if (!trigger.isPartialClose) {
+                      if (trigger.side === "LONG") {
+                        const coreLong = this.hedgeLedger.getCoreLong();
+                        if (coreLong.isOccupied && coreLong.entryPrice > 0) {
+                          const entryPx = coreLong.entryPrice;
+                          const qty = coreLong.quantity;
+                          const grossPnl = (execPx - entryPx) * qty;
+                          const fees = (entryPx * qty + execPx * qty) * takerFeeRate;
+                          realizedPnl = grossPnl - fees;
+                        }
+                        this.hedgeLedger.releaseCoreLong(execPx, takerFeeRate, trigger.reason);
+                      } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
+                        const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
+                        const slot = this.hedgeLedger.getShortSlots().find((s) => s.slotId === trigger.slotId);
+                        if (slot && slot.isOccupied && slot.entryPrice > 0) {
+                          const entryPx = slot.entryPrice;
+                          const qty = slot.quantity;
+                          const grossPnl = (entryPx - execPx) * qty;
+                          const fees = (entryPx * qty + execPx * qty) * takerFeeRate;
+                          realizedPnl = grossPnl - fees;
+                        }
+                        this.hedgeLedger.releaseShortSlot(sIdx, execPx, takerFeeRate, trigger.reason);
+                      }
+                    }
+
+                    // Dual-tier cooldown & risk sync for dynamic MARKET exit executions
+                    this.onExecutionCompleted({
+                      symbol: this.config.symbol,
+                      assetIndex: this.assetIndex,
+                      side: exitSide,
+                      positionSide: trigger.side,
+                      isCloseOrder: true,
+                      executedQty: trigger.quantity,
+                      executedPrice: execPx,
+                      realizedPnl,
+                      fillTimestampMs: Date.now(),
+                    });
+                  }
+                  return res;
+                })
+                .catch((err) => {
+                  console.error(`[DYNAMIC_MONITORING_ERROR] Hedge ${trigger.reason} MARKET order failed: ${err.message}`);
+                  if (
+                    err.message &&
+                    (err.message.includes("-2022") ||
+                      err.message.includes("ReduceOnly") ||
+                      err.message.includes("-2011") ||
+                      err.message.includes("not configured"))
+                  ) {
+                    console.warn(
+                      `[DYNAMIC_MONITORING_WARN] Clearing local slot ${trigger.slotId} due to exchange release/error: ${err.message}`
+                    );
+                    if (trigger.side === "LONG") {
+                      this.hedgeLedger.releaseCoreLong();
                     } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
                       const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
-                      const slot = this.hedgeLedger.getShortSlots().find((s) => s.slotId === trigger.slotId);
-                      if (slot && slot.entryPrice > 0) {
-                        const entryPx = slot.entryPrice;
-                        const closedQty = Math.min(slot.quantity, trigger.quantity);
-                        const grossPnl = (entryPx - execPx) * closedQty;
-                        const fees = (entryPx * closedQty + execPx * closedQty) * takerFeeRate;
-                        realizedPnl = grossPnl - fees;
-                      }
-                      this.hedgeLedger.deductShortSlotQuantity(sIdx, trigger.quantity, execPx, takerFeeRate, trigger.reason);
-                    }
-                  } else if (!trigger.isPartialClose) {
-                    if (trigger.side === "LONG") {
-                      const coreLong = this.hedgeLedger.getCoreLong();
-                      if (coreLong.isOccupied && coreLong.entryPrice > 0) {
-                        const entryPx = coreLong.entryPrice;
-                        const qty = coreLong.quantity;
-                        const grossPnl = (execPx - entryPx) * qty;
-                        const fees = (entryPx * qty + execPx * qty) * takerFeeRate;
-                        realizedPnl = grossPnl - fees;
-                      }
-                      this.hedgeLedger.releaseCoreLong(execPx, takerFeeRate, trigger.reason);
-                    } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
-                      const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
-                      const slot = this.hedgeLedger.getShortSlots().find((s) => s.slotId === trigger.slotId);
-                      if (slot && slot.isOccupied && slot.entryPrice > 0) {
-                        const entryPx = slot.entryPrice;
-                        const qty = slot.quantity;
-                        const grossPnl = (entryPx - execPx) * qty;
-                        const fees = (entryPx * qty + execPx * qty) * takerFeeRate;
-                        realizedPnl = grossPnl - fees;
-                      }
-                      this.hedgeLedger.releaseShortSlot(sIdx, execPx, takerFeeRate, trigger.reason);
+                      this.hedgeLedger.releaseShortSlot(sIdx);
                     }
                   }
+                  return null;
+                });
+            })().finally(() => {
+              this.isOrderInFlight = false;
+            });
+          }
 
-                  // Dual-tier cooldown & risk sync for dynamic MARKET exit executions
-                  this.onExecutionCompleted({
-                    symbol: this.config.symbol,
-                    assetIndex: this.assetIndex,
-                    side: exitSide,
-                    positionSide: trigger.side,
-                    isCloseOrder: true,
-                    executedQty: trigger.quantity,
-                    executedPrice: execPx,
-                    realizedPnl,
-                    fillTimestampMs: Date.now(),
-                  });
-                }
-                return res;
-              })
-              .catch((err) => {
-                console.error(`[DYNAMIC_MONITORING_ERROR] Hedge ${trigger.reason} MARKET order failed: ${err.message}`);
-                if (
-                  err.message &&
-                  (err.message.includes("-2022") ||
-                    err.message.includes("ReduceOnly") ||
-                    err.message.includes("-2011") ||
-                    err.message.includes("not configured"))
-                ) {
-                  console.warn(
-                    `[DYNAMIC_MONITORING_WARN] Clearing local slot ${trigger.slotId} due to exchange release/error: ${err.message}`
-                  );
-                  if (trigger.side === "LONG") {
-                    this.hedgeLedger.releaseCoreLong();
-                  } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
-                    const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
-                    this.hedgeLedger.releaseShortSlot(sIdx);
-                  }
-                }
-                return null;
-              });
-          })().finally(() => {
-            this.isOrderInFlight = false;
-          });
+          const sigVal = riskResult.passed ? (exitSide === "BUY" ? 1.0 : exitSide === "SELL" ? 2.0 : 0.0) : 0.0;
+          this.client.setFinalizedSignal(sigVal, this.assetIndex);
+
+          return {
+            sequenceNum: seq,
+            signalType: exitSide,
+            positionSide: trigger.side,
+            slotId: trigger.slotId,
+            obi,
+            cvd,
+            spreadVelocity,
+            bidPrice,
+            askPrice,
+            riskResult,
+            executionPromise,
+            exitReason: trigger.reason,
+          };
+        }
+      }
+
+      // Safety Clamp: Suppress new signal generation when engine is in TRAINING_LOCK, RECALIBRATING, PAUSED or EMERGENCY_HALT state
+      if (this.state === "TRAINING_LOCK" || this.state === "RECALIBRATING" || this.state === "PAUSED" || this.state === "EMERGENCY_HALT") {
+        this.client.setFinalizedSignal(0.0, this.assetIndex);
+        if (seq % 500n === 0n) {
+          console.log(`[StrategyEngine][StateLock] Seq #${seq} | Engine locked in [${this.state}] state. Signal evaluation suppressed.`);
         }
 
-        const sigVal = riskResult.passed ? (exitSide === "BUY" ? 1.0 : exitSide === "SELL" ? 2.0 : 0.0) : 0.0;
-        this.client.setFinalizedSignal(sigVal, this.assetIndex);
+        const reasonCode = this.state === "TRAINING_LOCK" ? "TRAINING_LOCK_ACTIVE" : this.state === "RECALIBRATING" ? "RECALIBRATING_ACTIVE" : "ENGINE_PAUSED";
 
-        return {
-          sequenceNum: seq,
-          signalType: exitSide,
-          positionSide: trigger.side,
-          slotId: trigger.slotId,
-          obi,
-          cvd,
-          spreadVelocity,
-          bidPrice,
-          askPrice,
-          riskResult,
-          executionPromise,
-          exitReason: trigger.reason,
+        this.staticResult.sequenceNum = seq;
+        this.staticResult.signalType = "NONE";
+        this.staticResult.obi = obi;
+        this.staticResult.cvd = cvd;
+        this.staticResult.spreadVelocity = spreadVelocity;
+        this.staticResult.bidPrice = bidPrice;
+        this.staticResult.askPrice = askPrice;
+        this.staticResult.riskResult = {
+          passed: false,
+          reasonCode,
+          message: `Engine signal evaluation paused due to state: ${this.state}`,
         };
-      }
-    }
-
-    // Safety Clamp: Suppress new signal generation when engine is in TRAINING_LOCK, RECALIBRATING, PAUSED or EMERGENCY_HALT state
-    if (this.state === "TRAINING_LOCK" || this.state === "RECALIBRATING" || this.state === "PAUSED" || this.state === "EMERGENCY_HALT") {
-      this.client.setFinalizedSignal(0.0, this.assetIndex);
-      if (seq % 500n === 0n) {
-        console.log(`[StrategyEngine][StateLock] Seq #${seq} | Engine locked in [${this.state}] state. Signal evaluation suppressed.`);
+        this.staticResult.executionPromise = undefined;
+        return this.staticResult;
       }
 
-      const reasonCode = this.state === "TRAINING_LOCK" ? "TRAINING_LOCK_ACTIVE" : this.state === "RECALIBRATING" ? "RECALIBRATING_ACTIVE" : "ENGINE_PAUSED";
+      let signalType: "NONE" | "BUY" | "SELL" = "NONE";
+      let targetPosSide: "LONG" | "SHORT" | undefined = undefined;
+      let targetSlotId: string | undefined = undefined;
+      let targetSlotIndex: number | undefined = undefined;
 
-      this.staticResult.sequenceNum = seq;
-      this.staticResult.signalType = "NONE";
-      this.staticResult.obi = obi;
-      this.staticResult.cvd = cvd;
-      this.staticResult.spreadVelocity = spreadVelocity;
-      this.staticResult.bidPrice = bidPrice;
-      this.staticResult.askPrice = askPrice;
-      this.staticResult.riskResult = {
-        passed: false,
-        reasonCode,
-        message: `Engine signal evaluation paused due to state: ${this.state}`,
-      };
-      this.staticResult.executionPromise = undefined;
-      return this.staticResult;
-    }
-
-    let signalType: "NONE" | "BUY" | "SELL" = "NONE";
-    let targetPosSide: "LONG" | "SHORT" | undefined = undefined;
-    let targetSlotId: string | undefined = undefined;
-    let targetSlotIndex: number | undefined = undefined;
-
-    // Auto-reconcile hedge ledger slots if local position ledger is flat
-    if (this.positionLedger.getSide() === "FLAT" || this.positionLedger.getNetQuantity() === 0) {
-      if (this.hedgeLedger.getCoreLong().isOccupied && (!this.hedgeLedger.getCoreLong().quantity || this.hedgeLedger.getCoreLong().quantity <= 0)) {
-        this.hedgeLedger.releaseCoreLong();
-      }
-    }
-
-    // Read Hawkes & Microburst Metrics from SAB
-    const hawkesIntensity = this.client.getHawkesIntensity(this.assetIndex);
-    const realizedVol = this.client.getRealizedVolatility(this.assetIndex);
-    const rawShortCooldownLock = this.client.getShortCooldownLock(this.assetIndex);
-    const rawLongCooldownLock = this.client.getLongCooldownLock(this.assetIndex);
-    const hurstExponent = this.client.getHurstExponent(this.assetIndex);
-    const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
-
-    const nowMs = Date.now();
-    // Defensive ceiling guard: if cooldown lock is set to a future timestamp > 60s, reset lock to 0
-    const longCooldownLock = rawLongCooldownLock > nowMs + 60000 ? 0 : rawLongCooldownLock;
-    const shortCooldownLock = rawShortCooldownLock > nowMs + 60000 ? 0 : rawShortCooldownLock;
-
-    let targetSizeDecayCoeff = 1.0;
-
-    // 50-25-25 Weighted Composite Signal Engine & High-Confidence AI Override
-    const obiScore = Math.max(-1.0, Math.min(1.0, obi));
-    const cvdScore = cvd > 0 ? 1.0 : cvd < 0 ? -1.0 : 0.0;
-    const aiScore = Math.max(-1.0, Math.min(1.0, aiDirection * aiConfidence));
-
-    // Regime-aware AI confidence threshold adaptation:
-    // In strong trend regime (Hurst > 0.55), lower required minAiConfidence to 0.52 for fast momentum capture.
-    let effectiveMinConfidence = this.config.minAiConfidence;
-    if (hurstExponent > 0.55 && garmanKlassRV > 0.001) {
-      effectiveMinConfidence = Math.max(0.50, this.config.minAiConfidence - 0.15);
-    }
-
-    // Weights: AI Model = 50% (0.50), OBI = 25% (0.25), CVD = 25% (0.25)
-    const compositeScore = 0.50 * aiScore + 0.25 * obiScore + 0.25 * cvdScore;
-
-    const isHighConfidenceAi = aiConfidence >= this.config.aggressiveConfidenceThreshold;
-
-    let isBuySignal = false;
-    let isSellSignal = false;
-
-    // SOTA Dynamic Volatility-Normalized Conviction Floor Gate (K_conviction)
-    // Eradicates static 0.15 floor. Uses Garman-Klass volatility, Bid-Ask Half-Spread, and Hawkes Intensity.
-    const midPrice = askPrice > 0 && bidPrice > 0 ? (bidPrice + askPrice) / 2.0 : 1.0;
-    const halfSpreadBps = midPrice > 0 ? ((askPrice - bidPrice) / (2.0 * midPrice)) : 0.0001;
-    const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
-    const hawkesMultiplier = 1.0 + 0.2 * Math.log(1.0 + Math.max(0, hawkesIntensity));
-    
-    // Dynamic Conviction Floor: K_conviction(t)
-    const dynamicConvictionFloor = Math.max(halfSpreadBps, 0.5 * volEstimate * hawkesMultiplier);
-    
-    // Volatility-Standardized Z-Score of the signal
-    const zScore = aiDirectionMag / Math.max(volEstimate, 0.0001);
-
-    // Dynamic Conviction Authorization: Require BOTH dynamicConvictionFloor AND Z-Score >= 1.5
-    const minZScoreThreshold = 1.5;
-    const isConvictionValid = aiDirectionMag >= dynamicConvictionFloor && zScore >= minZScoreThreshold;
-
-    if (isConvictionValid) {
-      if (isHighConfidenceAi) {
-        // AI-Override Rule: High-confidence AI must also satisfy strict OBI directional pressure threshold (+/- 0.35)
-        isBuySignal = aiDirection > 0 && obi >= this.config.obiBuyThreshold;
-        isSellSignal = aiDirection < 0 && obi <= this.config.obiSellThreshold;
-        if (isBuySignal || isSellSignal) {
-          console.log(`[StrategyEngine][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)}), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
+      // Auto-reconcile hedge ledger slots if local position ledger is flat
+      if (this.positionLedger.getSide() === "FLAT" || this.positionLedger.getNetQuantity() === 0) {
+        if (this.hedgeLedger.getCoreLong().isOccupied && (!this.hedgeLedger.getCoreLong().quantity || this.hedgeLedger.getCoreLong().quantity <= 0)) {
+          this.hedgeLedger.releaseCoreLong();
         }
-      } else {
-        // Weighted Composite Rule with dynamic effective confidence thresholding
-        isBuySignal = compositeScore > 0.12 && aiConfidence >= effectiveMinConfidence && obi >= this.config.obiBuyThreshold;
-        isSellSignal = compositeScore < -0.12 && aiConfidence >= effectiveMinConfidence && obi <= this.config.obiSellThreshold;
       }
-    } else if (seq % 1000n === 0n) {
-      console.log(`[StrategyEngine][CONVICTION_FLOOR_GATE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)} < DynamicFloor: ${dynamicConvictionFloor.toFixed(4)}, Z-Score: ${zScore.toFixed(2)} < 1.5) -> Signals Filtered`);
-    }
 
-    // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
-    const isCoreLongOccupied = this.hedgeLedger.getCoreLong().isOccupied;
-    const isCooldownCleared = nowMs >= longCooldownLock;
+      // Read Hawkes & Microburst Metrics from SAB
+      const hawkesIntensity = this.client.getHawkesIntensity(this.assetIndex);
+      const realizedVol = this.client.getRealizedVolatility(this.assetIndex);
+      const rawShortCooldownLock = this.client.getShortCooldownLock(this.assetIndex);
+      const rawLongCooldownLock = this.client.getLongCooldownLock(this.assetIndex);
+      const hurstExponent = this.client.getHurstExponent(this.assetIndex);
+      const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
 
-    if (!isCoreLongOccupied && !isCooldownCleared) {
-      console.log(`[StrategyEngine][COOLDOWN_BLOCK] Seq #${seq} | nowMs: ${nowMs}, longCooldownLock: ${longCooldownLock}, diff: ${longCooldownLock - nowMs}ms`);
-    }
+      const nowMs = Date.now();
+      // Defensive ceiling guard: if cooldown lock is set to a future timestamp > 60s, reset lock to 0
+      const longCooldownLock = rawLongCooldownLock > nowMs + 60000 ? 0 : rawLongCooldownLock;
+      const shortCooldownLock = rawShortCooldownLock > nowMs + 60000 ? 0 : rawShortCooldownLock;
 
-    if (
-      isBuySignal &&
-      (isHighConfidenceAi || spreadVelocity < this.config.maxSpreadVelocity) &&
-      askPrice > 0 &&
-      !isCoreLongOccupied &&
-      isCooldownCleared
-    ) {
-      signalType = "BUY";
-      targetPosSide = "LONG";
-      targetSlotId = "CORE_LONG";
-    }
-    // SELL -> Short Slot Entry (Evaluated via Tier-1 Dynamic Slot Dispersion Engine)
-    else if (
-      isSellSignal &&
-      (isHighConfidenceAi || spreadVelocity < this.config.maxSpreadVelocity) &&
-      bidPrice > 0
-    ) {
-      const slotEval = this.hedgeLedger.evaluateDispersedShortSlotAllocation(
-        bidPrice,
-        this.config.tickSize,
-        realizedVol,
-        hawkesIntensity,
-        shortCooldownLock,
-        nowMs
+      let targetSizeDecayCoeff = 1.0;
+
+      // 50-25-25 Weighted Composite Signal Engine & High-Confidence AI Override
+      const obiScore = Math.max(-1.0, Math.min(1.0, obi));
+      const cvdScore = cvd > 0 ? 1.0 : cvd < 0 ? -1.0 : 0.0;
+      const aiScore = Math.max(-1.0, Math.min(1.0, aiDirection * aiConfidence));
+
+      // Regime-aware AI confidence threshold adaptation:
+      // In strong trend regime (Hurst > 0.55), lower required minAiConfidence to 0.52 for fast momentum capture.
+      let effectiveMinConfidence = this.config.minAiConfidence;
+      if (hurstExponent > 0.55 && garmanKlassRV > 0.001) {
+        effectiveMinConfidence = Math.max(0.50, this.config.minAiConfidence - 0.15);
+      }
+
+      // Weights: AI Model = 50% (0.50), OBI = 25% (0.25), CVD = 25% (0.25)
+      const compositeScore = 0.50 * aiScore + 0.25 * obiScore + 0.25 * cvdScore;
+
+      const isHighConfidenceAi = aiConfidence >= this.config.aggressiveConfidenceThreshold;
+
+      let isBuySignal = false;
+      let isSellSignal = false;
+
+      // SOTA Dynamic Volatility-Normalized Conviction Floor Gate (K_conviction)
+      // Eradicates static 0.15 floor. Uses Garman-Klass volatility, Bid-Ask Half-Spread, and Hawkes Intensity.
+      const midPrice = askPrice > 0 && bidPrice > 0 ? (bidPrice + askPrice) / 2.0 : 1.0;
+      const halfSpreadBps = midPrice > 0 ? ((askPrice - bidPrice) / (2.0 * midPrice)) : 0.0001;
+      const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
+      const hawkesMultiplier = 1.0 + 0.2 * Math.log(1.0 + Math.max(0, hawkesIntensity));
+      
+      // Dynamic Conviction Floor: K_conviction(t)
+      const dynamicConvictionFloor = Math.max(halfSpreadBps, 0.5 * volEstimate * hawkesMultiplier);
+      
+      // Volatility-Standardized Z-Score of the signal
+      const zScore = aiDirectionMag / Math.max(volEstimate, 0.0001);
+
+      // Dynamic Conviction Authorization: Require BOTH dynamicConvictionFloor AND Z-Score >= 1.5
+      const minZScoreThreshold = 1.5;
+      const isConvictionValid = aiDirectionMag >= dynamicConvictionFloor && zScore >= minZScoreThreshold;
+
+      if (isConvictionValid) {
+        if (isHighConfidenceAi) {
+          // AI-Override Rule: High-confidence AI must also satisfy strict OBI directional pressure threshold (+/- 0.35)
+          isBuySignal = aiDirection > 0 && obi >= this.config.obiBuyThreshold;
+          isSellSignal = aiDirection < 0 && obi <= this.config.obiSellThreshold;
+          if (isBuySignal || isSellSignal) {
+            console.log(`[StrategyEngine][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)}), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
+          }
+        } else {
+          // Weighted Composite Rule with dynamic effective confidence thresholding
+          isBuySignal = compositeScore > 0.12 && aiConfidence >= effectiveMinConfidence && obi >= this.config.obiBuyThreshold;
+          isSellSignal = compositeScore < -0.12 && aiConfidence >= effectiveMinConfidence && obi <= this.config.obiSellThreshold;
+        }
+      } else if (seq % 1000n === 0n) {
+        console.log(`[StrategyEngine][CONVICTION_FLOOR_GATE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)} < DynamicFloor: ${dynamicConvictionFloor.toFixed(4)}, Z-Score: ${zScore.toFixed(2)} < 1.5) -> Signals Filtered`);
+      }
+
+      // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
+      const isCoreLongOccupied = this.hedgeLedger.getCoreLong().isOccupied;
+      const isCooldownCleared = nowMs >= longCooldownLock;
+
+      if (!isCoreLongOccupied && !isCooldownCleared) {
+        console.log(`[StrategyEngine][COOLDOWN_BLOCK] Seq #${seq} | nowMs: ${nowMs}, longCooldownLock: ${longCooldownLock}, diff: ${longCooldownLock - nowMs}ms`);
+      }
+
+      if (
+        isBuySignal &&
+        (isHighConfidenceAi || spreadVelocity < this.config.maxSpreadVelocity) &&
+        askPrice > 0 &&
+        !isCoreLongOccupied &&
+        isCooldownCleared
+      ) {
+        signalType = "BUY";
+        targetPosSide = "LONG";
+        targetSlotId = "CORE_LONG";
+      }
+      // SELL -> Short Slot Entry (Evaluated via Tier-1 Dynamic Slot Dispersion Engine)
+      else if (
+        isSellSignal &&
+        (isHighConfidenceAi || spreadVelocity < this.config.maxSpreadVelocity) &&
+        bidPrice > 0
+      ) {
+        const slotEval = this.hedgeLedger.evaluateDispersedShortSlotAllocation(
+          bidPrice,
+          this.config.tickSize,
+          realizedVol,
+          hawkesIntensity,
+          shortCooldownLock,
+          nowMs
+        );
+
+        if (slotEval !== null) {
+          signalType = "SELL";
+          targetPosSide = "SHORT";
+          targetSlotIndex = slotEval.slotIndex;
+          targetSlotId = `SHORT_SLOT_${slotEval.slotIndex}`;
+          targetSizeDecayCoeff = slotEval.sizeDecayCoeff;
+        }
+      }
+
+      if (signalType === "NONE") {
+        this.client.setFinalizedSignal(0.0, this.assetIndex);
+        if (seq % 500n === 0n) {
+          console.log(
+            `[StrategyEngine][SignalGate] Seq #${seq} | Composite: ${compositeScore.toFixed(4)} | AI: (dir=${aiDirection.toFixed(2)}, conf=${(aiConfidence * 100).toFixed(0)}%) | OBI: ${obi.toFixed(2)} | CVD: ${cvd.toFixed(0)} | Status: NO SIGNAL TRIGGERED`
+          );
+        }
+        this.staticResult.sequenceNum = seq;
+        this.staticResult.signalType = "NONE";
+        this.staticResult.obi = obi;
+        this.staticResult.cvd = cvd;
+        this.staticResult.spreadVelocity = spreadVelocity;
+        this.staticResult.bidPrice = bidPrice;
+        this.staticResult.askPrice = askPrice;
+        this.staticResult.riskResult = undefined;
+        this.staticResult.executionPromise = undefined;
+        return this.staticResult;
+      }
+
+      // Dynamic Taker Fallback (>75% Confidence) & 1-Tick Post-Only Offset (<=75%)
+      const effectiveSlippage = Math.max(2, slippageTicks);
+      const priceAdjustment = effectiveSlippage * this.config.tickSize;
+      const basePrice = signalType === "BUY" ? askPrice : bidPrice;
+
+      // 100% SOTA Maker-Dominant Execution Architecture (POST_ONLY GTX Order Routing)
+      // Completely eradicates MARKET/IOC taker fee dispatches for entry signals.
+      // Forces limit orders directly on the order book at best bid (BUY) and best ask (SELL), guaranteeing zero spread loss & Maker fee execution.
+      let orderType: "LIMIT" | "MARKET" = "LIMIT";
+      const timeInForce: "GTC" | "IOC" | "GTX" = "GTX";
+      let targetPrice: number = signalType === "BUY" ? bidPrice : askPrice;
+
+      // Dynamic .env driven USDT Sizing & LOT_SIZE Precision Rounding (Unlocks All 10 Assets)
+      let finalQuantity = 0.001;
+      if (basePrice > 0) {
+        const targetNotionalUsdt = this.config.tradeSizeUsdt > 0 ? this.config.tradeSizeUsdt : 60.0;
+        const rawQty = (targetNotionalUsdt / basePrice) * penaltyCoeff * targetSizeDecayCoeff;
+        finalQuantity = formatQuantityForSymbol(this.config.symbol, rawQty, false);
+
+        // Binance Futures Min Notional Guard: ensure order notional >= effectiveMinNotional using conservative price
+        const symbolRule = SymbolPrecisionRegistry.getPrecisionRule(this.config.symbol);
+        const effectiveMinNotional = Math.max(this.config.minNotionalUsdt, symbolRule.minNotional);
+        const effectivePrice = Math.min(basePrice, targetPrice);
+
+        if (effectivePrice > 0 && finalQuantity * effectivePrice < effectiveMinNotional) {
+          const requiredQty = effectiveMinNotional / effectivePrice;
+          finalQuantity = formatQuantityForSymbol(this.config.symbol, requiredQty, true);
+        }
+      }
+
+      // SPREAD GUARD: Explicitly block MARKET executions if spread is invalid or exceeds configured max threshold
+      const isTickValid = askPrice > 0 && bidPrice > 0 && askPrice >= bidPrice;
+      const currentSpread = isTickValid ? askPrice - bidPrice : Infinity;
+      const maxSpreadAllowed = this.config.symbol.includes("ETH") ? this.config.maxSpreadEth : this.config.maxSpreadBtc;
+      if (
+        (orderType as string) === "MARKET" &&
+        currentSpread > maxSpreadAllowed &&
+        !this.reusableOrderIntent.isCloseOrder &&
+        !this.reusableOrderIntent.isHardStop
+      ) {
+        this.client.setFinalizedSignal(0.0, this.assetIndex);
+        const reasonCode = !isTickValid ? "INVALID_TICK_DATA" : "REJECTED_LIQUIDITY_SWEEP_TRAP";
+        const message = !isTickValid
+          ? `Market execution blocked: invalid tick prices (bid: ${bidPrice}, ask: ${askPrice})`
+          : `Market execution blocked: current spread (${currentSpread.toFixed(2)} USDT) > ${maxSpreadAllowed.toFixed(2)} USDT threshold`;
+
+        console.log(`[StrategyEngine][SPREAD_GUARD_BLOCK] Seq #${seq} | ${message}`);
+        this.staticResult.sequenceNum = seq;
+        this.staticResult.signalType = "NONE";
+        this.staticResult.obi = obi;
+        this.staticResult.cvd = cvd;
+        this.staticResult.spreadVelocity = spreadVelocity;
+        this.staticResult.bidPrice = bidPrice;
+        this.staticResult.askPrice = askPrice;
+        this.staticResult.riskResult = {
+          passed: false,
+          reasonCode,
+          message,
+        };
+        this.staticResult.executionPromise = undefined;
+        return this.staticResult;
+      }
+
+      // Avellaneda-Stoikov Inventory Shift: Skew sell target higher for deeper short slots
+      if (signalType === "SELL" && targetSlotIndex !== undefined && targetSlotIndex > 0) {
+        targetPrice = targetPrice + targetSlotIndex * 2.0 * this.config.tickSize;
+      }
+
+      // Evaluate Dynamic Risk & Microstructure Trap Avoidance Profile
+      const microMetrics: DynamicMicrostructureMetrics = {
+        obi,
+        cvd,
+        rvGk: this.client.getGarmanKlassRV(this.assetIndex),
+        vpin: this.client.getVPIN(this.assetIndex),
+        hurst: this.client.getHurstExponent(this.assetIndex),
+        lobEntropy: this.client.getLOBEntropy(this.assetIndex),
+        regime: this.client.getRegimeStateCode(this.assetIndex),
+        isSweepDetected: this.client.getIsSweepDetected(this.assetIndex),
+      };
+
+      const riskProfile = this.dynamicRiskEngine.evaluateDynamicRisk(
+        targetPrice,
+        targetPosSide === "LONG" ? "LONG" : "SHORT",
+        microMetrics,
+        Math.abs(askPrice - bidPrice)
+      );
+      riskProfile.isHighConfidenceAi = isHighConfidenceAi;
+      riskProfile.aiConfidence = aiConfidence;
+
+      // Populate pre-allocated intent via Zero-GC Mutator
+      this.prepareOrderIntent(
+        signalType,
+        finalQuantity,
+        SymbolPrecisionRegistry.formatPrice(this.config.symbol, targetPrice),
+        targetPosSide,
+        false,
+        false,
+        riskProfile,
+        SymbolPrecisionRegistry.formatPrice(this.config.symbol, riskProfile.stopLossPrice),
+        SymbolPrecisionRegistry.formatPrice(this.config.symbol, riskProfile.takeProfitPrice)
       );
 
-      if (slotEval !== null) {
-        signalType = "SELL";
-        targetPosSide = "SHORT";
-        targetSlotIndex = slotEval.slotIndex;
-        targetSlotId = `SHORT_SLOT_${slotEval.slotIndex}`;
-        targetSizeDecayCoeff = slotEval.sizeDecayCoeff;
-      }
-    }
+      // Pass through Risk Management Guard with target position side
+      const isConfigured = this.executionClient.isConfigured();
+      const riskResult = (this.riskGuard instanceof MultiAssetRiskGuard)
+        ? (this.riskGuard as MultiAssetRiskGuard).validateMultiAssetOrder(this.reusableOrderIntent, isConfigured)
+        : this.riskGuard.validateOrder(
+            this.reusableOrderIntent,
+            isConfigured,
+            targetPosSide
+          );
 
-    if (signalType === "NONE") {
+      if (!riskResult.passed) {
+        this.client.setFinalizedSignal(0.0, this.assetIndex);
+        if (seq % 1000n === 0n) {
+          console.log(`[StrategyEngine][RISK_REJECTED] Seq #${seq} | Reason: ${riskResult.reasonCode} - ${riskResult.message}`);
+        }
+      } else {
+        const sigVal = signalType === "BUY" ? 1.0 : signalType === "SELL" ? 2.0 : 0.0;
+        this.client.setFinalizedSignal(sigVal, this.assetIndex);
+      }
+
+      let executionPromise: Promise<BinanceOrderResponse | null> | undefined = undefined;
+
+      if (riskResult.passed) {
+        this.isOrderInFlight = true;
+
+        // Set atomic SAB hysteresis lockout (cooldown per side) to suppress microburst sweeps
+        if (targetPosSide === "SHORT") {
+          this.client.setShortCooldownLock(Date.now() + this.config.cooldownMs, this.assetIndex);
+          this.client.setLastShortFillPrice(this.reusableOrderIntent.price, this.assetIndex);
+        } else if (targetPosSide === "LONG") {
+          this.client.setLongCooldownLock(Date.now() + this.config.cooldownMs, this.assetIndex);
+          this.client.setLastLongFillPrice(this.reusableOrderIntent.price, this.assetIndex);
+        }
+
+        const notional = this.reusableOrderIntent.price * this.reusableOrderIntent.quantity;
+
+        console.log(`[BinanceExecution][DISPATCHING] Submitting ${orderType} ${this.reusableOrderIntent.side} order for ${this.reusableOrderIntent.quantity} ${this.reusableOrderIntent.symbol} to Binance Futures...`);
+
+        const orderParams: BinanceOrderParams = {
+          symbol: this.reusableOrderIntent.symbol,
+          side: this.reusableOrderIntent.side,
+          type: orderType,
+          quantity: this.reusableOrderIntent.quantity,
+          positionSide: targetPosSide,
+        };
+
+        if (orderType === "LIMIT") {
+          orderParams.price = this.reusableOrderIntent.price;
+          orderParams.timeInForce = timeInForce;
+        }
+
+        executionPromise = this.executionClient
+          .placeOrder(orderParams)
+          .then((res) => {
+            if (res) {
+              const execPx = parseFloat(res.price || res.avgPrice || "0") || targetPrice;
+
+              this.onExecutionCompleted({
+                symbol: this.config.symbol,
+                assetIndex: this.assetIndex,
+                side: res.side as "BUY" | "SELL",
+                positionSide: targetPosSide!,
+                isCloseOrder: false,
+                executedQty: finalQuantity,
+                executedPrice: execPx,
+                fillTimestampMs: Date.now(),
+              });
+
+              console.log(`[BinanceExecution][SUCCESS] Order Executed on Binance! OrderId: ${res.orderId}, Status: ${res.status}, ExecQty: ${res.executedQty}`);
+              if (targetPosSide === "LONG") {
+                this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, this.config.longTakeProfitPercent, this.config.longStopLossPercent);
+                this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, finalQuantity, "LONG");
+              } else if (targetPosSide === "SHORT" && targetSlotIndex !== undefined) {
+                const slotId = `SHORT_SLOT_${targetSlotIndex}`;
+                this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent);
+                this.dispatchBatchPostOnlyTpOrders(slotId, execPx, finalQuantity, "SHORT");
+              }
+            }
+            return res;
+          })
+          .catch((err) => {
+            console.error(`[BinanceExecution][REJECTED] Order Placement Failed: ${err.message}`);
+            return null;
+          })
+          .finally(() => {
+            this.isOrderInFlight = false;
+          });
+      }
+
+      return {
+        sequenceNum: seq,
+        signalType,
+        positionSide: targetPosSide,
+        slotId: targetSlotId,
+        targetSlotIndex,
+        obi,
+        cvd,
+        spreadVelocity,
+        bidPrice,
+        askPrice,
+        riskResult,
+        executionPromise,
+      };
+    } catch (err: any) {
+      // Non-Negotiable Safety Invariant: Guarantee SAB finalizedSignal is reset to 0.0 on exception unwind
       this.client.setFinalizedSignal(0.0, this.assetIndex);
-      if (seq % 500n === 0n) {
-        console.log(
-          `[StrategyEngine][SignalGate] Seq #${seq} | Composite: ${compositeScore.toFixed(4)} | AI: (dir=${aiDirection.toFixed(2)}, conf=${(aiConfidence * 100).toFixed(0)}%) | OBI: ${obi.toFixed(2)} | CVD: ${cvd.toFixed(0)} | Status: NO SIGNAL TRIGGERED`
-        );
-      }
-      this.staticResult.sequenceNum = seq;
+      console.error(`[ENGINE_EVALUATE_TICK_ERROR][Asset #${this.assetIndex}] Exception in evaluateTick: ${err.message}`);
+      this.staticResult.sequenceNum = this.lastProcessedSequence;
       this.staticResult.signalType = "NONE";
-      this.staticResult.obi = obi;
-      this.staticResult.cvd = cvd;
-      this.staticResult.spreadVelocity = spreadVelocity;
-      this.staticResult.bidPrice = bidPrice;
-      this.staticResult.askPrice = askPrice;
-      this.staticResult.riskResult = undefined;
-      this.staticResult.executionPromise = undefined;
-      return this.staticResult;
-    }
-
-    // Dynamic Taker Fallback (>75% Confidence) & 1-Tick Post-Only Offset (<=75%)
-    const effectiveSlippage = Math.max(2, slippageTicks);
-    const priceAdjustment = effectiveSlippage * this.config.tickSize;
-    const basePrice = signalType === "BUY" ? askPrice : bidPrice;
-
-    // 100% SOTA Maker-Dominant Execution Architecture (POST_ONLY GTX Order Routing)
-    // Completely eradicates MARKET/IOC taker fee dispatches for entry signals.
-    // Forces limit orders directly on the order book at best bid (BUY) and best ask (SELL), guaranteeing zero spread loss & Maker fee execution.
-    let orderType: "LIMIT" | "MARKET" = "LIMIT";
-    const timeInForce: "GTC" | "IOC" | "GTX" = "GTX";
-    let targetPrice: number = signalType === "BUY" ? bidPrice : askPrice;
-
-    // Dynamic .env driven USDT Sizing & LOT_SIZE Precision Rounding (Unlocks All 10 Assets)
-    let finalQuantity = 0.001;
-    if (basePrice > 0) {
-      const targetNotionalUsdt = this.config.tradeSizeUsdt > 0 ? this.config.tradeSizeUsdt : 60.0;
-      const rawQty = (targetNotionalUsdt / basePrice) * penaltyCoeff * targetSizeDecayCoeff;
-      finalQuantity = formatQuantityForSymbol(this.config.symbol, rawQty, false);
-
-      // Binance Futures Min Notional Guard: ensure order notional >= effectiveMinNotional using conservative price
-      const symbolRule = SymbolPrecisionRegistry.getPrecisionRule(this.config.symbol);
-      const effectiveMinNotional = Math.max(this.config.minNotionalUsdt, symbolRule.minNotional);
-      const effectivePrice = Math.min(basePrice, targetPrice);
-
-      if (effectivePrice > 0 && finalQuantity * effectivePrice < effectiveMinNotional) {
-        const requiredQty = effectiveMinNotional / effectivePrice;
-        finalQuantity = formatQuantityForSymbol(this.config.symbol, requiredQty, true);
-      }
-    }
-
-    // SPREAD GUARD: Explicitly block MARKET executions if spread is invalid or exceeds configured max threshold
-    const isTickValid = askPrice > 0 && bidPrice > 0 && askPrice >= bidPrice;
-    const currentSpread = isTickValid ? askPrice - bidPrice : Infinity;
-    const maxSpreadAllowed = this.config.symbol.includes("ETH") ? this.config.maxSpreadEth : this.config.maxSpreadBtc;
-    if (
-      (orderType as string) === "MARKET" &&
-      currentSpread > maxSpreadAllowed &&
-      !this.reusableOrderIntent.isCloseOrder &&
-      !this.reusableOrderIntent.isHardStop
-    ) {
-      this.client.setFinalizedSignal(0.0, this.assetIndex);
-      const reasonCode = !isTickValid ? "INVALID_TICK_DATA" : "REJECTED_LIQUIDITY_SWEEP_TRAP";
-      const message = !isTickValid
-        ? `Market execution blocked: invalid tick prices (bid: ${bidPrice}, ask: ${askPrice})`
-        : `Market execution blocked: current spread (${currentSpread.toFixed(2)} USDT) > ${maxSpreadAllowed.toFixed(2)} USDT threshold`;
-
-      console.log(`[StrategyEngine][SPREAD_GUARD_BLOCK] Seq #${seq} | ${message}`);
-      this.staticResult.sequenceNum = seq;
-      this.staticResult.signalType = "NONE";
-      this.staticResult.obi = obi;
-      this.staticResult.cvd = cvd;
-      this.staticResult.spreadVelocity = spreadVelocity;
-      this.staticResult.bidPrice = bidPrice;
-      this.staticResult.askPrice = askPrice;
       this.staticResult.riskResult = {
         passed: false,
-        reasonCode,
-        message,
+        reasonCode: "CRITICAL_EVALUATION_EXCEPTION",
+        message: err.message || "Unhandled exception during tick evaluation",
       };
       this.staticResult.executionPromise = undefined;
       return this.staticResult;
     }
-
-    // Avellaneda-Stoikov Inventory Shift: Skew sell target higher for deeper short slots
-    if (signalType === "SELL" && targetSlotIndex !== undefined && targetSlotIndex > 0) {
-      targetPrice = targetPrice + targetSlotIndex * 2.0 * this.config.tickSize;
-    }
-
-    // Evaluate Dynamic Risk & Microstructure Trap Avoidance Profile
-    const microMetrics: DynamicMicrostructureMetrics = {
-      obi,
-      cvd,
-      rvGk: this.client.getGarmanKlassRV(this.assetIndex),
-      vpin: this.client.getVPIN(this.assetIndex),
-      hurst: this.client.getHurstExponent(this.assetIndex),
-      lobEntropy: this.client.getLOBEntropy(this.assetIndex),
-      regime: this.client.getRegimeStateCode(this.assetIndex),
-      isSweepDetected: this.client.getIsSweepDetected(this.assetIndex),
-    };
-
-    const riskProfile = this.dynamicRiskEngine.evaluateDynamicRisk(
-      targetPrice,
-      targetPosSide === "LONG" ? "LONG" : "SHORT",
-      microMetrics,
-      Math.abs(askPrice - bidPrice)
-    );
-    riskProfile.isHighConfidenceAi = isHighConfidenceAi;
-    riskProfile.aiConfidence = aiConfidence;
-
-    // Populate pre-allocated intent via Zero-GC Mutator
-    this.prepareOrderIntent(
-      signalType,
-      finalQuantity,
-      SymbolPrecisionRegistry.formatPrice(this.config.symbol, targetPrice),
-      targetPosSide,
-      false,
-      false,
-      riskProfile,
-      SymbolPrecisionRegistry.formatPrice(this.config.symbol, riskProfile.stopLossPrice),
-      SymbolPrecisionRegistry.formatPrice(this.config.symbol, riskProfile.takeProfitPrice)
-    );
-
-    // Pass through Risk Management Guard with target position side
-    const isConfigured = this.executionClient.isConfigured();
-    const riskResult = (this.riskGuard instanceof MultiAssetRiskGuard)
-      ? (this.riskGuard as MultiAssetRiskGuard).validateMultiAssetOrder(this.reusableOrderIntent, isConfigured)
-      : this.riskGuard.validateOrder(
-          this.reusableOrderIntent,
-          isConfigured,
-          targetPosSide
-        );
-
-    if (!riskResult.passed) {
-      this.client.setFinalizedSignal(0.0, this.assetIndex);
-      if (seq % 1000n === 0n) {
-        console.log(`[StrategyEngine][RISK_REJECTED] Seq #${seq} | Reason: ${riskResult.reasonCode} - ${riskResult.message}`);
-      }
-    } else {
-      const sigVal = signalType === "BUY" ? 1.0 : signalType === "SELL" ? 2.0 : 0.0;
-      this.client.setFinalizedSignal(sigVal, this.assetIndex);
-    }
-
-    let executionPromise: Promise<BinanceOrderResponse | null> | undefined = undefined;
-
-    if (riskResult.passed) {
-      this.isOrderInFlight = true;
-
-      // Set atomic SAB hysteresis lockout (cooldown per side) to suppress microburst sweeps
-      if (targetPosSide === "SHORT") {
-        this.client.setShortCooldownLock(Date.now() + this.config.cooldownMs, this.assetIndex);
-        this.client.setLastShortFillPrice(this.reusableOrderIntent.price, this.assetIndex);
-      } else if (targetPosSide === "LONG") {
-        this.client.setLongCooldownLock(Date.now() + this.config.cooldownMs, this.assetIndex);
-        this.client.setLastLongFillPrice(this.reusableOrderIntent.price, this.assetIndex);
-      }
-
-      const notional = this.reusableOrderIntent.price * this.reusableOrderIntent.quantity;
-
-      console.log(`[BinanceExecution][DISPATCHING] Submitting ${orderType} ${this.reusableOrderIntent.side} order for ${this.reusableOrderIntent.quantity} ${this.reusableOrderIntent.symbol} to Binance Futures...`);
-
-      const orderParams: BinanceOrderParams = {
-        symbol: this.reusableOrderIntent.symbol,
-        side: this.reusableOrderIntent.side,
-        type: orderType,
-        quantity: this.reusableOrderIntent.quantity,
-        positionSide: targetPosSide,
-      };
-
-      if (orderType === "LIMIT") {
-        orderParams.price = this.reusableOrderIntent.price;
-        orderParams.timeInForce = timeInForce;
-      }
-
-      executionPromise = this.executionClient
-        .placeOrder(orderParams)
-        .then((res) => {
-          if (res) {
-            const execPx = parseFloat(res.price || res.avgPrice || "0") || targetPrice;
-
-            this.onExecutionCompleted({
-              symbol: this.config.symbol,
-              assetIndex: this.assetIndex,
-              side: res.side as "BUY" | "SELL",
-              positionSide: targetPosSide!,
-              isCloseOrder: false,
-              executedQty: finalQuantity,
-              executedPrice: execPx,
-              fillTimestampMs: Date.now(),
-            });
-
-            console.log(`[BinanceExecution][SUCCESS] Order Executed on Binance! OrderId: ${res.orderId}, Status: ${res.status}, ExecQty: ${res.executedQty}`);
-            if (targetPosSide === "LONG") {
-              this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, this.config.longTakeProfitPercent, this.config.longStopLossPercent);
-              this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, finalQuantity, "LONG");
-            } else if (targetPosSide === "SHORT" && targetSlotIndex !== undefined) {
-              const slotId = `SHORT_SLOT_${targetSlotIndex}`;
-              this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent);
-              this.dispatchBatchPostOnlyTpOrders(slotId, execPx, finalQuantity, "SHORT");
-            }
-          }
-          return res;
-        })
-        .catch((err) => {
-          console.error(`[BinanceExecution][REJECTED] Order Placement Failed: ${err.message}`);
-          return null;
-        })
-        .finally(() => {
-          this.isOrderInFlight = false;
-        });
-    }
-
-    return {
-      sequenceNum: seq,
-      signalType,
-      positionSide: targetPosSide,
-      slotId: targetSlotId,
-      targetSlotIndex,
-      obi,
-      cvd,
-      spreadVelocity,
-      bidPrice,
-      askPrice,
-      riskResult,
-      executionPromise,
-    };
   }
 
   public getConfig(): Readonly<StrategyConfig> {

@@ -24,10 +24,10 @@ class MultiAssetCLIDashboard {
         return "\x1b[32m" + "=".repeat(filled) + "\x1b[90m" + "-".repeat(empty) + "\x1b[0m";
     });
     // Static pre-rendered ANSI UI dividers cached to eliminate hot-path string allocations in render loop
-    static BORDER = "\x1b[36m\x1b[1m===========================================================================================================================\x1b[0m\x1b[K\n";
-    static SUB_DIVIDER = "\x1b[90m---------------------------------------------------------------------------------------------------------------------------\x1b[0m\x1b[K\n";
+    static BORDER = "\x1b[36m\x1b[1m======================================================================================================================================\x1b[0m\x1b[K\n";
+    static SUB_DIVIDER = "\x1b[90m--------------------------------------------------------------------------------------------------------------------------------------\x1b[0m\x1b[K\n";
     static TABLE_DIVIDER = "\x1b[90m+------+----------+------------+------------+---------+--------------+------------+----------+--------------+-------+--------+--------+\x1b[0m\x1b[K\n";
-    static TRADES_DIVIDER = "\x1b[90m+------+----------+--------+-----------+-------------+--------------+----------+----------+----------------------+\x1b[0m\x1b[K\n";
+    static TRADES_DIVIDER = "\x1b[90m+------+----------+----------+------------+-------------+-------------+----------+-------------+--------------------------------------+\x1b[0m\x1b[K\n";
     constructor(client, enabled = true, customSymbols = (0, tradingSymbols_1.getTradingSymbols)()) {
         this.client = client;
         this.enabled = enabled;
@@ -38,6 +38,15 @@ class MultiAssetCLIDashboard {
                 this.clear();
             });
         }
+    }
+    /**
+     * Helper utility to format cell content with strict width bounds and pad/truncation protection.
+     */
+    formatCell(val, width, alignRight = true) {
+        if (val.length > width) {
+            return val.substring(0, width);
+        }
+        return alignRight ? val.padStart(width) : val.padEnd(width);
     }
     /**
      * Sets current focused asset index slot (0 to maxAssets-1) for detailed L2 view.
@@ -140,35 +149,35 @@ class MultiAssetCLIDashboard {
         out += MultiAssetCLIDashboard.TABLE_DIVIDER;
         for (let i = 0; i < this.client.maxAssets; i++) {
             const symName = this.assetSymbols[i] || `ASSET_${i}`;
-            const symStr = " " + symName.padEnd(8) + " ";
+            const symStr = " " + this.formatCell(symName, 8, false) + " ";
             const precisionRule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(symName);
             const dec = precisionRule.priceDecimals;
             const bid = this.client.getBestBidPrice(i);
             const ask = this.client.getBestAskPrice(i);
             const rawBid = bid > 0 ? bid.toFixed(dec) : (0).toFixed(dec);
-            const bidStr = " " + rawBid.padStart(10) + " ";
+            const bidStr = " " + this.formatCell(rawBid, 10) + " ";
             const rawAsk = ask > 0 ? ask.toFixed(dec) : (0).toFixed(dec);
-            const askStr = " " + rawAsk.padStart(10) + " ";
+            const askStr = " " + this.formatCell(rawAsk, 10) + " ";
             const rawSpread = (ask > 0 && bid > 0 && ask >= bid) ? (ask - bid).toFixed(dec) : (0).toFixed(dec);
-            const spreadStr = " " + rawSpread.padStart(7) + " ";
+            const spreadStr = " " + this.formatCell(rawSpread, 7) + " ";
             const obi = this.client.getOBI(i);
             const obiBar = this.getFastMiniBar(obi, -1, 1);
             const obiStr = " [" + obiBar + "] ";
             const cvd = this.client.getCVD(i);
             const rawCvd = (cvd >= 0 ? "+" : "") + cvd.toFixed(1);
-            const cvdStr = " " + rawCvd.padStart(10) + " ";
+            const cvdStr = " " + this.formatCell(rawCvd, 10) + " ";
             const hawkes = this.client.getHawkesIntensity(i);
-            const hawkesStr = " " + hawkes.toFixed(3).padStart(8) + " ";
+            const hawkesStr = " " + this.formatCell(hawkes.toFixed(3), 8) + " ";
             const gkRv = this.client.getGarmanKlassRV(i);
-            const gkStr = " " + gkRv.toFixed(5).padStart(12) + " ";
+            const gkStr = " " + this.formatCell(gkRv.toFixed(5), 12) + " ";
             const aiDir = this.client.getAIPredictionDirection(i);
             const rawDir = (aiDir >= 0 ? "+" : "") + aiDir.toFixed(2);
             const dirColor = aiDir > 0.05 ? green : aiDir < -0.05 ? red : gray;
-            const dirStr = " " + dirColor + rawDir.padStart(5) + reset + " ";
+            const dirStr = " " + dirColor + this.formatCell(rawDir, 5) + reset + " ";
             const aiConf = this.client.getAIPredictionConfidence(i);
             const rawConf = (aiConf * 100).toFixed(1) + "%";
             const confColor = aiConf >= 0.75 ? green + bold : aiConf >= 0.65 ? yellow : aiConf >= 0.55 ? cyan : gray;
-            const confStr = " " + confColor + rawConf.padStart(6) + reset + " ";
+            const confStr = " " + confColor + this.formatCell(rawConf, 6) + reset + " ";
             // Zero-Hallucination Signal Display: Read exact finalized signal state directly from Strategy Engine SAB Slot 137
             const rawSignalVal = this.client.getFinalizedSignal(i);
             let signalText = "NONE";
@@ -181,7 +190,7 @@ class MultiAssetCLIDashboard {
                 signalText = "SELL";
                 signalColor = red + bold;
             }
-            const signalStr = " " + signalColor + signalText.padEnd(6) + reset + " ";
+            const signalStr = " " + signalColor + this.formatCell(signalText, 6, false) + reset + " ";
             const slotStr = i === this.focusedAssetIdx
                 ? "  " + yellow + bold + "#" + i + reset + "  "
                 : "  #" + i + "  ";
@@ -211,7 +220,7 @@ class MultiAssetCLIDashboard {
         out += MultiAssetCLIDashboard.SUB_DIVIDER;
         out += `${bold}--- MULTI-ASSET ACTIVE POSITIONS (${this.client.maxAssets} OMS SLOTS) ---${reset}${clearLine}\n`;
         out += MultiAssetCLIDashboard.TRADES_DIVIDER;
-        out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Side${reset}   | ${bold}Position${reset}  | ${bold}Avg Entry${reset}   | ${bold}Mark Price${reset}   | ${bold}Leverage${reset} | ${bold}Realized${reset} | ${bold}Unrealized PnL ($)${reset}  |${clearLine}\n`;
+        out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Side${reset}     | ${bold}Position${reset}   | ${bold}Avg Entry${reset}    | ${bold}Mark Price${reset}   | ${bold}Leverage${reset} | ${bold}Realized${reset}    | ${bold}Unrealized PnL ($)${reset}                 |${clearLine}\n`;
         out += MultiAssetCLIDashboard.TRADES_DIVIDER;
         let hasActivePosition = false;
         for (let i = 0; i < this.client.maxAssets; i++) {
@@ -221,21 +230,25 @@ class MultiAssetCLIDashboard {
                 const symName = this.assetSymbols[i] || `ASSET_${i}`;
                 const posPrecisionRule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(symName);
                 const posDec = posPrecisionRule.priceDecimals;
-                const sym = symName.padEnd(8);
-                const sideText = (qty > 0 ? "LONG" : "SHORT").padEnd(6);
-                const side = qty > 0 ? `${green}${sideText}${reset}` : `${red}${sideText}${reset}`;
+                const sym = this.formatCell(symName, 8, false);
+                const sideText = qty > 0 ? "LONG" : "SHORT";
+                const sideFormatted = this.formatCell(sideText, 8, false);
+                const side = qty > 0 ? `${green}${sideFormatted}${reset}` : `${red}${sideFormatted}${reset}`;
                 const entry = this.client.getOmsAvgEntryPrice(i);
                 const mark = this.client.getBestBidPrice(i);
-                const lev = `${this.client.getOmsLeverage(i).toFixed(0)}x`.padEnd(8);
+                const levText = `${this.client.getOmsLeverage(i).toFixed(0)}x`;
+                const levFormatted = this.formatCell(levText, 8);
                 const rPnl = this.client.getOmsRealizedPnl(i);
                 const uPnl = this.client.getOmsUnrealizedPnl(i);
                 const uPnlColor = uPnl >= 0 ? green : red;
-                const uPnlStr = `${uPnl >= 0 ? "+" : ""}$${uPnl.toFixed(2)}`.padEnd(20);
-                out += `| #${i}   | ${sym} | ${side} | ${qty.toFixed(4).padEnd(9)} | $${entry.toFixed(posDec).padEnd(10)} | $${mark.toFixed(posDec).padEnd(11)} | ${lev} | $${rPnl.toFixed(2).padEnd(7)} | ${uPnlColor}${bold}${uPnlStr}${reset} |${clearLine}\n`;
+                const uPnlStr = `${uPnl >= 0 ? "+" : ""}$${uPnl.toFixed(2)}`;
+                const uPnlFormatted = this.formatCell(uPnlStr, 36, false);
+                out += `| #${i}   | ${sym} | ${side} | ${this.formatCell(qty.toFixed(4), 10)} | $${this.formatCell(entry.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${uPnlColor}${bold}${uPnlFormatted}${reset} |${clearLine}\n`;
             }
         }
         if (!hasActivePosition) {
-            out += `| ${yellow}` + `NO ACTIVE OPEN POSITIONS ACROSS ALL ${this.client.maxAssets} ASSET SLOTS (ALL POSITIONS FLAT)`.padEnd(112) + `${reset} |${clearLine}\n`;
+            const noPosMsg = "NO ACTIVE OPEN POSITIONS ACROSS ALL " + this.client.maxAssets + " ASSET SLOTS (ALL POSITIONS FLAT)";
+            out += `| ${yellow}` + this.formatCell(noPosMsg, 131, false) + `${reset} |${clearLine}\n`;
         }
         out += MultiAssetCLIDashboard.TRADES_DIVIDER;
         // Command Feedback & Real-Time Event Log
