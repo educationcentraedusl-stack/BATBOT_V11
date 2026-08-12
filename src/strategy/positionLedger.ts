@@ -1086,9 +1086,11 @@ export class HedgePositionLedger {
       }
 
       if (slot.breakEvenLocked && slot.breakEvenPrice > 0) {
-        slot.stopLossPrice = isLong
-          ? Math.max(slot.stopLossPrice, slot.breakEvenPrice)
-          : Math.min(slot.stopLossPrice, slot.breakEvenPrice);
+        if (isLong ? markPrice > slot.breakEvenPrice : markPrice < slot.breakEvenPrice) {
+          slot.stopLossPrice = isLong
+            ? Math.max(slot.stopLossPrice, slot.breakEvenPrice)
+            : Math.min(slot.stopLossPrice, slot.breakEvenPrice);
+        }
       }
 
       // Tier 4: Hard Harvest Timeout (t >= 1800s / 30 min)
@@ -1110,7 +1112,7 @@ export class HedgePositionLedger {
       if (holdingTimeMs >= 600000) {
         const lockOffset = feeBuffer + 0.0012;
         const lockedSl = isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset);
-        if (isLong ? lockedSl > slot.stopLossPrice : lockedSl < slot.stopLossPrice) {
+        if (isLong ? (markPrice > lockedSl && lockedSl > slot.stopLossPrice) : (markPrice < lockedSl && lockedSl < slot.stopLossPrice)) {
           slot.stopLossPrice = lockedSl;
           slot.breakEvenLocked = true;
           slot.timeDecayTier = 3;
@@ -1120,7 +1122,7 @@ export class HedgePositionLedger {
       else if (holdingTimeMs >= 180000) {
         const lockOffset = feeBuffer + 0.0005;
         const lockedSl = isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset);
-        if (isLong ? lockedSl > slot.stopLossPrice : lockedSl < slot.stopLossPrice) {
+        if (isLong ? (markPrice > lockedSl && lockedSl > slot.stopLossPrice) : (markPrice < lockedSl && lockedSl < slot.stopLossPrice)) {
           slot.stopLossPrice = lockedSl;
           slot.breakEvenLocked = true;
           slot.timeDecayTier = 2;
@@ -1130,7 +1132,7 @@ export class HedgePositionLedger {
       else if (holdingTimeMs >= 30000) {
         const lockOffset = feeBuffer;
         const lockedSl = isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset);
-        if (isLong ? lockedSl > slot.stopLossPrice : lockedSl < slot.stopLossPrice) {
+        if (isLong ? (markPrice > lockedSl && lockedSl > slot.stopLossPrice) : (markPrice < lockedSl && lockedSl < slot.stopLossPrice)) {
           slot.stopLossPrice = lockedSl;
           slot.breakEvenLocked = true;
           slot.timeDecayTier = 1;

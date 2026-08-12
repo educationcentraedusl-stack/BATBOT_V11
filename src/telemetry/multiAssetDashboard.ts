@@ -42,10 +42,10 @@ export class MultiAssetCLIDashboard {
   });
 
   // Static pre-rendered ANSI UI dividers cached to eliminate hot-path string allocations in render loop
-  private static readonly BORDER = "\x1b[36m\x1b[1m======================================================================================================================================\x1b[0m\x1b[K\n";
-  private static readonly SUB_DIVIDER = "\x1b[90m--------------------------------------------------------------------------------------------------------------------------------------\x1b[0m\x1b[K\n";
-  private static readonly TABLE_DIVIDER = "\x1b[90m+------+----------+------------+------------+---------+--------------+------------+----------+--------------+-------+--------+--------+\x1b[0m\x1b[K\n";
-  private static readonly TRADES_DIVIDER = "\x1b[90m+------+----------+----------+------------+-------------+-------------+----------+-------------+--------------------------------------+\x1b[0m\x1b[K\n";
+  private static readonly BORDER = "\x1b[36m\x1b[1m====================================================================================================================================================\x1b[0m\x1b[K\n";
+  private static readonly SUB_DIVIDER = "\x1b[90m----------------------------------------------------------------------------------------------------------------------------------------------------\x1b[0m\x1b[K\n";
+  private static readonly TABLE_DIVIDER = "\x1b[90m+------+----------+------------+------------+------------+---------+--------------+------------+----------+--------------+-------+--------+--------+\x1b[0m\x1b[K\n";
+  private static readonly TRADES_DIVIDER = "\x1b[90m+------+----------+----------+------------+-------------+-------------+----------+-------------+----------------------------------------------------------+\x1b[0m\x1b[K\n";
 
   constructor(
     client: MarketDataClient,
@@ -175,7 +175,7 @@ export class MultiAssetCLIDashboard {
     let out = "\x1b[H"; // Move cursor top-left
 
     out += MultiAssetCLIDashboard.BORDER;
-    out += `${cyan}${bold}                           BATBOT_V11 MULTI-ASSET HFT TELEMETRY & COMMAND MONITOR (${this.client.maxAssets} ASSETS)                              ${reset}${clearLine}\n`;
+    out += `${cyan}${bold}                                        BATBOT_V11 MULTI-ASSET HFT TELEMETRY & COMMAND MONITOR (${this.client.maxAssets} ASSETS)                                         ${reset}${clearLine}\n`;
     out += MultiAssetCLIDashboard.BORDER;
 
     const availBalance = this.client.getAvailableBalance(0);
@@ -186,7 +186,7 @@ export class MultiAssetCLIDashboard {
     out += MultiAssetCLIDashboard.SUB_DIVIDER;
     out += `${bold}--- ${this.client.maxAssets}-ASSET CONCURRENCY REAL-TIME MATRIX ---${reset}${clearLine}\n`;
     out += MultiAssetCLIDashboard.TABLE_DIVIDER;
-    out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Best Bid${reset}   | ${bold}Best Ask${reset}   | ${bold}Spread${reset}    | ${bold}OBI (-1..+1)${reset} | ${bold}CVD${reset}        | ${bold}Hawkes${reset}   | ${bold}Garman-Klass${reset} | ${bold}Dir${reset}   | ${bold}Conf%${reset}   | ${bold}Signal${reset}   |${clearLine}\n`;
+    out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Best Bid${reset}   | ${bold}Best Ask${reset}   | ${bold}Live Price${reset} | ${bold}Spread${reset}    | ${bold}OBI (-1..+1)${reset} | ${bold}CVD${reset}        | ${bold}Hawkes${reset}   | ${bold}Garman-Klass${reset} | ${bold}Dir${reset}   | ${bold}Conf%${reset}   | ${bold}Signal${reset}   |${clearLine}\n`;
     out += MultiAssetCLIDashboard.TABLE_DIVIDER;
 
     for (let i = 0; i < this.client.maxAssets; i++) {
@@ -198,12 +198,16 @@ export class MultiAssetCLIDashboard {
 
       const bid = this.client.getBestBidPrice(i);
       const ask = this.client.getBestAskPrice(i);
+      const mid = (bid > 0 && ask > 0) ? (bid + ask) / 2.0 : (bid > 0 ? bid : ask);
 
       const rawBid = bid > 0 ? bid.toFixed(dec) : (0).toFixed(dec);
       const bidStr = " " + this.formatCell(rawBid, 10) + " ";
 
       const rawAsk = ask > 0 ? ask.toFixed(dec) : (0).toFixed(dec);
       const askStr = " " + this.formatCell(rawAsk, 10) + " ";
+
+      const rawLivePrice = mid > 0 ? mid.toFixed(dec) : (0).toFixed(dec);
+      const livePriceStr = " " + this.formatCell(rawLivePrice, 10) + " ";
 
       const rawSpread = (ask > 0 && bid > 0 && ask >= bid) ? (ask - bid).toFixed(dec) : (0).toFixed(dec);
       const spreadStr = " " + this.formatCell(rawSpread, 7) + " ";
@@ -250,7 +254,7 @@ export class MultiAssetCLIDashboard {
         ? "  " + yellow + bold + "#" + i + reset + "  "
         : "  #" + i + "  ";
 
-      out += "|" + slotStr + "|" + symStr + "|" + bidStr + "|" + askStr + "|" + spreadStr + "|" + obiStr + "|" + cvdStr + "|" + hawkesStr + "|" + gkStr + "|" + dirStr + "|" + confStr + "|" + signalStr + "|" + clearLine + "\n";
+      out += "|" + slotStr + "|" + symStr + "|" + bidStr + "|" + askStr + "|" + livePriceStr + "|" + spreadStr + "|" + obiStr + "|" + cvdStr + "|" + hawkesStr + "|" + gkStr + "|" + dirStr + "|" + confStr + "|" + signalStr + "|" + clearLine + "\n";
     }
     out += MultiAssetCLIDashboard.TABLE_DIVIDER;
 
@@ -281,7 +285,7 @@ export class MultiAssetCLIDashboard {
     out += MultiAssetCLIDashboard.SUB_DIVIDER;
     out += `${bold}--- MULTI-ASSET ACTIVE POSITIONS (${this.client.maxAssets} OMS SLOTS) ---${reset}${clearLine}\n`;
     out += MultiAssetCLIDashboard.TRADES_DIVIDER;
-    out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Side${reset}     | ${bold}Position${reset}   | ${bold}Avg Entry${reset}    | ${bold}Mark Price${reset}   | ${bold}Leverage${reset} | ${bold}Realized${reset}    | ${bold}Unrealized PnL ($)${reset}                 |${clearLine}\n`;
+    out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Side${reset}     | ${bold}Position${reset}   | ${bold}Avg Entry${reset}    | ${bold}Mark Price${reset}   | ${bold}Leverage${reset} | ${bold}Realized${reset}    | ${bold}Unrealized PnL ($)${reset}                                 |${clearLine}\n`;
     out += MultiAssetCLIDashboard.TRADES_DIVIDER;
 
     let hasActivePosition = false;
@@ -297,7 +301,9 @@ export class MultiAssetCLIDashboard {
         const sideFormatted = this.formatCell(sideText, 8, false);
         const side = qty > 0 ? `${green}${sideFormatted}${reset}` : `${red}${sideFormatted}${reset}`;
         const entry = this.client.getOmsAvgEntryPrice(i);
-        const mark = this.client.getBestBidPrice(i);
+        const posBid = this.client.getBestBidPrice(i);
+        const posAsk = this.client.getBestAskPrice(i);
+        const mark = (posBid > 0 && posAsk > 0) ? (posBid + posAsk) / 2.0 : (posBid > 0 ? posBid : posAsk);
         const levText = `${this.client.getOmsLeverage(i).toFixed(0)}x`;
         const levFormatted = this.formatCell(levText, 8);
         const rPnl = this.client.getOmsRealizedPnl(i);
@@ -305,7 +311,7 @@ export class MultiAssetCLIDashboard {
 
         const uPnlColor = uPnl >= 0 ? green : red;
         const uPnlStr = `${uPnl >= 0 ? "+" : ""}$${uPnl.toFixed(2)}`;
-        const uPnlFormatted = this.formatCell(uPnlStr, 36, false);
+        const uPnlFormatted = this.formatCell(uPnlStr, 56, false);
 
         out += `| #${i}   | ${sym} | ${side} | ${this.formatCell(qty.toFixed(4), 10)} | $${this.formatCell(entry.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${uPnlColor}${bold}${uPnlFormatted}${reset} |${clearLine}\n`;
       }
@@ -313,7 +319,7 @@ export class MultiAssetCLIDashboard {
 
     if (!hasActivePosition) {
       const noPosMsg = "NO ACTIVE OPEN POSITIONS ACROSS ALL " + this.client.maxAssets + " ASSET SLOTS (ALL POSITIONS FLAT)";
-      out += `| ${yellow}` + this.formatCell(noPosMsg, 131, false) + `${reset} |${clearLine}\n`;
+      out += `| ${yellow}` + this.formatCell(noPosMsg, 144, false) + `${reset} |${clearLine}\n`;
     }
     out += MultiAssetCLIDashboard.TRADES_DIVIDER;
 
