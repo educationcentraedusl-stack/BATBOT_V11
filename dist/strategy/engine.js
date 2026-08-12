@@ -328,6 +328,7 @@ class StrategyEngine {
     evaluateTick() {
         const seq = this.client.getSequenceNum(this.assetIndex);
         if (seq === this.lastProcessedSequence || this.isOrderInFlight) {
+            this.client.setFinalizedSignal(0.0, this.assetIndex);
             this.staticResult.sequenceNum = seq;
             this.staticResult.signalType = "NONE";
             this.staticResult.riskResult = undefined;
@@ -491,6 +492,8 @@ class StrategyEngine {
                         this.isOrderInFlight = false;
                     });
                 }
+                const sigVal = riskResult.passed ? (exitSide === "BUY" ? 1.0 : exitSide === "SELL" ? 2.0 : 0.0) : 0.0;
+                this.client.setFinalizedSignal(sigVal, this.assetIndex);
                 return {
                     sequenceNum: seq,
                     signalType: exitSide,

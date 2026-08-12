@@ -469,6 +469,7 @@ export class StrategyEngine {
     const seq = this.client.getSequenceNum(this.assetIndex);
 
     if (seq === this.lastProcessedSequence || this.isOrderInFlight) {
+      this.client.setFinalizedSignal(0.0, this.assetIndex);
       this.staticResult.sequenceNum = seq;
       this.staticResult.signalType = "NONE";
       this.staticResult.riskResult = undefined;

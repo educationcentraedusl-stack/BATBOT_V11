@@ -24,9 +24,9 @@ class MultiAssetCLIDashboard {
         return "\x1b[32m" + "=".repeat(filled) + "\x1b[90m" + "-".repeat(empty) + "\x1b[0m";
     });
     // Static pre-rendered ANSI UI dividers cached to eliminate hot-path string allocations in render loop
-    static BORDER = "\x1b[36m\x1b[1m===================================================================================================================\x1b[0m\x1b[K\n";
-    static SUB_DIVIDER = "\x1b[90m-------------------------------------------------------------------------------------------------------------------\x1b[0m\x1b[K\n";
-    static TABLE_DIVIDER = "\x1b[90m+------+----------+-----------+-----------+--------+--------------+------------+----------+--------------+-------+-------+--------+\x1b[0m\x1b[K\n";
+    static BORDER = "\x1b[36m\x1b[1m===========================================================================================================================\x1b[0m\x1b[K\n";
+    static SUB_DIVIDER = "\x1b[90m---------------------------------------------------------------------------------------------------------------------------\x1b[0m\x1b[K\n";
+    static TABLE_DIVIDER = "\x1b[90m+------+----------+------------+------------+---------+--------------+------------+----------+--------------+-------+--------+--------+\x1b[0m\x1b[K\n";
     static TRADES_DIVIDER = "\x1b[90m+------+----------+--------+-----------+-------------+--------------+----------+----------+----------------------+\x1b[0m\x1b[K\n";
     constructor(client, enabled = true, customSymbols = (0, tradingSymbols_1.getTradingSymbols)()) {
         this.client = client;
@@ -136,7 +136,7 @@ class MultiAssetCLIDashboard {
         out += MultiAssetCLIDashboard.SUB_DIVIDER;
         out += `${bold}--- ${this.client.maxAssets}-ASSET CONCURRENCY REAL-TIME MATRIX ---${reset}${clearLine}\n`;
         out += MultiAssetCLIDashboard.TABLE_DIVIDER;
-        out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Best Bid${reset}  | ${bold}Best Ask${reset}  | ${bold}Spread${reset}   | ${bold}OBI (-1..+1)${reset} | ${bold}CVD${reset}        | ${bold}Hawkes${reset}   | ${bold}Garman-Klass${reset} | ${bold}Dir${reset}   | ${bold}Conf%${reset} | ${bold}Signal${reset}   |${clearLine}\n`;
+        out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Best Bid${reset}   | ${bold}Best Ask${reset}   | ${bold}Spread${reset}    | ${bold}OBI (-1..+1)${reset} | ${bold}CVD${reset}        | ${bold}Hawkes${reset}   | ${bold}Garman-Klass${reset} | ${bold}Dir${reset}   | ${bold}Conf%${reset}   | ${bold}Signal${reset}   |${clearLine}\n`;
         out += MultiAssetCLIDashboard.TABLE_DIVIDER;
         for (let i = 0; i < this.client.maxAssets; i++) {
             const symName = this.assetSymbols[i] || `ASSET_${i}`;
@@ -145,35 +145,30 @@ class MultiAssetCLIDashboard {
             const dec = precisionRule.priceDecimals;
             const bid = this.client.getBestBidPrice(i);
             const ask = this.client.getBestAskPrice(i);
-            const bidStr = " " + (bid > 0 ? bid.toFixed(dec) : (0).toFixed(dec)).padStart(9) + " ";
-            const askStr = " " + (ask > 0 ? ask.toFixed(dec) : (0).toFixed(dec)).padStart(9) + " ";
-            const spreadVal = (ask > 0 && bid > 0 && ask >= bid) ? (ask - bid).toFixed(dec) : (0).toFixed(dec);
-            const spreadStr = " " + spreadVal.padStart(6) + " ";
+            const rawBid = bid > 0 ? bid.toFixed(dec) : (0).toFixed(dec);
+            const bidStr = " " + rawBid.padStart(10) + " ";
+            const rawAsk = ask > 0 ? ask.toFixed(dec) : (0).toFixed(dec);
+            const askStr = " " + rawAsk.padStart(10) + " ";
+            const rawSpread = (ask > 0 && bid > 0 && ask >= bid) ? (ask - bid).toFixed(dec) : (0).toFixed(dec);
+            const spreadStr = " " + rawSpread.padStart(7) + " ";
             const obi = this.client.getOBI(i);
             const obiBar = this.getFastMiniBar(obi, -1, 1);
             const obiStr = " [" + obiBar + "] ";
             const cvd = this.client.getCVD(i);
-            let rawCvd = (cvd >= 0 ? "+" : "") + cvd.toFixed(1);
-            if (rawCvd.length > 10) {
-                rawCvd = rawCvd.substring(0, 10);
-            }
+            const rawCvd = (cvd >= 0 ? "+" : "") + cvd.toFixed(1);
             const cvdStr = " " + rawCvd.padStart(10) + " ";
             const hawkes = this.client.getHawkesIntensity(i);
             const hawkesStr = " " + hawkes.toFixed(3).padStart(8) + " ";
             const gkRv = this.client.getGarmanKlassRV(i);
             const gkStr = " " + gkRv.toFixed(5).padStart(12) + " ";
             const aiDir = this.client.getAIPredictionDirection(i);
-            let rawDir = (aiDir >= 0 ? "+" : "") + aiDir.toFixed(2);
-            if (rawDir.length > 5)
-                rawDir = rawDir.substring(0, 5);
+            const rawDir = (aiDir >= 0 ? "+" : "") + aiDir.toFixed(2);
             const dirColor = aiDir > 0.05 ? green : aiDir < -0.05 ? red : gray;
             const dirStr = " " + dirColor + rawDir.padStart(5) + reset + " ";
             const aiConf = this.client.getAIPredictionConfidence(i);
-            let rawConf = (aiConf * 100).toFixed(1) + "%";
-            if (rawConf.length > 5)
-                rawConf = rawConf.substring(0, 5);
+            const rawConf = (aiConf * 100).toFixed(1) + "%";
             const confColor = aiConf >= 0.75 ? green + bold : aiConf >= 0.65 ? yellow : aiConf >= 0.55 ? cyan : gray;
-            const confStr = " " + confColor + rawConf.padStart(5) + reset + " ";
+            const confStr = " " + confColor + rawConf.padStart(6) + reset + " ";
             // Zero-Hallucination Signal Display: Read exact finalized signal state directly from Strategy Engine SAB Slot 137
             const rawSignalVal = this.client.getFinalizedSignal(i);
             let signalText = "NONE";
@@ -227,7 +222,8 @@ class MultiAssetCLIDashboard {
                 const posPrecisionRule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(symName);
                 const posDec = posPrecisionRule.priceDecimals;
                 const sym = symName.padEnd(8);
-                const side = qty > 0 ? `${green}LONG ${reset}` : `${red}SHORT${reset}`;
+                const sideText = (qty > 0 ? "LONG" : "SHORT").padEnd(6);
+                const side = qty > 0 ? `${green}${sideText}${reset}` : `${red}${sideText}${reset}`;
                 const entry = this.client.getOmsAvgEntryPrice(i);
                 const mark = this.client.getBestBidPrice(i);
                 const lev = `${this.client.getOmsLeverage(i).toFixed(0)}x`.padEnd(8);

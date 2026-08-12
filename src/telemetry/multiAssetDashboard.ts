@@ -42,9 +42,9 @@ export class MultiAssetCLIDashboard {
   });
 
   // Static pre-rendered ANSI UI dividers cached to eliminate hot-path string allocations in render loop
-  private static readonly BORDER = "\x1b[36m\x1b[1m===================================================================================================================\x1b[0m\x1b[K\n";
-  private static readonly SUB_DIVIDER = "\x1b[90m-------------------------------------------------------------------------------------------------------------------\x1b[0m\x1b[K\n";
-  private static readonly TABLE_DIVIDER = "\x1b[90m+------+----------+-----------+-----------+--------+--------------+------------+----------+--------------+-------+-------+--------+\x1b[0m\x1b[K\n";
+  private static readonly BORDER = "\x1b[36m\x1b[1m===========================================================================================================================\x1b[0m\x1b[K\n";
+  private static readonly SUB_DIVIDER = "\x1b[90m---------------------------------------------------------------------------------------------------------------------------\x1b[0m\x1b[K\n";
+  private static readonly TABLE_DIVIDER = "\x1b[90m+------+----------+------------+------------+---------+--------------+------------+----------+--------------+-------+--------+--------+\x1b[0m\x1b[K\n";
   private static readonly TRADES_DIVIDER = "\x1b[90m+------+----------+--------+-----------+-------------+--------------+----------+----------+----------------------+\x1b[0m\x1b[K\n";
 
   constructor(
@@ -174,7 +174,7 @@ export class MultiAssetCLIDashboard {
     out += MultiAssetCLIDashboard.SUB_DIVIDER;
     out += `${bold}--- ${this.client.maxAssets}-ASSET CONCURRENCY REAL-TIME MATRIX ---${reset}${clearLine}\n`;
     out += MultiAssetCLIDashboard.TABLE_DIVIDER;
-    out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Best Bid${reset}  | ${bold}Best Ask${reset}  | ${bold}Spread${reset}   | ${bold}OBI (-1..+1)${reset} | ${bold}CVD${reset}        | ${bold}Hawkes${reset}   | ${bold}Garman-Klass${reset} | ${bold}Dir${reset}   | ${bold}Conf%${reset} | ${bold}Signal${reset}   |${clearLine}\n`;
+    out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Best Bid${reset}   | ${bold}Best Ask${reset}   | ${bold}Spread${reset}    | ${bold}OBI (-1..+1)${reset} | ${bold}CVD${reset}        | ${bold}Hawkes${reset}   | ${bold}Garman-Klass${reset} | ${bold}Dir${reset}   | ${bold}Conf%${reset}   | ${bold}Signal${reset}   |${clearLine}\n`;
     out += MultiAssetCLIDashboard.TABLE_DIVIDER;
 
     for (let i = 0; i < this.client.maxAssets; i++) {
@@ -188,26 +188,20 @@ export class MultiAssetCLIDashboard {
       const ask = this.client.getBestAskPrice(i);
 
       const rawBid = bid > 0 ? bid.toFixed(dec) : (0).toFixed(dec);
-      const formattedBid = (rawBid.length > 9 ? rawBid.substring(0, 9) : rawBid).padStart(9);
-      const bidStr = " " + formattedBid + " ";
+      const bidStr = " " + rawBid.padStart(10) + " ";
 
       const rawAsk = ask > 0 ? ask.toFixed(dec) : (0).toFixed(dec);
-      const formattedAsk = (rawAsk.length > 9 ? rawAsk.substring(0, 9) : rawAsk).padStart(9);
-      const askStr = " " + formattedAsk + " ";
+      const askStr = " " + rawAsk.padStart(10) + " ";
 
       const rawSpread = (ask > 0 && bid > 0 && ask >= bid) ? (ask - bid).toFixed(dec) : (0).toFixed(dec);
-      const formattedSpread = (rawSpread.length > 6 ? rawSpread.substring(0, 6) : rawSpread).padStart(6);
-      const spreadStr = " " + formattedSpread + " ";
+      const spreadStr = " " + rawSpread.padStart(7) + " ";
 
       const obi = this.client.getOBI(i);
       const obiBar = this.getFastMiniBar(obi, -1, 1);
       const obiStr = " [" + obiBar + "] ";
 
       const cvd = this.client.getCVD(i);
-      let rawCvd = (cvd >= 0 ? "+" : "") + cvd.toFixed(1);
-      if (rawCvd.length > 10) {
-        rawCvd = rawCvd.substring(0, 10);
-      }
+      const rawCvd = (cvd >= 0 ? "+" : "") + cvd.toFixed(1);
       const cvdStr = " " + rawCvd.padStart(10) + " ";
 
       const hawkes = this.client.getHawkesIntensity(i);
@@ -217,16 +211,14 @@ export class MultiAssetCLIDashboard {
       const gkStr = " " + gkRv.toFixed(5).padStart(12) + " ";
 
       const aiDir = this.client.getAIPredictionDirection(i);
-      let rawDir = (aiDir >= 0 ? "+" : "") + aiDir.toFixed(2);
-      if (rawDir.length > 5) rawDir = rawDir.substring(0, 5);
+      const rawDir = (aiDir >= 0 ? "+" : "") + aiDir.toFixed(2);
       const dirColor = aiDir > 0.05 ? green : aiDir < -0.05 ? red : gray;
       const dirStr = " " + dirColor + rawDir.padStart(5) + reset + " ";
 
       const aiConf = this.client.getAIPredictionConfidence(i);
-      let rawConf = (aiConf * 100).toFixed(1) + "%";
-      if (rawConf.length > 5) rawConf = rawConf.substring(0, 5);
+      const rawConf = (aiConf * 100).toFixed(1) + "%";
       const confColor = aiConf >= 0.75 ? green + bold : aiConf >= 0.65 ? yellow : aiConf >= 0.55 ? cyan : gray;
-      const confStr = " " + confColor + rawConf.padStart(5) + reset + " ";
+      const confStr = " " + confColor + rawConf.padStart(6) + reset + " ";
 
       // Zero-Hallucination Signal Display: Read exact finalized signal state directly from Strategy Engine SAB Slot 137
       const rawSignalVal = this.client.getFinalizedSignal(i);
