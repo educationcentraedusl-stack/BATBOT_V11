@@ -253,8 +253,29 @@ export class RiskGuard {
     return RISK_PASSED;
   }
 
-  public recordExecutionSuccess(notionalUsdt: number, side: "BUY" | "SELL" = "BUY"): void {
+  public recordExecutionSuccess(
+    notionalUsdt: number,
+    side: "BUY" | "SELL" = "BUY",
+    symbol?: string,
+    isCloseOrder: boolean = false
+  ): void {
     this.lastExecutionTimestampMs = Date.now();
+  }
+
+  public recordExitExecution(
+    notionalUsdt: number,
+    realizedPnl: number = 0,
+    side: "BUY" | "SELL" = "BUY",
+    symbol?: string
+  ): void {
+    this.recordExecutionSuccess(notionalUsdt, side, symbol, true);
+    if (realizedPnl !== 0) {
+      this.recordRealizedPnl(realizedPnl);
+    }
+  }
+
+  public getLastExecutionTimestampMs(): number {
+    return this.lastExecutionTimestampMs;
   }
 
   public recordRealizedPnl(pnlUsdt: number): void {
@@ -316,12 +337,17 @@ export class MultiAssetRiskGuard extends RiskGuard {
   public override recordExecutionSuccess(
     notionalUsdt: number,
     side: "BUY" | "SELL" = "BUY",
-    symbol?: string
+    symbol?: string,
+    isCloseOrder: boolean = false
   ): void {
-    super.recordExecutionSuccess(notionalUsdt, side);
+    super.recordExecutionSuccess(notionalUsdt, side, symbol, isCloseOrder);
     if (symbol) {
       this.symbolExecutionTimestamps.set(symbol, Date.now());
     }
+  }
+
+  public getSymbolExecutionTimestamp(symbol: string): number {
+    return this.symbolExecutionTimestamps.get(symbol) ?? 0;
   }
 
   public updateAccountBalance(balanceUsdt: number): void {

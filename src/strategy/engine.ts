@@ -2,7 +2,7 @@ import { MarketDataClient } from "../marketDataClient";
 import { RiskGuard, MultiAssetRiskGuard, OrderIntent, RiskCheckResult } from "./risk";
 import { BinanceExecutionClient, BinanceOrderResponse, BinanceOrderParams, BinancePositionRisk } from "../execution/binance";
 import { PositionLedger, HedgePositionLedger, MultiAssetPositionLedger, PositionSlot, SlotExitTrigger, ActiveTradeSlot } from "./positionLedger";
-import { DynamicRiskEngine, DynamicMicrostructureMetrics } from "./dynamicRiskEngine";
+import { DynamicRiskEngine, DynamicMicrostructureMetrics, DynamicRiskProfile } from "./dynamicRiskEngine";
 import { BinanceUserDataStream, OrderTradeUpdatePayload } from "../execution/userDataStream";
 import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
 import { getTradingSymbols } from "../config/tradingSymbols";
@@ -82,12 +82,7 @@ export class StrategyEngine {
   private assetIndex: number = 0;
   private isOrderInFlight: boolean = false;
 
-  private reusableOrderIntent: OrderIntent = {
-    symbol: process.env.SYMBOL ?? "BTCUSDT",
-    side: "BUY",
-    quantity: 0.001,
-    price: 0,
-  };
+  private reusableOrderIntent!: OrderIntent;
 
   // Reusable static result object for NONE signals to achieve zero GC-heap allocation in hot path
   private staticResult: StrategySignalResult = {
@@ -204,8 +199,99 @@ export class StrategyEngine {
 
     this.hedgeLedger = hedgeLedger ?? new HedgePositionLedger(this.config.symbol, this.config.maxShortSlots);
     this.positionLedger = positionLedger ?? this.hedgeLedger.getLegacyLedger();
+    this.reusableOrderIntent = {
+      symbol: this.config.symbol,
+      side: "BUY",
+      quantity: this.config.orderQuantity,
+      price: 0,
+    };
+  }
+
+  /**
+   * Pure Zero-GC Mutator Method for reusableOrderIntent.
+   * Enforces strict constructor-bound symbol invariance and resets all transient fields
+   * across evaluation ticks to prevent cross-asset or cross-tick intent state pollution.
+   */
+  private prepareOrderIntent(
+    side: "BUY" | "SELL",
+    quantity: number,
+    price: number,
+    currentPositionSide: "LONG" | "SHORT" | "FLAT" | undefined,
+    isCloseOrder: boolean,
+    isHardStop?: boolean,
+    riskProfile?: DynamicRiskProfile,
+    stopLossPrice?: number,
+    takeProfitPrice?: number
+  ): OrderIntent {
     this.reusableOrderIntent.symbol = this.config.symbol;
-    this.reusableOrderIntent.quantity = this.config.orderQuantity;
+    this.reusableOrderIntent.side = side;
+    this.reusableOrderIntent.quantity = quantity;
+    this.reusableOrderIntent.price = price;
+    this.reusableOrderIntent.currentPositionSide = currentPositionSide;
+    this.reusableOrderIntent.isCloseOrder = isCloseOrder;
+    this.reusableOrderIntent.isHardStop = isHardStop ?? false;
+    this.reusableOrderIntent.riskProfile = riskProfile;
+    this.reusableOrderIntent.stopLossPrice = stopLossPrice;
+    this.reusableOrderIntent.takeProfitPrice = takeProfitPrice;
+    return this.reusableOrderIntent;
+  }
+
+  /**
+   * Centralized fill lifecycle observer for both ENTRY and EXIT executions.
+   * Enforces dual-tier cooldown synchronization across RiskGuard (software state)
+   * and SharedArrayBuffer (zero-copy shared memory state).
+   */
+  private onExecutionCompleted(params: {
+    symbol: string;
+    assetIndex: number;
+    side: "BUY" | "SELL";
+    positionSide: "LONG" | "SHORT";
+    isCloseOrder: boolean;
+    executedQty: number;
+    executedPrice: number;
+    realizedPnl?: number;
+    fillTimestampMs?: number;
+  }): void {
+    const fillTime = params.fillTimestampMs ?? Date.now();
+    const notionalUsdt = params.executedQty * params.executedPrice;
+    const cooldownExpiry = fillTime + this.config.cooldownMs;
+
+    // 1. Tier 1: RiskGuard Software State & Realized PnL Synchronization
+    if (this.riskGuard instanceof MultiAssetRiskGuard) {
+      (this.riskGuard as MultiAssetRiskGuard).recordExecutionSuccess(
+        notionalUsdt,
+        params.side,
+        params.symbol,
+        params.isCloseOrder
+      );
+    } else {
+      this.riskGuard.recordExecutionSuccess(
+        notionalUsdt,
+        params.side,
+        params.symbol,
+        params.isCloseOrder
+      );
+    }
+
+    if (params.realizedPnl && params.realizedPnl !== 0) {
+      this.riskGuard.recordRealizedPnl(params.realizedPnl);
+    }
+
+    // 2. Tier 2: Atomic SharedArrayBuffer Cooldown Synchronization
+    // Enforce post-trade execution cooldown per asset and side on SAB for both entries and exits
+    if (params.positionSide === "LONG") {
+      this.client.setLongCooldownLock(cooldownExpiry, params.assetIndex);
+      this.client.setLastLongFillPrice(params.executedPrice, params.assetIndex);
+    } else if (params.positionSide === "SHORT") {
+      this.client.setShortCooldownLock(cooldownExpiry, params.assetIndex);
+      this.client.setLastShortFillPrice(params.executedPrice, params.assetIndex);
+    }
+
+    console.log(
+      `[COOLDOWN_SYNC][${params.isCloseOrder ? "EXIT" : "ENTRY"}] Completed ${params.positionSide} ${params.side} on ${params.symbol}. Qty: ${params.executedQty} @ $${params.executedPrice.toFixed(
+        2
+      )}. Cooldown active for ${this.config.cooldownMs}ms (until ${cooldownExpiry}). PnL: $${(params.realizedPnl ?? 0).toFixed(2)}`
+    );
   }
 
   public async initUserDataStream(): Promise<boolean> {
@@ -222,12 +308,19 @@ export class StrategyEngine {
           const shortSlots = this.hedgeLedger.getShortSlots();
 
           let targetSlotId: string | null = null;
+          let posSide: "LONG" | "SHORT" = "LONG";
+          let entryPx = 0;
+
           if (coreLong.isOccupied && coreLong.activeTpOrderIds?.includes(order.orderId)) {
             targetSlotId = "CORE_LONG";
+            posSide = "LONG";
+            entryPx = coreLong.entryPrice;
           } else {
             for (const s of shortSlots) {
               if (s.isOccupied && s.activeTpOrderIds?.includes(order.orderId)) {
                 targetSlotId = s.slotId;
+                posSide = "SHORT";
+                entryPx = s.entryPrice;
                 break;
               }
             }
@@ -236,6 +329,31 @@ export class StrategyEngine {
           if (targetSlotId) {
             const res = this.hedgeLedger.processTpLimitFill(targetSlotId, order.orderId, order.lastFilledQuantity, order.lastFilledPrice, order.isMaker);
             console.log(`[MAKER_TP_ENGINE][RECONCILED] Slot ${targetSlotId} updated. Closed: ${res.isPositionClosed}, RemQty: ${res.remainingQuantity}, NewSL: $${res.newStopLossPrice}`);
+
+            let realizedPnl = 0;
+            if (entryPx > 0) {
+              const makerFee = this.hedgeLedger.getSizingCalculator().getMakerFeeRate();
+              const takerFee = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
+              const feeRate = order.isMaker ? makerFee : takerFee;
+              const grossPnl = posSide === "LONG"
+                ? (order.lastFilledPrice - entryPx) * order.lastFilledQuantity
+                : (entryPx - order.lastFilledPrice) * order.lastFilledQuantity;
+              const totalFees = (entryPx * order.lastFilledQuantity * takerFee) + (order.lastFilledPrice * order.lastFilledQuantity * feeRate);
+              realizedPnl = grossPnl - totalFees;
+            }
+
+            const fillSide = order.side as "BUY" | "SELL";
+            this.onExecutionCompleted({
+              symbol: this.config.symbol,
+              assetIndex: this.assetIndex,
+              side: fillSide,
+              positionSide: posSide,
+              isCloseOrder: true,
+              executedQty: order.lastFilledQuantity,
+              executedPrice: order.lastFilledPrice,
+              realizedPnl,
+              fillTimestampMs: Date.now(),
+            });
           }
         }
       }
@@ -404,13 +522,14 @@ export class StrategyEngine {
           )}, Mark: $${markPrice.toFixed(2)}. Dispatching MARKET close with positionSide: ${trigger.side}.${isHardStopTrigger ? " [RUTHLESS HARD STOP OVERRIDE ACTIVE]" : ""}`
         );
 
-        this.reusableOrderIntent.symbol = this.config.symbol;
-        this.reusableOrderIntent.side = exitSide;
-        this.reusableOrderIntent.quantity = trigger.quantity;
-        this.reusableOrderIntent.price = markPrice;
-        this.reusableOrderIntent.currentPositionSide = trigger.side;
-        this.reusableOrderIntent.isCloseOrder = true;
-        this.reusableOrderIntent.isHardStop = isHardStopTrigger;
+        this.prepareOrderIntent(
+          exitSide,
+          trigger.quantity,
+          markPrice,
+          trigger.side,
+          true,
+          isHardStopTrigger
+        );
 
         const isConfigured = this.executionClient.isConfigured();
         const riskResult = (this.riskGuard instanceof MultiAssetRiskGuard)
@@ -447,21 +566,69 @@ export class StrategyEngine {
               })
               .then((res) => {
                 if (res) {
+                  const execPx = parseFloat(res.price || res.avgPrice || "0") || markPrice;
+                  const takerFeeRate = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
+                  let realizedPnl = 0;
+
                   if (trigger.isPartialClose && trigger.quantity > 0) {
                     if (trigger.side === "LONG") {
-                      this.hedgeLedger.deductCoreLongQuantity(trigger.quantity);
+                      const entryPx = this.hedgeLedger.getCoreLong().entryPrice;
+                      const closedQty = Math.min(this.hedgeLedger.getCoreLong().quantity, trigger.quantity);
+                      if (entryPx > 0) {
+                        const grossPnl = (execPx - entryPx) * closedQty;
+                        const fees = (entryPx * closedQty + execPx * closedQty) * takerFeeRate;
+                        realizedPnl = grossPnl - fees;
+                      }
+                      this.hedgeLedger.deductCoreLongQuantity(trigger.quantity, execPx, takerFeeRate, trigger.reason);
                     } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
                       const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
-                      this.hedgeLedger.deductShortSlotQuantity(sIdx, trigger.quantity);
+                      const slot = this.hedgeLedger.getShortSlots().find((s) => s.slotId === trigger.slotId);
+                      if (slot && slot.entryPrice > 0) {
+                        const entryPx = slot.entryPrice;
+                        const closedQty = Math.min(slot.quantity, trigger.quantity);
+                        const grossPnl = (entryPx - execPx) * closedQty;
+                        const fees = (entryPx * closedQty + execPx * closedQty) * takerFeeRate;
+                        realizedPnl = grossPnl - fees;
+                      }
+                      this.hedgeLedger.deductShortSlotQuantity(sIdx, trigger.quantity, execPx, takerFeeRate, trigger.reason);
                     }
                   } else if (!trigger.isPartialClose) {
                     if (trigger.side === "LONG") {
-                      this.hedgeLedger.releaseCoreLong();
+                      const coreLong = this.hedgeLedger.getCoreLong();
+                      if (coreLong.isOccupied && coreLong.entryPrice > 0) {
+                        const entryPx = coreLong.entryPrice;
+                        const qty = coreLong.quantity;
+                        const grossPnl = (execPx - entryPx) * qty;
+                        const fees = (entryPx * qty + execPx * qty) * takerFeeRate;
+                        realizedPnl = grossPnl - fees;
+                      }
+                      this.hedgeLedger.releaseCoreLong(execPx, takerFeeRate, trigger.reason);
                     } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
                       const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
-                      this.hedgeLedger.releaseShortSlot(sIdx);
+                      const slot = this.hedgeLedger.getShortSlots().find((s) => s.slotId === trigger.slotId);
+                      if (slot && slot.isOccupied && slot.entryPrice > 0) {
+                        const entryPx = slot.entryPrice;
+                        const qty = slot.quantity;
+                        const grossPnl = (entryPx - execPx) * qty;
+                        const fees = (entryPx * qty + execPx * qty) * takerFeeRate;
+                        realizedPnl = grossPnl - fees;
+                      }
+                      this.hedgeLedger.releaseShortSlot(sIdx, execPx, takerFeeRate, trigger.reason);
                     }
                   }
+
+                  // Dual-tier cooldown & risk sync for dynamic MARKET exit executions
+                  this.onExecutionCompleted({
+                    symbol: this.config.symbol,
+                    assetIndex: this.assetIndex,
+                    side: exitSide,
+                    positionSide: trigger.side,
+                    isCloseOrder: true,
+                    executedQty: trigger.quantity,
+                    executedPrice: execPx,
+                    realizedPnl,
+                    fillTimestampMs: Date.now(),
+                  });
                 }
                 return res;
               })
@@ -751,16 +918,18 @@ export class StrategyEngine {
     riskProfile.isHighConfidenceAi = isHighConfidenceAi;
     riskProfile.aiConfidence = aiConfidence;
 
-    // Populate pre-allocated intent
-    this.reusableOrderIntent.symbol = this.config.symbol;
-    this.reusableOrderIntent.side = signalType;
-    this.reusableOrderIntent.quantity = finalQuantity;
-    this.reusableOrderIntent.price = SymbolPrecisionRegistry.formatPrice(this.config.symbol, targetPrice);
-    this.reusableOrderIntent.currentPositionSide = targetPosSide;
-    this.reusableOrderIntent.isCloseOrder = false;
-    this.reusableOrderIntent.riskProfile = riskProfile;
-    this.reusableOrderIntent.stopLossPrice = SymbolPrecisionRegistry.formatPrice(this.config.symbol, riskProfile.stopLossPrice);
-    this.reusableOrderIntent.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.config.symbol, riskProfile.takeProfitPrice);
+    // Populate pre-allocated intent via Zero-GC Mutator
+    this.prepareOrderIntent(
+      signalType,
+      finalQuantity,
+      SymbolPrecisionRegistry.formatPrice(this.config.symbol, targetPrice),
+      targetPosSide,
+      false,
+      false,
+      riskProfile,
+      SymbolPrecisionRegistry.formatPrice(this.config.symbol, riskProfile.stopLossPrice),
+      SymbolPrecisionRegistry.formatPrice(this.config.symbol, riskProfile.takeProfitPrice)
+    );
 
     // Pass through Risk Management Guard with target position side
     const isConfigured = this.executionClient.isConfigured();
@@ -813,13 +982,20 @@ export class StrategyEngine {
         .placeOrder(orderParams)
         .then((res) => {
           if (res) {
-            if (this.riskGuard instanceof MultiAssetRiskGuard) {
-              (this.riskGuard as MultiAssetRiskGuard).recordExecutionSuccess(notional, res.side as "BUY" | "SELL", this.config.symbol);
-            } else {
-              this.riskGuard.recordExecutionSuccess(notional);
-            }
-            console.log(`[BinanceExecution][SUCCESS] Order Executed on Binance! OrderId: ${res.orderId}, Status: ${res.status}, ExecQty: ${res.executedQty}`);
             const execPx = parseFloat(res.price || res.avgPrice || "0") || targetPrice;
+
+            this.onExecutionCompleted({
+              symbol: this.config.symbol,
+              assetIndex: this.assetIndex,
+              side: res.side as "BUY" | "SELL",
+              positionSide: targetPosSide!,
+              isCloseOrder: false,
+              executedQty: finalQuantity,
+              executedPrice: execPx,
+              fillTimestampMs: Date.now(),
+            });
+
+            console.log(`[BinanceExecution][SUCCESS] Order Executed on Binance! OrderId: ${res.orderId}, Status: ${res.status}, ExecQty: ${res.executedQty}`);
             if (targetPosSide === "LONG") {
               this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, this.config.longTakeProfitPercent, this.config.longStopLossPercent);
               this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, finalQuantity, "LONG");

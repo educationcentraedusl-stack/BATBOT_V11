@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TelemetryWSServer = exports.CLIDashboard = exports.CsvTradeLogger = exports.TradeLogger = exports.BinanceExecutionClient = exports.RiskGuard = exports.StrategyEngine = exports.MarketDataClient = exports.DEFAULT_TAKER_FEE_RATE = void 0;
+exports.TelemetryWSServer = exports.CLIDashboard = exports.CsvTradeLogger = exports.TradeLogger = exports.BinanceExecutionClient = exports.MultiAssetRiskGuard = exports.RiskGuard = exports.MultiAssetStrategyEngine = exports.StrategyEngine = exports.MarketDataClient = exports.DEFAULT_TAKER_FEE_RATE = void 0;
 exports.syncStateOnStartup = syncStateOnStartup;
 exports.initializeSystem = initializeSystem;
 require("dotenv/config");
@@ -56,6 +56,10 @@ const server_1 = require("./telemetry/server");
 Object.defineProperty(exports, "TelemetryWSServer", { enumerable: true, get: function () { return server_1.TelemetryWSServer; } });
 const recalibrationWorker_1 = require("./ai/recalibrationWorker");
 const symbolPrecision_1 = require("./config/symbolPrecision");
+const multiEngine_1 = require("./strategy/multiEngine");
+Object.defineProperty(exports, "MultiAssetStrategyEngine", { enumerable: true, get: function () { return multiEngine_1.MultiAssetStrategyEngine; } });
+const risk_2 = require("./strategy/risk");
+Object.defineProperty(exports, "MultiAssetRiskGuard", { enumerable: true, get: function () { return risk_2.MultiAssetRiskGuard; } });
 exports.DEFAULT_TAKER_FEE_RATE = 0.0004;
 async function syncStateOnStartup(executionClient, strategyEngine, riskGuard) {
     if (!executionClient.isConfigured()) {
@@ -73,23 +77,34 @@ async function syncStateOnStartup(executionClient, strategyEngine, riskGuard) {
         // 3. Fetch USDT Account Balance
         const balance = await executionClient.fetchUsdtBalanceAsync();
         console.log(`[StateSync] Binance Wallet Available Balance Synced: $${balance.toFixed(2)} USDT`);
+        if (riskGuard instanceof risk_2.MultiAssetRiskGuard) {
+            riskGuard.updateAccountBalance(balance);
+        }
         // 4. Fetch Position Risk & Reconcile Active Positions for StrategyEngine
-        const symbol = strategyEngine.getConfig().symbol;
-        const positions = await executionClient.getPositionRisk(symbol);
-        if (Array.isArray(positions)) {
-            strategyEngine.reconcileStartupPositions(positions);
-            // Update Risk Guard position notional baseline
-            let totalNotional = 0;
-            for (const pos of positions) {
-                if (pos.symbol === symbol) {
-                    const amt = Math.abs(parseFloat(pos.positionAmt || "0"));
-                    const entryPx = parseFloat(pos.entryPrice || "0");
-                    if (amt > 0 && entryPx > 0) {
-                        totalNotional += amt * entryPx;
+        if ("getConfig" in strategyEngine && typeof strategyEngine.getConfig === "function") {
+            const symbol = strategyEngine.getConfig().symbol;
+            const positions = await executionClient.getPositionRisk(symbol);
+            if (Array.isArray(positions)) {
+                strategyEngine.reconcileStartupPositions(positions);
+                // Update Risk Guard position notional baseline
+                let totalNotional = 0;
+                for (const pos of positions) {
+                    if (pos.symbol === symbol) {
+                        const amt = Math.abs(parseFloat(pos.positionAmt || "0"));
+                        const entryPx = parseFloat(pos.entryPrice || "0");
+                        if (amt > 0 && entryPx > 0) {
+                            totalNotional += amt * entryPx;
+                        }
                     }
                 }
+                riskGuard.updatePositionNotional(totalNotional);
             }
-            riskGuard.updatePositionNotional(totalNotional);
+        }
+        else if (strategyEngine instanceof multiEngine_1.MultiAssetStrategyEngine) {
+            const positions = await executionClient.getPositionRisk();
+            if (Array.isArray(positions)) {
+                strategyEngine.reconcileStartupPositions(positions);
+            }
         }
     }
     catch (err) {

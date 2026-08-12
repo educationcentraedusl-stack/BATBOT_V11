@@ -11,7 +11,7 @@ async function runMultiTpZeroLossTests() {
     console.log("================================================================================");
     // 1. Verify SAB AI Temperature & Platt Calibration parameter setters/getters
     console.log("\n[TEST 1] Verifying SAB AI Calibration Parameter Storage...");
-    const sab = new SharedArrayBuffer(2048);
+    const sab = new SharedArrayBuffer(20480);
     const client = new marketDataClient_1.MarketDataClient(sab);
     const recalManager = recalibrationWorker_1.AutoRecalibrationManager.getInstance();
     const calRes = recalManager.applyPlattCalibration(client, 0.08); // High positive IC -> sharpen temperature
@@ -47,6 +47,51 @@ async function runMultiTpZeroLossTests() {
         throw new Error(`FAIL: Expected lot size trap guard to merge chunk into full 0.001, got ${mergedChunk}`);
     }
     console.log(`  ✓ Micro lot trap guard (20% of 0.001 BTC = 0.0002 BTC < minQty) -> Dynamically MERGED to ${mergedChunk} BTC! (Prevented LOT_SIZE API rejection)`);
+    // 3B. DEFECT 4 SOTA NaN & Zero-Division Boundary Hazard Test Suite
+    console.log("\n[TEST 3B] Verifying DEFECT 4 SOTA IEEE 754 Zero-Division & NaN Safety Guards...");
+    // Hazard 1: stepSize = 0 (Division by zero / -Infinity hazard)
+    const zeroStepChunk = (0, positionLedger_1.calculatePartialExitChunk)(0.010, 0.010, 20, 0, 0.001, 5.0, 60000.0);
+    if (!Number.isFinite(zeroStepChunk) || Number.isNaN(zeroStepChunk)) {
+        throw new Error(`FAIL: stepSize=0 produced non-finite or NaN value: ${zeroStepChunk}`);
+    }
+    console.log(`  ✓ stepSize=0 Safety Guard -> ${zeroStepChunk} (Handled safely with default fallback, zero division prevented)`);
+    // Hazard 2: stepSize = -0.001 (Negative step size hazard)
+    const negStepChunk = (0, positionLedger_1.calculatePartialExitChunk)(0.010, 0.010, 20, -0.001, 0.001, 5.0, 60000.0);
+    if (!Number.isFinite(negStepChunk) || Number.isNaN(negStepChunk)) {
+        throw new Error(`FAIL: stepSize=-0.001 produced non-finite value: ${negStepChunk}`);
+    }
+    console.log(`  ✓ stepSize=-0.001 Safety Guard -> ${negStepChunk} (Handled safely with default fallback)`);
+    // Hazard 3: stepSize = NaN (NaN propagation hazard)
+    const nanStepChunk = (0, positionLedger_1.calculatePartialExitChunk)(0.010, 0.010, 20, NaN, 0.001, 5.0, 60000.0);
+    if (!Number.isFinite(nanStepChunk) || Number.isNaN(nanStepChunk)) {
+        throw new Error(`FAIL: stepSize=NaN produced non-finite value: ${nanStepChunk}`);
+    }
+    console.log(`  ✓ stepSize=NaN Safety Guard -> ${nanStepChunk} (Handled safely without RangeError or NaN propagation)`);
+    // Hazard 4: stepSize = Infinity (Infinity hazard)
+    const infStepChunk = (0, positionLedger_1.calculatePartialExitChunk)(0.010, 0.010, 20, Infinity, 0.001, 5.0, 60000.0);
+    if (!Number.isFinite(infStepChunk) || Number.isNaN(infStepChunk)) {
+        throw new Error(`FAIL: stepSize=Infinity produced non-finite value: ${infStepChunk}`);
+    }
+    console.log(`  ✓ stepSize=Infinity Safety Guard -> ${infStepChunk} (Handled safely)`);
+    // Hazard 5: Exponent overflow subnormal step size 1e-15
+    const subnormalChunk = (0, positionLedger_1.calculatePartialExitChunk)(0.010, 0.010, 20, 1e-15, 0.001, 5.0, 60000.0);
+    if (!Number.isFinite(subnormalChunk) || Number.isNaN(subnormalChunk)) {
+        throw new Error(`FAIL: stepSize=1e-15 produced non-finite value: ${subnormalChunk}`);
+    }
+    console.log(`  ✓ stepSize=1e-15 Precision Clamping -> ${subnormalChunk} (Precision clamped to max 8 decimal places)`);
+    // Hazard 6: Non-power-of-10 step size 0.25 (Quantization multiple check: 30% of 1.0 = 0.30 -> floor to 0.25)
+    const nonPower10Chunk = (0, positionLedger_1.calculatePartialExitChunk)(1.0, 1.0, 30, 0.25, 0.25, 5.0, 100.0);
+    if (nonPower10Chunk !== 0.25) {
+        throw new Error(`FAIL: stepSize=0.25 expected quantized chunk 0.25, got ${nonPower10Chunk}`);
+    }
+    console.log(`  ✓ Non-power-of-10 step size (stepSize=0.25, raw 0.30) -> Quantized strictly to ${nonPower10Chunk} (Exact integer multiple)`);
+    // Hazard 7: Out-of-bounds inputs (markPrice=0, percent=0, quantity=NaN)
+    const zeroPriceChunk = (0, positionLedger_1.calculatePartialExitChunk)(0.010, 0.010, 20, 0.001, 0.001, 5.0, 0);
+    const nanQtyChunk = (0, positionLedger_1.calculatePartialExitChunk)(NaN, 0.010, 20, 0.001, 0.001, 5.0, 60000.0);
+    if (zeroPriceChunk !== 0 || nanQtyChunk !== 0) {
+        throw new Error(`FAIL: Expected 0 for out-of-bounds inputs, got zeroPrice: ${zeroPriceChunk}, nanQty: ${nanQtyChunk}`);
+    }
+    console.log(`  ✓ Out-of-bounds input protection (markPrice=0, qty=NaN) -> Returned 0 safely`);
     // 4. Verify 5-Stage Partial TP Execution & Trailing SL Ladder
     console.log("\n[TEST 4] Verifying 5-Stage Partial TP & Trailing SL Ladder Execution...");
     const hedgeLedger = new positionLedger_1.HedgePositionLedger("BTCUSDT", 3);

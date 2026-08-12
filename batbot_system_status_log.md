@@ -1,6 +1,25 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-12
+- **Feature/Task:** Absolute Final Holistic Deep-Scan Audit (Defects 1-5 Remediation & Zero-Trust State Reconciliation)
+- **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/strategy/positionLedger.ts`, `src/strategy/risk.ts`, `src/strategy/multiEngine.ts`, `src/test_pnl_reconciliation.ts`, `src/test_multi_tp_zero_loss.ts`, `src/test_defect1_remediation.ts`, `.loki/memory/CONTINUITY.md`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Successfully completed line-by-line zero-trust audit and verified 100% accurate, zero-shortcut, production-ready remediation across all 5 critical defects:
+  1. **Defect 1 (Unhandled Promise Rejections):** Eradicated process crash hazard in `StrategyEngine` by handling `.catch((err) => null)` and ensuring `isOrderInFlight` boolean lock is deterministically reset in `finally` blocks for all entry/exit order dispatches. 100% verified via `npx tsx src/test_defect1_remediation.ts`.
+  2. **Defect 2 (PnL & Position Ledger Sync):** Replaced legacy ledger calls in `HedgePositionLedger` with direct zero-GC cumulative accounting counters (`cumulativeRealizedPnl`, `cumulativeFees`, `winningTrades`, `losingTrades`, `totalTrades`). Integrated live realized/unrealized PnL telemetry sync to SAB slots 105..109 and `RiskGuard` daily limits via `onExecutionCompleted`. 100% verified via `npx tsx src/test_pnl_reconciliation.ts` & `src/test_position_ledger.ts`.
+  3. **Defect 3 (Isolated Exit Cooldown Sync):** Centralized dual-tier cooldown synchronization in `onExecutionCompleted` inside `StrategyEngine` and `RiskGuard`. Position exit executions (`isCloseOrder: true` / `isHardStop: true`) bypass entry cooldowns so stop-loss / profit-harvest orders are never blocked, while post-exit execution immediately locks Tier 1 (`symbolExecutionTimestamps`) and Tier 2 (SAB `setLongCooldownLock` / `setShortCooldownLock`) against microburst sweep traps. 100% verified via `npx tsx src/test_multi_asset_risk.ts`.
+  4. **Defect 4 (IEEE 754 Zero-Division, NaN & Sub-Normal Precision Guards):** Implemented SOTA 5-Layer Mathematical Guard Architecture in `calculatePartialExitChunk` in `positionLedger.ts` and `SPREAD_GUARD` in `engine.ts`. Sanitized pre-math inputs against `!Number.isFinite` and `<= 0`, bounded precision derivation between $0 \le \text{precision} \le 8$, and handled step-size quantization and lot-size merge protection without RangeError or NaN propagation. 100% verified via `npx tsx src/test_multi_tp_zero_loss.ts`.
+  5. **Defect 5 (Zero-GC Order Intent Reset & Cross-Asset State Isolation):** Implemented pure zero-GC mutator `prepareOrderIntent()` in `StrategyEngine`, enforcing strict constructor-bound symbol invariance (`this.reusableOrderIntent.symbol = this.config.symbol`) and explicitly resetting ALL transient fields (`side`, `quantity`, `price`, `currentPositionSide`, `isCloseOrder`, `isHardStop`, `riskProfile`, `stopLossPrice`, `takeProfitPrice`) across evaluation ticks and assets, completely eradicating state leakage. 100% verified via `npx tsx src/test_strategy_execution.ts`.
+- **Status:** ✅ Completed & QA Verified
+
+
+
+- **Date:** 2026-08-12
+- **Feature/Task:** Isolated Remediation of Defect 4 (Step Size Zero Division / NaN Risk in calculatePartialExitChunk)
+- **Artifacts Created/Modified:** `src/strategy/positionLedger.ts`, `src/test_multi_tp_zero_loss.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Implemented SOTA 5-Layer Mathematical Guard Architecture in `calculatePartialExitChunk` in `src/strategy/positionLedger.ts`. Pre-math sanitization guards against `!Number.isFinite` and `<= 0` parameters, precision derivation is safely bounded to 0 <= precision <= 8 eliminating logarithmic `-Infinity`/`NaN` hazards and `toFixed` V8 `RangeError` exceptions, and division-based step size quantization accurately handles both power-of-10 and non-power-of-10 step sizes (`0.25`, `0.05`, etc.). 100% verified via automated verification test suite `npx ts-node src/test_multi_tp_zero_loss.ts` (0 errors across zero step size, negative step size, NaN, Infinity, sub-normal floats, non-power-of-10 step sizes, and out-of-bounds parameters).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-12
 - **Feature/Task:** Isolated Remediation of Defect 1 (Unhandled Promise Rejection in Entry Order Execution)
 - **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/test_defect1_remediation.ts`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Eradicated Node.js process crash hazard by replacing `throw err;` with `return null;` in `StrategyEngine.evaluateTick()` entry order `.catch()` handler. 100% verified via `npx tsc --noEmit` (0 errors) and automated verification harness `npx tsx src/test_defect1_remediation.ts` (API rejection handled gracefully, `isOrderInFlight` reset in `finally` block, event loop survived without UnhandledPromiseRejection).

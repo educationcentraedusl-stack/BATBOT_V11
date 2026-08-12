@@ -185,8 +185,17 @@ class RiskGuard {
         }
         return exports.RISK_PASSED;
     }
-    recordExecutionSuccess(notionalUsdt, side = "BUY") {
+    recordExecutionSuccess(notionalUsdt, side = "BUY", symbol, isCloseOrder = false) {
         this.lastExecutionTimestampMs = Date.now();
+    }
+    recordExitExecution(notionalUsdt, realizedPnl = 0, side = "BUY", symbol) {
+        this.recordExecutionSuccess(notionalUsdt, side, symbol, true);
+        if (realizedPnl !== 0) {
+            this.recordRealizedPnl(realizedPnl);
+        }
+    }
+    getLastExecutionTimestampMs() {
+        return this.lastExecutionTimestampMs;
     }
     recordRealizedPnl(pnlUsdt) {
         this.cumulativeDailyRealizedPnl += pnlUsdt;
@@ -218,6 +227,7 @@ class RiskGuard {
 exports.RiskGuard = RiskGuard;
 class MultiAssetRiskGuard extends RiskGuard {
     activeSymbolNotionals = new Map();
+    symbolExecutionTimestamps = new Map();
     accountBalanceUsdt;
     maxPortfolioLeverage;
     maxAssetCorrelation;
@@ -227,10 +237,22 @@ class MultiAssetRiskGuard extends RiskGuard {
         this.maxPortfolioLeverage = config?.maxPortfolioLeverage ?? 3.0;
         this.maxAssetCorrelation = config?.maxAssetCorrelation ?? 0.85;
     }
+    recordExecutionSuccess(notionalUsdt, side = "BUY", symbol, isCloseOrder = false) {
+        super.recordExecutionSuccess(notionalUsdt, side, symbol, isCloseOrder);
+        if (symbol) {
+            this.symbolExecutionTimestamps.set(symbol, Date.now());
+        }
+    }
+    getSymbolExecutionTimestamp(symbol) {
+        return this.symbolExecutionTimestamps.get(symbol) ?? 0;
+    }
     updateAccountBalance(balanceUsdt) {
         if (balanceUsdt > 0) {
             this.accountBalanceUsdt = balanceUsdt;
         }
+    }
+    resetSymbolNotionals() {
+        this.activeSymbolNotionals.clear();
     }
     updateSymbolNotional(symbol, notionalUsdt) {
         if (notionalUsdt <= 0) {
@@ -251,6 +273,19 @@ class MultiAssetRiskGuard extends RiskGuard {
         if (this.accountBalanceUsdt <= 0)
             return 0;
         return this.getGrossPortfolioNotional() / this.accountBalanceUsdt;
+    }
+    validateOrder(intent, isClientConfigured, currentPositionSide = "FLAT") {
+        // Isolated Per-Asset Cooldown Enforcement
+        if (intent.symbol && !(intent.isCloseOrder === true || intent.isHardStop === true)) {
+            const lastExec = this.symbolExecutionTimestamps.get(intent.symbol);
+            if (lastExec !== undefined) {
+                const now = Date.now();
+                if (now - lastExec < this.getConfig().minCooldownMs) {
+                    return exports.RISK_REJECTED_COOLDOWN;
+                }
+            }
+        }
+        return super.validateOrder(intent, isClientConfigured, currentPositionSide);
     }
     validateMultiAssetOrder(intent, isClientConfigured) {
         const baseResult = this.validateOrder(intent, isClientConfigured);

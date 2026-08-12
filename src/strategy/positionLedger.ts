@@ -405,9 +405,8 @@ export interface SlotExitTrigger {
 
 /**
  * Calculates a partial exit chunk quantity for Binance Futures.
- * Rounds down strictly to `stepSize`.
- * FATAL GUARD: If rounded chunk is < `minQty` or notional < `minNotional`,
- * dynamically merges the chunk into higher TP tiers or returns 0 until cumulative size is valid.
+ * Implements SOTA 5-Layer Mathematical Guard Architecture against IEEE 754 Zero-Division, NaN,
+ * sub-normal step sizes, log exponent overflows, and non-power-of-10 tick sizes.
  */
 export function calculatePartialExitChunk(
   currentSlotQuantity: number,
@@ -418,25 +417,63 @@ export function calculatePartialExitChunk(
   minNotional: number = 5.0,
   markPrice: number = 60000.0
 ): number {
-  if (currentSlotQuantity <= 0 || initialSlotQuantity <= 0) return 0;
+  // Layer 1: Pre-Math Input Sanitization & Clamping Boundary
+  if (
+    !Number.isFinite(currentSlotQuantity) || currentSlotQuantity <= 0 ||
+    !Number.isFinite(initialSlotQuantity) || initialSlotQuantity <= 0 ||
+    !Number.isFinite(markPrice) || markPrice <= 0 ||
+    !Number.isFinite(percent) || percent <= 0
+  ) {
+    return 0;
+  }
 
-  const rawChunk = initialSlotQuantity * (percent / 100.0);
-  const precision = Math.max(0, Math.round(-Math.log10(stepSize)));
+  const safePercent = Math.min(100.0, percent);
+  const safeStepSize = (Number.isFinite(stepSize) && stepSize > 0) ? stepSize : 0.001;
+  const safeMinQty = (Number.isFinite(minQty) && minQty > 0) ? minQty : safeStepSize;
+  const safeMinNotional = (Number.isFinite(minNotional) && minNotional >= 0) ? minNotional : 5.0;
+
+  // Layer 2: Safe Precision Derivation Engine (Guaranteed 0 <= precision <= 8)
+  let precision = 3;
+  if (Number.isFinite(safeStepSize) && safeStepSize > 0) {
+    const str = safeStepSize.toString();
+    if (str.includes("e") || str.includes("E")) {
+      const ePos = str.toLowerCase().indexOf("e");
+      const exp = parseInt(str.slice(ePos + 1), 10);
+      if (exp < 0) precision = Math.min(8, Math.abs(exp));
+    } else {
+      const decimalIdx = str.indexOf(".");
+      if (decimalIdx !== -1) {
+        precision = Math.min(8, Math.max(0, str.length - decimalIdx - 1));
+      } else {
+        const logPrec = Math.round(-Math.log10(safeStepSize));
+        precision = Math.min(8, Math.max(0, logPrec));
+      }
+    }
+  }
   const factor = Math.pow(10, precision);
-  let roundedChunk = Number((Math.floor(rawChunk * factor + 1e-9) / factor).toFixed(precision));
 
+  // Layer 3: Exact Step-Size Quantization Math (Modulo/Division-Based Multiples)
+  const rawChunk = initialSlotQuantity * (safePercent / 100.0);
+  const units = Math.floor((rawChunk + 1e-12) / safeStepSize);
+  const quantizedChunk = units * safeStepSize;
+
+  let roundedChunk = Math.floor(quantizedChunk * factor + 1e-9) / factor;
   roundedChunk = Math.min(roundedChunk, currentSlotQuantity);
 
+  // Layer 4: Binance Lot Size Trap & Merge Protection
   const notional = roundedChunk * markPrice;
-  if (roundedChunk < minQty || notional < minNotional) {
+  if (roundedChunk < safeMinQty || notional < safeMinNotional) {
     const fullNotional = currentSlotQuantity * markPrice;
-    if (currentSlotQuantity >= minQty && fullNotional >= minNotional) {
-      return Number(currentSlotQuantity.toFixed(precision));
+    if (currentSlotQuantity >= safeMinQty && fullNotional >= safeMinNotional) {
+      const mergedVal = Number(currentSlotQuantity.toFixed(precision));
+      return Number.isFinite(mergedVal) && mergedVal > 0 ? mergedVal : 0;
     }
     return 0;
   }
 
-  return Number(roundedChunk.toFixed(precision));
+  // Layer 5: Safe Fixed-Precision Output Formatting Boundary
+  const finalResult = Number(roundedChunk.toFixed(precision));
+  return Number.isFinite(finalResult) && finalResult >= 0 ? finalResult : 0;
 }
 
 export class HedgePositionLedger {
@@ -447,6 +484,13 @@ export class HedgePositionLedger {
   private legacyLedger: PositionLedger;
   private sizingCalc: DynamicSizingCalculator;
   private cachedSummary: PositionSummary;
+
+  // Native zero-GC cumulative trade accounting counters
+  private cumulativeRealizedPnl = 0;
+  private cumulativeFees = 0;
+  private totalTrades = 0;
+  private winningTrades = 0;
+  private losingTrades = 0;
 
   constructor(symbol: string = "BTCUSDT", maxShortSlots: number = 3) {
     this.symbol = symbol;
@@ -503,6 +547,49 @@ export class HedgePositionLedger {
     }
   }
 
+  public getSizingCalculator(): DynamicSizingCalculator {
+    return this.sizingCalc;
+  }
+
+  /**
+   * Centralized Zero-GC Trade Exit & Realized PnL Accounting Record.
+   * Computes gross PnL, fee drag, updates win/loss tallies, and accumulates cumulative realized metrics.
+   */
+  public recordRealizedExit(
+    slotSide: "LONG" | "SHORT",
+    entryPrice: number,
+    exitPrice: number,
+    closedQty: number,
+    exitFeeRate?: number,
+    exitReason: string = "SIGNAL_EXIT"
+  ): void {
+    if (closedQty <= 0 || entryPrice <= 0 || exitPrice <= 0) return;
+
+    const takerFee = this.sizingCalc.getTakerFeeRate();
+    const feeRate = exitFeeRate !== undefined ? exitFeeRate : takerFee;
+
+    const grossPnl =
+      slotSide === "LONG"
+        ? (exitPrice - entryPrice) * closedQty
+        : (entryPrice - exitPrice) * closedQty;
+
+    const entryFeeUsdt = entryPrice * closedQty * takerFee;
+    const exitFeeUsdt = exitPrice * closedQty * feeRate;
+    const totalFee = entryFeeUsdt + exitFeeUsdt;
+
+    const netTradePnl = grossPnl - totalFee;
+
+    this.cumulativeRealizedPnl += netTradePnl;
+    this.cumulativeFees += totalFee;
+    this.totalTrades++;
+
+    if (netTradePnl > 0) {
+      this.winningTrades++;
+    } else if (netTradePnl < 0) {
+      this.losingTrades++;
+    }
+  }
+
   public getSummary(currentMarkPrice: number = 0): PositionSummary {
     let longQty = 0;
     let shortQty = 0;
@@ -526,18 +613,17 @@ export class HedgePositionLedger {
     const side: "FLAT" | "LONG" | "SHORT" = netQty > 1e-9 ? "LONG" : netQty < -1e-9 ? "SHORT" : "FLAT";
     const totalPosQty = longQty + shortQty;
     const avgEntry = totalPosQty > 0 ? weightedEntrySum / totalPosQty : 0;
-    const legacySummary = this.legacyLedger.getSummary(currentMarkPrice);
 
     this.cachedSummary.symbol = this.symbol;
     this.cachedSummary.side = side;
     this.cachedSummary.netQuantity = Number(absQty.toFixed(6));
     this.cachedSummary.averageEntryPrice = Number(avgEntry.toFixed(4));
     this.cachedSummary.unrealizedPnl = Number(this.getUnrealizedPnl(currentMarkPrice).toFixed(4));
-    this.cachedSummary.cumulativeRealizedPnl = legacySummary.cumulativeRealizedPnl;
-    this.cachedSummary.cumulativeFees = legacySummary.cumulativeFees;
-    this.cachedSummary.totalTrades = legacySummary.totalTrades;
-    this.cachedSummary.winningTrades = legacySummary.winningTrades;
-    this.cachedSummary.losingTrades = legacySummary.losingTrades;
+    this.cachedSummary.cumulativeRealizedPnl = Number(this.cumulativeRealizedPnl.toFixed(4));
+    this.cachedSummary.cumulativeFees = Number(this.cumulativeFees.toFixed(4));
+    this.cachedSummary.totalTrades = this.totalTrades;
+    this.cachedSummary.winningTrades = this.winningTrades;
+    this.cachedSummary.losingTrades = this.losingTrades;
 
     return this.cachedSummary;
   }
@@ -605,7 +691,7 @@ export class HedgePositionLedger {
 
   /**
    * Processes a filled WebSocket POST_ONLY limit TP order update.
-   * Advances tpStageReached and updates fee-adjusted Break-Even / Trailing Stop-Loss price.
+   * Advances tpStageReached, records realized exit accounting, and updates fee-adjusted Break-Even / Trailing Stop-Loss price.
    */
   public processTpLimitFill(
     slotId: string,
@@ -623,16 +709,24 @@ export class HedgePositionLedger {
       slot.activeTpOrderIds = slot.activeTpOrderIds.filter((id) => id !== orderId);
     }
 
+    const actualClosedQty = Math.min(slot.quantity, fillQuantity);
+    const entryPx = slot.entryPrice;
+    const slotSide = slot.side;
+
     slot.quantity = Math.max(0, Number((slot.quantity - fillQuantity).toFixed(3)));
     const currentStage = (slot.tpStageReached || 0) + 1;
     slot.tpStageReached = currentStage;
+
+    // Record realized trade accounting for the POST_ONLY limit fill
+    const makerFee = this.sizingCalc.getMakerFeeRate();
+    const feeRate = isMaker ? makerFee : this.sizingCalc.getTakerFeeRate();
+    this.recordRealizedExit(slotSide, entryPx, fillPrice, actualClosedQty, feeRate, `MAKER_TP_STAGE_${currentStage}`);
 
     const isLong = slot.side === "LONG";
 
     // Advance Trailing Stop Loss
     if (currentStage === 1) {
       slot.breakEvenLocked = true;
-      const makerFee = this.sizingCalc.getMakerFeeRate();
       const takerFee = this.sizingCalc.getTakerFeeRate();
       const feeBuffer = (makerFee + takerFee) * 2.5; // Fee-adjusted Break-Even
       slot.breakEvenPrice = isLong ? slot.entryPrice * (1 + feeBuffer) : slot.entryPrice * (1 - feeBuffer);
@@ -843,7 +937,10 @@ export class HedgePositionLedger {
     }
   }
 
-  public releaseCoreLong(): void {
+  public releaseCoreLong(exitPrice?: number, feeRate?: number, exitReason: string = "SIGNAL_EXIT"): void {
+    if (this.coreLong.isOccupied && this.coreLong.quantity > 0 && exitPrice !== undefined && exitPrice > 0) {
+      this.recordRealizedExit("LONG", this.coreLong.entryPrice, exitPrice, this.coreLong.quantity, feeRate, exitReason);
+    }
     this.coreLong.isOccupied = false;
     this.coreLong.quantity = 0;
     this.coreLong.initialQuantity = 0;
@@ -901,9 +998,12 @@ export class HedgePositionLedger {
     return true;
   }
 
-  public releaseShortSlot(slotIndex: number): void {
+  public releaseShortSlot(slotIndex: number, exitPrice?: number, feeRate?: number, exitReason: string = "SIGNAL_EXIT"): void {
     if (slotIndex < 0 || slotIndex >= this.maxShortSlots) return;
     const slot = this.shortSlots[slotIndex];
+    if (slot.isOccupied && slot.quantity > 0 && exitPrice !== undefined && exitPrice > 0) {
+      this.recordRealizedExit("SHORT", slot.entryPrice, exitPrice, slot.quantity, feeRate, exitReason);
+    }
     slot.isOccupied = false;
     slot.quantity = 0;
     slot.initialQuantity = 0;
@@ -917,20 +1017,28 @@ export class HedgePositionLedger {
     slot.tpPrices = [];
   }
 
-  public deductCoreLongQuantity(qty: number): void {
+  public deductCoreLongQuantity(qty: number, exitPrice?: number, feeRate?: number, exitReason: string = "PARTIAL_EXIT"): void {
     if (this.coreLong.isOccupied && qty > 0) {
-      this.coreLong.quantity = Math.max(0, Number((this.coreLong.quantity - qty).toFixed(6)));
+      const closedQty = Math.min(this.coreLong.quantity, qty);
+      if (exitPrice !== undefined && exitPrice > 0) {
+        this.recordRealizedExit("LONG", this.coreLong.entryPrice, exitPrice, closedQty, feeRate, exitReason);
+      }
+      this.coreLong.quantity = Math.max(0, Number((this.coreLong.quantity - closedQty).toFixed(6)));
       if (this.coreLong.quantity <= 1e-6) {
         this.releaseCoreLong();
       }
     }
   }
 
-  public deductShortSlotQuantity(slotIndex: number, qty: number): void {
+  public deductShortSlotQuantity(slotIndex: number, qty: number, exitPrice?: number, feeRate?: number, exitReason: string = "PARTIAL_EXIT"): void {
     if (slotIndex >= 0 && slotIndex < this.maxShortSlots) {
       const slot = this.shortSlots[slotIndex];
       if (slot.isOccupied && qty > 0) {
-        slot.quantity = Math.max(0, Number((slot.quantity - qty).toFixed(6)));
+        const closedQty = Math.min(slot.quantity, qty);
+        if (exitPrice !== undefined && exitPrice > 0) {
+          this.recordRealizedExit("SHORT", slot.entryPrice, exitPrice, closedQty, feeRate, exitReason);
+        }
+        slot.quantity = Math.max(0, Number((slot.quantity - closedQty).toFixed(6)));
         if (slot.quantity <= 1e-6) {
           this.releaseShortSlot(slotIndex);
         }

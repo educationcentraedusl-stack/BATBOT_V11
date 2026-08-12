@@ -42,7 +42,7 @@ const multiAssetDashboard_1 = require("../telemetry/multiAssetDashboard");
 const keypressHandler_1 = require("../telemetry/keypressHandler");
 const binance_1 = require("../execution/binance");
 const tradingSymbols_1 = require("../config/tradingSymbols");
-const engine_1 = require("../strategy/engine");
+const multiEngine_1 = require("../strategy/multiEngine");
 const risk_1 = require("../strategy/risk");
 const index_1 = require("../index");
 const symbolPrecision_1 = require("../config/symbolPrecision");
@@ -127,8 +127,7 @@ async function runProductionTuiLauncher() {
     const dashboard = new multiAssetDashboard_1.MultiAssetCLIDashboard(client, true, activeSymbols);
     const keyEngine = new keypressHandler_1.InteractiveKeypressEngine(client);
     const binanceClient = new binance_1.BinanceExecutionClient();
-    const riskGuard = new risk_1.RiskGuard();
-    const primarySymbol = process.env.SYMBOL ?? activeSymbols[0] ?? "BTCUSDT";
+    const riskGuard = new risk_1.MultiAssetRiskGuard();
     // Pre-fetch Binance Futures exchangeInfo to build dynamic LOT_SIZE & PRICE_FILTER precision map
     try {
         await symbolPrecision_1.SymbolPrecisionRegistry.initializeFromBinance(binanceClient);
@@ -136,13 +135,13 @@ async function runProductionTuiLauncher() {
     catch (err) {
         symbolPrecision_1.SymbolPrecisionRegistry.preseedOfflineDefaults(activeSymbols);
     }
-    const strategyEngine = new engine_1.StrategyEngine(client, riskGuard, binanceClient, { symbol: primarySymbol });
+    const multiEngine = new multiEngine_1.MultiAssetStrategyEngine(client, riskGuard, binanceClient, activeSymbols);
     if (binanceClient.isConfigured()) {
         binanceClient.startBalancePolling(5000);
         dashboard.pushNotification("✅ Binance API credentials verified. Balance polling active.");
-        (0, index_1.syncStateOnStartup)(binanceClient, strategyEngine, riskGuard)
+        (0, index_1.syncStateOnStartup)(binanceClient, multiEngine, riskGuard)
             .then(() => {
-            dashboard.pushNotification(`✅ State synchronized with Binance API for ${primarySymbol}.`);
+            dashboard.pushNotification(`✅ Multi-Asset state synchronized with Binance API for ${activeSymbols.length} coins.`);
         })
             .catch((err) => {
             const msg = err instanceof Error ? err.message : String(err);
@@ -155,7 +154,7 @@ async function runProductionTuiLauncher() {
     }
     dashboard.pushNotification("BATBOT_V11 Production Launch Sequence Complete.");
     dashboard.pushNotification(`${maxAssets}-Asset SharedArrayBuffer Active (${totalSABBytes} bytes).`);
-    dashboard.pushNotification(`Strategy Engine Live on ${primarySymbol} (10ms High-Frequency Signal Loop).`);
+    dashboard.pushNotification(`Multi-Asset Engine Live across ${activeSymbols.length} coins (10ms Parallel Tick Loop).`);
     dashboard.pushNotification("Keyboard active: 0-9 = Focus Asset, K = Kill, P = Pause, C = Close All, Q = Quit.");
     keyEngine.setAssetFocusCallback((idx) => {
         dashboard.setFocusedAsset(idx);
@@ -164,48 +163,50 @@ async function runProductionTuiLauncher() {
         dashboard.pushNotification(msg);
     });
     keyEngine.start();
-    // Active High-Frequency 10ms Strategy Engine Tick Evaluation Loop
+    // Active High-Frequency 10ms Vectorized Multi-Asset Strategy Engine Tick Loop
     const strategyInterval = setInterval(() => {
         try {
-            const result = strategyEngine.evaluateTick();
-            if (result.signalType !== "NONE") {
-                dashboard.pushNotification(`[STRATEGY_SIGNAL] ${result.signalType} | Sym: ${primarySymbol} | Seq #${result.sequenceNum} | Bid: $${result.bidPrice.toFixed(2)} / Ask: $${result.askPrice.toFixed(2)}`);
-                if (result.riskResult && !result.riskResult.passed) {
-                    dashboard.pushNotification(`[RISK_BLOCK] ${primarySymbol} ${result.signalType} Blocked: [${result.riskResult.reasonCode}] ${result.riskResult.message}`);
-                }
-                if (result.executionPromise) {
-                    result.executionPromise
-                        .then((res) => {
-                        if (res && res.orderId) {
-                            const rawQty = parseFloat(res.executedQty || "0") > 0 ? res.executedQty : (res.origQty || "0");
-                            const avgPx = parseFloat(res.avgPrice || "0");
-                            const px = parseFloat(res.price || "0");
-                            const cumQuote = parseFloat(res.cumQuote || "0");
-                            const qtyNum = parseFloat(rawQty);
-                            const displayPrice = avgPx > 0 ? avgPx : (px > 0 ? px : (cumQuote > 0 && qtyNum > 0 ? cumQuote / qtyNum : (result.bidPrice || result.askPrice)));
-                            dashboard.pushNotification(`[ORDER_FILLED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${rawQty} @ $${displayPrice.toFixed(2)}`);
-                        }
-                    })
-                        .catch((err) => {
-                        const errorMsg = err instanceof Error ? err.message : String(err);
-                        let userAlert = `[EXECUTION_ERROR] ${primarySymbol} ${result.signalType} Failed: ${errorMsg}`;
-                        if (errorMsg.includes("-4059") || errorMsg.includes("position side")) {
-                            userAlert = `⛔ [CRITICAL_API_ALERT] Error -4059: HEDGE MODE REQUIRED! Go to Binance Futures -> Preferences -> Position Mode -> Enable "Hedge Mode".`;
-                        }
-                        else if (errorMsg.includes("-1013") || errorMsg.includes("MIN_NOTIONAL") || errorMsg.includes("Filter failure")) {
-                            userAlert = `⛔ [CRITICAL_API_ALERT] Error -1013: MIN NOTIONAL TOO LOW! Order value is below $55 USDT minimum notional threshold.`;
-                        }
-                        else if (errorMsg.includes("-2019") || errorMsg.includes("Margin is insufficient")) {
-                            userAlert = `⛔ [CRITICAL_API_ALERT] Error -2019: INSUFFICIENT MARGIN! Account balance is too low for this order size.`;
-                        }
-                        else if (errorMsg.includes("-2015") || errorMsg.includes("Invalid API-key")) {
-                            userAlert = `⛔ [CRITICAL_API_ALERT] Error -2015: INVALID API KEY / PERMISSIONS! Verify API Key and enable Futures Trading in Binance.`;
-                        }
-                        else if (errorMsg.includes("-1021") || errorMsg.includes("Timestamp")) {
-                            userAlert = `⛔ [CRITICAL_API_ALERT] Error -1021: SYSTEM CLOCK DESYNC! Local machine time is out of sync with Binance server time.`;
-                        }
-                        dashboard.pushNotification(userAlert);
-                    });
+            const batch = multiEngine.evaluateAllTicks();
+            for (const [symbol, result] of batch.results.entries()) {
+                if (result.signalType !== "NONE") {
+                    dashboard.pushNotification(`[STRATEGY_SIGNAL] ${result.signalType} | Sym: ${symbol} | Seq #${result.sequenceNum} | Bid: $${result.bidPrice.toFixed(2)} / Ask: $${result.askPrice.toFixed(2)}`);
+                    if (result.riskResult && !result.riskResult.passed) {
+                        dashboard.pushNotification(`[RISK_BLOCK] ${symbol} ${result.signalType} Blocked: [${result.riskResult.reasonCode}] ${result.riskResult.message}`);
+                    }
+                    if (result.executionPromise) {
+                        result.executionPromise
+                            .then((res) => {
+                            if (res && res.orderId) {
+                                const rawQty = parseFloat(res.executedQty || "0") > 0 ? res.executedQty : (res.origQty || "0");
+                                const avgPx = parseFloat(res.avgPrice || "0");
+                                const px = parseFloat(res.price || "0");
+                                const cumQuote = parseFloat(res.cumQuote || "0");
+                                const qtyNum = parseFloat(rawQty);
+                                const displayPrice = avgPx > 0 ? avgPx : (px > 0 ? px : (cumQuote > 0 && qtyNum > 0 ? cumQuote / qtyNum : (result.bidPrice || result.askPrice)));
+                                dashboard.pushNotification(`[ORDER_FILLED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${rawQty} @ $${displayPrice.toFixed(2)}`);
+                            }
+                        })
+                            .catch((err) => {
+                            const errorMsg = err instanceof Error ? err.message : String(err);
+                            let userAlert = `[EXECUTION_ERROR] ${symbol} ${result.signalType} Failed: ${errorMsg}`;
+                            if (errorMsg.includes("-4059") || errorMsg.includes("position side")) {
+                                userAlert = `⛔ [CRITICAL_API_ALERT] Error -4059: HEDGE MODE REQUIRED! Go to Binance Futures -> Preferences -> Position Mode -> Enable "Hedge Mode".`;
+                            }
+                            else if (errorMsg.includes("-1013") || errorMsg.includes("MIN_NOTIONAL") || errorMsg.includes("Filter failure")) {
+                                userAlert = `⛔ [CRITICAL_API_ALERT] Error -1013: MIN NOTIONAL TOO LOW! Order value is below $55 USDT minimum notional threshold.`;
+                            }
+                            else if (errorMsg.includes("-2019") || errorMsg.includes("Margin is insufficient")) {
+                                userAlert = `⛔ [CRITICAL_API_ALERT] Error -2019: INSUFFICIENT MARGIN! Account balance is too low for this order size.`;
+                            }
+                            else if (errorMsg.includes("-2015") || errorMsg.includes("Invalid API-key")) {
+                                userAlert = `⛔ [CRITICAL_API_ALERT] Error -2015: INVALID API KEY / PERMISSIONS! Verify API Key and enable Futures Trading in Binance.`;
+                            }
+                            else if (errorMsg.includes("-1021") || errorMsg.includes("Timestamp")) {
+                                userAlert = `⛔ [CRITICAL_API_ALERT] Error -1021: SYSTEM CLOCK DESYNC! Local machine time is out of sync with Binance server time.`;
+                            }
+                            dashboard.pushNotification(userAlert);
+                        });
+                    }
                 }
             }
         }
