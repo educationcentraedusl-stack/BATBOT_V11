@@ -193,10 +193,12 @@ export class MultiAssetStrategyEngine {
         rejectReason = "REJECTED_TOXIC_FLOW";
       } else if (hurst < 0.45) {
         rejectReason = "REJECTED_COUNTER_TREND_REGIME";
-      } else if (obi >= 0.35 && cvd >= 0.0 && hawkes >= 0.5) {
+      } else if (confidence < 0.75) {
+        rejectReason = "REJECTED_LOW_CONFIDENCE";
+      } else if (obi >= 0.35 && cvd >= 0.0 && hawkes >= 0.5 && confidence >= 0.75) {
         signalType = "BUY";
         isApproved = true;
-      } else if (obi <= -0.35 && cvd <= 0.0 && hawkes >= 0.5) {
+      } else if (obi <= -0.35 && cvd <= 0.0 && hawkes >= 0.5 && confidence >= 0.75) {
         signalType = "SELL";
         isApproved = true;
       }

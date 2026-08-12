@@ -1018,12 +1018,17 @@ export class StrategyEngine {
               });
 
               console.log(`[BinanceExecution][SUCCESS] Order Executed on Binance! OrderId: ${res.orderId}, Status: ${res.status}, ExecQty: ${res.executedQty}`);
+              const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
+              const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
+              const dynamicSlPct = Math.max(0.005, volEstimate * 2.0);
+              const dynamicSlPercent = dynamicSlPct * 100;
+
               if (targetPosSide === "LONG") {
-                this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, this.config.longTakeProfitPercent, this.config.longStopLossPercent);
+                this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
                 this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, finalQuantity, "LONG");
               } else if (targetPosSide === "SHORT" && targetSlotIndex !== undefined) {
                 const slotId = `SHORT_SLOT_${targetSlotIndex}`;
-                this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent);
+                this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
                 this.dispatchBatchPostOnlyTpOrders(slotId, execPx, finalQuantity, "SHORT");
               }
             }
