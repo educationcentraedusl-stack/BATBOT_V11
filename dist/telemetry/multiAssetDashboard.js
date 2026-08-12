@@ -217,8 +217,10 @@ class MultiAssetCLIDashboard {
         const fAiDir = this.client.getAIPredictionDirection(fIdx);
         const fAiConf = (this.client.getAIPredictionConfidence(fIdx) * 100).toFixed(1);
         const fInfLat = (Number(this.client.getAIInferenceLatencyNs(fIdx)) / 1000).toFixed(1);
+        const fHjb = this.client.getHJBReservationPrice(fIdx);
+        const fSurvival = this.client.getSurvivalProbability(fIdx);
         out += `${bold}--- FOCUSED ASSET METRICS & LEVEL-2 BOOK (#${fIdx} - ${fSym}) ---${reset}${clearLine}\n`;
-        out += ` OBI: ${fObi >= 0 ? "+" : ""}${fObi.toFixed(4)}  |  CVD: ${fCvd >= 0 ? "+" : ""}${fCvd.toFixed(2)}  |  Hawkes: ${fHawkes.toFixed(4)}  |  VPIN: ${fVpin.toFixed(4)}  |  Hurst: ${fHurst.toFixed(4)}${clearLine}\n`;
+        out += ` OBI: ${fObi >= 0 ? "+" : ""}${fObi.toFixed(4)} | CVD: ${fCvd >= 0 ? "+" : ""}${fCvd.toFixed(2)} | Hawkes: ${fHawkes.toFixed(3)} | VPIN: ${fVpin.toFixed(4)} | HJB Res: $${fHjb > 0 ? fHjb.toFixed(fDec) : "N/A"} | Survival: ${(fSurvival * 100).toFixed(1)}%${clearLine}\n`;
         out += ` AI Prediction Direction: ${fAiDir >= 0 ? green : red}${fAiDir >= 0 ? "+" : ""}${fAiDir.toFixed(4)}${reset}  |  Confidence: ${yellow}${fAiConf}%${reset}  |  Inference Latency: ${fInfLat} µs${clearLine}\n`;
         out += ` Top 3 Bids: [1] $${this.bidBuffer[0].toFixed(fDec)} (${this.bidBuffer[1].toFixed(3)})  [2] $${this.bidBuffer[2].toFixed(fDec)} (${this.bidBuffer[3].toFixed(3)})  [3] $${this.bidBuffer[4].toFixed(fDec)} (${this.bidBuffer[5].toFixed(3)})${clearLine}\n`;
         out += ` Top 3 Asks: [1] $${this.askBuffer[0].toFixed(fDec)} (${this.askBuffer[1].toFixed(3)})  [2] $${this.askBuffer[2].toFixed(fDec)} (${this.askBuffer[3].toFixed(3)})  [3] $${this.askBuffer[4].toFixed(fDec)} (${this.askBuffer[5].toFixed(3)})${clearLine}\n`;

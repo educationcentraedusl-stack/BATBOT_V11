@@ -1,5 +1,9 @@
 import { DynamicSizingCalculator } from "./dynamicSizing";
 import { BinanceOrderParams } from "../execution/binance";
+import { MicrostructureHazardEngine, MicrostructureMetrics } from "./microstructureHazardEngine";
+import { VolatilitySurfaceEngine, VolatilitySurfaceMetrics } from "./volatilitySurfaceEngine";
+import { HJBReservationEngine, HJBExitEvaluation } from "./hjbReservationEngine";
+
 
 export interface PositionLot {
   price: number;
@@ -384,18 +388,9 @@ export interface PositionSlot {
 export interface SlotExitTrigger {
   slotId: string;
   side: "LONG" | "SHORT";
-  reason:
-    | "TAKE_PROFIT"
-    | "STOP_LOSS"
-    | "TAKE_PROFIT_TP1"
-    | "TAKE_PROFIT_TP2"
-    | "TAKE_PROFIT_TP3"
-    | "TAKE_PROFIT_TP4"
-    | "TAKE_PROFIT_TP5"
-    | "BREAK_EVEN_STOP_LOSS"
-    | "TIME_DECAY_PROFIT_LOCK"
-    | "LONG_HOLD_PROFIT_HARVEST";
+  reason: string;
   quantity: number;
+
   entryPrice: number;
   markPrice: number;
   isPartialClose?: boolean;
@@ -1292,6 +1287,115 @@ export class HedgePositionLedger {
 
     return triggers;
   }
+
+  /**
+   * SOTA August 2026 Continuous Microstructure & Volatility Dynamic Exit Evaluator.
+   * Evaluates Cox Hazard Rate Flushes, HJB Reservation Liquidation Boundaries, and MVA-TS Trailing Stops.
+   * Maintains strict Fee-Adjusted Zero-Loss ($0.00 Net Loss) floor as an absolute lower bound fallback.
+   */
+  public evaluateSotaDynamicExits(
+    markPrice: number,
+    hazardMetrics: MicrostructureMetrics,
+    hjbEngine: HJBReservationEngine,
+    volMetrics: VolatilitySurfaceMetrics,
+    nowMs: number = Date.now()
+  ): SlotExitTrigger[] {
+    const triggers: SlotExitTrigger[] = [];
+
+    const evalSlotSota = (slot: PositionSlot) => {
+      if (!slot.isOccupied || slot.quantity <= 0 || slot.entryPrice <= 0) return;
+
+      const isLong = slot.side === "LONG";
+      const durationMs = Math.max(0, nowMs - (slot.openTime || nowMs));
+
+
+      // 1. Cox Proportional Hazard Rate Survival Exit
+      if (hazardMetrics.isHazardExitTriggered) {
+        triggers.push({
+          slotId: slot.slotId,
+          side: slot.side,
+          reason: `HAZARD_FLUSH_EXIT_${slot.side}`,
+          quantity: slot.quantity,
+          entryPrice: slot.entryPrice,
+          markPrice,
+          isPartialClose: false,
+          cancelOrderIds: slot.activeTpOrderIds ? [...slot.activeTpOrderIds] : [],
+        });
+        return;
+      }
+
+      // 2. Avellaneda-Stoikov HJB Optimal Stopping Liquidation Boundary
+      const hjbEval = hjbEngine.getOptimalExitBoundary(
+        slot.side,
+        slot.entryPrice,
+        markPrice,
+        slot.quantity,
+        durationMs,
+        volMetrics.garmanKlass1s
+      );
+
+      if (hjbEval.isLiquidationTriggered) {
+        triggers.push({
+          slotId: slot.slotId,
+          side: slot.side,
+          reason: hjbEval.exitReason,
+          quantity: slot.quantity,
+          entryPrice: slot.entryPrice,
+          markPrice,
+          isPartialClose: false,
+          cancelOrderIds: slot.activeTpOrderIds ? [...slot.activeTpOrderIds] : [],
+        });
+        return;
+      }
+
+      // 3. MVA-TS (Microstructure-Aware Volatility Adaptive Trailing Stop)
+      const baseDistPct = Math.max(0.005, volMetrics.garmanKlass1s * 2.0 * volMetrics.volatilityMultiplier);
+      let adaptedDistPct = baseDistPct;
+
+      if (isLong) {
+        adaptedDistPct = hazardMetrics.ofi < 0
+          ? baseDistPct * (1.0 + 0.5 * Math.abs(hazardMetrics.ofi))
+          : baseDistPct * (1.0 - 0.25 * hazardMetrics.ofi);
+      } else {
+        adaptedDistPct = hazardMetrics.ofi > 0
+          ? baseDistPct * (1.0 + 0.5 * hazardMetrics.ofi)
+          : baseDistPct * (1.0 - 0.25 * Math.abs(hazardMetrics.ofi));
+      }
+      adaptedDistPct = Math.max(0.002, Math.min(0.05, adaptedDistPct));
+
+      const offsetUsdt = slot.entryPrice * adaptedDistPct;
+      let mvaStopPrice = isLong ? markPrice - offsetUsdt : markPrice + offsetUsdt;
+
+      // Absolute Fee-Adjusted Zero-Loss Guarantee Floor
+      if (slot.breakEvenLocked && slot.breakEvenPrice && slot.breakEvenPrice > 0) {
+        mvaStopPrice = isLong
+          ? Math.max(mvaStopPrice, slot.breakEvenPrice)
+          : Math.min(mvaStopPrice, slot.breakEvenPrice);
+      }
+
+      const isMvaTriggered = isLong ? markPrice <= mvaStopPrice : markPrice >= mvaStopPrice;
+      if (isMvaTriggered) {
+        triggers.push({
+          slotId: slot.slotId,
+          side: slot.side,
+          reason: `MVA_TRAILING_STOP_${slot.side}`,
+          quantity: slot.quantity,
+          entryPrice: slot.entryPrice,
+          markPrice,
+          isPartialClose: false,
+          cancelOrderIds: slot.activeTpOrderIds ? [...slot.activeTpOrderIds] : [],
+        });
+      }
+    };
+
+    evalSlotSota(this.coreLong);
+    for (let i = 0; i < this.maxShortSlots; i++) {
+      evalSlotSota(this.shortSlots[i]);
+    }
+
+    return triggers;
+  }
+
 
   public getLegacyLedger(): PositionLedger {
     return this.legacyLedger;

@@ -374,6 +374,32 @@ class MarketDataClient {
     setFinalizedSignal(signalVal, assetIdx = 0) {
         this.writeAtomicFloat64Asset(assetIdx, 137, signalVal);
     }
+    // --- Slots 138 to 141: SOTA Dynamic Exits & Microstructure Telemetry ---
+    getOFI(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 138);
+    }
+    setOFI(ofiVal, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 138, ofiVal);
+    }
+    getHJBReservationPrice(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 139);
+    }
+    setHJBReservationPrice(price, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 139, price);
+    }
+    getSurvivalProbability(assetIdx = 0) {
+        const val = this.readAtomicFloat64Asset(assetIdx, 140);
+        return val > 0 ? val : 1.0;
+    }
+    setSurvivalProbability(prob, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 140, prob);
+    }
+    getDynamicStopLossPrice(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 141);
+    }
+    setDynamicStopLossPrice(price, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 141, price);
+    }
     /**
      * Broadcasts atomic Kill-Switch activation across all asset slots simultaneously.
      */
