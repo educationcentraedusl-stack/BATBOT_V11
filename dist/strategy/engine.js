@@ -509,6 +509,7 @@ class StrategyEngine {
         }
         // Safety Clamp: Suppress new signal generation when engine is in TRAINING_LOCK, RECALIBRATING, PAUSED or EMERGENCY_HALT state
         if (this.state === "TRAINING_LOCK" || this.state === "RECALIBRATING" || this.state === "PAUSED" || this.state === "EMERGENCY_HALT") {
+            this.client.setFinalizedSignal(0.0, this.assetIndex);
             if (seq % 500n === 0n) {
                 console.log(`[StrategyEngine][StateLock] Seq #${seq} | Engine locked in [${this.state}] state. Signal evaluation suppressed.`);
             }

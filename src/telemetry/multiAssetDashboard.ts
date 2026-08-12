@@ -246,6 +246,8 @@ export class MultiAssetCLIDashboard {
     // Focused Asset Deep Microstructure & L2 View
     const fIdx = this.focusedAssetIdx;
     const fSym = this.assetSymbols[fIdx] || `ASSET_${fIdx}`;
+    const fPrecisionRule = SymbolPrecisionRegistry.getPrecisionRule(fSym);
+    const fDec = fPrecisionRule.priceDecimals;
     this.client.fillTopBids(this.bidBuffer, 5, fIdx);
     this.client.fillTopAsks(this.askBuffer, 5, fIdx);
 
@@ -262,8 +264,8 @@ export class MultiAssetCLIDashboard {
     out += ` OBI: ${fObi >= 0 ? "+" : ""}${fObi.toFixed(4)}  |  CVD: ${fCvd >= 0 ? "+" : ""}${fCvd.toFixed(2)}  |  Hawkes: ${fHawkes.toFixed(4)}  |  VPIN: ${fVpin.toFixed(4)}  |  Hurst: ${fHurst.toFixed(4)}${clearLine}\n`;
     out += ` AI Prediction Direction: ${fAiDir >= 0 ? green : red}${fAiDir >= 0 ? "+" : ""}${fAiDir.toFixed(4)}${reset}  |  Confidence: ${yellow}${fAiConf}%${reset}  |  Inference Latency: ${fInfLat} µs${clearLine}\n`;
 
-    out += ` Top 3 Bids: [1] $${this.bidBuffer[0].toFixed(2)} (${this.bidBuffer[1].toFixed(3)})  [2] $${this.bidBuffer[2].toFixed(2)} (${this.bidBuffer[3].toFixed(3)})  [3] $${this.bidBuffer[4].toFixed(2)} (${this.bidBuffer[5].toFixed(3)})${clearLine}\n`;
-    out += ` Top 3 Asks: [1] $${this.askBuffer[0].toFixed(2)} (${this.askBuffer[1].toFixed(3)})  [2] $${this.askBuffer[2].toFixed(2)} (${this.askBuffer[3].toFixed(3)})  [3] $${this.askBuffer[4].toFixed(2)} (${this.askBuffer[5].toFixed(3)})${clearLine}\n`;
+    out += ` Top 3 Bids: [1] $${this.bidBuffer[0].toFixed(fDec)} (${this.bidBuffer[1].toFixed(3)})  [2] $${this.bidBuffer[2].toFixed(fDec)} (${this.bidBuffer[3].toFixed(3)})  [3] $${this.bidBuffer[4].toFixed(fDec)} (${this.bidBuffer[5].toFixed(3)})${clearLine}\n`;
+    out += ` Top 3 Asks: [1] $${this.askBuffer[0].toFixed(fDec)} (${this.askBuffer[1].toFixed(3)})  [2] $${this.askBuffer[2].toFixed(fDec)} (${this.askBuffer[3].toFixed(3)})  [3] $${this.askBuffer[4].toFixed(fDec)} (${this.askBuffer[5].toFixed(3)})${clearLine}\n`;
 
     out += MultiAssetCLIDashboard.SUB_DIVIDER;
     out += `${bold}--- MULTI-ASSET ACTIVE POSITIONS (${this.client.maxAssets} OMS SLOTS) ---${reset}${clearLine}\n`;
@@ -276,7 +278,10 @@ export class MultiAssetCLIDashboard {
       const qty = this.client.getOmsPositionQty(i);
       if (Math.abs(qty) > 1e-6) {
         hasActivePosition = true;
-        const sym = (this.assetSymbols[i] || `ASSET_${i}`).padEnd(8);
+        const symName = this.assetSymbols[i] || `ASSET_${i}`;
+        const posPrecisionRule = SymbolPrecisionRegistry.getPrecisionRule(symName);
+        const posDec = posPrecisionRule.priceDecimals;
+        const sym = symName.padEnd(8);
         const side = qty > 0 ? `${green}LONG ${reset}` : `${red}SHORT${reset}`;
         const entry = this.client.getOmsAvgEntryPrice(i);
         const mark = this.client.getBestBidPrice(i);
@@ -287,7 +292,7 @@ export class MultiAssetCLIDashboard {
         const uPnlColor = uPnl >= 0 ? green : red;
         const uPnlStr = `${uPnl >= 0 ? "+" : ""}$${uPnl.toFixed(2)}`.padEnd(20);
 
-        out += `| #${i}   | ${sym} | ${side} | ${qty.toFixed(4).padEnd(9)} | $${entry.toFixed(2).padEnd(10)} | $${mark.toFixed(2).padEnd(11)} | ${lev} | $${rPnl.toFixed(2).padEnd(7)} | ${uPnlColor}${bold}${uPnlStr}${reset} |${clearLine}\n`;
+        out += `| #${i}   | ${sym} | ${side} | ${qty.toFixed(4).padEnd(9)} | $${entry.toFixed(posDec).padEnd(10)} | $${mark.toFixed(posDec).padEnd(11)} | ${lev} | $${rPnl.toFixed(2).padEnd(7)} | ${uPnlColor}${bold}${uPnlStr}${reset} |${clearLine}\n`;
       }
     }
 

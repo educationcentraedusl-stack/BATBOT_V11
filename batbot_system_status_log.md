@@ -1324,3 +1324,12 @@
   5. **Defect 6 (Recalibration Worker Typing):** Created `PlattCalibrationClient` interface and eliminated `any` type casting from `applyPlattCalibration` in `recalibrationWorker.ts`.
   6. 100% QA verified via `npm run build:ts` (0 errors), `npm run build:rust` (built in 1m 17s), and `npx tsx src/test_multi_asset_risk.ts` (100,000 ticks executed at 71,073 ticks/sec with 14.07 μs average latency).
 - **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-12
+- **Feature/Task:** Remediation of Final Audit Defects (Decimal Truncation & SAB Signal State Leaks)
+- **Artifacts Created/Modified:** `src/telemetry/multiAssetDashboard.ts`, `src/strategy/engine.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:**
+  1. Eradicated hardcoded `.toFixed(2)` shortcuts in Focused Asset L2 Book and Multi-Asset Active Positions Table in `src/telemetry/multiAssetDashboard.ts` by introducing dynamic `SymbolPrecisionRegistry.getPrecisionRule(symName).priceDecimals` rendering for all bid, ask, entry, and mark prices across all symbol precision tiers.
+  2. Fixed atomic SAB Slot 137 synchronization gap in `src/strategy/engine.ts` by explicitly clearing `this.client.setFinalizedSignal(0.0, this.assetIndex)` prior to returning on engine StateLock conditions (`TRAINING_LOCK`, `RECALIBRATING`, `PAUSED`, `EMERGENCY_HALT`).
+  3. 100% verified via `npm run build:ts` (0 transpilation errors).
+- **Status:** ✅ Completed & QA Verified
