@@ -320,7 +320,11 @@ class AutoRecalibrationManager {
         }
         if (client && typeof client.setAiTemperature === "function") {
             client.setAiTemperature(temperature);
+        }
+        if (client && typeof client.setAiPlattScale === "function") {
             client.setAiPlattScale(scale);
+        }
+        if (client && typeof client.setAiPlattOffset === "function") {
             client.setAiPlattOffset(offset);
         }
         return { temperature, scale, offset };

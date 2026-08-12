@@ -511,7 +511,8 @@ impl AIEngine {
         let alpha = scale.max(1.0);
         let beta = 0.8;
         let obi = sab.load_f64_asset(asset_idx, 1);
-        let obi_align = obi * direction.signum();
+        let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
+        let obi_align = obi * direction_sign;
 
         let calibrated_logit: f64 = ((alpha * z_score + beta * snr_score + obi_align * 0.5 + offset) / temp.max(0.05)).clamp(0.0, 4.6);
         let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.99f64);
@@ -570,9 +571,9 @@ impl AIEngine {
         }
 
         let lat_us_val = sab.load_f64(98) * 1000.0;
-        let lob_features = {
+        let (lob_features, snr_score) = {
             let mut pipeline = self.feature_pipeline.lock().unwrap_or_else(|e| e.into_inner());
-            pipeline.update_and_normalize(sab, lat_us_val)?
+            pipeline.update_and_normalize_with_snr_asset(sab, lat_us_val, 0)?
         };
 
         let tkan_out = self.tkan.forward(&lob_features);
@@ -597,11 +598,14 @@ impl AIEngine {
         let flat_out = output_tensor.flatten_all()?;
         let num_elems = flat_out.elem_count();
         let raw_direction = if num_elems > 0 { flat_out.get(0)?.to_scalar::<f32>()? as f64 } else { 0.0 };
-        let raw_confidence = if num_elems > 1 { flat_out.get(1)?.to_scalar::<f32>()? as f64 } else { raw_direction.abs() };
         let horizon_ms = if num_elems > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
         let direction = raw_direction.tanh();
+        let direction_magnitude = direction.abs();
 
-        // Temperature Scaling (T) & Mathematically Sound Platt Calibration Transformation (No Inflation Multipliers)
+        let gk_rv = sab.load_f64(121);
+        let gk_vol = if gk_rv > 0.000001 { gk_rv.sqrt() } else { 0.005 };
+        let z_score = direction_magnitude / gk_vol.max(0.0001);
+
         let sab_temp = sab.load_f64(127);
         let sab_scale = sab.load_f64(128);
         let sab_offset = sab.load_f64(129);
@@ -610,7 +614,13 @@ impl AIEngine {
         let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale };
         let offset = sab_offset;
 
-        let calibrated_logit: f64 = ((scale * raw_confidence + offset) / temp.max(0.05)).clamp(0.0, 4.6);
+        let alpha = scale.max(1.0);
+        let beta = 0.8;
+        let obi = sab.load_f64(1);
+        let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
+        let obi_align = obi * direction_sign;
+
+        let calibrated_logit: f64 = ((alpha * z_score + beta * snr_score + obi_align * 0.5 + offset) / temp.max(0.05)).clamp(0.0, 4.6);
         let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.99f64);
 
         let end_ns = SystemTime::now()
@@ -651,9 +661,23 @@ impl AIEngine {
                         if let Ok(flat_out) = output_tensor.flatten_all() {
                             let num_elems = flat_out.elem_count();
                             let raw_direction = if num_elems > 0 { flat_out.get(0).ok().and_then(|t| t.to_scalar::<f32>().ok()).unwrap_or(0.0) as f64 } else { 0.0 };
-                            let raw_confidence = if num_elems > 1 { flat_out.get(1).ok().and_then(|t| t.to_scalar::<f32>().ok()).unwrap_or(raw_direction.abs() as f32) as f64 } else { raw_direction.abs() };
                             let direction = raw_direction.tanh();
-                            let calibrated_logit: f64 = ((self.calibration_params.platt_scale * raw_confidence + self.calibration_params.platt_offset) / self.calibration_params.temperature.max(0.05)).clamp(0.0, 4.6);
+                            let direction_magnitude = direction.abs();
+
+                            let vol = features[35].max(0.0001);
+                            let z_score = direction_magnitude / vol;
+                            let obi = features[8];
+                            let obi_z = obi.abs();
+                            let cvd_z = features[21].abs();
+                            let vel_z = features[24].abs();
+                            let micro_z = features[2].abs();
+                            let snr_score = 1.0 + 0.6 * (obi_z + 0.8 * cvd_z + 0.5 * vel_z + 0.5 * micro_z).min(8.0);
+                            let alpha = self.calibration_params.platt_scale.max(1.0);
+                            let beta = 0.8;
+                            let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
+                            let obi_align = obi * direction_sign;
+
+                            let calibrated_logit: f64 = ((alpha * z_score + beta * snr_score + obi_align * 0.5 + self.calibration_params.platt_offset) / self.calibration_params.temperature.max(0.05)).clamp(0.0, 4.6);
                             let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.99f64);
                             return (direction, confidence);
                         }

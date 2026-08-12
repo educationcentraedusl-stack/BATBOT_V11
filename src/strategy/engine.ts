@@ -763,8 +763,9 @@ export class StrategyEngine {
     // Volatility-Standardized Z-Score of the signal
     const zScore = aiDirectionMag / Math.max(volEstimate, 0.0001);
 
-    // Dynamic Conviction Authorization: Pass if signal >= dynamicConvictionFloor OR Z-Score >= 1.0
-    const isConvictionValid = aiDirectionMag >= dynamicConvictionFloor || zScore >= 1.0;
+    // Dynamic Conviction Authorization: Require BOTH dynamicConvictionFloor AND Z-Score >= 1.5
+    const minZScoreThreshold = 1.5;
+    const isConvictionValid = aiDirectionMag >= dynamicConvictionFloor && zScore >= minZScoreThreshold;
 
     if (isConvictionValid) {
       if (isHighConfidenceAi) {
@@ -780,7 +781,7 @@ export class StrategyEngine {
         isSellSignal = compositeScore < -0.12 && aiConfidence >= effectiveMinConfidence && obi <= this.config.obiSellThreshold;
       }
     } else if (seq % 1000n === 0n) {
-      console.log(`[StrategyEngine][CONVICTION_FLOOR_GATE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)} < DynamicFloor: ${dynamicConvictionFloor.toFixed(4)}, Z-Score: ${zScore.toFixed(2)} < 1.0) -> Signals Filtered`);
+      console.log(`[StrategyEngine][CONVICTION_FLOOR_GATE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)} < DynamicFloor: ${dynamicConvictionFloor.toFixed(4)}, Z-Score: ${zScore.toFixed(2)} < 1.5) -> Signals Filtered`);
     }
 
     // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
@@ -827,6 +828,7 @@ export class StrategyEngine {
     }
 
     if (signalType === "NONE") {
+      this.client.setFinalizedSignal(0.0, this.assetIndex);
       if (seq % 500n === 0n) {
         console.log(
           `[StrategyEngine][SignalGate] Seq #${seq} | Composite: ${compositeScore.toFixed(4)} | AI: (dir=${aiDirection.toFixed(2)}, conf=${(aiConfidence * 100).toFixed(0)}%) | OBI: ${obi.toFixed(2)} | CVD: ${cvd.toFixed(0)} | Status: NO SIGNAL TRIGGERED`
@@ -884,6 +886,7 @@ export class StrategyEngine {
       !this.reusableOrderIntent.isCloseOrder &&
       !this.reusableOrderIntent.isHardStop
     ) {
+      this.client.setFinalizedSignal(0.0, this.assetIndex);
       const reasonCode = !isTickValid ? "INVALID_TICK_DATA" : "REJECTED_LIQUIDITY_SWEEP_TRAP";
       const message = !isTickValid
         ? `Market execution blocked: invalid tick prices (bid: ${bidPrice}, ask: ${askPrice})`
@@ -956,9 +959,13 @@ export class StrategyEngine {
         );
 
     if (!riskResult.passed) {
+      this.client.setFinalizedSignal(0.0, this.assetIndex);
       if (seq % 1000n === 0n) {
         console.log(`[StrategyEngine][RISK_REJECTED] Seq #${seq} | Reason: ${riskResult.reasonCode} - ${riskResult.message}`);
       }
+    } else {
+      const sigVal = signalType === "BUY" ? 1.0 : signalType === "SELL" ? 2.0 : 0.0;
+      this.client.setFinalizedSignal(sigVal, this.assetIndex);
     }
 
     let executionPromise: Promise<BinanceOrderResponse | null> | undefined = undefined;

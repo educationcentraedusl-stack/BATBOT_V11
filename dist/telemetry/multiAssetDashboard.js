@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MultiAssetCLIDashboard = exports.DEFAULT_ASSET_SYMBOLS = void 0;
 const tradingSymbols_1 = require("../config/tradingSymbols");
+const symbolPrecision_1 = require("../config/symbolPrecision");
 exports.DEFAULT_ASSET_SYMBOLS = (0, tradingSymbols_1.getTradingSymbols)();
 class MultiAssetCLIDashboard {
     client;
@@ -140,11 +141,13 @@ class MultiAssetCLIDashboard {
         for (let i = 0; i < this.client.maxAssets; i++) {
             const symName = this.assetSymbols[i] || `ASSET_${i}`;
             const symStr = " " + symName.padEnd(8) + " ";
+            const precisionRule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(symName);
+            const dec = precisionRule.priceDecimals;
             const bid = this.client.getBestBidPrice(i);
             const ask = this.client.getBestAskPrice(i);
-            const bidStr = " " + (bid > 0 ? bid.toFixed(2) : "0.00").padStart(9) + " ";
-            const askStr = " " + (ask > 0 ? ask.toFixed(2) : "0.00").padStart(9) + " ";
-            const spreadVal = (ask > 0 && bid > 0 && ask >= bid) ? (ask - bid).toFixed(2) : "0.00";
+            const bidStr = " " + (bid > 0 ? bid.toFixed(dec) : (0).toFixed(dec)).padStart(9) + " ";
+            const askStr = " " + (ask > 0 ? ask.toFixed(dec) : (0).toFixed(dec)).padStart(9) + " ";
+            const spreadVal = (ask > 0 && bid > 0 && ask >= bid) ? (ask - bid).toFixed(dec) : (0).toFixed(dec);
             const spreadStr = " " + spreadVal.padStart(6) + " ";
             const obi = this.client.getOBI(i);
             const obiBar = this.getFastMiniBar(obi, -1, 1);
@@ -171,33 +174,17 @@ class MultiAssetCLIDashboard {
                 rawConf = rawConf.substring(0, 5);
             const confColor = aiConf >= 0.75 ? green + bold : aiConf >= 0.65 ? yellow : aiConf >= 0.55 ? cyan : gray;
             const confStr = " " + confColor + rawConf.padStart(5) + reset + " ";
-            const obiBuyThreshold = 0.35;
-            const obiSellThreshold = -0.35;
+            // Zero-Hallucination Signal Display: Read exact finalized signal state directly from Strategy Engine SAB Slot 137
+            const rawSignalVal = this.client.getFinalizedSignal(i);
             let signalText = "NONE";
             let signalColor = gray;
-            if (aiConf >= 0.75) {
-                if (aiDir > 0 && obi >= obiBuyThreshold) {
-                    signalText = "BUY";
-                    signalColor = green + bold;
-                }
-                else if (aiDir < 0 && obi <= obiSellThreshold) {
-                    signalText = "SELL";
-                    signalColor = red + bold;
-                }
+            if (rawSignalVal === 1.0) {
+                signalText = "BUY";
+                signalColor = green + bold;
             }
-            else {
-                const aiScore = Math.max(-1.0, Math.min(1.0, aiDir * aiConf));
-                const obiScore = Math.max(-1.0, Math.min(1.0, obi));
-                const cvdScore = cvd > 0 ? 1.0 : cvd < 0 ? -1.0 : 0.0;
-                const compScore = 0.50 * aiScore + 0.25 * obiScore + 0.25 * cvdScore;
-                if (compScore > 0.12 && aiConf >= 0.52 && obi >= obiBuyThreshold) {
-                    signalText = "BUY";
-                    signalColor = green;
-                }
-                else if (compScore < -0.12 && aiConf >= 0.52 && obi <= obiSellThreshold) {
-                    signalText = "SELL";
-                    signalColor = red;
-                }
+            else if (rawSignalVal === 2.0) {
+                signalText = "SELL";
+                signalColor = red + bold;
             }
             const signalStr = " " + signalColor + signalText.padEnd(6) + reset + " ";
             const slotStr = i === this.focusedAssetIdx

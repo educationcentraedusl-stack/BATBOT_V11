@@ -25,6 +25,12 @@ export interface RecalibrationStatus {
 export type RecalibrationSuccessCallback = () => void;
 export type RecalibrationStateChangeCallback = (state: "TRAINING_LOCK" | "RECALIBRATING" | "LIVE_ACTIVE") => void;
 
+export interface PlattCalibrationClient {
+  setAiTemperature?: (val: number, assetIdx?: number) => void;
+  setAiPlattScale?: (val: number, assetIdx?: number) => void;
+  setAiPlattOffset?: (val: number, assetIdx?: number) => void;
+}
+
 interface ChildProcessError extends Error {
   code?: number | string;
   signal?: string;
@@ -350,7 +356,10 @@ export class AutoRecalibrationManager {
    * Dynamically calculates and applies Temperature Scaling and Platt Calibration parameters
    * based on rolling Information Coefficient (IC) and empirical accuracy.
    */
-  public applyPlattCalibration(client: any, rollingIc: number): { temperature: number; scale: number; offset: number } {
+  public applyPlattCalibration(
+    client: PlattCalibrationClient | null,
+    rollingIc: number
+  ): { temperature: number; scale: number; offset: number } {
     let temperature = 1.0;
     let scale = 1.0;
     let offset = 0.0;
@@ -369,7 +378,11 @@ export class AutoRecalibrationManager {
 
     if (client && typeof client.setAiTemperature === "function") {
       client.setAiTemperature(temperature);
+    }
+    if (client && typeof client.setAiPlattScale === "function") {
       client.setAiPlattScale(scale);
+    }
+    if (client && typeof client.setAiPlattOffset === "function") {
       client.setAiPlattOffset(offset);
     }
 

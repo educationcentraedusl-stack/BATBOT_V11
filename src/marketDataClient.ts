@@ -482,6 +482,16 @@ export class MarketDataClient {
     this.writeAtomicFloat64Asset(assetIdx, 134, val);
   }
 
+  // --- Slot 137: Finalized Strategy Engine Signal State (0.0 = NONE, 1.0 = BUY, 2.0 = SELL) ---
+
+  public getFinalizedSignal(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 137);
+  }
+
+  public setFinalizedSignal(signalVal: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 137, signalVal);
+  }
+
   /**
    * Broadcasts atomic Kill-Switch activation across all asset slots simultaneously.
    */
