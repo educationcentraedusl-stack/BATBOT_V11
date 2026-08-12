@@ -673,8 +673,22 @@ export class StrategyEngine {
 
       const summary = this.hedgeLedger.getSummary(markPrice > 0 ? markPrice : 0);
       const activePosSide = summary.side === "FLAT" ? "LONG" : summary.side;
-      const coreLong = this.hedgeLedger.getCoreLong();
-      const holdingDurationMs = coreLong.isOccupied ? Math.max(0, Date.now() - (coreLong.openTime || Date.now())) : 0;
+      let holdingDurationMs = 0;
+      if (summary.side === "LONG") {
+        const coreLong = this.hedgeLedger.getCoreLong();
+        holdingDurationMs = coreLong.isOccupied && coreLong.openTime > 0 ? Math.max(0, Date.now() - coreLong.openTime) : 0;
+      } else if (summary.side === "SHORT") {
+        const shortSlots = this.hedgeLedger.getShortSlots();
+        let oldestOpenTime = 0;
+        for (const slot of shortSlots) {
+          if (slot.isOccupied && slot.openTime > 0) {
+            if (oldestOpenTime === 0 || slot.openTime < oldestOpenTime) {
+              oldestOpenTime = slot.openTime;
+            }
+          }
+        }
+        holdingDurationMs = oldestOpenTime > 0 ? Math.max(0, Date.now() - oldestOpenTime) : 0;
+      }
       const hazardMetrics = this.hazardEngine.getHazardMetrics(activePosSide, aiConfidence, holdingDurationMs);
       const volMetrics = this.volEngine.getVolatilitySurfaceMetrics();
 

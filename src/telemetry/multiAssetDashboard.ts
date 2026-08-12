@@ -278,8 +278,8 @@ export class MultiAssetCLIDashboard {
     const fHjb = this.client.getHJBReservationPrice(fIdx);
     const fSurvival = this.client.getSurvivalProbability(fIdx);
 
-    const hjbStr = fHjb > 0 ? fHjb.toFixed(fDec) : "0.00";
-    const survivalStr = fSurvival > 0 ? (fSurvival * 100).toFixed(1) : "100.0";
+    const hjbStr = (fHjb > 0 ? fHjb : 0).toFixed(fDec);
+    const survivalStr = (fSurvival > 0 ? fSurvival * 100 : 100.0).toFixed(1);
 
     out += `${bold}--- FOCUSED ASSET METRICS & LEVEL-2 BOOK (#${fIdx} - ${fSym}) ---${reset}${clearLine}\n`;
     out += ` OBI: ${fObi >= 0 ? "+" : ""}${fObi.toFixed(4)} | CVD: ${fCvd >= 0 ? "+" : ""}${fCvd.toFixed(2)} | Hawkes: ${fHawkes.toFixed(3)} | VPIN: ${fVpin.toFixed(4)} | HJB Res: $${hjbStr} | Survival: ${survivalStr}%${clearLine}\n`;
