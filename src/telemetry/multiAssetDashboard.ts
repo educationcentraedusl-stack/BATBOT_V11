@@ -278,8 +278,11 @@ export class MultiAssetCLIDashboard {
     const fHjb = this.client.getHJBReservationPrice(fIdx);
     const fSurvival = this.client.getSurvivalProbability(fIdx);
 
+    const hjbStr = fHjb > 0 ? fHjb.toFixed(fDec) : "0.00";
+    const survivalStr = fSurvival > 0 ? (fSurvival * 100).toFixed(1) : "100.0";
+
     out += `${bold}--- FOCUSED ASSET METRICS & LEVEL-2 BOOK (#${fIdx} - ${fSym}) ---${reset}${clearLine}\n`;
-    out += ` OBI: ${fObi >= 0 ? "+" : ""}${fObi.toFixed(4)} | CVD: ${fCvd >= 0 ? "+" : ""}${fCvd.toFixed(2)} | Hawkes: ${fHawkes.toFixed(3)} | VPIN: ${fVpin.toFixed(4)} | HJB Res: $${fHjb > 0 ? fHjb.toFixed(fDec) : "N/A"} | Survival: ${(fSurvival * 100).toFixed(1)}%${clearLine}\n`;
+    out += ` OBI: ${fObi >= 0 ? "+" : ""}${fObi.toFixed(4)} | CVD: ${fCvd >= 0 ? "+" : ""}${fCvd.toFixed(2)} | Hawkes: ${fHawkes.toFixed(3)} | VPIN: ${fVpin.toFixed(4)} | HJB Res: $${hjbStr} | Survival: ${survivalStr}%${clearLine}\n`;
     out += ` AI Prediction Direction: ${fAiDir >= 0 ? green : red}${fAiDir >= 0 ? "+" : ""}${fAiDir.toFixed(4)}${reset}  |  Confidence: ${yellow}${fAiConf}%${reset}  |  Inference Latency: ${fInfLat} µs${clearLine}\n`;
 
 
