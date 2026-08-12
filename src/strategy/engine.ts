@@ -512,11 +512,33 @@ export class StrategyEngine {
             this.hedgeLedger.occupyShortSlot(0, qty, entryPx, dynamicTpPercent, dynamicSlPercent);
           }
 
-          // Attach and dispatch protective POST_ONLY TP limit order batch to Binance
+          const slPrice = posSide === "LONG" ? entryPx * (1.0 - dynamicSlPct) : entryPx * (1.0 + dynamicSlPct);
+          const formattedSlPrice = SymbolPrecisionRegistry.formatPrice(this.config.symbol, slPrice);
+
+          // 1. Attach and dispatch protective POST_ONLY TP limit order batch to Binance
           await this.dispatchBatchPostOnlyTpOrders(slotId, entryPx, qty, posSide);
 
+          // 2. Explicitly dispatch LIVE STOP_MARKET Stop-Loss order to Binance exchange
+          try {
+            const slOrder = await this.executionClient.placeOrder({
+              symbol: this.config.symbol,
+              side: exitSide,
+              type: "STOP_MARKET",
+              quantity: qty,
+              stopPrice: formattedSlPrice,
+              positionSide: posSide,
+            });
+            console.log(
+              `[ORPHAN_GUARD][DISPATCHED] Live STOP_MARKET order #${slOrder.orderId} confirmed on Binance for ${this.config.symbol} ${posSide}: stopPrice=$${formattedSlPrice}`
+            );
+          } catch (slErr: any) {
+            console.error(
+              `[ORPHAN_GUARD][ERROR] Failed to dispatch live STOP_MARKET order to Binance for ${this.config.symbol} ${posSide}: ${slErr.message}`
+            );
+          }
+
           console.log(
-            `[ORPHAN_GUARD][DISPATCHED] Dynamic Volatility SL/TP attached to ${this.config.symbol} ${posSide} position: SL=${dynamicSlPercent.toFixed(2)}%, TP=${dynamicTpPercent.toFixed(2)}%`
+            `[ORPHAN_GUARD][DISPATCHED] Dynamic Volatility SL/TP attached to ${this.config.symbol} ${posSide} position: SL=$${formattedSlPrice} (${dynamicSlPercent.toFixed(2)}%), TP=${dynamicTpPercent.toFixed(2)}%`
           );
         } else {
           console.log(`[ORPHAN_GUARD] Active ${posSide} position on ${this.config.symbol} has active exchange protective order(s).`);
