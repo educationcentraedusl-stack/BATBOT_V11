@@ -83,7 +83,7 @@ class VolatilitySurfaceEngine {
     getGarmanKlassVolatility(windowSize) {
         const N = Math.min(windowSize, this.sampleCount);
         if (N < 2)
-            return 0.001; // Baseline floor
+            return 0.0;
         let sumGK = 0;
         for (let i = 0; i < N; i++) {
             // Index backwards from current ring position
@@ -109,7 +109,7 @@ class VolatilitySurfaceEngine {
     getParkinsonVolatility(windowSize) {
         const N = Math.min(windowSize, this.sampleCount);
         if (N < 2)
-            return 0.001; // Baseline floor
+            return 0.0;
         let sumParkinson = 0;
         for (let i = 0; i < N; i++) {
             const idx = (this.ringIdx - 1 - i + this.capacity60s) % this.capacity60s;
@@ -133,7 +133,7 @@ class VolatilitySurfaceEngine {
         const parkinson60s = this.getParkinsonVolatility(600);
         // Dynamic Volatility Multiplier: Fast (1s) vs Macro (60s) Realized Volatility Ratio
         let rawRatio = 1.0;
-        if (gk60s > 0) {
+        if (gk60s > 0 && gk1s > 0) {
             rawRatio = gk1s / gk60s;
         }
         // Clamp multiplier to [0.50, 3.00] range

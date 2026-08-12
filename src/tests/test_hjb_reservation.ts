@@ -104,12 +104,13 @@ async function runHJBReservationTestSuite() {
   // -------------------------------------------------------------------------
   console.log("[TEST 5] Running 100,000 Tick Latency & Zero-GC Benchmark (Phase 2 Engines)...");
   const iterations = 100000;
+  const durationMs = 15000;
   const startHrTime = process.hrtime.bigint();
 
   for (let i = 0; i < iterations; i++) {
     const curPx = 60000 + (i % 20);
-    hjbEngine.getOptimalExitBoundary("LONG", 60000, curPx, 1.0, i * 10, 0.02);
-    hazardEngine.getHazardMetrics("LONG", 0.50, i * 10);
+    hjbEngine.getOptimalExitBoundary("LONG", 60000, curPx, 1.0, durationMs, 0.02);
+    hazardEngine.getHazardMetrics("LONG", 0.50, durationMs);
   }
 
   const endHrTime = process.hrtime.bigint();

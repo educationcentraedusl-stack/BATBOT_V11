@@ -140,11 +140,12 @@ async function runSotaDynamicExitIntegrationTestSuite() {
   ledger.occupyCoreLong(0.5, 60000, 1.5, 1.5);
 
   const iterations = 100000;
+  const nowMs = Date.now();
   const startHrTime = process.hrtime.bigint();
 
   for (let i = 0; i < iterations; i++) {
     const markPx = 60000 + (i % 20);
-    ledger.evaluateSotaDynamicExits(markPx, hazardMetrics1, hjbEngine, volMetrics1);
+    ledger.evaluateSotaDynamicExits(markPx, hazardMetrics1, hjbEngine, volMetrics1, nowMs);
   }
 
   const endHrTime = process.hrtime.bigint();

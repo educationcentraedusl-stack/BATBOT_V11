@@ -25,6 +25,16 @@ export class HJBReservationEngine {
   private readonly precalcLogTerm: number;
   private readonly precalcSqrtCoeff: number;
 
+  // Zero-GC Pre-allocated Cached Result Payload Ring Buffer
+  private readonly cachedExitEvalRing: HJBExitEvaluation[] = Array.from({ length: 8 }, () => ({
+    reservationPrice: 0,
+    liquidationBoundary: 0,
+    isLiquidationTriggered: false,
+    inventoryPenalty: 0,
+    exitReason: "NONE",
+  }));
+  private evalRingIdx: number = 0;
+
   constructor(
     symbol: string,
     riskAversionGamma: number = 0.10,
@@ -62,7 +72,7 @@ export class HJBReservationEngine {
   }
 
   /**
-   * Evaluates continuous HJB optimal stopping liquidation boundary relative to position entry price
+   * Evaluates continuous HJB optimal stopping liquidation boundary relative to position entry price using zero-GC cached payload ring.
    */
   public getOptimalExitBoundary(
     side: "LONG" | "SHORT",
@@ -72,14 +82,16 @@ export class HJBReservationEngine {
     durationMs: number,
     garmanKlassVol: number
   ): HJBExitEvaluation {
+    const res = this.cachedExitEvalRing[this.evalRingIdx];
+    this.evalRingIdx = (this.evalRingIdx + 1) % 8;
+
     if (currentPrice <= 0 || entryPrice <= 0) {
-      return {
-        reservationPrice: currentPrice,
-        liquidationBoundary: currentPrice,
-        isLiquidationTriggered: false,
-        inventoryPenalty: 0,
-        exitReason: "NONE"
-      };
+      res.reservationPrice = currentPrice;
+      res.liquidationBoundary = currentPrice;
+      res.isLiquidationTriggered = false;
+      res.inventoryPenalty = 0;
+      res.exitReason = "NONE";
+      return res;
     }
 
     const safeVol = Math.max(0.001, garmanKlassVol);
@@ -116,13 +128,13 @@ export class HJBReservationEngine {
 
     const inventoryPenalty = Math.abs(entryPrice - reservationPrice);
 
-    return {
-      reservationPrice,
-      liquidationBoundary,
-      isLiquidationTriggered,
-      inventoryPenalty,
-      exitReason: isLiquidationTriggered ? `HJB_RESERVATION_LIQUIDATE_${side}` : "NONE"
-    };
+    res.reservationPrice = reservationPrice;
+    res.liquidationBoundary = liquidationBoundary;
+    res.isLiquidationTriggered = isLiquidationTriggered;
+    res.inventoryPenalty = inventoryPenalty;
+    res.exitReason = isLiquidationTriggered ? `HJB_RESERVATION_LIQUIDATE_${side}` : "NONE";
+
+    return res;
   }
 
   public getSymbol(): string {

@@ -388,8 +388,7 @@ class MarketDataClient {
         this.writeAtomicFloat64Asset(assetIdx, 139, price);
     }
     getSurvivalProbability(assetIdx = 0) {
-        const val = this.readAtomicFloat64Asset(assetIdx, 140);
-        return val > 0 ? val : 1.0;
+        return this.readAtomicFloat64Asset(assetIdx, 140);
     }
     setSurvivalProbability(prob, assetIdx = 0) {
         this.writeAtomicFloat64Asset(assetIdx, 140, prob);

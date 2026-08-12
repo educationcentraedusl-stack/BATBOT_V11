@@ -511,8 +511,7 @@ export class MarketDataClient {
   }
 
   public getSurvivalProbability(assetIdx: number = 0): number {
-    const val = this.readAtomicFloat64Asset(assetIdx, 140);
-    return val > 0 ? val : 1.0;
+    return this.readAtomicFloat64Asset(assetIdx, 140);
   }
 
   public setSurvivalProbability(prob: number, assetIdx: number = 0): void {

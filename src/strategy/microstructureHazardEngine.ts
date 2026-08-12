@@ -22,7 +22,9 @@ export class MicrostructureHazardEngine {
 
   // Circular Ring Buffers for Zero-GC
   private readonly ofiRingBuffer: Float64Array;
+  private readonly depthRingBuffer: Float64Array;
   private ofiRingIdx: number = 0;
+  private depthSampleCount: number = 0;
   private readonly ofiBufferSize: number;
 
   // Order Book Previous State
@@ -51,6 +53,18 @@ export class MicrostructureHazardEngine {
   // Hazard Configuration Threshold
   private hazardThreshold: number;
 
+  // Zero-GC Pre-allocated Cached Metrics Payload Ring Buffer
+  private readonly cachedMetricsRing: MicrostructureMetrics[] = Array.from({ length: 8 }, () => ({
+    ofi: 0,
+    tfi: 0,
+    vpin: 0,
+    hazardScore: 0,
+    coxHazardRate: 0,
+    survivalProbability: 1.0,
+    isHazardExitTriggered: false,
+  }));
+  private metricsRingIdx: number = 0;
+
   // Cox Proportional Hazard Parameters (theta weights)
   private static readonly THETA_OFI = 1.5;
   private static readonly THETA_TFI = 1.5;
@@ -68,6 +82,7 @@ export class MicrostructureHazardEngine {
     this.symbol = symbol;
     this.ofiBufferSize = ofiBufferSize;
     this.ofiRingBuffer = new Float64Array(ofiBufferSize);
+    this.depthRingBuffer = new Float64Array(ofiBufferSize);
 
     this.tradeBufferSize = tradeBufferSize;
     this.tradeBuyQtyRing = new Float64Array(tradeBufferSize);
@@ -114,10 +129,15 @@ export class MicrostructureHazardEngine {
     }
 
     const instantOFI = eBid - eAsk;
+    const instantDepth = (bestBidQty + bestAskQty) * 0.5;
 
-    // Zero-GC insertion into circular ring buffer
+    // Zero-GC insertion into circular ring buffers
     this.ofiRingBuffer[this.ofiRingIdx] = instantOFI;
+    this.depthRingBuffer[this.ofiRingIdx] = instantDepth;
     this.ofiRingIdx = (this.ofiRingIdx + 1) % this.ofiBufferSize;
+    if (this.depthSampleCount < this.ofiBufferSize) {
+      this.depthSampleCount++;
+    }
 
     // Update previous book state
     this.prevBidPx = bestBidPx;
@@ -169,17 +189,22 @@ export class MicrostructureHazardEngine {
   }
 
   /**
-   * Calculates normalized Order Flow Imbalance (OFI) [-1.0, 1.0]
+   * Calculates normalized Order Flow Imbalance (OFI) [-1.0, 1.0] using rolling historical depth moving average.
    */
   public getNormalizedOFI(): number {
     let sumOFI = 0;
-    for (let i = 0; i < this.ofiBufferSize; i++) {
-      sumOFI += this.ofiRingBuffer[i];
-    }
-    const depthScale = (this.prevBidQty + this.prevAskQty) * 0.5;
-    if (depthScale <= 0) return 0;
+    let sumDepth = 0;
+    const samples = Math.min(this.ofiBufferSize, Math.max(1, this.depthSampleCount));
 
-    const rawNorm = sumOFI / (depthScale * (this.ofiBufferSize * 0.2));
+    for (let i = 0; i < samples; i++) {
+      sumOFI += this.ofiRingBuffer[i];
+      sumDepth += this.depthRingBuffer[i];
+    }
+
+    const avgDepth = sumDepth / samples;
+    if (avgDepth <= 0) return 0;
+
+    const rawNorm = sumOFI / (avgDepth * samples);
     return Math.max(-1.0, Math.min(1.0, rawNorm));
   }
 
@@ -215,8 +240,8 @@ export class MicrostructureHazardEngine {
   }
 
   /**
-   * Fast evaluation of Cox Proportional Hazard rate h(t) = h0(t) * exp(theta^T * X_t)
-   * and Survival Probability S(t) = exp(-H(t))
+   * Fast zero-GC evaluation of Cox Proportional Hazard rate h(t) = h0(t) * exp(theta^T * X_t)
+   * and Survival Probability S(t) = exp(-H(t)) using pre-allocated cached object ring pool.
    */
   public getHazardMetrics(
     positionSide: "LONG" | "SHORT",
@@ -262,15 +287,18 @@ export class MicrostructureHazardEngine {
 
     const isHazardExitTriggered = hazardScore >= this.hazardThreshold || survivalProbability <= 0.15;
 
-    return {
-      ofi,
-      tfi,
-      vpin,
-      hazardScore,
-      coxHazardRate,
-      survivalProbability,
-      isHazardExitTriggered
-    };
+    const res = this.cachedMetricsRing[this.metricsRingIdx];
+    this.metricsRingIdx = (this.metricsRingIdx + 1) % 8;
+
+    res.ofi = ofi;
+    res.tfi = tfi;
+    res.vpin = vpin;
+    res.hazardScore = hazardScore;
+    res.coxHazardRate = coxHazardRate;
+    res.survivalProbability = survivalProbability;
+    res.isHazardExitTriggered = isHazardExitTriggered;
+
+    return res;
   }
 
   public setHazardThreshold(threshold: number): void {

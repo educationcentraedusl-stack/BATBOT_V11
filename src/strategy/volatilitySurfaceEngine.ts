@@ -100,7 +100,7 @@ export class VolatilitySurfaceEngine {
    */
   public getGarmanKlassVolatility(windowSize: number): number {
     const N = Math.min(windowSize, this.sampleCount);
-    if (N < 2) return 0.001; // Baseline floor
+    if (N < 2) return 0.0;
 
     let sumGK = 0;
     for (let i = 0; i < N; i++) {
@@ -131,7 +131,7 @@ export class VolatilitySurfaceEngine {
    */
   public getParkinsonVolatility(windowSize: number): number {
     const N = Math.min(windowSize, this.sampleCount);
-    if (N < 2) return 0.001; // Baseline floor
+    if (N < 2) return 0.0;
 
     let sumParkinson = 0;
     for (let i = 0; i < N; i++) {
@@ -160,7 +160,7 @@ export class VolatilitySurfaceEngine {
 
     // Dynamic Volatility Multiplier: Fast (1s) vs Macro (60s) Realized Volatility Ratio
     let rawRatio = 1.0;
-    if (gk60s > 0) {
+    if (gk60s > 0 && gk1s > 0) {
       rawRatio = gk1s / gk60s;
     }
 
