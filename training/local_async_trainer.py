@@ -117,6 +117,67 @@ def create_cfc_sequences_strided_torch(features: torch.Tensor, targets: torch.Te
     return seq_inputs, seq_targets
 
 
+def fit_platt_temperature_calibration(model: nn.Module, val_loader: DataLoader, device: torch.device):
+    """
+    Fits Empirical Platt Scaling parameters (A, B) and Temperature (T) post-training
+    using the Validation dataset to calibrate continuous Neural ODE output logits.
+    """
+    model.eval()
+    all_preds = []
+    all_targets = []
+
+    with torch.no_grad():
+        for bx, by in val_loader:
+            if bx.shape[1] == 0:
+                continue
+            pred = model(bx)
+            last_pred = pred[:, -1, 0].cpu()
+            last_target = by[:, -1, 0].cpu()
+            all_preds.append(last_pred)
+            all_targets.append(last_target)
+
+    if not all_preds:
+        print("[BATBOT_V11][CALIBRATION] Validation dataset empty. Using default calibration (A=1.0, B=0.0, T=1.0).")
+        return 1.0, 0.0, 1.0
+
+    preds = torch.cat(all_preds, dim=0)
+    targets = torch.cat(all_targets, dim=0)
+
+    if preds.shape[0] < 10:
+        print("[BATBOT_V11][CALIBRATION] Insufficient val samples for fitting. Using defaults.")
+        return 1.0, 0.0, 1.0
+
+    directional_match = (preds * targets > 0).float()
+    magnitudes = preds.abs()
+    mag_std = magnitudes.std() + 1e-8
+    z_dir = magnitudes / mag_std
+
+    platt_scale = nn.Parameter(torch.tensor([1.0], device=device))
+    platt_offset = nn.Parameter(torch.tensor([0.0], device=device))
+    temperature = nn.Parameter(torch.tensor([1.0], device=device))
+
+    z_dir_dev = z_dir.to(device)
+    target_dev = directional_match.to(device)
+
+    optimizer = torch.optim.AdamW([platt_scale, platt_offset, temperature], lr=0.01)
+
+    for _ in range(200):
+        optimizer.zero_grad()
+        temp_clamp = torch.clamp(temperature, min=0.05)
+        calibrated_logit = (platt_scale * z_dir_dev + platt_offset) / temp_clamp
+        prob = torch.sigmoid(calibrated_logit)
+        loss = F.binary_cross_entropy(prob, target_dev)
+        loss.backward()
+        optimizer.step()
+
+    final_scale = max(0.01, float(platt_scale.item()))
+    final_offset = float(platt_offset.item())
+    final_temp = max(0.05, float(temperature.item()))
+
+    print(f"[BATBOT_V11][CALIBRATION SUCCESS] Empirical Platt Scale A: {final_scale:.4f} | Offset B: {final_offset:.4f} | Temperature T: {final_temp:.4f}")
+    return final_scale, final_offset, final_temp
+
+
 def train_local_cfc():
     start_time = time.time()
 
@@ -259,6 +320,9 @@ def train_local_cfc():
     duration = time.time() - start_time
     print(f"[BATBOT_V11][LOCAL-TRAINER] Recalibration completed in {duration:.3f}s | Final Best Val IC: {best_val_ic:+.4f}")
 
+    # Fit Platt Scaling & Temperature Calibration parameters on Validation Set
+    platt_scale, platt_offset, temperature = fit_platt_temperature_calibration(model, val_loader, device)
+
     # Extract Tensors for Rust Candle Engine compatibility
     weight_tensors = {
         "w_alpha": model.w_alpha.detach().cpu().contiguous(),
@@ -267,6 +331,9 @@ def train_local_cfc():
         "b_beta": model.b_beta.detach().cpu().contiguous(),
         "w_output": model.w_output.detach().cpu().contiguous(),
         "b_output": model.b_output.detach().cpu().contiguous(),
+        "platt_scale": torch.tensor([platt_scale], dtype=torch.float32),
+        "platt_offset": torch.tensor([platt_offset], dtype=torch.float32),
+        "temperature": torch.tensor([temperature], dtype=torch.float32),
     }
 
     # Atomic Write to Disk
@@ -284,3 +351,4 @@ def train_local_cfc():
 
 if __name__ == "__main__":
     train_local_cfc()
+

@@ -23,10 +23,10 @@ class MultiAssetCLIDashboard {
         return "\x1b[32m" + "=".repeat(filled) + "\x1b[90m" + "-".repeat(empty) + "\x1b[0m";
     });
     // Static pre-rendered ANSI UI dividers cached to eliminate hot-path string allocations in render loop
-    static BORDER = "\x1b[36m\x1b[1m======================================================================================================================\x1b[0m\x1b[K\n";
-    static SUB_DIVIDER = "\x1b[90m----------------------------------------------------------------------------------------------------------------------\x1b[0m\x1b[K\n";
-    static TABLE_DIVIDER = "\x1b[90m+------+----------+-----------+-----------+---------+--------------------+------------+----------+------------+---------+\x1b[0m\x1b[K\n";
-    static TRADES_DIVIDER = "\x1b[90m+------+----------+--------+-----------+--------------+--------------+------------+----------+--------------------+ \x1b[0m\x1b[K\n";
+    static BORDER = "\x1b[36m\x1b[1m===================================================================================================================\x1b[0m\x1b[K\n";
+    static SUB_DIVIDER = "\x1b[90m-------------------------------------------------------------------------------------------------------------------\x1b[0m\x1b[K\n";
+    static TABLE_DIVIDER = "\x1b[90m+------+----------+-----------+-----------+--------+--------------+------------+----------+--------------+-------+-------+--------+\x1b[0m\x1b[K\n";
+    static TRADES_DIVIDER = "\x1b[90m+------+----------+--------+-----------+-------------+--------------+----------+----------+----------------------+\x1b[0m\x1b[K\n";
     constructor(client, enabled = true, customSymbols = (0, tradingSymbols_1.getTradingSymbols)()) {
         this.client = client;
         this.enabled = enabled;
@@ -120,7 +120,7 @@ class MultiAssetCLIDashboard {
         }
         let out = "\x1b[H"; // Move cursor top-left
         out += MultiAssetCLIDashboard.BORDER;
-        out += `${cyan}${bold}                         BATBOT_V11 MULTI-ASSET HFT TELEMETRY & COMMAND MONITOR (${this.client.maxAssets} ASSETS)                            ${reset}${clearLine}\n`;
+        out += `${cyan}${bold}                           BATBOT_V11 MULTI-ASSET HFT TELEMETRY & COMMAND MONITOR (${this.client.maxAssets} ASSETS)                              ${reset}${clearLine}\n`;
         out += MultiAssetCLIDashboard.BORDER;
         const availBalance = this.client.getAvailableBalance(0);
         out += ` Engine Status: ${statusStr}  |  Memory: ${memMb} MB  |  Sequence: #${seqNum.toString()}  |  Active Positions: ${activePositionCount}/${this.client.maxAssets}${clearLine}\n`;
@@ -128,28 +128,54 @@ class MultiAssetCLIDashboard {
         out += MultiAssetCLIDashboard.SUB_DIVIDER;
         out += `${bold}--- ${this.client.maxAssets}-ASSET CONCURRENCY REAL-TIME MATRIX ---${reset}${clearLine}\n`;
         out += MultiAssetCLIDashboard.TABLE_DIVIDER;
-        out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Best Bid${reset}  | ${bold}Best Ask${reset}  | ${bold}Spread${reset}  | ${bold}OBI (-1..+1)${reset}        | ${bold}CVD${reset}        | ${bold}Hawkes${reset}   | ${bold}Garman-Klass${reset} | ${bold}Signal${reset}  |${clearLine}\n`;
+        out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Best Bid${reset}  | ${bold}Best Ask${reset}  | ${bold}Spread${reset}   | ${bold}OBI (-1..+1)${reset} | ${bold}CVD${reset}        | ${bold}Hawkes${reset}   | ${bold}Garman-Klass${reset} | ${bold}Dir${reset}   | ${bold}Conf%${reset} | ${bold}Signal${reset}   |${clearLine}\n`;
         out += MultiAssetCLIDashboard.TABLE_DIVIDER;
         for (let i = 0; i < this.client.maxAssets; i++) {
-            const sym = (this.assetSymbols[i] || `ASSET_${i}`).padEnd(8);
+            const symName = this.assetSymbols[i] || `ASSET_${i}`;
+            const symStr = " " + symName.padEnd(8) + " ";
             const bid = this.client.getBestBidPrice(i);
             const ask = this.client.getBestAskPrice(i);
-            const spread = ask > bid ? (ask - bid).toFixed(2) : "0.00";
+            const bidStr = " " + (bid > 0 ? bid.toFixed(2) : "0.00").padStart(9) + " ";
+            const askStr = " " + (ask > 0 ? ask.toFixed(2) : "0.00").padStart(9) + " ";
+            const spreadVal = (ask > 0 && bid > 0 && ask >= bid) ? (ask - bid).toFixed(2) : "0.00";
+            const spreadStr = " " + spreadVal.padStart(6) + " ";
             const obi = this.client.getOBI(i);
+            const obiBar = this.getFastMiniBar(obi, -1, 1);
+            const obiStr = " [" + obiBar + "] ";
             const cvd = this.client.getCVD(i);
+            let rawCvd = (cvd >= 0 ? "+" : "") + cvd.toFixed(1);
+            if (rawCvd.length > 10) {
+                rawCvd = rawCvd.substring(0, 10);
+            }
+            const cvdStr = " " + rawCvd.padStart(10) + " ";
             const hawkes = this.client.getHawkesIntensity(i);
+            const hawkesStr = " " + hawkes.toFixed(3).padStart(8) + " ";
             const gkRv = this.client.getGarmanKlassRV(i);
+            const gkStr = " " + gkRv.toFixed(5).padStart(12) + " ";
             const aiDir = this.client.getAIPredictionDirection(i);
+            let rawDir = (aiDir >= 0 ? "+" : "") + aiDir.toFixed(2);
+            if (rawDir.length > 5)
+                rawDir = rawDir.substring(0, 5);
+            const dirColor = aiDir > 0.05 ? green : aiDir < -0.05 ? red : gray;
+            const dirStr = " " + dirColor + rawDir.padStart(5) + reset + " ";
             const aiConf = this.client.getAIPredictionConfidence(i);
+            let rawConf = (aiConf * 100).toFixed(1) + "%";
+            if (rawConf.length > 5)
+                rawConf = rawConf.substring(0, 5);
+            const confColor = aiConf >= 0.75 ? yellow : aiConf >= 0.65 ? cyan : gray;
+            const confStr = " " + confColor + rawConf.padStart(5) + reset + " ";
             const obiBuyThreshold = 0.35;
             const obiSellThreshold = -0.35;
-            let signalStr = `${gray}NONE${reset}`;
+            let signalText = "NONE";
+            let signalColor = gray;
             if (aiConf >= 0.75) {
                 if (aiDir > 0 && obi >= obiBuyThreshold) {
-                    signalStr = `${green}${bold}BUY ${reset}`;
+                    signalText = "BUY";
+                    signalColor = green + bold;
                 }
                 else if (aiDir < 0 && obi <= obiSellThreshold) {
-                    signalStr = `${red}${bold}SELL${reset}`;
+                    signalText = "SELL";
+                    signalColor = red + bold;
                 }
             }
             else {
@@ -158,15 +184,19 @@ class MultiAssetCLIDashboard {
                 const cvdScore = cvd > 0 ? 1.0 : cvd < 0 ? -1.0 : 0.0;
                 const compScore = 0.50 * aiScore + 0.25 * obiScore + 0.25 * cvdScore;
                 if (compScore > 0.12 && aiConf >= 0.65 && obi >= obiBuyThreshold) {
-                    signalStr = `${green}BUY ${reset}`;
+                    signalText = "BUY";
+                    signalColor = green;
                 }
                 else if (compScore < -0.12 && aiConf >= 0.65 && obi <= obiSellThreshold) {
-                    signalStr = `${red}SELL${reset}`;
+                    signalText = "SELL";
+                    signalColor = red;
                 }
             }
-            const obiBar = this.getFastMiniBar(obi, -1, 1);
-            const focusMarker = i === this.focusedAssetIdx ? `${yellow}${bold}#${i}${reset}` : ` #${i}`;
-            out += `| ${focusMarker}  | ${sym} | ${bid.toFixed(2).padEnd(9)} | ${ask.toFixed(2).padEnd(9)} | ${spread.padEnd(7)} | [${obiBar}] | ${cvd >= 0 ? "+" : ""}${cvd.toFixed(1).padEnd(9)} | ${hawkes.toFixed(3).padEnd(8)} | ${gkRv.toFixed(5).padEnd(12)} | ${signalStr}  |${clearLine}\n`;
+            const signalStr = " " + signalColor + signalText.padEnd(6) + reset + " ";
+            const slotStr = i === this.focusedAssetIdx
+                ? "  " + yellow + bold + "#" + i + reset + "  "
+                : "  #" + i + "  ";
+            out += "|" + slotStr + "|" + symStr + "|" + bidStr + "|" + askStr + "|" + spreadStr + "|" + obiStr + "|" + cvdStr + "|" + hawkesStr + "|" + gkStr + "|" + dirStr + "|" + confStr + "|" + signalStr + "|" + clearLine + "\n";
         }
         out += MultiAssetCLIDashboard.TABLE_DIVIDER;
         // Focused Asset Deep Microstructure & L2 View
@@ -205,12 +235,12 @@ class MultiAssetCLIDashboard {
                 const rPnl = this.client.getOmsRealizedPnl(i);
                 const uPnl = this.client.getOmsUnrealizedPnl(i);
                 const uPnlColor = uPnl >= 0 ? green : red;
-                const uPnlStr = `${uPnl >= 0 ? "+" : ""}$${uPnl.toFixed(2)}`.padEnd(18);
-                out += `| #${i}   | ${sym} | ${side} | ${qty.toFixed(4).padEnd(9)} | $${entry.toFixed(2).padEnd(11)} | $${mark.toFixed(2).padEnd(11)} | ${lev} | $${rPnl.toFixed(2).padEnd(7)} | ${uPnlColor}${bold}${uPnlStr}${reset} |${clearLine}\n`;
+                const uPnlStr = `${uPnl >= 0 ? "+" : ""}$${uPnl.toFixed(2)}`.padEnd(20);
+                out += `| #${i}   | ${sym} | ${side} | ${qty.toFixed(4).padEnd(9)} | $${entry.toFixed(2).padEnd(10)} | $${mark.toFixed(2).padEnd(11)} | ${lev} | $${rPnl.toFixed(2).padEnd(7)} | ${uPnlColor}${bold}${uPnlStr}${reset} |${clearLine}\n`;
             }
         }
         if (!hasActivePosition) {
-            out += `| ${yellow}NO ACTIVE OPEN POSITIONS ACROSS ALL ${this.client.maxAssets} ASSET SLOTS (ALL POSITIONS FLAT)${reset}`.padEnd(132) + `|${clearLine}\n`;
+            out += `| ${yellow}` + `NO ACTIVE OPEN POSITIONS ACROSS ALL ${this.client.maxAssets} ASSET SLOTS (ALL POSITIONS FLAT)`.padEnd(112) + `${reset} |${clearLine}\n`;
         }
         out += MultiAssetCLIDashboard.TRADES_DIVIDER;
         // Command Feedback & Real-Time Event Log

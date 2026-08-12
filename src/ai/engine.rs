@@ -388,6 +388,7 @@ impl AIEngine {
         self.tkan = new_engine.tkan;
         self.cell = new_engine.cell;
         self.status = new_engine.status;
+        self.calibration_params = new_engine.calibration_params;
         if let Ok(new_hs) = new_engine.hidden_state.into_inner() {
             if let Ok(mut hs) = self.hidden_state.lock() {
                 *hs = new_hs;
@@ -476,11 +477,12 @@ impl AIEngine {
         let sab_offset = sab.load_f64_asset(asset_idx, 129);
 
         let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature };
-        let scale = if sab_scale > 0.05 { sab_scale } else { self.calibration_params.platt_scale };
+        let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale };
         let offset = sab_offset;
 
-        let calibrated_logit: f64 = (scale * raw_confidence + offset) / temp.max(0.05);
-        let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.0f64, 1.0f64);
+        let z_dir = raw_confidence / 1e-3;
+        let calibrated_logit: f64 = (scale * z_dir + offset) / temp.max(0.05);
+        let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.9999f64);
 
         let end_ns = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -573,11 +575,12 @@ impl AIEngine {
         let sab_offset = sab.load_f64(129);
 
         let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature };
-        let scale = if sab_scale > 0.05 { sab_scale } else { self.calibration_params.platt_scale };
+        let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale };
         let offset = sab_offset;
 
-        let calibrated_logit: f64 = (scale * raw_confidence + offset) / temp.max(0.05);
-        let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.0f64, 1.0f64);
+        let z_dir = raw_confidence / 1e-3;
+        let calibrated_logit: f64 = (scale * z_dir + offset) / temp.max(0.05);
+        let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.9999f64);
 
         let end_ns = SystemTime::now()
             .duration_since(UNIX_EPOCH)

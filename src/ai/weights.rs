@@ -75,18 +75,54 @@ impl AiEngine {
         let w_output = mmaped.load("w_output", &device).ok();
         let b_output = mmaped.load("b_output", &device).ok();
 
+        let temp_val = mmaped
+            .load("temperature", &device)
+            .ok()
+            .and_then(|t| t.flatten_all().ok())
+            .and_then(|t| t.get(0).ok())
+            .and_then(|t| t.to_scalar::<f32>().ok())
+            .map(|v| v as f64)
+            .unwrap_or(1.0);
+
+        let scale_val = mmaped
+            .load("platt_scale", &device)
+            .ok()
+            .and_then(|t| t.flatten_all().ok())
+            .and_then(|t| t.get(0).ok())
+            .and_then(|t| t.to_scalar::<f32>().ok())
+            .map(|v| v as f64)
+            .unwrap_or(1.0);
+
+        let offset_val = mmaped
+            .load("platt_offset", &device)
+            .ok()
+            .and_then(|t| t.flatten_all().ok())
+            .and_then(|t| t.get(0).ok())
+            .and_then(|t| t.to_scalar::<f32>().ok())
+            .map(|v| v as f64)
+            .unwrap_or(0.0);
+
+        let calibration_params = CalibrationParams {
+            temperature: temp_val,
+            platt_scale: scale_val,
+            platt_offset: offset_val,
+        };
+
         if let (Some(w_a), Some(b_a), Some(w_b), Some(b_b), Some(w_o), Some(b_o)) =
             (w_alpha, b_alpha, w_beta, b_beta, w_output, b_output)
         {
             let cell = CfCCell::new(w_a, b_a, w_b, b_b, w_o, b_o);
             println!(
-                "[BATBOT_V11][AI Engine Zero-Copy] Loaded pre-trained CfC weights from {} via mmap. Status: CALIBRATED.",
-                path_ref.display()
+                "[BATBOT_V11][AI Engine Zero-Copy] Loaded pre-trained CfC weights from {} via mmap. Status: CALIBRATED (A={:.4}, B={:.4}, T={:.4}).",
+                path_ref.display(),
+                calibration_params.platt_scale,
+                calibration_params.platt_offset,
+                calibration_params.temperature
             );
             Self {
                 cell: Some(cell),
                 status: AiEngineStatus::Calibrated,
-                calibration_params: CalibrationParams::default(),
+                calibration_params,
             }
         } else {
             eprintln!(
