@@ -1,5 +1,11 @@
 # BATBOT_V11 System Status Log
 
+- **Date:** 2026-08-12
+- **Feature/Task:** Isolated Remediation of Defect 1 (Unhandled Promise Rejection in Entry Order Execution)
+- **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/test_defect1_remediation.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Eradicated Node.js process crash hazard by replacing `throw err;` with `return null;` in `StrategyEngine.evaluateTick()` entry order `.catch()` handler. 100% verified via `npx tsc --noEmit` (0 errors) and automated verification harness `npx tsx src/test_defect1_remediation.ts` (API rejection handled gracefully, `isOrderInFlight` reset in `finally` block, event loop survived without UnhandledPromiseRejection).
+- **Status:** ✅ Completed & QA Verified
+
 - **Date:** 2026-08-09
 - **Feature/Task:** Zero-Trust Audit Remediation of 7 Multi-Asset Concurrency Defects
 - **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/strategy/risk.ts`, `src/strategy/multiEngine.ts`, `src/strategy/positionLedger.ts`, `batbot_system_status_log.md`
