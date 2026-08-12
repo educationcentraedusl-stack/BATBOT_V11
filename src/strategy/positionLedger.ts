@@ -724,17 +724,25 @@ export class HedgePositionLedger {
 
     const isLong = slot.side === "LONG";
 
-    // Advance Trailing Stop Loss
+    // Advance Trailing Stop Loss with strict Breakeven ($0.00 Loss) floor
+    const takerFee = this.sizingCalc.getTakerFeeRate();
+    const feeBuffer = (makerFee + takerFee) * 2.5; // Fee-adjusted Break-Even
+    const calcBePrice = isLong ? slot.entryPrice * (1 + feeBuffer) : slot.entryPrice * (1 - feeBuffer);
+    if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
+      slot.breakEvenPrice = calcBePrice;
+    }
+
     if (currentStage === 1) {
       slot.breakEvenLocked = true;
-      const takerFee = this.sizingCalc.getTakerFeeRate();
-      const feeBuffer = (makerFee + takerFee) * 2.5; // Fee-adjusted Break-Even
-      slot.breakEvenPrice = isLong ? slot.entryPrice * (1 + feeBuffer) : slot.entryPrice * (1 - feeBuffer);
       slot.stopLossPrice = slot.breakEvenPrice;
     } else if (currentStage === 2 && slot.tpStagePrices && slot.tpStagePrices.length >= 1) {
-      slot.stopLossPrice = slot.tpStagePrices[0];
+      slot.stopLossPrice = isLong
+        ? Math.max(slot.tpStagePrices[0], slot.breakEvenPrice)
+        : Math.min(slot.tpStagePrices[0], slot.breakEvenPrice);
     } else if (currentStage >= 3 && slot.tpStagePrices && slot.tpStagePrices.length >= 2) {
-      slot.stopLossPrice = slot.tpStagePrices[1];
+      slot.stopLossPrice = isLong
+        ? Math.max(slot.tpStagePrices[1], slot.breakEvenPrice)
+        : Math.min(slot.tpStagePrices[1], slot.breakEvenPrice);
     }
 
     const isClosed = slot.quantity <= 0;
@@ -1066,6 +1074,22 @@ export class HedgePositionLedger {
       const makerFee = this.sizingCalc.getMakerFeeRate();
       const takerFee = this.sizingCalc.getTakerFeeRate();
       const feeBuffer = (makerFee + takerFee) * 2.5;
+
+      // Strict Breakeven ($0.00 Loss Floor) & Profit Hunting Enforcement
+      if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
+        slot.breakEvenPrice = isLong ? slot.entryPrice * (1.0 + feeBuffer) : slot.entryPrice * (1.0 - feeBuffer);
+      }
+
+      const isCrossedIntoProfit = isLong ? markPrice >= slot.breakEvenPrice : markPrice <= slot.breakEvenPrice;
+      if (isCrossedIntoProfit) {
+        slot.breakEvenLocked = true;
+      }
+
+      if (slot.breakEvenLocked && slot.breakEvenPrice > 0) {
+        slot.stopLossPrice = isLong
+          ? Math.max(slot.stopLossPrice, slot.breakEvenPrice)
+          : Math.min(slot.stopLossPrice, slot.breakEvenPrice);
+      }
 
       // Tier 4: Hard Harvest Timeout (t >= 1800s / 30 min)
       if (holdingTimeMs >= 1800000) {

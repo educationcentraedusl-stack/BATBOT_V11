@@ -80,24 +80,15 @@ async function syncStateOnStartup(executionClient, strategyEngine, riskGuard) {
         if (riskGuard instanceof risk_2.MultiAssetRiskGuard) {
             riskGuard.updateAccountBalance(balance);
         }
-        // 4. Fetch Position Risk & Reconcile Active Positions for StrategyEngine
-        if ("getConfig" in strategyEngine && typeof strategyEngine.getConfig === "function") {
+        // 4. State Hydration & Orphaned Position Guard SL/TP Injection
+        if ("syncExchangeState" in strategyEngine && typeof strategyEngine.syncExchangeState === "function") {
+            await strategyEngine.syncExchangeState();
+        }
+        else if ("getConfig" in strategyEngine && typeof strategyEngine.getConfig === "function") {
             const symbol = strategyEngine.getConfig().symbol;
             const positions = await executionClient.getPositionRisk(symbol);
             if (Array.isArray(positions)) {
                 strategyEngine.reconcileStartupPositions(positions);
-                // Update Risk Guard position notional baseline
-                let totalNotional = 0;
-                for (const pos of positions) {
-                    if (pos.symbol === symbol) {
-                        const amt = Math.abs(parseFloat(pos.positionAmt || "0"));
-                        const entryPx = parseFloat(pos.entryPrice || "0");
-                        if (amt > 0 && entryPx > 0) {
-                            totalNotional += amt * entryPx;
-                        }
-                    }
-                }
-                riskGuard.updatePositionNotional(totalNotional);
             }
         }
         else if (strategyEngine instanceof multiEngine_1.MultiAssetStrategyEngine) {

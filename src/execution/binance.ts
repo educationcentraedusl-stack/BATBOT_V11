@@ -535,6 +535,12 @@ export class BinanceExecutionClient {
     return this.request<BinancePositionRisk[]>("GET", "/fapi/v2/positionRisk", params, true);
   }
 
+  public async getOpenOrders(symbol?: string): Promise<BinanceOrderResponse[]> {
+    const params: Record<string, string> = {};
+    if (symbol) params.symbol = symbol;
+    return this.request<BinanceOrderResponse[]>("GET", "/fapi/v1/openOrders", params, true);
+  }
+
   public async getAccountBalance(): Promise<BinanceAccountBalance[]> {
     return this.request<BinanceAccountBalance[]>("GET", "/fapi/v2/account", {}, true);
   }

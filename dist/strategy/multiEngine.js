@@ -59,6 +59,28 @@ class MultiAssetStrategyEngine {
         }
         return anySuccess;
     }
+    async syncExchangeState() {
+        console.log(`[MultiAssetStrategyEngine][StateSync] Initiating multi-asset state hydration across ${this.engines.size} active symbol engines...`);
+        if (!this.executionClient.isConfigured()) {
+            console.log("[MultiAssetStrategyEngine][StateSync] BinanceExecutionClient unconfigured. Skipping state sync.");
+            return;
+        }
+        for (const engine of this.engines.values()) {
+            await engine.syncExchangeState();
+        }
+        let totalNotional = 0;
+        this.riskGuard.resetSymbolNotionals();
+        for (const [symbol, engine] of this.engines.entries()) {
+            const summary = engine.getHedgeLedger().getSummary(0);
+            if (summary.side !== "FLAT" && summary.netQuantity > 0) {
+                const symbolGrossNotional = summary.netQuantity * summary.averageEntryPrice;
+                totalNotional += symbolGrossNotional;
+                this.riskGuard.updateSymbolNotional(symbol, symbolGrossNotional);
+            }
+        }
+        this.riskGuard.updatePositionNotional(totalNotional);
+        console.log(`[MultiAssetStrategyEngine][StateSync] Multi-asset state hydration complete. Active Portfolio Gross Notional: $${totalNotional.toFixed(2)} USDT`);
+    }
     reconcileStartupPositions(positions) {
         let totalNotional = 0;
         this.riskGuard.resetSymbolNotionals();

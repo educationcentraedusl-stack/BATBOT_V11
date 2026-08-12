@@ -8,13 +8,14 @@ async function testStateRecovery() {
   console.log("RUNNING STARTUP STATE RECOVERY VERIFICATION TEST");
   console.log("=================================================");
 
-  const sab = new SharedArrayBuffer(2048);
+  const sab = new SharedArrayBuffer(20480);
   const client = new MarketDataClient(sab);
   const riskGuard = new RiskGuard();
   const executionClient = new BinanceExecutionClient();
 
   const strategyEngine = new StrategyEngine(client, riskGuard, executionClient, {
     symbol: "ETHUSDT",
+    assetIndex: 0,
     orderQuantity: 0.038,
     longTakeProfitPercent: 0.35,
     longStopLossPercent: 0.25,
@@ -82,21 +83,23 @@ async function testStateRecovery() {
   }
   console.log("✓ Test 2 Passed: PositionLedger summary correctly aligned with recovered position.");
 
-  // 4. Verify dynamic TP monitoring resumption in evaluateTick
-  // Set prices above TP threshold (1875.22 * 1.0035 = 1881.78)
-  const floatView = new Float64Array(sab, 0, 16);
-  const bigIntView = new BigInt64Array(sab, 0, 16);
+  // Write seq #1 in Slot 92 and Best Bid = 1882.0 (Slot 4), Best Ask = 1882.5 (Slot 6)
+  const bitBuf = new ArrayBuffer(8);
+  const fView = new Float64Array(bitBuf);
+  const bView = new BigInt64Array(bitBuf);
 
-  // Store seq #1
-  bigIntView[0] = 1n;
-  // Store Best Bid = 1882.0, Best Ask = 1882.5
-  floatView[3] = 1882.0;
-  floatView[4] = 1882.5;
+  Atomics.store(new BigInt64Array(sab), 92, 1n);
+
+  fView[0] = 1882.0;
+  Atomics.store(new BigInt64Array(sab), 4, bView[0]);
+
+  fView[0] = 1882.5;
+  Atomics.store(new BigInt64Array(sab), 6, bView[0]);
 
   const tickResult = strategyEngine.evaluateTick();
   console.log(`Tick Result Signal: ${tickResult.signalType}, PositionSide: ${tickResult.positionSide}, ExitReason: ${tickResult.exitReason}`);
 
-  if (tickResult.signalType !== "SELL" || tickResult.positionSide !== "LONG" || tickResult.exitReason !== "TAKE_PROFIT") {
+  if (tickResult.signalType !== "SELL" || tickResult.positionSide !== "LONG" || !tickResult.exitReason?.startsWith("TAKE_PROFIT")) {
     throw new Error(`FAIL: AI monitoring loop failed to trigger dynamic exit for recovered position! Got: ${tickResult.exitReason}`);
   }
   console.log("✓ Test 3 Passed: AI Monitoring Loop dynamically intercepted and triggered TAKE_PROFIT exit for recovered trade.");

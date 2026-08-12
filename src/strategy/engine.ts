@@ -420,6 +420,113 @@ export class StrategyEngine {
     );
   }
 
+  /**
+   * Phase 3 Emergency Remediation: State Hydration & Orphaned Position Guard.
+   * Runs strictly ONCE during startup initialization before WebSocket feeds open.
+   * Queries Binance Futures REST API (GET /fapi/v2/positionRisk & openOrders),
+   * maps active positions to PositionLedger, HedgePositionLedger & SAB slots,
+   * and attaches dynamic Phase 2 volatility SL/TP to any unprotected orphaned trades.
+   */
+  public async syncExchangeState(): Promise<void> {
+    if (!this.executionClient.isConfigured()) {
+      console.log(`[StrategyEngine][StateSync] BinanceExecutionClient unconfigured for ${this.config.symbol}. Skipping state sync.`);
+      return;
+    }
+
+    try {
+      console.log(`[StrategyEngine][StateSync] Syncing exchange state & open orders for ${this.config.symbol}...`);
+      const [positions, openOrders] = await Promise.all([
+        this.executionClient.getPositionRisk(this.config.symbol),
+        this.executionClient.getOpenOrders(this.config.symbol),
+      ]);
+
+      const activePositions = (Array.isArray(positions) ? positions : []).filter(
+        (pos) => pos.symbol === this.config.symbol && Math.abs(parseFloat(pos.positionAmt || "0")) > 0
+      );
+
+      const symbolOpenOrders = Array.isArray(openOrders)
+        ? openOrders.filter((o) => o.symbol === this.config.symbol)
+        : [];
+
+      if (activePositions.length === 0) {
+        console.log(`[StrategyEngine][StateSync] Binance position state: FLAT (0.0000) for ${this.config.symbol}.`);
+        this.client.setOmsPositionQty(0, this.assetIndex);
+        this.client.setOmsAvgEntryPrice(0, this.assetIndex);
+        return;
+      }
+
+      // Reconcile active position(s) into internal ledgers
+      this.reconcileStartupPositions(activePositions);
+
+      // Map position metrics into SharedArrayBuffer slots
+      const summary = this.hedgeLedger.getSummary(0);
+      const netSignedQty = summary.side === "SHORT" ? -summary.netQuantity : summary.netQuantity;
+      this.client.setOmsPositionQty(netSignedQty, this.assetIndex);
+      this.client.setOmsAvgEntryPrice(summary.averageEntryPrice, this.assetIndex);
+      this.client.setOmsRealizedPnl(summary.cumulativeRealizedPnl, this.assetIndex);
+      this.client.setOmsUnrealizedPnl(0, this.assetIndex);
+      this.client.setOmsLeverage(this.config.leverageMultiplier, this.assetIndex);
+      this.client.setOmsTotalTrades(summary.totalTrades, this.assetIndex);
+      this.client.setOmsWinningTrades(summary.winningTrades, this.assetIndex);
+      this.client.setOmsLosingTrades(summary.losingTrades, this.assetIndex);
+
+      // ORPHANED POSITION GUARD: Inject dynamic SL/TP if position lacks exchange orders
+      for (const pos of activePositions) {
+        const qty = Math.abs(parseFloat(pos.positionAmt || "0"));
+        const entryPx = parseFloat(pos.entryPrice || "0");
+        if (qty <= 0 || entryPx <= 0) continue;
+
+        const posSide: "LONG" | "SHORT" =
+          pos.positionSide === "LONG" || (pos.positionSide === "BOTH" && parseFloat(pos.positionAmt || "0") > 0)
+            ? "LONG"
+            : "SHORT";
+
+        const exitSide = posSide === "LONG" ? "SELL" : "BUY";
+        const hasSlTpOrder = symbolOpenOrders.some((ord) => {
+          const isMatchSide = ord.side === exitSide;
+          const isSlTpType =
+            ord.type === "STOP_MARKET" ||
+            ord.type === "TAKE_PROFIT_MARKET" ||
+            ord.type === "LIMIT" ||
+            ord.reduceOnly === true;
+          return isMatchSide && isSlTpType;
+        });
+
+        if (!hasSlTpOrder) {
+          console.warn(
+            `[ORPHAN_GUARD] Active ${posSide} position on ${this.config.symbol} (${qty} @ $${entryPx}) is UNPROTECTED on exchange!`
+          );
+
+          // Dynamic Volatility-Based SL/TP (Phase 2 Formulas)
+          const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
+          const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
+          const dynamicSlPct = Math.max(0.005, volEstimate * 2.0);
+          const dynamicSlPercent = dynamicSlPct * 100;
+          const dynamicTpPercent = posSide === "LONG" ? this.config.longTakeProfitPercent : this.config.shortTakeProfitPercent;
+
+          const slotId = posSide === "LONG" ? "CORE_LONG" : "SHORT_SLOT_0";
+
+          if (posSide === "LONG") {
+            this.hedgeLedger.occupyCoreLong(qty, entryPx, dynamicTpPercent, dynamicSlPercent);
+          } else {
+            this.hedgeLedger.occupyShortSlot(0, qty, entryPx, dynamicTpPercent, dynamicSlPercent);
+          }
+
+          // Attach and dispatch protective POST_ONLY TP limit order batch to Binance
+          await this.dispatchBatchPostOnlyTpOrders(slotId, entryPx, qty, posSide);
+
+          console.log(
+            `[ORPHAN_GUARD][DISPATCHED] Dynamic Volatility SL/TP attached to ${this.config.symbol} ${posSide} position: SL=${dynamicSlPercent.toFixed(2)}%, TP=${dynamicTpPercent.toFixed(2)}%`
+          );
+        } else {
+          console.log(`[ORPHAN_GUARD] Active ${posSide} position on ${this.config.symbol} has active exchange protective order(s).`);
+        }
+      }
+    } catch (err: any) {
+      console.error(`[StrategyEngine][StateSync][ERROR] Failed to sync exchange state for ${this.config.symbol}: ${err.message}`);
+    }
+  }
+
   public reconcileStartupPositions(rawPositions: BinancePositionRisk[]): void {
     if (!Array.isArray(rawPositions) || rawPositions.length === 0) {
       console.log(`[StrategyEngine][StateRecovery] No active positions returned from Binance REST API for ${this.config.symbol}.`);

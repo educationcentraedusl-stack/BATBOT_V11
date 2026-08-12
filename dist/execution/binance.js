@@ -396,6 +396,12 @@ class BinanceExecutionClient {
             params.symbol = symbol;
         return this.request("GET", "/fapi/v2/positionRisk", params, true);
     }
+    async getOpenOrders(symbol) {
+        const params = {};
+        if (symbol)
+            params.symbol = symbol;
+        return this.request("GET", "/fapi/v1/openOrders", params, true);
+    }
     async getAccountBalance() {
         return this.request("GET", "/fapi/v2/account", {}, true);
     }
