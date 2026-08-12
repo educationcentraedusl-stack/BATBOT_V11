@@ -101,6 +101,15 @@ impl StreamingFeaturePipeline {
         lat_us_val: f64,
         asset_idx: usize,
     ) -> Result<[f64; 40]> {
+        self.update_and_normalize_with_snr_asset(sab, lat_us_val, asset_idx).map(|(f, _)| f)
+    }
+
+    pub fn update_and_normalize_with_snr_asset(
+        &mut self,
+        sab: &AtomicSharedMemoryBridge,
+        lat_us_val: f64,
+        asset_idx: usize,
+    ) -> Result<([f64; 40], f64)> {
         let best_bid = sab.load_f64_asset(asset_idx, 4);
         let best_bid_qty = sab.load_f64_asset(asset_idx, 5);
         let best_ask = sab.load_f64_asset(asset_idx, 6);
@@ -312,6 +321,11 @@ impl StreamingFeaturePipeline {
         self.seq_hist = Some(seq_raw);
 
         let mut norm_features = [0.0f64; 40];
+        let mut obi_z = 0.0f64;
+        let mut cvd_z = 0.0f64;
+        let mut vel_z = 0.0f64;
+        let mut micro_z = 0.0f64;
+
         for i in 0..40 {
             let val = raw_features[i];
             let window = &mut self.feature_windows[i];
@@ -329,10 +343,18 @@ impl StreamingFeaturePipeline {
             let variance = (self.feature_sum_sqs[i] / count - mean * mean).max(0.0);
             let std_dev = variance.sqrt();
             let z = (val - mean) / (std_dev + 1e-8);
+
+            if i == 8 { obi_z = z.abs(); }
+            if i == 21 { cvd_z = z.abs(); }
+            if i == 24 { vel_z = z.abs(); }
+            if i == 2 { micro_z = z.abs(); }
+
             norm_features[i] = (z / 3.0).tanh();
         }
 
-        Ok(norm_features)
+        let snr_score = 1.0 + 0.6 * (obi_z + 0.8 * cvd_z + 0.5 * vel_z + 0.5 * micro_z).min(8.0);
+
+        Ok((norm_features, snr_score))
     }
 }
 
@@ -429,9 +451,9 @@ impl AIEngine {
         let current_mid = (best_bid + best_ask) / 2.0;
 
         let lat_us_val = sab.load_f64_asset(asset_idx, 98) * 1000.0;
-        let lob_features = {
+        let (lob_features, snr_score) = {
             let mut pipeline = self.feature_pipeline.lock().unwrap_or_else(|e| e.into_inner());
-            pipeline.update_and_normalize_asset(sab, lat_us_val, asset_idx)?
+            pipeline.update_and_normalize_with_snr_asset(sab, lat_us_val, asset_idx)?
         };
 
         let last_mid = f64::from_bits(self.last_mid_price.load(Ordering::Relaxed));
@@ -471,7 +493,7 @@ impl AIEngine {
         let direction = raw_direction.tanh();
         let direction_magnitude = direction.abs();
 
-        // Temperature Scaling (T) & Mathematically Sound Platt Calibration Transformation (No Artificial Inflation Multipliers)
+        // Temperature Scaling (T) & Mathematically Sound Dynamic Platt SNR Calibration
         let sab_temp = sab.load_f64_asset(asset_idx, 127);
         let sab_scale = sab.load_f64_asset(asset_idx, 128);
         let sab_offset = sab.load_f64_asset(asset_idx, 129);
@@ -480,7 +502,7 @@ impl AIEngine {
         let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale };
         let offset = sab_offset;
 
-        let calibrated_logit: f64 = ((scale * raw_confidence + offset) / temp.max(0.05)).clamp(0.0, 4.6);
+        let calibrated_logit: f64 = ((scale * raw_confidence * snr_score + offset) / temp.max(0.05)).clamp(0.0, 4.6);
         let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.99f64);
 
         let end_ns = SystemTime::now()

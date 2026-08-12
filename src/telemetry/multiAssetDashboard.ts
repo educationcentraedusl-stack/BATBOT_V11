@@ -206,7 +206,7 @@ export class MultiAssetCLIDashboard {
       const aiConf = this.client.getAIPredictionConfidence(i);
       let rawConf = (aiConf * 100).toFixed(1) + "%";
       if (rawConf.length > 5) rawConf = rawConf.substring(0, 5);
-      const confColor = aiConf >= 0.75 ? yellow : aiConf >= 0.65 ? cyan : gray;
+      const confColor = aiConf >= 0.75 ? green + bold : aiConf >= 0.65 ? yellow : aiConf >= 0.55 ? cyan : gray;
       const confStr = " " + confColor + rawConf.padStart(5) + reset + " ";
 
       const obiBuyThreshold = 0.35;
