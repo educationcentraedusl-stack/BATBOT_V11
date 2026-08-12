@@ -190,11 +190,11 @@ class MultiAssetCLIDashboard {
                 const obiScore = Math.max(-1.0, Math.min(1.0, obi));
                 const cvdScore = cvd > 0 ? 1.0 : cvd < 0 ? -1.0 : 0.0;
                 const compScore = 0.50 * aiScore + 0.25 * obiScore + 0.25 * cvdScore;
-                if (compScore > 0.12 && aiConf >= 0.65 && obi >= obiBuyThreshold) {
+                if (compScore > 0.12 && aiConf >= 0.52 && obi >= obiBuyThreshold) {
                     signalText = "BUY";
                     signalColor = green;
                 }
-                else if (compScore < -0.12 && aiConf >= 0.65 && obi <= obiSellThreshold) {
+                else if (compScore < -0.12 && aiConf >= 0.52 && obi <= obiSellThreshold) {
                     signalText = "SELL";
                     signalColor = red;
                 }

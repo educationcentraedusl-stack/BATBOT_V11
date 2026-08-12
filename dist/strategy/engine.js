@@ -565,8 +565,18 @@ class StrategyEngine {
         const isHighConfidenceAi = aiConfidence >= this.config.aggressiveConfidenceThreshold;
         let isBuySignal = false;
         let isSellSignal = false;
-        // Directional Conviction Floor: Reject micro-noise predictions with magnitude < 0.15
-        const isConvictionValid = aiDirectionMag >= 0.15 && Math.abs(aiDirection) >= 0.15;
+        // SOTA Dynamic Volatility-Normalized Conviction Floor Gate (K_conviction)
+        // Eradicates static 0.15 floor. Uses Garman-Klass volatility, Bid-Ask Half-Spread, and Hawkes Intensity.
+        const midPrice = askPrice > 0 && bidPrice > 0 ? (bidPrice + askPrice) / 2.0 : 1.0;
+        const halfSpreadBps = midPrice > 0 ? ((askPrice - bidPrice) / (2.0 * midPrice)) : 0.0001;
+        const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
+        const hawkesMultiplier = 1.0 + 0.2 * Math.log(1.0 + Math.max(0, hawkesIntensity));
+        // Dynamic Conviction Floor: K_conviction(t)
+        const dynamicConvictionFloor = Math.max(halfSpreadBps, 0.5 * volEstimate * hawkesMultiplier);
+        // Volatility-Standardized Z-Score of the signal
+        const zScore = aiDirectionMag / Math.max(volEstimate, 0.0001);
+        // Dynamic Conviction Authorization: Pass if signal >= dynamicConvictionFloor OR Z-Score >= 1.0
+        const isConvictionValid = aiDirectionMag >= dynamicConvictionFloor || zScore >= 1.0;
         if (isConvictionValid) {
             if (isHighConfidenceAi) {
                 // AI-Override Rule: High-confidence AI must also satisfy strict OBI directional pressure threshold (+/- 0.35)
@@ -583,7 +593,7 @@ class StrategyEngine {
             }
         }
         else if (seq % 1000n === 0n) {
-            console.log(`[StrategyEngine][CONVICTION_FLOOR_GATE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)} < 0.15 floor) -> Signals Filtered`);
+            console.log(`[StrategyEngine][CONVICTION_FLOOR_GATE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)} < DynamicFloor: ${dynamicConvictionFloor.toFixed(4)}, Z-Score: ${zScore.toFixed(2)} < 1.0) -> Signals Filtered`);
         }
         // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
         const isCoreLongOccupied = this.hedgeLedger.getCoreLong().isOccupied;

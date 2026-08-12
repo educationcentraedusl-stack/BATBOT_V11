@@ -488,12 +488,18 @@ impl AIEngine {
         let flat_out = output_tensor.flatten_all()?;
         let num_elems = flat_out.elem_count();
         let raw_direction = if num_elems > 0 { flat_out.get(0)?.to_scalar::<f32>()? as f64 } else { 0.0 };
-        let raw_confidence = if num_elems > 1 { flat_out.get(1)?.to_scalar::<f32>()? as f64 } else { raw_direction.abs() };
+        let _raw_confidence = if num_elems > 1 { flat_out.get(1)?.to_scalar::<f32>()? as f64 } else { raw_direction.abs() };
         let horizon_ms = if num_elems > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
         let direction = raw_direction.tanh();
         let direction_magnitude = direction.abs();
 
-        // Temperature Scaling (T) & Mathematically Sound Dynamic Platt SNR Calibration
+        // Garman-Klass Volatility & Signal Z-Score (Z_signal)
+        let gk_rv = sab.load_f64_asset(asset_idx, 121);
+        let gk_vol = if gk_rv > 0.000001 { gk_rv.sqrt() } else { 0.005 };
+        let z_score = direction_magnitude / gk_vol.max(0.0001);
+
+        // Temperature Scaling (T) & SOTA Dynamic Platt SNR Calibration Formula:
+        // calibrated_logit = (alpha * z_score + beta * snr + obi_align + offset) / temperature
         let sab_temp = sab.load_f64_asset(asset_idx, 127);
         let sab_scale = sab.load_f64_asset(asset_idx, 128);
         let sab_offset = sab.load_f64_asset(asset_idx, 129);
@@ -502,7 +508,12 @@ impl AIEngine {
         let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale };
         let offset = sab_offset;
 
-        let calibrated_logit: f64 = ((scale * raw_confidence * snr_score + offset) / temp.max(0.05)).clamp(0.0, 4.6);
+        let alpha = scale.max(1.0);
+        let beta = 0.8;
+        let obi = sab.load_f64_asset(asset_idx, 1);
+        let obi_align = obi * direction.signum();
+
+        let calibrated_logit: f64 = ((alpha * z_score + beta * snr_score + obi_align * 0.5 + offset) / temp.max(0.05)).clamp(0.0, 4.6);
         let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.99f64);
 
         let end_ns = SystemTime::now()
