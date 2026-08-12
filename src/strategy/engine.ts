@@ -130,9 +130,9 @@ export class StrategyEngine {
     const envVpinBucketVolume = process.env.VPIN_BUCKET_VOLUME ? parseFloat(process.env.VPIN_BUCKET_VOLUME) : NaN;
 
     const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 0.45;
-    const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 0.15;
+    const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 0.50;
     const defaultShortTp = !isNaN(envShortTp) ? envShortTp : 0.45;
-    const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.15;
+    const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.50;
     const defaultProfitLock = !isNaN(envProfitLock) ? envProfitLock : 10.0;
     const defaultMaxShortSlots = !isNaN(envMaxShortSlots) ? envMaxShortSlots : 3;
     const defaultMinAiConfidence = !isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.65;
@@ -755,14 +755,15 @@ export class StrategyEngine {
       let isSellSignal = false;
 
       // SOTA Dynamic Volatility-Normalized Conviction Floor Gate (K_conviction)
-      // Eradicates static 0.15 floor. Uses Garman-Klass volatility, Bid-Ask Half-Spread, and Hawkes Intensity.
+      // Eradicates micro-return fee traps. Explicitly includes round-trip exchange fees (10 bps) + half spread.
+      const ROUND_TRIP_FEE_BPS = 0.001; // 10 bps mandatory exchange fee floor
       const midPrice = askPrice > 0 && bidPrice > 0 ? (bidPrice + askPrice) / 2.0 : 1.0;
       const halfSpreadBps = midPrice > 0 ? ((askPrice - bidPrice) / (2.0 * midPrice)) : 0.0001;
       const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
       const hawkesMultiplier = 1.0 + 0.2 * Math.log(1.0 + Math.max(0, hawkesIntensity));
       
-      // Dynamic Conviction Floor: K_conviction(t)
-      const dynamicConvictionFloor = Math.max(halfSpreadBps, 0.5 * volEstimate * hawkesMultiplier);
+      // Dynamic Conviction Floor: K_conviction(t) MUST exceed half spread + round trip fees
+      const dynamicConvictionFloor = Math.max(halfSpreadBps + ROUND_TRIP_FEE_BPS, 0.5 * volEstimate * hawkesMultiplier);
       
       // Volatility-Standardized Z-Score of the signal
       const zScore = aiDirectionMag / Math.max(volEstimate, 0.0001);

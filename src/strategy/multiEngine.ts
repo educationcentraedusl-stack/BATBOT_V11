@@ -185,7 +185,7 @@ export class MultiAssetStrategyEngine {
       const hawkes = this.client.getHawkesIntensity(assetIdx);
 
       let signalType: "NONE" | "BUY" | "SELL" = "NONE";
-      let confidence = 0;
+      let confidence = this.client.getAIPredictionConfidence(assetIdx);
       let isApproved = false;
       let rejectReason: string | undefined = undefined;
 
@@ -195,11 +195,9 @@ export class MultiAssetStrategyEngine {
         rejectReason = "REJECTED_COUNTER_TREND_REGIME";
       } else if (obi >= 0.35 && cvd >= 0.0 && hawkes >= 0.5) {
         signalType = "BUY";
-        confidence = Math.min(0.99, 0.5 + obi * 0.3 + (hurst - 0.45) * 0.5);
         isApproved = true;
       } else if (obi <= -0.35 && cvd <= 0.0 && hawkes >= 0.5) {
         signalType = "SELL";
-        confidence = Math.min(0.99, 0.5 + Math.abs(obi) * 0.3 + (hurst - 0.45) * 0.5);
         isApproved = true;
       }
 

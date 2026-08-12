@@ -498,8 +498,9 @@ impl AIEngine {
         let gk_vol = if gk_rv > 0.000001 { gk_rv.sqrt() } else { 0.005 };
         let z_score = direction_magnitude / gk_vol.max(0.0001);
 
-        // Temperature Scaling (T) & SOTA Dynamic Platt SNR Calibration Formula:
-        // calibrated_logit = (alpha * z_score + beta * snr + obi_align + offset) / temperature
+        // Temperature Scaling (T) & Genuine Platt Calibration Formula:
+        // SNR scales prediction magnitude (z_score), eliminating artificial additive terms (+ beta * snr_score).
+        // Logit is unconstrained on the lower bound, allowing negative logits when conviction is weak (confidence < 50%).
         let sab_temp = sab.load_f64_asset(asset_idx, 127);
         let sab_scale = sab.load_f64_asset(asset_idx, 128);
         let sab_offset = sab.load_f64_asset(asset_idx, 129);
@@ -509,13 +510,17 @@ impl AIEngine {
         let offset = sab_offset;
 
         let alpha = scale.max(1.0);
-        let beta = 0.8;
         let obi = sab.load_f64_asset(asset_idx, 1);
         let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
         let obi_align = obi * direction_sign;
 
-        let calibrated_logit: f64 = ((alpha * z_score + beta * snr_score + obi_align * 0.5 + offset) / temp.max(0.05)).clamp(0.0, 4.6);
-        let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.99f64);
+        // SNR scales conviction magnitude (z_score - 1.0) rather than adding a raw bias constant
+        let snr_scalar = (snr_score / 2.0).clamp(0.2, 2.5);
+        let net_conviction_z = (z_score - 1.0) * snr_scalar;
+
+        // Unconstrained logit allows natural negative values when conviction is weak (z_score < 1.0)
+        let calibrated_logit: f64 = ((alpha * net_conviction_z + obi_align * 0.5 + offset) / temp.max(0.05)).clamp(-10.0, 4.6);
+        let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.01f64, 0.99f64);
 
         let end_ns = SystemTime::now()
             .duration_since(UNIX_EPOCH)

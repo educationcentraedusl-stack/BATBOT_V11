@@ -1113,11 +1113,8 @@ export class HedgePositionLedger {
         }
       }
 
-      // 30-Second Minimum Holding Time Hysteresis: Protect against microburst churn
-      const isHoldingHysteresisCleared = holdingTimeMs >= 30000;
-
-      // 1. Evaluate 5-Stage Partial Take Profits (ONLY if no active exchange limit TP orders are registered & holding time >= 30s)
-      if (isHoldingHysteresisCleared && !hasActiveLimitOrders && tpPrices.length === 5) {
+      // 1. Symmetrical Immediate Take-Profit Evaluation (Zero Holding Time Hysteresis - Symmetrical to SL)
+      if (!hasActiveLimitOrders && tpPrices.length === 5) {
         // TP1 (+20% ROI Target)
         if (stage < 1 && ((isLong && markPrice >= tpPrices[0]) || (!isLong && markPrice <= tpPrices[0]))) {
           slot.tpStageReached = 1;
@@ -1242,8 +1239,8 @@ export class HedgePositionLedger {
         return;
       }
 
-      // 3. Fallback Standard TP Percent Check (ONLY if no active exchange limit TP orders are registered & holding time >= 30s)
-      if (isHoldingHysteresisCleared && !hasActiveLimitOrders) {
+      // 3. Fallback Standard TP Percent Check (Symmetrical Immediate Exit - Zero Time Barrier)
+      if (!hasActiveLimitOrders) {
         const pnlPct = isLong
           ? ((markPrice - slot.entryPrice) / slot.entryPrice) * 100
           : ((slot.entryPrice - markPrice) / slot.entryPrice) * 100;

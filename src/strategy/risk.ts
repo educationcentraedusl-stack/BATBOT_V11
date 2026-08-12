@@ -151,11 +151,9 @@ export class RiskGuard {
       }
     }
 
-    // 2.2 Fee & Spread Friction Guard: Target Return >= 2.5 * (MakerFee + TakerFee)
+    // 2.2 Fee & Spread Friction Guard: Target Return >= 0.50% (50 bps Minimum Breathing Room)
     if (!intent.isCloseOrder && !intent.isHardStop && intent.price > 0) {
-      const makerFee = 0.0002;
-      const takerFee = 0.0004;
-      const minFrictionFloorPct = 2.5 * (makerFee + takerFee); // 0.0015 (0.15%)
+      const minFrictionFloorPct = 0.005; // 0.005 (0.50% / 50 bps minimum floor)
 
       if (intent.takeProfitPrice !== undefined && intent.takeProfitPrice > 0) {
         const returnPct = Math.abs(intent.takeProfitPrice - intent.price) / intent.price;
