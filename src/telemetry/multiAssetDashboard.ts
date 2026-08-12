@@ -85,24 +85,30 @@ export class MultiAssetCLIDashboard {
     if (this.isConsoleIntercepted) return;
     this.isConsoleIntercepted = true;
 
+    const safeStringify = (arg: any): string => {
+      if (typeof arg === "string") return arg;
+      if (typeof arg === "object" && arg !== null) {
+        try {
+          return JSON.stringify(arg, (_, val) => (typeof val === "bigint" ? val.toString() : val));
+        } catch {
+          return String(arg);
+        }
+      }
+      return String(arg);
+    };
+
     console.log = (...args: any[]) => {
-      const msg = args
-        .map((a) => (typeof a === "string" ? a : typeof a === "object" ? JSON.stringify(a) : String(a)))
-        .join(" ");
+      const msg = args.map(safeStringify).join(" ");
       this.pushNotification(msg);
     };
 
     console.warn = (...args: any[]) => {
-      const msg = args
-        .map((a) => (typeof a === "string" ? a : typeof a === "object" ? JSON.stringify(a) : String(a)))
-        .join(" ");
+      const msg = args.map(safeStringify).join(" ");
       this.pushNotification(`\x1b[33m[WARN] ${msg}\x1b[0m`);
     };
 
     console.error = (...args: any[]) => {
-      const msg = args
-        .map((a) => (typeof a === "string" ? a : typeof a === "object" ? JSON.stringify(a) : String(a)))
-        .join(" ");
+      const msg = args.map(safeStringify).join(" ");
       this.pushNotification(`\x1b[31m[ERROR] ${msg}\x1b[0m`);
     };
   }
@@ -125,9 +131,12 @@ export class MultiAssetCLIDashboard {
   private formatCell(val: string, width: number, alignRight: boolean = true): string {
     const plainVal = val.replace(/\x1b\[[0-9;]*m/g, "");
     if (plainVal.length > width) {
-      return plainVal.substring(0, width);
+      const truncatedPlain = plainVal.substring(0, width);
+      return alignRight ? truncatedPlain.padStart(width) : truncatedPlain.padEnd(width);
     }
-    return alignRight ? plainVal.padStart(width) : plainVal.padEnd(width);
+    const padLen = width - plainVal.length;
+    const padding = " ".repeat(padLen);
+    return alignRight ? padding + val : val + padding;
   }
 
   /**

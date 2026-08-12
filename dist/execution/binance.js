@@ -248,7 +248,7 @@ class BinanceExecutionClient {
             return false;
         }
     }
-    async placeOrder(params) {
+    async placeOrder(params, retryCount = 0) {
         const formattedQty = params.quantity;
         const payload = {
             symbol: params.symbol,
@@ -293,30 +293,26 @@ class BinanceExecutionClient {
         }
         catch (err) {
             const errMsg = err?.message || String(err);
-            if (params.timeInForce === "GTX" && (errMsg.includes("-5022") || errMsg.includes("5022"))) {
+            if ((errMsg.includes("-5022") || errMsg.includes("5022")) && retryCount < 2) {
                 const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(params.symbol);
                 const currentPrice = params.price || 0;
                 // Shift 1 tick away from spread to guarantee Maker placement
                 const adjustedPrice = params.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
                 const newPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, adjustedPrice);
-                console.warn(`[BinanceExecutionClient][-5022 REJECTION] POST_ONLY order for ${params.symbol} ${params.side} @ ${currentPrice} crossed spread. Shifting 1 tick away to ${newPrice} and retrying...`);
-                try {
+                if (retryCount === 0 && params.timeInForce === "GTX") {
+                    console.warn(`[BinanceExecutionClient][-5022 REJECTION] POST_ONLY order for ${params.symbol} ${params.side} @ ${currentPrice} crossed spread. Shifting 1 tick away to ${newPrice} and retrying...`);
                     return await this.placeOrder({
                         ...params,
                         price: newPrice,
-                    });
+                    }, 1);
                 }
-                catch (retryErr) {
-                    const retryErrMsg = retryErr?.message || String(retryErr);
-                    if (retryErrMsg.includes("-5022") || retryErrMsg.includes("5022")) {
-                        console.warn(`[BinanceExecutionClient][-5022 FALLBACK] GTX retry failed for ${params.symbol}. Falling back to standard LIMIT (GTC) order @ ${newPrice} to safeguard position...`);
-                        return await this.placeOrder({
-                            ...params,
-                            price: newPrice,
-                            timeInForce: "GTC",
-                        });
-                    }
-                    throw retryErr;
+                else if (retryCount === 1) {
+                    console.warn(`[BinanceExecutionClient][-5022 FALLBACK] GTX retry failed for ${params.symbol}. Falling back to standard LIMIT (GTC) order @ ${newPrice} to safeguard position...`);
+                    return await this.placeOrder({
+                        ...params,
+                        price: newPrice,
+                        timeInForce: "GTC",
+                    }, 2);
                 }
             }
             throw err;

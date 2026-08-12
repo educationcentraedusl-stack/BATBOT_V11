@@ -361,7 +361,7 @@ export class BinanceExecutionClient {
     }
   }
 
-  public async placeOrder(params: BinanceOrderParams): Promise<BinanceOrderResponse> {
+  public async placeOrder(params: BinanceOrderParams, retryCount: number = 0): Promise<BinanceOrderResponse> {
     const formattedQty = params.quantity;
     const payload: Record<string, string | number | boolean> = {
       symbol: params.symbol,
@@ -406,31 +406,26 @@ export class BinanceExecutionClient {
       return await this.request<BinanceOrderResponse>("POST", "/fapi/v1/order", payload, true);
     } catch (err: any) {
       const errMsg = err?.message || String(err);
-      if (params.timeInForce === "GTX" && (errMsg.includes("-5022") || errMsg.includes("5022"))) {
+      if ((errMsg.includes("-5022") || errMsg.includes("5022")) && retryCount < 2) {
         const tickSize = SymbolPrecisionRegistry.getTickSize(params.symbol);
         const currentPrice = params.price || 0;
         // Shift 1 tick away from spread to guarantee Maker placement
         const adjustedPrice = params.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
         const newPrice = SymbolPrecisionRegistry.formatPrice(params.symbol, adjustedPrice);
 
-        console.warn(`[BinanceExecutionClient][-5022 REJECTION] POST_ONLY order for ${params.symbol} ${params.side} @ ${currentPrice} crossed spread. Shifting 1 tick away to ${newPrice} and retrying...`);
-
-        try {
+        if (retryCount === 0 && params.timeInForce === "GTX") {
+          console.warn(`[BinanceExecutionClient][-5022 REJECTION] POST_ONLY order for ${params.symbol} ${params.side} @ ${currentPrice} crossed spread. Shifting 1 tick away to ${newPrice} and retrying...`);
           return await this.placeOrder({
             ...params,
             price: newPrice,
-          });
-        } catch (retryErr: any) {
-          const retryErrMsg = retryErr?.message || String(retryErr);
-          if (retryErrMsg.includes("-5022") || retryErrMsg.includes("5022")) {
-            console.warn(`[BinanceExecutionClient][-5022 FALLBACK] GTX retry failed for ${params.symbol}. Falling back to standard LIMIT (GTC) order @ ${newPrice} to safeguard position...`);
-            return await this.placeOrder({
-              ...params,
-              price: newPrice,
-              timeInForce: "GTC",
-            });
-          }
-          throw retryErr;
+          }, 1);
+        } else if (retryCount === 1) {
+          console.warn(`[BinanceExecutionClient][-5022 FALLBACK] GTX retry failed for ${params.symbol}. Falling back to standard LIMIT (GTC) order @ ${newPrice} to safeguard position...`);
+          return await this.placeOrder({
+            ...params,
+            price: newPrice,
+            timeInForce: "GTC",
+          }, 2);
         }
       }
       throw err;
@@ -501,15 +496,19 @@ export class BinanceExecutionClient {
         console.warn(`[BinanceExecutionClient][-5022 BATCH REJECTION] Batch POST_ONLY order rejected with -5022. Retrying target orders individually with 1-tick price shift...`);
         const fallbackResults: BinanceOrderResponse[] = [];
         for (const orderParams of targetOrders) {
-          const tickSize = SymbolPrecisionRegistry.getTickSize(orderParams.symbol);
-          const currentPrice = orderParams.price || 0;
-          const adjustedPrice = orderParams.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
-          const newPrice = SymbolPrecisionRegistry.formatPrice(orderParams.symbol, adjustedPrice);
-          const singleRes = await this.placeOrder({
-            ...orderParams,
-            price: newPrice,
-          });
-          fallbackResults.push(singleRes);
+          try {
+            const tickSize = SymbolPrecisionRegistry.getTickSize(orderParams.symbol);
+            const currentPrice = orderParams.price || 0;
+            const adjustedPrice = orderParams.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
+            const newPrice = SymbolPrecisionRegistry.formatPrice(orderParams.symbol, adjustedPrice);
+            const singleRes = await this.placeOrder({
+              ...orderParams,
+              price: newPrice,
+            });
+            fallbackResults.push(singleRes);
+          } catch (itemErr: any) {
+            console.error(`[BinanceExecutionClient][-5022 BATCH FALLBACK ITEM FAILED] ${itemErr?.message || String(itemErr)}`);
+          }
         }
         return fallbackResults;
       }

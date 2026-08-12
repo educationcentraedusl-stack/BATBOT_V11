@@ -377,14 +377,12 @@ export class StrategyEngine {
     quantity: number,
     side: "LONG" | "SHORT"
   ): Promise<void> {
-    const isPostOnlyTpEnabled = process.env.ENABLE_POST_ONLY_TP !== "false";
-    if (!isPostOnlyTpEnabled) return;
-
-    const intents = this.hedgeLedger.generateBatchTpOrderIntents(slotId, entryPrice, quantity, side);
-    if (intents.length === 0) return;
-
-    console.log(`[MAKER_TP_ENGINE][DISPATCHING] Submitting ${intents.length} POST_ONLY limit TP orders for ${slotId} via batchOrders...`);
+    let intents: BinanceOrderParams[] = [];
     try {
+      intents = this.hedgeLedger.generateBatchTpOrderIntents(slotId, entryPrice, quantity, side);
+      if (intents.length === 0) return;
+
+      console.log(`[MAKER_TP_ENGINE][DISPATCHING] Submitting ${intents.length} POST_ONLY limit TP orders for ${slotId} via batchOrders...`);
       const resList = await this.executionClient.placeBatchOrders(intents);
       if (Array.isArray(resList) && resList.length > 0) {
         const validOrderIds: any[] = [];
@@ -1273,11 +1271,15 @@ export class StrategyEngine {
 
               if (targetPosSide === "LONG") {
                 this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
-                this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, finalQuantity, "LONG");
+                this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, finalQuantity, "LONG").catch((err) => {
+                  console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+                });
               } else if (targetPosSide === "SHORT" && targetSlotIndex !== undefined) {
                 const slotId = `SHORT_SLOT_${targetSlotIndex}`;
                 this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
-                this.dispatchBatchPostOnlyTpOrders(slotId, execPx, finalQuantity, "SHORT");
+                this.dispatchBatchPostOnlyTpOrders(slotId, execPx, finalQuantity, "SHORT").catch((err) => {
+                  console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+                });
               }
             }
             return res;

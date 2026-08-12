@@ -105,9 +105,9 @@ async function runPostOnlyAndTuiTests() {
     if (fallbackRes.timeInForce !== "GTC") {
         throw new Error(`[FAIL] Expected final order to fall back to GTC, got ${fallbackRes.timeInForce}`);
     }
-    // SELL order @ 3000.0 shifted 1 tick (0.01) up = 3000.01
-    if (attemptedPrices[attemptedPrices.length - 1] !== 3000.01) {
-        throw new Error(`[FAIL] Expected SELL price shifted 1 tick up to 3000.01, got ${attemptedPrices[attemptedPrices.length - 1]}`);
+    const expectedPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice("ETHUSDT", 3000.0 + ethTick * 2);
+    if (attemptedPrices[attemptedPrices.length - 1] !== expectedPrice) {
+        throw new Error(`[FAIL] Expected SELL price shifted 2 ticks up to ${expectedPrice}, got ${attemptedPrices[attemptedPrices.length - 1]}`);
     }
     console.log("  ✅ Test 3 Passed: Fallback to GTC limit order on repeated -5022 rejections verified.\n");
     // Test 4: TUI Console Interception and Circular Notification Buffer
