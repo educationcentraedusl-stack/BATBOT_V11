@@ -4,7 +4,7 @@ import { BinanceExecutionClient } from "./execution/binance";
 import { StrategyEngine } from "./strategy/engine";
 
 function createMockSharedArrayBuffer(): SharedArrayBuffer {
-  const sab = new SharedArrayBuffer(2048);
+  const sab = new SharedArrayBuffer(20480);
   const view = new BigInt64Array(sab);
 
   const bitcastBuf = new ArrayBuffer(8);

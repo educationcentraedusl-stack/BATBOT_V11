@@ -6,7 +6,7 @@ const binance_1 = require("./execution/binance");
 const engine_1 = require("./strategy/engine");
 const positionLedger_1 = require("./strategy/positionLedger");
 function createMockSharedArrayBuffer() {
-    const sab = new SharedArrayBuffer(2048);
+    const sab = new SharedArrayBuffer(20480);
     const view = new BigInt64Array(sab);
     const bitcastBuf = new ArrayBuffer(8);
     const bitcastBigInt = new BigInt64Array(bitcastBuf);
@@ -47,6 +47,7 @@ async function runRuthlessHardStopTests() {
     const hedgeLedger = new positionLedger_1.HedgePositionLedger("ETHUSDT", 3);
     const engine = new engine_1.StrategyEngine(client, riskGuard, executionClient, {
         symbol: "ETHUSDT",
+        assetIndex: 0,
         orderQuantity: 0.326,
         shortTakeProfitPercent: 0.25,
         shortStopLossPercent: 0.20,

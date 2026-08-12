@@ -375,15 +375,20 @@ class BinanceExecutionClient {
                 console.warn(`[BinanceExecutionClient][-5022 BATCH REJECTION] Batch POST_ONLY order rejected with -5022. Retrying target orders individually with 1-tick price shift...`);
                 const fallbackResults = [];
                 for (const orderParams of targetOrders) {
-                    const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(orderParams.symbol);
-                    const currentPrice = orderParams.price || 0;
-                    const adjustedPrice = orderParams.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
-                    const newPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(orderParams.symbol, adjustedPrice);
-                    const singleRes = await this.placeOrder({
-                        ...orderParams,
-                        price: newPrice,
-                    });
-                    fallbackResults.push(singleRes);
+                    try {
+                        const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(orderParams.symbol);
+                        const currentPrice = orderParams.price || 0;
+                        const adjustedPrice = orderParams.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
+                        const newPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(orderParams.symbol, adjustedPrice);
+                        const singleRes = await this.placeOrder({
+                            ...orderParams,
+                            price: newPrice,
+                        });
+                        fallbackResults.push(singleRes);
+                    }
+                    catch (itemErr) {
+                        console.error(`[BinanceExecutionClient][-5022 BATCH FALLBACK ITEM FAILED] ${itemErr?.message || String(itemErr)}`);
+                    }
                 }
                 return fallbackResults;
             }

@@ -107,8 +107,8 @@ export class DynamicRiskEngine {
         volFactor * 2.0 * (1.0 + 0.5 * obiSigned) * entryPrice,
         minSpreadDistance * 3.0
       );
-      // Enforce minimum 2.01 R:R ratio floor to satisfy RiskGuard check
-      tpDistance = Math.max(tpDistance, slDistance * 2.01);
+      // Enforce minimum 2.01 R:R ratio floor and 55 bps friction defense floor
+      tpDistance = Math.max(tpDistance, slDistance * 2.01, entryPrice * 0.0055);
 
       stopLossPrice = entryPrice - slDistance;
       takeProfitPrice = entryPrice + tpDistance;
@@ -124,8 +124,8 @@ export class DynamicRiskEngine {
         volFactor * 2.0 * (1.0 - 0.5 * obiSigned) * entryPrice,
         minSpreadDistance * 3.0
       );
-      // Enforce minimum 2.01 R:R ratio floor to satisfy RiskGuard check
-      tpDistance = Math.max(tpDistance, slDistance * 2.01);
+      // Enforce minimum 2.01 R:R ratio floor and 55 bps friction defense floor
+      tpDistance = Math.max(tpDistance, slDistance * 2.01, entryPrice * 0.0055);
 
       stopLossPrice = entryPrice + slDistance;
       takeProfitPrice = entryPrice - tpDistance;

@@ -75,9 +75,9 @@ class StrategyEngine {
         const envCooldownMs = process.env.COOLDOWN_MS ? parseInt(process.env.COOLDOWN_MS, 10) : NaN;
         const envVpinThreshold = process.env.VPIN_THRESHOLD ? parseFloat(process.env.VPIN_THRESHOLD) : NaN;
         const envVpinBucketVolume = process.env.VPIN_BUCKET_VOLUME ? parseFloat(process.env.VPIN_BUCKET_VOLUME) : NaN;
-        const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 0.45;
+        const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 1.0;
         const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 0.50;
-        const defaultShortTp = !isNaN(envShortTp) ? envShortTp : 0.45;
+        const defaultShortTp = !isNaN(envShortTp) ? envShortTp : 1.0;
         const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.50;
         const defaultProfitLock = !isNaN(envProfitLock) ? envProfitLock : 10.0;
         const defaultMaxShortSlots = !isNaN(envMaxShortSlots) ? envMaxShortSlots : 3;
@@ -261,14 +261,12 @@ class StrategyEngine {
         return this.userDataStream.start();
     }
     async dispatchBatchPostOnlyTpOrders(slotId, entryPrice, quantity, side) {
-        const isPostOnlyTpEnabled = process.env.ENABLE_POST_ONLY_TP !== "false";
-        if (!isPostOnlyTpEnabled)
-            return;
-        const intents = this.hedgeLedger.generateBatchTpOrderIntents(slotId, entryPrice, quantity, side);
-        if (intents.length === 0)
-            return;
-        console.log(`[MAKER_TP_ENGINE][DISPATCHING] Submitting ${intents.length} POST_ONLY limit TP orders for ${slotId} via batchOrders...`);
+        let intents = [];
         try {
+            intents = this.hedgeLedger.generateBatchTpOrderIntents(slotId, entryPrice, quantity, side);
+            if (intents.length === 0)
+                return;
+            console.log(`[MAKER_TP_ENGINE][DISPATCHING] Submitting ${intents.length} POST_ONLY limit TP orders for ${slotId} via batchOrders...`);
             const resList = await this.executionClient.placeBatchOrders(intents);
             if (Array.isArray(resList) && resList.length > 0) {
                 const validOrderIds = [];
@@ -988,12 +986,16 @@ class StrategyEngine {
                         const dynamicSlPercent = dynamicSlPct * 100;
                         if (targetPosSide === "LONG") {
                             this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
-                            this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, finalQuantity, "LONG");
+                            this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, finalQuantity, "LONG").catch((err) => {
+                                console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+                            });
                         }
                         else if (targetPosSide === "SHORT" && targetSlotIndex !== undefined) {
                             const slotId = `SHORT_SLOT_${targetSlotIndex}`;
                             this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
-                            this.dispatchBatchPostOnlyTpOrders(slotId, execPx, finalQuantity, "SHORT");
+                            this.dispatchBatchPostOnlyTpOrders(slotId, execPx, finalQuantity, "SHORT").catch((err) => {
+                                console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+                            });
                         }
                     }
                     return res;

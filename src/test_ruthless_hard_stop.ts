@@ -16,7 +16,7 @@ function createMockSharedArrayBuffer(): {
     aiConf: number
   ) => void;
 } {
-  const sab = new SharedArrayBuffer(2048);
+  const sab = new SharedArrayBuffer(20480);
   const view = new BigInt64Array(sab);
 
   const bitcastBuf = new ArrayBuffer(8);
@@ -74,6 +74,7 @@ async function runRuthlessHardStopTests() {
 
   const engine = new StrategyEngine(client, riskGuard, executionClient, {
     symbol: "ETHUSDT",
+    assetIndex: 0,
     orderQuantity: 0.326,
     shortTakeProfitPercent: 0.25,
     shortStopLossPercent: 0.20,

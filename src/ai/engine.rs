@@ -330,9 +330,10 @@ impl StreamingFeaturePipeline {
             let val = raw_features[i];
             let window = &mut self.feature_windows[i];
             if window.len() == 1000 {
-                let old = window.pop_back().unwrap();
-                self.feature_sums[i] -= old;
-                self.feature_sum_sqs[i] -= old * old;
+                if let Some(old) = window.pop_back() {
+                    self.feature_sums[i] -= old;
+                    self.feature_sum_sqs[i] -= old * old;
+                }
             }
             window.push_front(val);
             self.feature_sums[i] += val;

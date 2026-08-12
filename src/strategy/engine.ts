@@ -135,9 +135,9 @@ export class StrategyEngine {
     const envVpinThreshold = process.env.VPIN_THRESHOLD ? parseFloat(process.env.VPIN_THRESHOLD) : NaN;
     const envVpinBucketVolume = process.env.VPIN_BUCKET_VOLUME ? parseFloat(process.env.VPIN_BUCKET_VOLUME) : NaN;
 
-    const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 0.45;
+    const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 1.0;
     const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 0.50;
-    const defaultShortTp = !isNaN(envShortTp) ? envShortTp : 0.45;
+    const defaultShortTp = !isNaN(envShortTp) ? envShortTp : 1.0;
     const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.50;
     const defaultProfitLock = !isNaN(envProfitLock) ? envProfitLock : 10.0;
     const defaultMaxShortSlots = !isNaN(envMaxShortSlots) ? envMaxShortSlots : 3;
