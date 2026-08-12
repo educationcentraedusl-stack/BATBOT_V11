@@ -615,6 +615,36 @@ export class StrategyEngine {
       const bidPrice = this.client.getBestBidPrice(this.assetIndex);
       const askPrice = this.client.getBestAskPrice(this.assetIndex);
 
+      // SPREAD & TICK GUARD: Immediately reject invalid tick data (bid <= 0, ask <= 0, bid > ask) or excessive spread BEFORE evaluating dynamic exits or signals
+      const isTickValid = askPrice > 0 && bidPrice > 0 && askPrice >= bidPrice;
+      const currentSpread = isTickValid ? askPrice - bidPrice : Infinity;
+      const maxSpreadAllowed = this.config.symbol.includes("ETH") ? this.config.maxSpreadEth : this.config.maxSpreadBtc;
+
+      if (!isTickValid || currentSpread > maxSpreadAllowed) {
+        const reasonCode = !isTickValid ? "INVALID_TICK_DATA" : "REJECTED_LIQUIDITY_SWEEP_TRAP";
+        const message = !isTickValid
+          ? `Tick evaluation rejected: invalid tick prices (bid: ${bidPrice}, ask: ${askPrice})`
+          : `Tick evaluation rejected: current spread (${currentSpread.toFixed(2)} USDT) > ${maxSpreadAllowed.toFixed(2)} USDT threshold`;
+
+        if (seq % 500n === 0n || !isTickValid) {
+          console.warn(`[StrategyEngine][SPREAD_GUARD_REJECT] Seq #${seq} | ${message}`);
+        }
+        this.staticResult.sequenceNum = seq;
+        this.staticResult.signalType = "NONE";
+        this.staticResult.obi = obi;
+        this.staticResult.cvd = cvd;
+        this.staticResult.spreadVelocity = spreadVelocity;
+        this.staticResult.bidPrice = bidPrice;
+        this.staticResult.askPrice = askPrice;
+        this.staticResult.riskResult = {
+          passed: false,
+          reasonCode,
+          message,
+        };
+        this.staticResult.executionPromise = undefined;
+        return this.staticResult;
+      }
+
       // Read AI predictions & latency metrics from SAB
       const aiDirection = this.client.getAIPredictionDirection(this.assetIndex);
       const aiConfidence = this.client.getAIPredictionConfidence(this.assetIndex);
@@ -1009,37 +1039,7 @@ export class StrategyEngine {
         }
       }
 
-      // SPREAD GUARD: Explicitly block MARKET executions if spread is invalid or exceeds configured max threshold
-      const isTickValid = askPrice > 0 && bidPrice > 0 && askPrice >= bidPrice;
-      const currentSpread = isTickValid ? askPrice - bidPrice : Infinity;
-      const maxSpreadAllowed = this.config.symbol.includes("ETH") ? this.config.maxSpreadEth : this.config.maxSpreadBtc;
-      if (
-        (orderType as string) === "MARKET" &&
-        currentSpread > maxSpreadAllowed &&
-        !this.reusableOrderIntent.isCloseOrder &&
-        !this.reusableOrderIntent.isHardStop
-      ) {
-        const reasonCode = !isTickValid ? "INVALID_TICK_DATA" : "REJECTED_LIQUIDITY_SWEEP_TRAP";
-        const message = !isTickValid
-          ? `Market execution blocked: invalid tick prices (bid: ${bidPrice}, ask: ${askPrice})`
-          : `Market execution blocked: current spread (${currentSpread.toFixed(2)} USDT) > ${maxSpreadAllowed.toFixed(2)} USDT threshold`;
 
-        console.log(`[StrategyEngine][SPREAD_GUARD_BLOCK] Seq #${seq} | ${message}`);
-        this.staticResult.sequenceNum = seq;
-        this.staticResult.signalType = "NONE";
-        this.staticResult.obi = obi;
-        this.staticResult.cvd = cvd;
-        this.staticResult.spreadVelocity = spreadVelocity;
-        this.staticResult.bidPrice = bidPrice;
-        this.staticResult.askPrice = askPrice;
-        this.staticResult.riskResult = {
-          passed: false,
-          reasonCode,
-          message,
-        };
-        this.staticResult.executionPromise = undefined;
-        return this.staticResult;
-      }
 
       // Avellaneda-Stoikov Inventory Shift: Skew sell target higher for deeper short slots
       if (signalType === "SELL" && targetSlotIndex !== undefined && targetSlotIndex > 0) {
