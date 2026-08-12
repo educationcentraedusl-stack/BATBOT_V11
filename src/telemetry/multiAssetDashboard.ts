@@ -186,11 +186,18 @@ export class MultiAssetCLIDashboard {
 
       const bid = this.client.getBestBidPrice(i);
       const ask = this.client.getBestAskPrice(i);
-      const bidStr = " " + (bid > 0 ? bid.toFixed(dec) : (0).toFixed(dec)).padStart(9) + " ";
-      const askStr = " " + (ask > 0 ? ask.toFixed(dec) : (0).toFixed(dec)).padStart(9) + " ";
 
-      const spreadVal = (ask > 0 && bid > 0 && ask >= bid) ? (ask - bid).toFixed(dec) : (0).toFixed(dec);
-      const spreadStr = " " + spreadVal.padStart(6) + " ";
+      const rawBid = bid > 0 ? bid.toFixed(dec) : (0).toFixed(dec);
+      const formattedBid = (rawBid.length > 9 ? rawBid.substring(0, 9) : rawBid).padStart(9);
+      const bidStr = " " + formattedBid + " ";
+
+      const rawAsk = ask > 0 ? ask.toFixed(dec) : (0).toFixed(dec);
+      const formattedAsk = (rawAsk.length > 9 ? rawAsk.substring(0, 9) : rawAsk).padStart(9);
+      const askStr = " " + formattedAsk + " ";
+
+      const rawSpread = (ask > 0 && bid > 0 && ask >= bid) ? (ask - bid).toFixed(dec) : (0).toFixed(dec);
+      const formattedSpread = (rawSpread.length > 6 ? rawSpread.substring(0, 6) : rawSpread).padStart(6);
+      const spreadStr = " " + formattedSpread + " ";
 
       const obi = this.client.getOBI(i);
       const obiBar = this.getFastMiniBar(obi, -1, 1);
@@ -282,7 +289,8 @@ export class MultiAssetCLIDashboard {
         const posPrecisionRule = SymbolPrecisionRegistry.getPrecisionRule(symName);
         const posDec = posPrecisionRule.priceDecimals;
         const sym = symName.padEnd(8);
-        const side = qty > 0 ? `${green}LONG ${reset}` : `${red}SHORT${reset}`;
+        const sideText = (qty > 0 ? "LONG" : "SHORT").padEnd(6);
+        const side = qty > 0 ? `${green}${sideText}${reset}` : `${red}${sideText}${reset}`;
         const entry = this.client.getOmsAvgEntryPrice(i);
         const mark = this.client.getBestBidPrice(i);
         const lev = `${this.client.getOmsLeverage(i).toFixed(0)}x`.padEnd(8);
