@@ -98,15 +98,15 @@ async function runAuditRemediationTest() {
         throw new Error(`FAIL: Crossed orderbook (bid > ask) should return INVALID_TICK_DATA, got ${result2.riskResult?.reasonCode}`);
     }
     console.log("✓ Test 4 Passed: Crossed orderbook evaluated spread to Infinity and rejected with INVALID_TICK_DATA.");
-    // Test 4: Spread exceeding threshold
+    // Test 4: Spread exceeding dynamic BPS threshold
     const engineEth = new engine_1.StrategyEngine(client, riskGuard, executionClient, { symbol: "ETHUSDT" });
-    client.setPrices(3000.0, 3001.0); // Spread = 1.0 USDT (> 0.50 ETH limit)
+    client.setPrices(3000.0, 3010.0); // Spread = 10.0 USDT (> 4.515 USDT ETH dynamic BPS limit)
     client.setSequence(102n);
     const result3 = engineEth.evaluateTick();
     if (result3.riskResult?.reasonCode !== "REJECTED_LIQUIDITY_SWEEP_TRAP") {
-        throw new Error(`FAIL: Spread 1.0 > 0.50 should reject with REJECTED_LIQUIDITY_SWEEP_TRAP, got ${result3.riskResult?.reasonCode}`);
+        throw new Error(`FAIL: Spread 10.0 > dynamic BPS limit should reject with REJECTED_LIQUIDITY_SWEEP_TRAP, got ${result3.riskResult?.reasonCode}`);
     }
-    console.log("✓ Test 5 Passed: Spread 1.0 USDT > 0.50 USDT correctly blocked MARKET order with REJECTED_LIQUIDITY_SWEEP_TRAP.");
+    console.log("✓ Test 5 Passed: Spread 10.0 USDT > dynamic BPS limit correctly blocked order with REJECTED_LIQUIDITY_SWEEP_TRAP.");
     console.log("=================================================");
     console.log("✅ ALL AUDIT REMEDIATION VERIFICATION TESTS PASSED!");
     console.log("=================================================");

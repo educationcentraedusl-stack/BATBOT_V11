@@ -1167,13 +1167,14 @@ export class StrategyEngine {
       // SOTA Dynamic Volatility-Normalized Conviction Floor Gate (K_conviction)
       // Eradicates micro-return fee traps. Explicitly includes round-trip exchange fees (10 bps) + half spread.
       const ROUND_TRIP_FEE_BPS = 0.001; // 10 bps mandatory exchange fee floor
+      const MIN_DIRECTIONAL_MAGNITUDE = 0.05; // Mandatory 0.05 conviction floor to eradicate micro-magnitude noise
       const midPrice = askPrice > 0 && bidPrice > 0 ? (bidPrice + askPrice) / 2.0 : 1.0;
       const halfSpreadBps = midPrice > 0 ? ((askPrice - bidPrice) / (2.0 * midPrice)) : 0.0001;
       const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
       const hawkesMultiplier = 1.0 + 0.2 * Math.log(1.0 + Math.max(0, hawkesIntensity));
       
-      // Dynamic Conviction Floor: K_conviction(t) MUST exceed half spread + round trip fees
-      const dynamicConvictionFloor = Math.max(halfSpreadBps + ROUND_TRIP_FEE_BPS, 0.5 * volEstimate * hawkesMultiplier);
+      // Dynamic Conviction Floor: K_conviction(t) MUST exceed half spread + round trip fees, bounded by absolute 0.05 floor
+      const dynamicConvictionFloor = Math.max(MIN_DIRECTIONAL_MAGNITUDE, halfSpreadBps + ROUND_TRIP_FEE_BPS, 0.5 * volEstimate * hawkesMultiplier);
       
       // Volatility-Standardized Z-Score of the signal
       const zScore = aiDirectionMag / Math.max(volEstimate, 0.0001);
@@ -1184,9 +1185,9 @@ export class StrategyEngine {
 
       if (isConvictionValid) {
         if (isHighConfidenceAi) {
-          // AI-Override Rule: High-confidence AI must also satisfy strict OBI directional pressure threshold (+/- 0.35)
-          isBuySignal = aiDirection > 0 && obi >= this.config.obiBuyThreshold;
-          isSellSignal = aiDirection < 0 && obi <= this.config.obiSellThreshold;
+          // AI-Override Rule: High-confidence AI must satisfy strict OBI directional pressure (+/- 0.35) and MIN_DIRECTIONAL_MAGNITUDE (0.05)
+          isBuySignal = aiDirection > 0 && aiDirectionMag >= MIN_DIRECTIONAL_MAGNITUDE && obi >= this.config.obiBuyThreshold;
+          isSellSignal = aiDirection < 0 && aiDirectionMag >= MIN_DIRECTIONAL_MAGNITUDE && obi <= this.config.obiSellThreshold;
           if (isBuySignal || isSellSignal) {
             console.log(`[StrategyEngine][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)}), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
           }

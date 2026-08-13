@@ -72,6 +72,7 @@ class StrategyEngine {
         const envLeverage = process.env.LEVERAGE ? parseInt(process.env.LEVERAGE, 10) : NaN;
         const envMaxSpreadEth = process.env.MAX_SPREAD_ETH ? parseFloat(process.env.MAX_SPREAD_ETH) : NaN;
         const envMaxSpreadBtc = process.env.MAX_SPREAD_BTC ? parseFloat(process.env.MAX_SPREAD_BTC) : NaN;
+        const envMaxSpreadAlt = process.env.MAX_SPREAD_ALT ? parseFloat(process.env.MAX_SPREAD_ALT) : NaN;
         const envMinNotionalUsdt = process.env.MIN_NOTIONAL_USDT ? parseFloat(process.env.MIN_NOTIONAL_USDT) : NaN;
         const envCooldownMs = process.env.COOLDOWN_MS ? parseInt(process.env.COOLDOWN_MS, 10) : NaN;
         const envVpinThreshold = process.env.VPIN_THRESHOLD ? parseFloat(process.env.VPIN_THRESHOLD) : NaN;
@@ -90,7 +91,8 @@ class StrategyEngine {
         const defaultCvdSell = !isNaN(envCvdSell) ? envCvdSell : 0.0;
         const defaultMaxSpreadVelocity = !isNaN(envMaxSpreadVelocity) ? envMaxSpreadVelocity : 5.0;
         const defaultMaxSpreadEth = !isNaN(envMaxSpreadEth) ? envMaxSpreadEth : 0.50;
-        const defaultMaxSpreadBtc = !isNaN(envMaxSpreadBtc) ? envMaxSpreadBtc : 5.0;
+        const defaultMaxSpreadBtc = !isNaN(envMaxSpreadBtc) ? envMaxSpreadBtc : 50.0;
+        const defaultMaxSpreadAlt = !isNaN(envMaxSpreadAlt) ? envMaxSpreadAlt : 1.0;
         const defaultMinNotionalUsdt = !isNaN(envMinNotionalUsdt) ? envMinNotionalUsdt : 55.0;
         const defaultCooldownMs = !isNaN(envCooldownMs) ? envCooldownMs : 250;
         const defaultVpinThreshold = !isNaN(envVpinThreshold) ? envVpinThreshold : 0.85;
@@ -125,6 +127,7 @@ class StrategyEngine {
             leverageMultiplier: config?.leverageMultiplier ?? defaultLeverage,
             maxSpreadEth: config?.maxSpreadEth ?? defaultMaxSpreadEth,
             maxSpreadBtc: config?.maxSpreadBtc ?? defaultMaxSpreadBtc,
+            maxSpreadAlt: config?.maxSpreadAlt ?? defaultMaxSpreadAlt,
             minNotionalUsdt: config?.minNotionalUsdt ?? defaultMinNotionalUsdt,
             cooldownMs: config?.cooldownMs ?? defaultCooldownMs,
             vpinThreshold: config?.vpinThreshold ?? defaultVpinThreshold,
@@ -618,7 +621,16 @@ class StrategyEngine {
             // SPREAD & TICK GUARD: Immediately reject invalid tick data (bid <= 0, ask <= 0, bid > ask) or excessive spread BEFORE evaluating dynamic exits or signals
             const isTickValid = askPrice > 0 && bidPrice > 0 && askPrice >= bidPrice;
             const currentSpread = isTickValid ? askPrice - bidPrice : Infinity;
-            const maxSpreadAllowed = this.config.symbol.includes("ETH") ? this.config.maxSpreadEth : this.config.maxSpreadBtc;
+            let maxSpreadAllowed;
+            if (this.config.symbol.includes("BTC")) {
+                maxSpreadAllowed = Math.max(this.config.maxSpreadBtc, askPrice * 0.0015);
+            }
+            else if (this.config.symbol.includes("ETH")) {
+                maxSpreadAllowed = Math.max(this.config.maxSpreadEth, askPrice * 0.0015);
+            }
+            else {
+                maxSpreadAllowed = Math.max(this.config.maxSpreadAlt, askPrice * 0.0020);
+            }
             if (!isTickValid || currentSpread > maxSpreadAllowed) {
                 const reasonCode = !isTickValid ? "INVALID_TICK_DATA" : "REJECTED_LIQUIDITY_SWEEP_TRAP";
                 const message = !isTickValid
