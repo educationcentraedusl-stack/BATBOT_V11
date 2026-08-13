@@ -1,6 +1,12 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-13
+- **Feature/Task:** Single-Flight Time Sync Lock Optimization for Binance REST Execution Client
+- **Artifacts Created/Modified:** `src/execution/binance.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Implemented single-flight promise lock (`timeSyncPromise`) in `BinanceExecutionClient.syncServerTime()`. Prevents parallel in-flight REST requests from spamming Binance API with redundant `/fapi/v1/time` calls during `-1021 INVALID_TIMESTAMP` clock drift events. All concurrent callers await a single shared promise lock. Verified via `npx tsc --noEmit` (0 compilation errors).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-13
 - **Feature/Task:** Zero-Trust Deep Scan Audit & Remediation of StrategyEngine Conviction Math
 - **Artifacts Created/Modified:** `src/strategy/engine.ts`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Conducted line-by-line unguided deep scan audit of `src/strategy/engine.ts`. Remediated 3 critical vulnerabilities:

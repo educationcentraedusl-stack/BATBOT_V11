@@ -122,6 +122,7 @@ export class BinanceExecutionClient {
   private balancePollTimer: NodeJS.Timeout | null = null;
   private timeOffset: number = 0;
   private isTimeSynced: boolean = false;
+  private timeSyncPromise: Promise<number> | null = null;
 
   constructor(options?: BinanceClientOptions) {
     this.testnet = options?.useTestnet ?? (process.env.USE_TESTNET === "true" || process.env.USE_TESTNET === "1" || process.env.BINANCE_TESTNET === "true");
@@ -176,21 +177,31 @@ export class BinanceExecutionClient {
   }
 
   public async syncServerTime(): Promise<number> {
-    try {
-      const startTime = Date.now();
-      const res = await this.request<{ serverTime: number }>("GET", "/fapi/v1/time", {}, false);
-      const endTime = Date.now();
-      const rtt = endTime - startTime;
-      if (res && typeof res.serverTime === "number") {
-        this.timeOffset = res.serverTime - (startTime + Math.floor(rtt / 2));
-        this.isTimeSynced = true;
-        console.log(`[BinanceExecutionClient] Time synced with Binance Server. Server Time: ${res.serverTime}, Local Time: ${Date.now()}, Offset: ${this.timeOffset}ms (RTT: ${rtt}ms)`);
-        return this.timeOffset;
-      }
-    } catch (err: any) {
-      console.error(`[BinanceExecutionClient] Failed to sync Binance server time: ${err.message}`);
+    if (this.timeSyncPromise) {
+      return this.timeSyncPromise;
     }
-    return this.timeOffset;
+
+    this.timeSyncPromise = (async () => {
+      try {
+        const startTime = Date.now();
+        const res = await this.request<{ serverTime: number }>("GET", "/fapi/v1/time", {}, false);
+        const endTime = Date.now();
+        const rtt = endTime - startTime;
+        if (res && typeof res.serverTime === "number") {
+          this.timeOffset = res.serverTime - (startTime + Math.floor(rtt / 2));
+          this.isTimeSynced = true;
+          console.log(`[BinanceExecutionClient] Time synced with Binance Server. Server Time: ${res.serverTime}, Local Time: ${Date.now()}, Offset: ${this.timeOffset}ms (RTT: ${rtt}ms)`);
+          return this.timeOffset;
+        }
+      } catch (err: any) {
+        console.error(`[BinanceExecutionClient] Failed to sync Binance server time: ${err.message}`);
+      } finally {
+        this.timeSyncPromise = null;
+      }
+      return this.timeOffset;
+    })();
+
+    return this.timeSyncPromise;
   }
 
   public async fetchExchangeInfo(): Promise<BinanceExchangeInfoResponse> {
