@@ -375,9 +375,14 @@ export class MultiAssetCLIDashboard {
         const posPrecisionRule = SymbolPrecisionRegistry.getPrecisionRule(symName);
         const posDec = posPrecisionRule.priceDecimals;
         const sym = this.formatCell(symName, 8, false);
-        const sideText = qty > 0 ? "LONG" : "SHORT";
+        const sideCode = this.client.getOmsPositionSide(i);
+        const sideText = sideCode === 3.0 ? "BOTH" : (sideCode === 2.0 || qty < 0) ? "SHORT" : "LONG";
         const sideFormatted = this.formatCell(sideText, 8, false);
-        const side = qty > 0 ? `${green}${sideFormatted}${reset}` : `${red}${sideFormatted}${reset}`;
+        const side = sideCode === 3.0
+          ? `${cyan}${bold}${sideFormatted}${reset}`
+          : sideText === "LONG"
+          ? `${green}${sideFormatted}${reset}`
+          : `${red}${sideFormatted}${reset}`;
         const entry = this.client.getOmsAvgEntryPrice(i);
         const posBid = this.client.getBestBidPrice(i);
         const posAsk = this.client.getBestAskPrice(i);

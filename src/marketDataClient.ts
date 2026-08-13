@@ -539,6 +539,14 @@ export class MarketDataClient {
     this.writeAtomicFloat64Asset(assetIdx, 141, price);
   }
 
+  public getOmsPositionSide(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 142);
+  }
+
+  public setOmsPositionSide(code: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 142, code);
+  }
+
 
   /**
    * Broadcasts atomic Kill-Switch activation across all asset slots simultaneously.

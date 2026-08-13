@@ -13,7 +13,7 @@ export interface PositionLot {
 
 export interface PositionSummary {
   symbol: string;
-  side: "FLAT" | "LONG" | "SHORT";
+  side: "FLAT" | "LONG" | "SHORT" | "BOTH";
   netQuantity: number;
   averageEntryPrice: number;
   unrealizedPnl: number;
@@ -622,9 +622,17 @@ export class HedgePositionLedger {
       }
     }
 
+    let side: "FLAT" | "LONG" | "SHORT" | "BOTH" = "FLAT";
+    if (longQty > 1e-9 && shortQty > 1e-9) {
+      side = "BOTH";
+    } else if (longQty > 1e-9) {
+      side = "LONG";
+    } else if (shortQty > 1e-9) {
+      side = "SHORT";
+    }
+
     const netQty = longQty - shortQty;
-    const absQty = Math.abs(netQty);
-    const side: "FLAT" | "LONG" | "SHORT" = netQty > 1e-9 ? "LONG" : netQty < -1e-9 ? "SHORT" : "FLAT";
+    const absQty = side === "BOTH" ? (longQty + shortQty) : Math.abs(netQty);
     const totalPosQty = longQty + shortQty;
     const avgEntry = totalPosQty > 0 ? weightedEntrySum / totalPosQty : 0;
 
@@ -960,18 +968,21 @@ export class HedgePositionLedger {
       this.releaseShortSlot(i);
     }
 
-    let netQty = 0;
-    let weightedPxSum = 0;
-    let primarySide: "LONG" | "SHORT" | "FLAT" = "FLAT";
+    let hasLong = false;
+    let hasShort = false;
+    let longQty = 0;
+    let shortQty = 0;
+    let longPxSum = 0;
+    let shortPxSum = 0;
 
     for (const pos of recoveredPositions) {
       if (pos.quantity <= 0 || pos.entryPrice <= 0) continue;
 
       if (pos.side === "LONG") {
         this.occupyCoreLong(pos.quantity, pos.entryPrice, longTpPct, longSlPct);
-        netQty += pos.quantity;
-        weightedPxSum += pos.entryPrice * pos.quantity;
-        primarySide = "LONG";
+        hasLong = true;
+        longQty += pos.quantity;
+        longPxSum += pos.entryPrice * pos.quantity;
         console.log(
           `[HedgePositionLedger] Recovered Core Long Position: ${pos.quantity} @ $${pos.entryPrice.toFixed(
             2
@@ -981,9 +992,9 @@ export class HedgePositionLedger {
         const slotIdx = this.getAvailableShortSlotIndex();
         if (slotIdx >= 0) {
           this.occupyShortSlot(slotIdx, pos.quantity, pos.entryPrice, shortTpPct, shortSlPct);
-          netQty += pos.quantity;
-          weightedPxSum += pos.entryPrice * pos.quantity;
-          primarySide = "SHORT";
+          hasShort = true;
+          shortQty += pos.quantity;
+          shortPxSum += pos.entryPrice * pos.quantity;
           console.log(
             `[HedgePositionLedger] Recovered Short Slot #${slotIdx} Position: ${pos.quantity} @ $${pos.entryPrice.toFixed(
               2
@@ -993,9 +1004,16 @@ export class HedgePositionLedger {
       }
     }
 
-    if (primarySide !== "FLAT" && netQty > 0) {
-      const avgPx = weightedPxSum / netQty;
-      this.legacyLedger.syncActivePosition(primarySide, netQty, avgPx);
+    if (hasLong && hasShort) {
+      const grossQty = longQty + shortQty;
+      const avgPx = (longPxSum + shortPxSum) / grossQty;
+      this.legacyLedger.syncActivePosition("LONG", grossQty, avgPx);
+    } else if (hasLong && longQty > 0) {
+      const avgPx = longPxSum / longQty;
+      this.legacyLedger.syncActivePosition("LONG", longQty, avgPx);
+    } else if (hasShort && shortQty > 0) {
+      const avgPx = shortPxSum / shortQty;
+      this.legacyLedger.syncActivePosition("SHORT", shortQty, avgPx);
     }
   }
 
