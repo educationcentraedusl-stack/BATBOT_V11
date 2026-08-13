@@ -391,7 +391,7 @@ export class MultiAssetCLIDashboard {
         const uPnlStr = `${uPnl >= 0 ? "+" : ""}$${uPnl.toFixed(2)}`;
         const uPnlFormatted = this.formatCell(uPnlStr, 56, false);
 
-        out += `| #${i}   | ${sym} | ${side} | ${this.formatCell(qty.toFixed(4), 10)} | $${this.formatCell(entry.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${uPnlColor}${bold}${uPnlFormatted}${reset} |${clearLine}\n`;
+        out += `| #${i}   | ${sym} | ${side} | ${this.formatCell(Math.abs(qty).toFixed(4), 10)} | $${this.formatCell(entry.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${uPnlColor}${bold}${uPnlFormatted}${reset} |${clearLine}\n`;
       }
     }
 

@@ -109,6 +109,7 @@ async function initializeSystem() {
     const slotsPerAsset = Number.isFinite(parsedSlotsPerAsset) && parsedSlotsPerAsset > 0 ? parsedSlotsPerAsset : 256;
     const sab = new SharedArrayBuffer(maxAssets * slotsPerAsset * 8);
     const client = new marketDataClient_1.MarketDataClient(sab, maxAssets, slotsPerAsset);
+    client.flushTelemetry();
     const riskGuard = new risk_1.RiskGuard();
     const executionClient = new binance_1.BinanceExecutionClient();
     const symbol = process.env.SYMBOL ?? "BTCUSDT";

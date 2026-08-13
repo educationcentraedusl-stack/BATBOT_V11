@@ -251,6 +251,33 @@ export class StrategyEngine {
    * Enforces dual-tier cooldown synchronization across RiskGuard (software state)
    * and SharedArrayBuffer (zero-copy shared memory state).
    */
+  public syncSabPositionState(currentMarkPrice: number = 0): void {
+    const summary = this.hedgeLedger.getSummary(currentMarkPrice);
+    const netSignedQty = summary.side === "SHORT" ? -summary.netQuantity : summary.netQuantity;
+    this.client.setOmsPositionQty(netSignedQty, this.assetIndex);
+    this.client.setOmsAvgEntryPrice(summary.averageEntryPrice, this.assetIndex);
+    this.client.setOmsRealizedPnl(summary.cumulativeRealizedPnl, this.assetIndex);
+    this.client.setOmsUnrealizedPnl(summary.unrealizedPnl, this.assetIndex);
+    this.client.setOmsLeverage(this.config.leverageMultiplier, this.assetIndex);
+    this.client.setOmsTotalTrades(summary.totalTrades, this.assetIndex);
+    this.client.setOmsWinningTrades(summary.winningTrades, this.assetIndex);
+    this.client.setOmsLosingTrades(summary.losingTrades, this.assetIndex);
+  }
+
+  public hasPendingEntryForSlot(slotId: string): boolean {
+    for (const pending of this.pendingEntryOrders.values()) {
+      if (pending.slotId === slotId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Centralized fill lifecycle observer for both ENTRY and EXIT executions.
+   * Enforces dual-tier cooldown synchronization across RiskGuard (software state)
+   * and SharedArrayBuffer (zero-copy shared memory state).
+   */
   private onExecutionCompleted(params: {
     symbol: string;
     assetIndex: number;
@@ -297,6 +324,9 @@ export class StrategyEngine {
       this.client.setLastShortFillPrice(params.executedPrice, params.assetIndex);
     }
 
+    // 3. Tier 3: Immediate Zero-Latency SAB Position State Sync
+    this.syncSabPositionState(0);
+
     console.log(
       `[COOLDOWN_SYNC][${params.isCloseOrder ? "EXIT" : "ENTRY"}] Completed ${params.positionSide} ${params.side} on ${params.symbol}. Qty: ${params.executedQty} @ $${params.executedPrice.toFixed(
         2
@@ -310,6 +340,7 @@ export class StrategyEngine {
 
     this.userDataStream.subscribeOrderUpdates((update: OrderTradeUpdatePayload) => {
       const { order } = update;
+      if (order.symbol !== this.config.symbol) return; // Strict asset symbol filter for zero cross-asset state pollution
       const orderId = order.orderId;
 
       if (order.orderStatus === "FILLED" || order.orderStatus === "PARTIALLY_FILLED") {
@@ -350,13 +381,12 @@ export class StrategyEngine {
             executedPrice: execPx,
             fillTimestampMs: Date.now(),
           });
+          this.syncSabPositionState();
           return;
         }
 
-        // 2. Otherwise check if this is an EXIT or TP limit order fill
+        // 2. Check if this is a TP limit order fill or exit order fill
         if (order.orderType === "LIMIT" || order.isMaker) {
-          console.log(`[MAKER_TP_ENGINE][WS_FILL_NOTIFIED] OrderId #${order.orderId} filled as ${order.isMaker ? "MAKER" : "TAKER"}. Qty: ${order.lastFilledQuantity} @ $${order.lastFilledPrice}`);
-
           const coreLong = this.hedgeLedger.getCoreLong();
           const shortSlots = this.hedgeLedger.getShortSlots();
 
@@ -380,6 +410,7 @@ export class StrategyEngine {
           }
 
           if (targetSlotId) {
+            console.log(`[MAKER_TP_ENGINE][WS_FILL_NOTIFIED] OrderId #${order.orderId} filled as ${order.isMaker ? "MAKER" : "TAKER"}. Qty: ${order.lastFilledQuantity} @ $${order.lastFilledPrice}`);
             const res = this.hedgeLedger.processTpLimitFill(targetSlotId, order.orderId, order.lastFilledQuantity, order.lastFilledPrice, order.isMaker);
             console.log(`[MAKER_TP_ENGINE][RECONCILED] Slot ${targetSlotId} updated. Closed: ${res.isPositionClosed}, RemQty: ${res.remainingQuantity}, NewSL: $${res.newStopLossPrice}`);
 
@@ -407,6 +438,47 @@ export class StrategyEngine {
               realizedPnl,
               fillTimestampMs: Date.now(),
             });
+            this.syncSabPositionState();
+            return;
+          }
+        }
+
+        // 3. Fallback: Untracked ENTRY fill handling (e.g. immediate fills or REST placement fills)
+        const isEntrySide = (order.side === "BUY" && (order.positionSide === "LONG" || order.positionSide === "BOTH")) ||
+                            (order.side === "SELL" && (order.positionSide === "SHORT" || order.positionSide === "BOTH"));
+        if (isEntrySide) {
+          const execPx = order.lastFilledPrice > 0 ? order.lastFilledPrice : order.originalPrice;
+          const execQty = order.lastFilledQuantity > 0 ? order.lastFilledQuantity : order.cumulativeFilledQuantity;
+          if (execPx > 0 && execQty > 0) {
+            const posSide: "LONG" | "SHORT" = (order.side === "BUY") ? "LONG" : "SHORT";
+            console.log(`[BinanceExecution][UNTRACKED_ENTRY_FILL] OrderId #${orderId} filled for ${this.config.symbol} ${posSide}! Occupying/accumulating slot. Qty: ${execQty} @ $${execPx}`);
+
+            const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
+            const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
+            const dynamicSlPct = Math.max(0.005, volEstimate * 2.0);
+            const dynamicSlPercent = dynamicSlPct * 100;
+
+            if (posSide === "LONG") {
+              this.hedgeLedger.occupyCoreLong(execQty, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
+              this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch(() => {});
+            } else {
+              const slotIdx = this.hedgeLedger.getAvailableShortSlotIndex();
+              const targetIdx = slotIdx >= 0 ? slotIdx : 0;
+              this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
+              this.dispatchBatchPostOnlyTpOrders(`SHORT_SLOT_${targetIdx}`, execPx, execQty, "SHORT").catch(() => {});
+            }
+
+            this.onExecutionCompleted({
+              symbol: this.config.symbol,
+              assetIndex: this.assetIndex,
+              side: order.side as "BUY" | "SELL",
+              positionSide: posSide,
+              isCloseOrder: false,
+              executedQty: execQty,
+              executedPrice: execPx,
+              fillTimestampMs: Date.now(),
+            });
+            this.syncSabPositionState();
           }
         }
       } else if (order.orderStatus === "CANCELED" || order.orderStatus === "EXPIRED" || (order.orderStatus as string) === "REJECTED") {
@@ -696,6 +768,8 @@ export class StrategyEngine {
     } else {
       console.log(`[StrategyEngine][StateRecovery] Binance position state: FLAT (0.0000) for ${this.config.symbol}.`);
     }
+
+    this.syncSabPositionState(0);
   }
 
   /**
@@ -1116,9 +1190,10 @@ export class StrategyEngine {
 
       // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
       const isCoreLongOccupied = this.hedgeLedger.getCoreLong().isOccupied;
+      const hasPendingCoreLong = this.hasPendingEntryForSlot("CORE_LONG");
       const isCooldownCleared = nowMs >= longCooldownLock;
 
-      if (!isCoreLongOccupied && !isCooldownCleared) {
+      if (!isCoreLongOccupied && !hasPendingCoreLong && !isCooldownCleared) {
         console.log(`[StrategyEngine][COOLDOWN_BLOCK] Seq #${seq} | nowMs: ${nowMs}, longCooldownLock: ${longCooldownLock}, diff: ${longCooldownLock - nowMs}ms`);
       }
 
@@ -1127,6 +1202,7 @@ export class StrategyEngine {
         (isHighConfidenceAi || spreadVelocity < this.config.maxSpreadVelocity) &&
         askPrice > 0 &&
         !isCoreLongOccupied &&
+        !hasPendingCoreLong &&
         isCooldownCleared
       ) {
         signalType = "BUY";
@@ -1149,11 +1225,14 @@ export class StrategyEngine {
         );
 
         if (slotEval !== null) {
-          signalType = "SELL";
-          targetPosSide = "SHORT";
-          targetSlotIndex = slotEval.slotIndex;
-          targetSlotId = `SHORT_SLOT_${slotEval.slotIndex}`;
-          targetSizeDecayCoeff = slotEval.sizeDecayCoeff;
+          const slotId = `SHORT_SLOT_${slotEval.slotIndex}`;
+          if (!this.hasPendingEntryForSlot(slotId)) {
+            signalType = "SELL";
+            targetPosSide = "SHORT";
+            targetSlotIndex = slotEval.slotIndex;
+            targetSlotId = slotId;
+            targetSizeDecayCoeff = slotEval.sizeDecayCoeff;
+          }
         }
       }
 

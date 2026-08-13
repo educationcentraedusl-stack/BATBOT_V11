@@ -44,6 +44,7 @@ class PositionLedger {
             this.lots[i] = { price: 0, quantity: 0, timestamp: 0 };
         }
         this.reconciliationResult.symbol = symbol;
+        this.reset();
         this.cachedSummary = {
             symbol: this.symbol,
             side: "FLAT",
@@ -644,6 +645,38 @@ class HedgePositionLedger {
         return count;
     }
     occupyCoreLong(quantity, entryPrice, tpPercent, slPercent) {
+        if (quantity <= 0 || entryPrice <= 0)
+            return;
+        if (this.coreLong.isOccupied && this.coreLong.quantity > 0) {
+            // Accumulate existing Core Long position and recalculate weighted average entry price
+            const currentNotional = this.coreLong.quantity * this.coreLong.entryPrice;
+            const addNotional = quantity * entryPrice;
+            const newQty = Number((this.coreLong.quantity + quantity).toFixed(6));
+            const newAvgEntry = (currentNotional + addNotional) / newQty;
+            this.coreLong.quantity = newQty;
+            this.coreLong.initialQuantity = Number(((this.coreLong.initialQuantity || this.coreLong.quantity) + quantity).toFixed(6));
+            this.coreLong.entryPrice = newAvgEntry;
+            const makerFee = this.sizingCalc.getMakerFeeRate();
+            const takerFee = this.sizingCalc.getTakerFeeRate();
+            const feeMultiplier = (makerFee + takerFee) * 2.5;
+            this.coreLong.breakEvenPrice = newAvgEntry * (1.0 + feeMultiplier);
+            this.coreLong.takeProfitPrice = newAvgEntry * (1 + tpPercent / 100);
+            this.coreLong.stopLossPrice = newAvgEntry * (1 - slPercent / 100);
+            const tp1Pct = Math.min(2.0, tpPercent * 1.0);
+            const tp2Pct = Math.min(3.0, tpPercent * 2.0);
+            const tp3Pct = Math.min(5.0, tpPercent * 4.0);
+            const tp4Pct = Math.min(8.0, tpPercent * 6.0);
+            const tp5Pct = Math.min(12.0, tpPercent * 10.0);
+            this.coreLong.tpPrices = [
+                newAvgEntry * (1 + tp1Pct / 100),
+                newAvgEntry * (1 + tp2Pct / 100),
+                newAvgEntry * (1 + tp3Pct / 100),
+                newAvgEntry * (1 + tp4Pct / 100),
+                newAvgEntry * (1 + tp5Pct / 100),
+            ];
+            this.legacyLedger.syncActivePosition("LONG", newQty, newAvgEntry);
+            return;
+        }
         this.coreLong.isOccupied = true;
         this.coreLong.quantity = quantity;
         this.coreLong.initialQuantity = quantity;
@@ -673,6 +706,7 @@ class HedgePositionLedger {
             entryPrice * (1 + tp4Pct / 100),
             entryPrice * (1 + tp5Pct / 100),
         ];
+        this.legacyLedger.syncActivePosition("LONG", quantity, entryPrice);
     }
     syncStartupPositions(recoveredPositions, longTpPct, longSlPct, shortTpPct, shortSlPct) {
         this.releaseCoreLong();
@@ -725,11 +759,39 @@ class HedgePositionLedger {
         this.coreLong.tpPrices = [];
     }
     occupyShortSlot(slotIndex, quantity, entryPrice, tpPercent, slPercent) {
-        if (slotIndex < 0 || slotIndex >= this.maxShortSlots)
+        if (slotIndex < 0 || slotIndex >= this.maxShortSlots || quantity <= 0 || entryPrice <= 0)
             return false;
         const slot = this.shortSlots[slotIndex];
-        if (slot.isOccupied)
-            return false;
+        if (slot.isOccupied && slot.quantity > 0) {
+            // Accumulate existing short slot position and recalculate weighted average entry price
+            const currentNotional = slot.quantity * slot.entryPrice;
+            const addNotional = quantity * entryPrice;
+            const newQty = Number((slot.quantity + quantity).toFixed(6));
+            const newAvgEntry = (currentNotional + addNotional) / newQty;
+            slot.quantity = newQty;
+            slot.initialQuantity = Number(((slot.initialQuantity || slot.quantity) + quantity).toFixed(6));
+            slot.entryPrice = newAvgEntry;
+            const makerFee = this.sizingCalc.getMakerFeeRate();
+            const takerFee = this.sizingCalc.getTakerFeeRate();
+            const feeMultiplier = (makerFee + takerFee) * 2.5;
+            slot.breakEvenPrice = newAvgEntry * (1.0 - feeMultiplier);
+            slot.takeProfitPrice = newAvgEntry * (1 - tpPercent / 100);
+            slot.stopLossPrice = newAvgEntry * (1 + slPercent / 100);
+            const tp1Pct = Math.min(2.0, tpPercent * 1.0);
+            const tp2Pct = Math.min(3.0, tpPercent * 2.0);
+            const tp3Pct = Math.min(5.0, tpPercent * 4.0);
+            const tp4Pct = Math.min(8.0, tpPercent * 6.0);
+            const tp5Pct = Math.min(12.0, tpPercent * 10.0);
+            slot.tpPrices = [
+                newAvgEntry * (1 - tp1Pct / 100),
+                newAvgEntry * (1 - tp2Pct / 100),
+                newAvgEntry * (1 - tp3Pct / 100),
+                newAvgEntry * (1 - tp4Pct / 100),
+                newAvgEntry * (1 - tp5Pct / 100),
+            ];
+            this.legacyLedger.syncActivePosition("SHORT", newQty, newAvgEntry);
+            return true;
+        }
         slot.isOccupied = true;
         slot.quantity = quantity;
         slot.initialQuantity = quantity;
@@ -758,6 +820,7 @@ class HedgePositionLedger {
             entryPrice * (1 - tp4Pct / 100),
             entryPrice * (1 - tp5Pct / 100),
         ];
+        this.legacyLedger.syncActivePosition("SHORT", quantity, entryPrice);
         return true;
     }
     releaseShortSlot(slotIndex, exitPrice, feeRate, exitReason = "SIGNAL_EXIT") {
