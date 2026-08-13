@@ -33,6 +33,7 @@ export interface StrategyConfig {
   leverageMultiplier: number;
   maxSpreadEth: number;
   maxSpreadBtc: number;
+  maxSpreadAlt: number;
   minNotionalUsdt: number;
   cooldownMs: number;
   vpinThreshold: number;
@@ -131,6 +132,7 @@ export class StrategyEngine {
     const envLeverage = process.env.LEVERAGE ? parseInt(process.env.LEVERAGE, 10) : NaN;
     const envMaxSpreadEth = process.env.MAX_SPREAD_ETH ? parseFloat(process.env.MAX_SPREAD_ETH) : NaN;
     const envMaxSpreadBtc = process.env.MAX_SPREAD_BTC ? parseFloat(process.env.MAX_SPREAD_BTC) : NaN;
+    const envMaxSpreadAlt = process.env.MAX_SPREAD_ALT ? parseFloat(process.env.MAX_SPREAD_ALT) : NaN;
     const envMinNotionalUsdt = process.env.MIN_NOTIONAL_USDT ? parseFloat(process.env.MIN_NOTIONAL_USDT) : NaN;
     const envCooldownMs = process.env.COOLDOWN_MS ? parseInt(process.env.COOLDOWN_MS, 10) : NaN;
     const envVpinThreshold = process.env.VPIN_THRESHOLD ? parseFloat(process.env.VPIN_THRESHOLD) : NaN;
@@ -150,7 +152,8 @@ export class StrategyEngine {
     const defaultCvdSell = !isNaN(envCvdSell) ? envCvdSell : 0.0;
     const defaultMaxSpreadVelocity = !isNaN(envMaxSpreadVelocity) ? envMaxSpreadVelocity : 5.0;
     const defaultMaxSpreadEth = !isNaN(envMaxSpreadEth) ? envMaxSpreadEth : 0.50;
-    const defaultMaxSpreadBtc = !isNaN(envMaxSpreadBtc) ? envMaxSpreadBtc : 5.0;
+    const defaultMaxSpreadBtc = !isNaN(envMaxSpreadBtc) ? envMaxSpreadBtc : 50.0;
+    const defaultMaxSpreadAlt = !isNaN(envMaxSpreadAlt) ? envMaxSpreadAlt : 1.0;
     const defaultMinNotionalUsdt = !isNaN(envMinNotionalUsdt) ? envMinNotionalUsdt : 55.0;
     const defaultCooldownMs = !isNaN(envCooldownMs) ? envCooldownMs : 250;
     const defaultVpinThreshold = !isNaN(envVpinThreshold) ? envVpinThreshold : 0.85;
@@ -188,6 +191,7 @@ export class StrategyEngine {
       leverageMultiplier: config?.leverageMultiplier ?? defaultLeverage,
       maxSpreadEth: config?.maxSpreadEth ?? defaultMaxSpreadEth,
       maxSpreadBtc: config?.maxSpreadBtc ?? defaultMaxSpreadBtc,
+      maxSpreadAlt: config?.maxSpreadAlt ?? defaultMaxSpreadAlt,
       minNotionalUsdt: config?.minNotionalUsdt ?? defaultMinNotionalUsdt,
       cooldownMs: config?.cooldownMs ?? defaultCooldownMs,
       vpinThreshold: config?.vpinThreshold ?? defaultVpinThreshold,
@@ -626,20 +630,11 @@ export class StrategyEngine {
         return;
       }
 
-      // Reconcile active position(s) into internal ledgers
+      // Reconcile active position(s) into internal ledgers (strictly overwrites and assigns exact Binance position size)
       this.reconcileStartupPositions(activePositions);
 
       // Map position metrics into SharedArrayBuffer slots
-      const summary = this.hedgeLedger.getSummary(0);
-      const netSignedQty = summary.side === "SHORT" ? -summary.netQuantity : summary.netQuantity;
-      this.client.setOmsPositionQty(netSignedQty, this.assetIndex);
-      this.client.setOmsAvgEntryPrice(summary.averageEntryPrice, this.assetIndex);
-      this.client.setOmsRealizedPnl(summary.cumulativeRealizedPnl, this.assetIndex);
-      this.client.setOmsUnrealizedPnl(0, this.assetIndex);
-      this.client.setOmsLeverage(this.config.leverageMultiplier, this.assetIndex);
-      this.client.setOmsTotalTrades(summary.totalTrades, this.assetIndex);
-      this.client.setOmsWinningTrades(summary.winningTrades, this.assetIndex);
-      this.client.setOmsLosingTrades(summary.losingTrades, this.assetIndex);
+      this.syncSabPositionState(0);
 
       // ORPHANED POSITION GUARD: Inject dynamic SL/TP if position lacks exchange orders
       for (const pos of activePositions) {
@@ -677,11 +672,8 @@ export class StrategyEngine {
 
           const slotId = posSide === "LONG" ? "CORE_LONG" : "SHORT_SLOT_0";
 
-          if (posSide === "LONG") {
-            this.hedgeLedger.occupyCoreLong(qty, entryPx, dynamicTpPercent, dynamicSlPercent);
-          } else {
-            this.hedgeLedger.occupyShortSlot(0, qty, entryPx, dynamicTpPercent, dynamicSlPercent);
-          }
+          // NOTE: reconcileStartupPositions() above already reset and occupied the position slot with the exact Binance quantity.
+          // We MUST NOT call occupyCoreLong / occupyShortSlot here because calling occupy on an already occupied slot triggers quantity accumulation (doubling the position size).
 
           const slPrice = posSide === "LONG" ? entryPx * (1.0 - dynamicSlPct) : entryPx * (1.0 + dynamicSlPct);
           const formattedSlPrice = SymbolPrecisionRegistry.formatPrice(this.config.symbol, slPrice);
@@ -715,6 +707,9 @@ export class StrategyEngine {
           console.log(`[ORPHAN_GUARD] Active ${posSide} position on ${this.config.symbol} has active exchange protective order(s).`);
         }
       }
+
+      // Final synchronization of SharedArrayBuffer OMS slots
+      this.syncSabPositionState(0);
     } catch (err: any) {
       console.error(`[StrategyEngine][StateSync][ERROR] Failed to sync exchange state for ${this.config.symbol}: ${err.message}`);
     }
@@ -810,7 +805,14 @@ export class StrategyEngine {
       // SPREAD & TICK GUARD: Immediately reject invalid tick data (bid <= 0, ask <= 0, bid > ask) or excessive spread BEFORE evaluating dynamic exits or signals
       const isTickValid = askPrice > 0 && bidPrice > 0 && askPrice >= bidPrice;
       const currentSpread = isTickValid ? askPrice - bidPrice : Infinity;
-      const maxSpreadAllowed = this.config.symbol.includes("ETH") ? this.config.maxSpreadEth : this.config.maxSpreadBtc;
+      let maxSpreadAllowed: number;
+      if (this.config.symbol.includes("BTC")) {
+        maxSpreadAllowed = Math.max(this.config.maxSpreadBtc, askPrice * 0.0015);
+      } else if (this.config.symbol.includes("ETH")) {
+        maxSpreadAllowed = Math.max(this.config.maxSpreadEth, askPrice * 0.0015);
+      } else {
+        maxSpreadAllowed = Math.max(this.config.maxSpreadAlt, askPrice * 0.0020);
+      }
 
       if (!isTickValid || currentSpread > maxSpreadAllowed) {
         const reasonCode = !isTickValid ? "INVALID_TICK_DATA" : "REJECTED_LIQUIDITY_SWEEP_TRAP";

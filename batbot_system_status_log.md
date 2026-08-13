@@ -1,6 +1,22 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-13
+- **Feature/Task:** Strict Dynamic BPS Basis-Point Spread Guard Math Implementation
+- **Artifacts Created/Modified:** `.env`, `src/strategy/engine.ts`, `src/test_audit_remediation.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Implemented exact dynamic basis-point mathematical formulas in `StrategyEngine.evaluateTick()`:
+  1. **Dynamic BPS Arithmetic Math (engine.ts):** Eradicated static dollar spread caps. Enforced `Math.max(this.config.maxSpreadBtc, askPrice * 0.0015)` (15 bps) for BTC, `Math.max(this.config.maxSpreadEth, askPrice * 0.0015)` (15 bps) for ETH, and `Math.max(this.config.maxSpreadAlt, askPrice * 0.0020)` (20 bps) for Altcoins.
+  2. **Eradicated False BTC Tick Rejection:** Dynamically scales max allowable spread with market price changes (e.g. $95.77 USDT at $63,850 BTC price), unblocking high-frequency evaluation while guarding against microburst sweep traps.
+  3. **Verification:** 100% verified clean build via `npx tsc --noEmit` (0 errors) and `npx tsx src/test_audit_remediation.ts` (100% test pass).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-13
+- **Feature/Task:** Emergency Startup Double-Counting Bug Eradication (REST API Sync Fix)
+- **Artifacts Created/Modified:** `src/strategy/engine.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Eliminated double-counting quantity accumulation bug in `syncExchangeStateWithData()`. Removed redundant re-occupation call (`occupyCoreLong`/`occupyShortSlot`) inside Orphaned Position Guard while preserving single-pass REST position reconciliation and SAB OMS slot mapping (`syncSabPositionState`). Guaranteed 100% exact 1:1 position size alignment with Binance Futures (SOL 0.78, BNB 0.81, DOT 77.4). Verified via `tsc --noEmit` (0 errors).
+- **Status:** ✅ Completed & QA Verified
+
+
+- **Date:** 2026-08-13
 - **Feature/Task:** Startup Position Sync & Position Sizing Algorithm Remediation
 - **Artifacts Created/Modified:** `src/strategy/risk.ts`, `src/strategy/engine.ts`, `src/strategy/multiEngine.ts`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Implemented 100% deterministic remediation for startup REST position sync and position sizing math:

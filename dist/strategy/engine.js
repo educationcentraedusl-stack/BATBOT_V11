@@ -481,19 +481,10 @@ class StrategyEngine {
                 this.client.setOmsAvgEntryPrice(0, this.assetIndex);
                 return;
             }
-            // Reconcile active position(s) into internal ledgers
+            // Reconcile active position(s) into internal ledgers (strictly overwrites and assigns exact Binance position size)
             this.reconcileStartupPositions(activePositions);
             // Map position metrics into SharedArrayBuffer slots
-            const summary = this.hedgeLedger.getSummary(0);
-            const netSignedQty = summary.side === "SHORT" ? -summary.netQuantity : summary.netQuantity;
-            this.client.setOmsPositionQty(netSignedQty, this.assetIndex);
-            this.client.setOmsAvgEntryPrice(summary.averageEntryPrice, this.assetIndex);
-            this.client.setOmsRealizedPnl(summary.cumulativeRealizedPnl, this.assetIndex);
-            this.client.setOmsUnrealizedPnl(0, this.assetIndex);
-            this.client.setOmsLeverage(this.config.leverageMultiplier, this.assetIndex);
-            this.client.setOmsTotalTrades(summary.totalTrades, this.assetIndex);
-            this.client.setOmsWinningTrades(summary.winningTrades, this.assetIndex);
-            this.client.setOmsLosingTrades(summary.losingTrades, this.assetIndex);
+            this.syncSabPositionState(0);
             // ORPHANED POSITION GUARD: Inject dynamic SL/TP if position lacks exchange orders
             for (const pos of activePositions) {
                 const qty = Math.abs(parseFloat(pos.positionAmt || "0"));
@@ -521,12 +512,8 @@ class StrategyEngine {
                     const dynamicSlPercent = dynamicSlPct * 100;
                     const dynamicTpPercent = posSide === "LONG" ? this.config.longTakeProfitPercent : this.config.shortTakeProfitPercent;
                     const slotId = posSide === "LONG" ? "CORE_LONG" : "SHORT_SLOT_0";
-                    if (posSide === "LONG") {
-                        this.hedgeLedger.occupyCoreLong(qty, entryPx, dynamicTpPercent, dynamicSlPercent);
-                    }
-                    else {
-                        this.hedgeLedger.occupyShortSlot(0, qty, entryPx, dynamicTpPercent, dynamicSlPercent);
-                    }
+                    // NOTE: reconcileStartupPositions() above already reset and occupied the position slot with the exact Binance quantity.
+                    // We MUST NOT call occupyCoreLong / occupyShortSlot here because calling occupy on an already occupied slot triggers quantity accumulation (doubling the position size).
                     const slPrice = posSide === "LONG" ? entryPx * (1.0 - dynamicSlPct) : entryPx * (1.0 + dynamicSlPct);
                     const formattedSlPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.config.symbol, slPrice);
                     // 1. Attach and dispatch protective POST_ONLY TP limit order batch to Binance
@@ -552,6 +539,8 @@ class StrategyEngine {
                     console.log(`[ORPHAN_GUARD] Active ${posSide} position on ${this.config.symbol} has active exchange protective order(s).`);
                 }
             }
+            // Final synchronization of SharedArrayBuffer OMS slots
+            this.syncSabPositionState(0);
         }
         catch (err) {
             console.error(`[StrategyEngine][StateSync][ERROR] Failed to sync exchange state for ${this.config.symbol}: ${err.message}`);
