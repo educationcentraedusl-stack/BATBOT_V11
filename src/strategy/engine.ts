@@ -848,7 +848,6 @@ export class StrategyEngine {
       const aiDirectionMag = Math.abs(aiDirection);
       const latencyPenalty = this.client.getLatencyPenaltyCoefficient(this.assetIndex);
       const penaltyCoeff = latencyPenalty > 0 ? Math.max(0.75, latencyPenalty) : 1.0;
-      const slippageTicks = this.client.getDynamicSlippageTicks(this.assetIndex);
 
       // 1. Dynamic Monitoring: Evaluate Microstructure, Volatility & Dynamic Exit Boundaries
       const markPrice = askPrice > 0 ? (askPrice + bidPrice) / 2 : bidPrice;
@@ -902,15 +901,7 @@ export class StrategyEngine {
 
       // Sync active position state to SharedArrayBuffer for TUI Table telemetry
       if (markPrice > 0) {
-        const netSignedQty = summary.side === "SHORT" ? -summary.netQuantity : summary.netQuantity;
-        this.client.setOmsPositionQty(netSignedQty, this.assetIndex);
-        this.client.setOmsAvgEntryPrice(summary.averageEntryPrice, this.assetIndex);
-        this.client.setOmsRealizedPnl(summary.cumulativeRealizedPnl, this.assetIndex);
-        this.client.setOmsUnrealizedPnl(summary.unrealizedPnl, this.assetIndex);
-        this.client.setOmsLeverage(this.config.leverageMultiplier, this.assetIndex);
-        this.client.setOmsTotalTrades(summary.totalTrades, this.assetIndex);
-        this.client.setOmsWinningTrades(summary.winningTrades, this.assetIndex);
-        this.client.setOmsLosingTrades(summary.losingTrades, this.assetIndex);
+        this.syncSabPositionState(markPrice);
       }
 
       if (markPrice > 0) {
@@ -1289,9 +1280,6 @@ export class StrategyEngine {
         return this.staticResult;
       }
 
-      // Dynamic Taker Fallback (>75% Confidence) & 1-Tick Post-Only Offset (<=75%)
-      const effectiveSlippage = Math.max(2, slippageTicks);
-      const priceAdjustment = effectiveSlippage * this.config.tickSize;
       const basePrice = signalType === "BUY" ? askPrice : bidPrice;
 
       // 100% SOTA Maker-Dominant Execution Architecture (POST_ONLY GTX Order Routing)
@@ -1398,8 +1386,6 @@ export class StrategyEngine {
           this.client.setLongCooldownLock(Date.now() + this.config.cooldownMs, this.assetIndex);
           this.client.setLastLongFillPrice(this.reusableOrderIntent.price, this.assetIndex);
         }
-
-        const notional = this.reusableOrderIntent.price * this.reusableOrderIntent.quantity;
 
         console.log(`[BinanceExecution][DISPATCHING] Submitting ${orderType} ${this.reusableOrderIntent.side} order for ${this.reusableOrderIntent.quantity} ${this.reusableOrderIntent.symbol} to Binance Futures...`);
 

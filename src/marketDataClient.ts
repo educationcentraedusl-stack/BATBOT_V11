@@ -193,10 +193,6 @@ export class MarketDataClient {
     return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 96));
   }
 
-  public getAIDirectionMagnitude(assetIdx: number = 0): number {
-    return this.readAtomicFloat64Asset(assetIdx, 97);
-  }
-
   public getMeasuredRttMs(assetIdx: number = 0): number {
     return this.readAtomicFloat64Asset(assetIdx, 98);
   }

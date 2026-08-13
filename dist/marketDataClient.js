@@ -129,19 +129,7 @@ class MarketDataClient {
     }
     // --- Slots 93 to 104: AI Prediction & Latency Metrics ---
     getAIPredictionDirection(assetIdx = 0) {
-        const rawDir = this.readAtomicFloat64Asset(assetIdx, 93);
-        const rawConf = this.readAtomicFloat64Asset(assetIdx, 94);
-        // Eradicate fake AI 0.99 confidence: If raw confidence is uncalibrated mock (>= 0.98), compute strict Microstructure Model direction
-        if (rawConf >= 0.98 || rawConf === 0) {
-            const obi = this.getOBI(assetIdx);
-            const cvd = this.getCVD(assetIdx);
-            if (obi >= 0.35 && cvd >= 0)
-                return 1.0;
-            if (obi <= -0.35 && cvd <= 0)
-                return -1.0;
-            return 0.0;
-        }
-        return rawDir;
+        return this.readAtomicFloat64Asset(assetIdx, 93);
     }
     getAIPredictionConfidence(assetIdx = 0) {
         const rawConf = this.readAtomicFloat64Asset(assetIdx, 94);
@@ -167,9 +155,6 @@ class MarketDataClient {
     }
     getAIPredictionTimestampNs(assetIdx = 0) {
         return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 96));
-    }
-    getAIDirectionMagnitude(assetIdx = 0) {
-        return this.readAtomicFloat64Asset(assetIdx, 97);
     }
     getMeasuredRttMs(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 98);

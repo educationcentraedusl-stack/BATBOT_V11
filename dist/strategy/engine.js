@@ -659,13 +659,9 @@ class StrategyEngine {
             const rawConf = this.client.getAIPredictionConfidence(this.assetIndex);
             const aiDirection = Number.isFinite(rawDir) ? rawDir : 0.0;
             const aiConfidence = Number.isFinite(rawConf) ? Math.max(0.0, Math.min(1.0, rawConf)) : 0.0;
-            const rawMag = this.client.getAIDirectionMagnitude(this.assetIndex);
-            const aiDirectionMag = Number.isFinite(rawMag) && rawMag > 0
-                ? Math.abs(rawMag)
-                : Math.abs(aiDirection);
+            const aiDirectionMag = Math.abs(aiDirection);
             const latencyPenalty = this.client.getLatencyPenaltyCoefficient(this.assetIndex);
             const penaltyCoeff = latencyPenalty > 0 ? Math.max(0.75, latencyPenalty) : 1.0;
-            const slippageTicks = this.client.getDynamicSlippageTicks(this.assetIndex);
             // 1. Dynamic Monitoring: Evaluate Microstructure, Volatility & Dynamic Exit Boundaries
             const markPrice = askPrice > 0 ? (askPrice + bidPrice) / 2 : bidPrice;
             // Feed live orderbook & price ticks into SOTA microstructure & volatility engines
@@ -709,15 +705,7 @@ class StrategyEngine {
             this.client.setDynamicStopLossPrice(dynamicSlPx, this.assetIndex);
             // Sync active position state to SharedArrayBuffer for TUI Table telemetry
             if (markPrice > 0) {
-                const netSignedQty = summary.side === "SHORT" ? -summary.netQuantity : summary.netQuantity;
-                this.client.setOmsPositionQty(netSignedQty, this.assetIndex);
-                this.client.setOmsAvgEntryPrice(summary.averageEntryPrice, this.assetIndex);
-                this.client.setOmsRealizedPnl(summary.cumulativeRealizedPnl, this.assetIndex);
-                this.client.setOmsUnrealizedPnl(summary.unrealizedPnl, this.assetIndex);
-                this.client.setOmsLeverage(this.config.leverageMultiplier, this.assetIndex);
-                this.client.setOmsTotalTrades(summary.totalTrades, this.assetIndex);
-                this.client.setOmsWinningTrades(summary.winningTrades, this.assetIndex);
-                this.client.setOmsLosingTrades(summary.losingTrades, this.assetIndex);
+                this.syncSabPositionState(markPrice);
             }
             if (markPrice > 0) {
                 // Priority 1: Evaluate SOTA Dynamic Exits (Cox Hazard Survival Flush, HJB Liquidation Boundary, MVA-TS)
@@ -964,7 +952,7 @@ class StrategyEngine {
                     isBuySignal = aiDirection > 0 && aiDirectionMag >= MIN_DIRECTIONAL_MAGNITUDE && obi >= this.config.obiBuyThreshold;
                     isSellSignal = aiDirection < 0 && aiDirectionMag >= MIN_DIRECTIONAL_MAGNITUDE && obi <= this.config.obiSellThreshold;
                     if (isBuySignal || isSellSignal) {
-                        console.log(`[StrategyEngine][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)}), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
+                        console.log(`[StrategyEngine][${this.config.symbol}][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)}), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
                     }
                 }
                 else {
@@ -974,14 +962,14 @@ class StrategyEngine {
                 }
             }
             else if (seq % 1000n === 0n) {
-                console.log(`[StrategyEngine][CONVICTION_FLOOR_GATE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)} < DynamicFloor: ${dynamicConvictionFloor.toFixed(4)}, Z-Score: ${zScore.toFixed(2)} < 1.5) -> Signals Filtered`);
+                console.log(`[StrategyEngine][${this.config.symbol}][CONVICTION_FLOOR_GATE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)} < DynamicFloor: ${dynamicConvictionFloor.toFixed(4)}, Z-Score: ${zScore.toFixed(2)} < 1.5) -> Signals Filtered`);
             }
             // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
             const isCoreLongOccupied = this.hedgeLedger.getCoreLong().isOccupied;
             const hasPendingCoreLong = this.hasPendingEntryForSlot("CORE_LONG");
             const isCooldownCleared = nowMs >= longCooldownLock;
             if (!isCoreLongOccupied && !hasPendingCoreLong && !isCooldownCleared) {
-                console.log(`[StrategyEngine][COOLDOWN_BLOCK] Seq #${seq} | nowMs: ${nowMs}, longCooldownLock: ${longCooldownLock}, diff: ${longCooldownLock - nowMs}ms`);
+                console.log(`[StrategyEngine][${this.config.symbol}][COOLDOWN_BLOCK] Seq #${seq} | nowMs: ${nowMs}, longCooldownLock: ${longCooldownLock}, diff: ${longCooldownLock - nowMs}ms`);
             }
             if (isBuySignal &&
                 (isHighConfidenceAi || spreadVelocity < this.config.maxSpreadVelocity) &&
@@ -1011,7 +999,7 @@ class StrategyEngine {
             }
             if (signalType === "NONE") {
                 if (seq % 500n === 0n) {
-                    console.log(`[StrategyEngine][SignalGate] Seq #${seq} | Composite: ${compositeScore.toFixed(4)} | AI: (dir=${aiDirection.toFixed(2)}, conf=${(aiConfidence * 100).toFixed(0)}%) | OBI: ${obi.toFixed(2)} | CVD: ${cvd.toFixed(0)} | Status: NO SIGNAL TRIGGERED`);
+                    console.log(`[StrategyEngine][${this.config.symbol}][SignalGate] Seq #${seq} | Composite: ${compositeScore.toFixed(4)} | AI: (dir=${aiDirection.toFixed(2)}, conf=${(aiConfidence * 100).toFixed(0)}%) | OBI: ${obi.toFixed(2)} | CVD: ${cvd.toFixed(0)} | Status: NO SIGNAL TRIGGERED`);
                 }
                 this.staticResult.sequenceNum = seq;
                 this.staticResult.signalType = "NONE";
@@ -1024,9 +1012,6 @@ class StrategyEngine {
                 this.staticResult.executionPromise = undefined;
                 return this.staticResult;
             }
-            // Dynamic Taker Fallback (>75% Confidence) & 1-Tick Post-Only Offset (<=75%)
-            const effectiveSlippage = Math.max(2, slippageTicks);
-            const priceAdjustment = effectiveSlippage * this.config.tickSize;
             const basePrice = signalType === "BUY" ? askPrice : bidPrice;
             // 100% SOTA Maker-Dominant Execution Architecture (POST_ONLY GTX Order Routing)
             // Completely eradicates MARKET/IOC taker fee dispatches for entry signals.
@@ -1081,7 +1066,7 @@ class StrategyEngine {
                 : this.riskGuard.validateOrder(this.reusableOrderIntent, isConfigured, targetPosSide);
             if (!riskResult.passed) {
                 if (seq % 1000n === 0n) {
-                    console.log(`[StrategyEngine][RISK_REJECTED] Seq #${seq} | Reason: ${riskResult.reasonCode} - ${riskResult.message}`);
+                    console.log(`[StrategyEngine][${this.config.symbol}][RISK_REJECTED] Seq #${seq} | Reason: ${riskResult.reasonCode} - ${riskResult.message}`);
                 }
             }
             else {
@@ -1099,7 +1084,6 @@ class StrategyEngine {
                     this.client.setLongCooldownLock(Date.now() + this.config.cooldownMs, this.assetIndex);
                     this.client.setLastLongFillPrice(this.reusableOrderIntent.price, this.assetIndex);
                 }
-                const notional = this.reusableOrderIntent.price * this.reusableOrderIntent.quantity;
                 console.log(`[BinanceExecution][DISPATCHING] Submitting ${orderType} ${this.reusableOrderIntent.side} order for ${this.reusableOrderIntent.quantity} ${this.reusableOrderIntent.symbol} to Binance Futures...`);
                 const orderParams = {
                     symbol: this.reusableOrderIntent.symbol,
