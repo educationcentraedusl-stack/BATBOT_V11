@@ -412,6 +412,24 @@ class MarketDataClient {
     setDynamicStopLossPrice(price, assetIdx = 0) {
         this.writeAtomicFloat64Asset(assetIdx, 141, price);
     }
+    getOmsPositionSide(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 142);
+    }
+    setOmsPositionSide(code, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 142, code);
+    }
+    getOmsLongPositionQty(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 143);
+    }
+    setOmsLongPositionQty(qty, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 143, qty);
+    }
+    getOmsShortPositionQty(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 144);
+    }
+    setOmsShortPositionQty(qty, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 144, qty);
+    }
     /**
      * Broadcasts atomic Kill-Switch activation across all asset slots simultaneously.
      */

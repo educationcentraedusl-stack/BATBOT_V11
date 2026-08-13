@@ -48,8 +48,10 @@ exports.SAB_SLOTS = {
     LAST_LONG_FILL_PRICE: 116,
     LAST_SHORT_FILL_TIME: 117,
     LAST_LONG_FILL_TIME: 118,
-    // Account & Execution Telemetry Slots (134..136)
+    // Account & Execution Telemetry Slots (134..144)
     AVAILABLE_BALANCE: 134,
     OMS_WINNING_TRADES: 135,
     OMS_LOSING_TRADES: 136,
+    OMS_LONG_POSITION_QTY: 143,
+    OMS_SHORT_POSITION_QTY: 144,
 };

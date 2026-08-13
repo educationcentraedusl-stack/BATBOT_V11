@@ -300,15 +300,24 @@ class MultiAssetCLIDashboard {
         let hasActivePosition = false;
         for (let i = 0; i < this.client.maxAssets; i++) {
             const qty = this.client.getOmsPositionQty(i);
-            if (Math.abs(qty) > 1e-6) {
+            const sideCode = this.client.getOmsPositionSide(i);
+            const longQty = this.client.getOmsLongPositionQty(i);
+            const shortQty = this.client.getOmsShortPositionQty(i);
+            const isBoth = sideCode === 3.0;
+            const displayQty = isBoth ? (longQty + shortQty) : Math.abs(qty);
+            if (isBoth ? (longQty > 1e-6 || shortQty > 1e-6) : Math.abs(qty) > 1e-6) {
                 hasActivePosition = true;
                 const symName = this.assetSymbols[i] || `ASSET_${i}`;
                 const posPrecisionRule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(symName);
                 const posDec = posPrecisionRule.priceDecimals;
                 const sym = this.formatCell(symName, 8, false);
-                const sideText = qty > 0 ? "LONG" : "SHORT";
+                const sideText = isBoth ? "BOTH" : (sideCode === 2.0 || qty < 0) ? "SHORT" : "LONG";
                 const sideFormatted = this.formatCell(sideText, 8, false);
-                const side = qty > 0 ? `${green}${sideFormatted}${reset}` : `${red}${sideFormatted}${reset}`;
+                const side = isBoth
+                    ? `${cyan}${bold}${sideFormatted}${reset}`
+                    : sideText === "LONG"
+                        ? `${green}${sideFormatted}${reset}`
+                        : `${red}${sideFormatted}${reset}`;
                 const entry = this.client.getOmsAvgEntryPrice(i);
                 const posBid = this.client.getBestBidPrice(i);
                 const posAsk = this.client.getBestAskPrice(i);
@@ -320,7 +329,7 @@ class MultiAssetCLIDashboard {
                 const uPnlColor = uPnl >= 0 ? green : red;
                 const uPnlStr = `${uPnl >= 0 ? "+" : ""}$${uPnl.toFixed(2)}`;
                 const uPnlFormatted = this.formatCell(uPnlStr, 56, false);
-                out += `| #${i}   | ${sym} | ${side} | ${this.formatCell(Math.abs(qty).toFixed(4), 10)} | $${this.formatCell(entry.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${uPnlColor}${bold}${uPnlFormatted}${reset} |${clearLine}\n`;
+                out += `| #${i}   | ${sym} | ${side} | ${this.formatCell(displayQty.toFixed(4), 10)} | $${this.formatCell(entry.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${uPnlColor}${bold}${uPnlFormatted}${reset} |${clearLine}\n`;
             }
         }
         if (!hasActivePosition) {

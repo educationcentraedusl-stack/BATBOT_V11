@@ -1744,7 +1744,7 @@ export class MultiAssetPositionLedger {
       summaries.set(sym, summary);
 
       if (summary.side !== "FLAT") {
-        totalGrossNotional += summary.netQuantity * (price > 0 ? price : summary.averageEntryPrice);
+        totalGrossNotional += summary.grossQuantity * (price > 0 ? price : summary.averageEntryPrice);
         totalUnrealized += summary.unrealizedPnl;
       }
       totalRealized += summary.cumulativeRealizedPnl;

@@ -49,6 +49,9 @@ class PositionLedger {
             symbol: this.symbol,
             side: "FLAT",
             netQuantity: 0,
+            longQuantity: 0,
+            shortQuantity: 0,
+            grossQuantity: 0,
             averageEntryPrice: 0,
             unrealizedPnl: 0,
             cumulativeRealizedPnl: 0,
@@ -223,6 +226,9 @@ class PositionLedger {
         this.cachedSummary.symbol = this.symbol;
         this.cachedSummary.side = this.side;
         this.cachedSummary.netQuantity = Number(this.netQuantity.toFixed(6));
+        this.cachedSummary.longQuantity = this.side === "LONG" ? Number(this.netQuantity.toFixed(6)) : 0;
+        this.cachedSummary.shortQuantity = this.side === "SHORT" ? Number(this.netQuantity.toFixed(6)) : 0;
+        this.cachedSummary.grossQuantity = Number(this.netQuantity.toFixed(6));
         this.cachedSummary.averageEntryPrice = Number(this.averageEntryPrice.toFixed(4));
         this.cachedSummary.unrealizedPnl = Number(this.getUnrealizedPnl(currentMarkPrice).toFixed(4));
         this.cachedSummary.cumulativeRealizedPnl = Number(this.cumulativeRealizedPnl.toFixed(4));
@@ -354,6 +360,9 @@ class HedgePositionLedger {
             symbol: this.symbol,
             side: "FLAT",
             netQuantity: 0,
+            longQuantity: 0,
+            shortQuantity: 0,
+            grossQuantity: 0,
             averageEntryPrice: 0,
             unrealizedPnl: 0,
             cumulativeRealizedPnl: 0,
@@ -442,14 +451,25 @@ class HedgePositionLedger {
                 weightedEntrySum += slot.entryPrice * slot.quantity;
             }
         }
+        let side = "FLAT";
+        if (longQty > 1e-9 && shortQty > 1e-9) {
+            side = "BOTH";
+        }
+        else if (longQty > 1e-9) {
+            side = "LONG";
+        }
+        else if (shortQty > 1e-9) {
+            side = "SHORT";
+        }
         const netQty = longQty - shortQty;
-        const absQty = Math.abs(netQty);
-        const side = netQty > 1e-9 ? "LONG" : netQty < -1e-9 ? "SHORT" : "FLAT";
         const totalPosQty = longQty + shortQty;
         const avgEntry = totalPosQty > 0 ? weightedEntrySum / totalPosQty : 0;
         this.cachedSummary.symbol = this.symbol;
         this.cachedSummary.side = side;
-        this.cachedSummary.netQuantity = Number(absQty.toFixed(6));
+        this.cachedSummary.netQuantity = Number(netQty.toFixed(6));
+        this.cachedSummary.longQuantity = Number(longQty.toFixed(6));
+        this.cachedSummary.shortQuantity = Number(shortQty.toFixed(6));
+        this.cachedSummary.grossQuantity = Number(totalPosQty.toFixed(6));
         this.cachedSummary.averageEntryPrice = Number(avgEntry.toFixed(4));
         this.cachedSummary.unrealizedPnl = Number(this.getUnrealizedPnl(currentMarkPrice).toFixed(4));
         this.cachedSummary.cumulativeRealizedPnl = Number(this.cumulativeRealizedPnl.toFixed(4));
@@ -713,33 +733,45 @@ class HedgePositionLedger {
         for (let i = 0; i < this.maxShortSlots; i++) {
             this.releaseShortSlot(i);
         }
-        let netQty = 0;
-        let weightedPxSum = 0;
-        let primarySide = "FLAT";
+        let hasLong = false;
+        let hasShort = false;
+        let longQty = 0;
+        let shortQty = 0;
+        let longPxSum = 0;
+        let shortPxSum = 0;
         for (const pos of recoveredPositions) {
             if (pos.quantity <= 0 || pos.entryPrice <= 0)
                 continue;
             if (pos.side === "LONG") {
                 this.occupyCoreLong(pos.quantity, pos.entryPrice, longTpPct, longSlPct);
-                netQty += pos.quantity;
-                weightedPxSum += pos.entryPrice * pos.quantity;
-                primarySide = "LONG";
+                hasLong = true;
+                longQty += pos.quantity;
+                longPxSum += pos.entryPrice * pos.quantity;
                 console.log(`[HedgePositionLedger] Recovered Core Long Position: ${pos.quantity} @ $${pos.entryPrice.toFixed(2)} (TP: $${this.coreLong.takeProfitPrice.toFixed(2)}, SL: $${this.coreLong.stopLossPrice.toFixed(2)})`);
             }
             else if (pos.side === "SHORT") {
                 const slotIdx = this.getAvailableShortSlotIndex();
                 if (slotIdx >= 0) {
                     this.occupyShortSlot(slotIdx, pos.quantity, pos.entryPrice, shortTpPct, shortSlPct);
-                    netQty += pos.quantity;
-                    weightedPxSum += pos.entryPrice * pos.quantity;
-                    primarySide = "SHORT";
+                    hasShort = true;
+                    shortQty += pos.quantity;
+                    shortPxSum += pos.entryPrice * pos.quantity;
                     console.log(`[HedgePositionLedger] Recovered Short Slot #${slotIdx} Position: ${pos.quantity} @ $${pos.entryPrice.toFixed(2)} (TP: $${this.shortSlots[slotIdx].takeProfitPrice.toFixed(2)}, SL: $${this.shortSlots[slotIdx].stopLossPrice.toFixed(2)})`);
                 }
             }
         }
-        if (primarySide !== "FLAT" && netQty > 0) {
-            const avgPx = weightedPxSum / netQty;
-            this.legacyLedger.syncActivePosition(primarySide, netQty, avgPx);
+        if (hasLong && hasShort) {
+            const grossQty = longQty + shortQty;
+            const avgPx = (longPxSum + shortPxSum) / grossQty;
+            this.legacyLedger.syncActivePosition("LONG", grossQty, avgPx);
+        }
+        else if (hasLong && longQty > 0) {
+            const avgPx = longPxSum / longQty;
+            this.legacyLedger.syncActivePosition("LONG", longQty, avgPx);
+        }
+        else if (hasShort && shortQty > 0) {
+            const avgPx = shortPxSum / shortQty;
+            this.legacyLedger.syncActivePosition("SHORT", shortQty, avgPx);
         }
     }
     releaseCoreLong(exitPrice, feeRate, exitReason = "SIGNAL_EXIT") {
