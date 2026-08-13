@@ -839,10 +839,16 @@ export class StrategyEngine {
         return this.staticResult;
       }
 
-      // Read AI predictions & latency metrics from SAB
-      const aiDirection = this.client.getAIPredictionDirection(this.assetIndex);
-      const aiConfidence = this.client.getAIPredictionConfidence(this.assetIndex);
-      const aiDirectionMag = this.client.getAIDirectionMagnitude(this.assetIndex) || Math.abs(aiDirection);
+      // Read AI predictions & latency metrics from SAB (Sanitized for NaN & magnitude non-negativity)
+      const rawDir = this.client.getAIPredictionDirection(this.assetIndex);
+      const rawConf = this.client.getAIPredictionConfidence(this.assetIndex);
+      const aiDirection = Number.isFinite(rawDir) ? rawDir : 0.0;
+      const aiConfidence = Number.isFinite(rawConf) ? Math.max(0.0, Math.min(1.0, rawConf)) : 0.0;
+
+      const rawMag = this.client.getAIDirectionMagnitude(this.assetIndex);
+      const aiDirectionMag = Number.isFinite(rawMag) && rawMag > 0
+        ? Math.abs(rawMag)
+        : Math.abs(aiDirection);
       const latencyPenalty = this.client.getLatencyPenaltyCoefficient(this.assetIndex);
       const penaltyCoeff = latencyPenalty > 0 ? Math.max(0.75, latencyPenalty) : 1.0;
       const slippageTicks = this.client.getDynamicSlippageTicks(this.assetIndex);
@@ -1168,16 +1174,36 @@ export class StrategyEngine {
       // Eradicates micro-return fee traps. Explicitly includes round-trip exchange fees (10 bps) + half spread.
       const ROUND_TRIP_FEE_BPS = 0.001; // 10 bps mandatory exchange fee floor
       const MIN_DIRECTIONAL_MAGNITUDE = 0.05; // Mandatory 0.05 conviction floor to eradicate micro-magnitude noise
-      const midPrice = askPrice > 0 && bidPrice > 0 ? (bidPrice + askPrice) / 2.0 : 1.0;
-      const halfSpreadBps = midPrice > 0 ? ((askPrice - bidPrice) / (2.0 * midPrice)) : 0.0001;
-      const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
-      const hawkesMultiplier = 1.0 + 0.2 * Math.log(1.0 + Math.max(0, hawkesIntensity));
+      
+      const midPrice = askPrice > 0 && bidPrice > 0 && Number.isFinite(askPrice) && Number.isFinite(bidPrice)
+        ? (bidPrice + askPrice) / 2.0
+        : 1.0;
+
+      const rawHalfSpread = midPrice > 0 && askPrice >= bidPrice && Number.isFinite(askPrice) && Number.isFinite(bidPrice)
+        ? (askPrice - bidPrice) / (2.0 * midPrice)
+        : 0.0001;
+      const halfSpreadBps = Number.isFinite(rawHalfSpread) && rawHalfSpread >= 0 ? rawHalfSpread : 0.0001;
+
+      const safeGarmanKlass = Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001 ? garmanKlassRV : 0;
+      const volEstimate = safeGarmanKlass > 0 ? Math.sqrt(safeGarmanKlass) : 0.005;
+
+      const safeHawkes = Number.isFinite(hawkesIntensity) && hawkesIntensity > 0 ? hawkesIntensity : 0;
+      const hawkesMultiplier = 1.0 + 0.2 * Math.log(1.0 + safeHawkes);
       
       // Dynamic Conviction Floor: K_conviction(t) MUST exceed half spread + round trip fees, bounded by absolute 0.05 floor
-      const dynamicConvictionFloor = Math.max(MIN_DIRECTIONAL_MAGNITUDE, halfSpreadBps + ROUND_TRIP_FEE_BPS, 0.5 * volEstimate * hawkesMultiplier);
+      const rawDynamicFloor = Math.max(
+        MIN_DIRECTIONAL_MAGNITUDE,
+        halfSpreadBps + ROUND_TRIP_FEE_BPS,
+        0.5 * volEstimate * hawkesMultiplier
+      );
+      const dynamicConvictionFloor = Number.isFinite(rawDynamicFloor) && rawDynamicFloor >= MIN_DIRECTIONAL_MAGNITUDE
+        ? rawDynamicFloor
+        : MIN_DIRECTIONAL_MAGNITUDE;
       
       // Volatility-Standardized Z-Score of the signal
-      const zScore = aiDirectionMag / Math.max(volEstimate, 0.0001);
+      const safeVol = Number.isFinite(volEstimate) && volEstimate >= 0.0001 ? volEstimate : 0.005;
+      const rawZScore = aiDirectionMag / safeVol;
+      const zScore = Number.isFinite(rawZScore) ? rawZScore : 0.0;
 
       // Dynamic Conviction Authorization: Require BOTH dynamicConvictionFloor AND Z-Score >= 1.5
       const minZScoreThreshold = 1.5;
