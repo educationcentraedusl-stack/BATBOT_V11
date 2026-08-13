@@ -405,8 +405,10 @@ class HedgePositionLedger {
     recordRealizedExit(slotSide, entryPrice, exitPrice, closedQty, exitFeeRate, exitReason = "SIGNAL_EXIT") {
         if (closedQty <= 0 || entryPrice <= 0 || exitPrice <= 0)
             return;
-        const takerFee = this.sizingCalc.getTakerFeeRate();
-        const feeRate = exitFeeRate !== undefined ? exitFeeRate : takerFee;
+        // Standard 0.05% (0.0005) taker fee floor per leg to guarantee true wallet loss reflection
+        const defaultTakerFee = 0.0005;
+        const takerFee = Math.max(defaultTakerFee, this.sizingCalc.getTakerFeeRate());
+        const feeRate = exitFeeRate !== undefined ? Math.max(0.0002, exitFeeRate) : takerFee;
         const grossPnl = slotSide === "LONG"
             ? (exitPrice - entryPrice) * closedQty
             : (entryPrice - exitPrice) * closedQty;
@@ -651,6 +653,7 @@ class HedgePositionLedger {
         this.coreLong.stopLossPercent = slPercent;
         this.coreLong.tpStageReached = 0;
         this.coreLong.breakEvenLocked = false;
+        this.coreLong.peakPrice = entryPrice;
         const makerFee = this.sizingCalc.getMakerFeeRate();
         const takerFee = this.sizingCalc.getTakerFeeRate();
         const feeMultiplier = (makerFee + takerFee) * 2.5; // Fee-adjusted zero-loss buffer loaded from .env
@@ -736,6 +739,7 @@ class HedgePositionLedger {
         slot.stopLossPercent = slPercent;
         slot.tpStageReached = 0;
         slot.breakEvenLocked = false;
+        slot.troughPrice = entryPrice;
         const makerFee = this.sizingCalc.getMakerFeeRate();
         const takerFee = this.sizingCalc.getTakerFeeRate();
         const feeMultiplier = (makerFee + takerFee) * 2.5; // Fee-adjusted zero-loss buffer loaded from .env
@@ -1050,7 +1054,7 @@ class HedgePositionLedger {
         }
         // 3. MVA-TS (Microstructure-Aware Volatility Adaptive Trailing Stop)
         // Under adverse toxic flow (ofi < 0 for Longs, ofi > 0 for Shorts), trailing stop distance MUST TIGHTEN
-        // (smaller adaptedDistPct -> smaller offsetUsdt -> stop price closer to mark price) to protect capital.
+        // Peak/Trough Tracking: LONG tracks peakPrice, SHORT tracks troughPrice to ratchet stop loss
         const baseDistPct = Math.max(0.005, volMetrics.garmanKlass1s * 2.0 * volMetrics.volatilityMultiplier);
         let adaptedDistPct = baseDistPct;
         if (isLong) {
@@ -1064,8 +1068,27 @@ class HedgePositionLedger {
                 : baseDistPct * (1.0 + 0.25 * Math.abs(hazardMetrics.ofi));
         }
         adaptedDistPct = Math.max(0.002, Math.min(0.05, adaptedDistPct));
-        const offsetUsdt = slot.entryPrice * adaptedDistPct;
-        let mvaStopPrice = isLong ? markPrice - offsetUsdt : markPrice + offsetUsdt;
+        let mvaStopPrice = 0;
+        if (isLong) {
+            slot.peakPrice = Math.max(slot.peakPrice || slot.entryPrice, markPrice);
+            const offsetUsdt = slot.peakPrice * adaptedDistPct;
+            mvaStopPrice = slot.peakPrice - offsetUsdt;
+            // Ratchet up only
+            if (mvaStopPrice > slot.stopLossPrice) {
+                slot.stopLossPrice = mvaStopPrice;
+            }
+        }
+        else {
+            slot.troughPrice = (slot.troughPrice && slot.troughPrice > 0)
+                ? Math.min(slot.troughPrice, markPrice)
+                : markPrice;
+            const offsetUsdt = slot.troughPrice * adaptedDistPct;
+            mvaStopPrice = slot.troughPrice + offsetUsdt;
+            // Ratchet down only
+            if (slot.stopLossPrice === 0 || mvaStopPrice < slot.stopLossPrice) {
+                slot.stopLossPrice = mvaStopPrice;
+            }
+        }
         // Absolute Fee-Adjusted Zero-Loss Guarantee Floor
         if (slot.breakEvenLocked && slot.breakEvenPrice && slot.breakEvenPrice > 0) {
             mvaStopPrice = isLong

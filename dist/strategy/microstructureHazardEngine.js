@@ -221,17 +221,19 @@ class MicrostructureHazardEngine {
         const confidenceDecay = currentLogitConfidence < 0.50 ? (0.50 - currentLogitConfidence) * 2.0 : 0;
         // Composite Linear Risk Score
         const hazardScore = Math.min(1.0, 0.35 * adverseOFI + 0.35 * adverseTFI + 0.20 * vpin + 0.10 * confidenceDecay);
-        // Weibull Baseline Hazard h0(t)
+        // Fixed Weibull Baseline Hazard h0(t): prevents artificial time-decay panic flushes
         const tSec = Math.max(0.1, durationMs * 0.001);
-        const h0_t = 0.06 * Math.pow(0.05 * tSec, 0.2);
+        const h0_t = 0.002 * Math.pow(1.0 + 0.01 * tSec, 0.1);
         // Linear Predictor eta = theta^T * X_t
         const eta = 1.5 * adverseOFI + 1.5 * adverseTFI + 2.0 * vpin + 1.0 * confidenceDecay;
         // Cox Proportional Hazard Rate h(t) = h0(t) * exp(eta)
         const coxHazardRate = h0_t * Math.exp(eta);
-        // Cumulative Hazard H(t) = h(t) * tSec
-        const cumulativeHazard = coxHazardRate * tSec;
+        // Bounded Cumulative Hazard H(t): prevents time duration alone from triggering panic flushes without toxic flow
+        const durationFactor = Math.min(10.0, 1.0 + 0.05 * tSec);
+        const cumulativeHazard = coxHazardRate * durationFactor;
         const survivalProbability = Math.max(0.001, Math.min(1.0, Math.exp(-cumulativeHazard)));
-        const isHazardExitTriggered = hazardScore >= this.hazardThreshold || survivalProbability <= 0.15;
+        // Hazard Flush ONLY triggers when toxic order flow is actively detected (hazardScore >= threshold) or high hazard + low survival
+        const isHazardExitTriggered = hazardScore >= this.hazardThreshold || (survivalProbability <= 0.15 && hazardScore >= 0.40);
         const res = this.cachedMetricsRing[this.metricsRingIdx];
         this.metricsRingIdx = (this.metricsRingIdx + 1) % 8;
         res.ofi = ofi;

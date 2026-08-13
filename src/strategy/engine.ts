@@ -87,6 +87,7 @@ export class StrategyEngine {
   private state: EngineState = "LIVE_ACTIVE";
   private assetIndex: number = 0;
   private isOrderInFlight: boolean = false;
+  private pendingEntryOrders: Map<number, { slotId: string; posSide: "LONG" | "SHORT"; slotIndex?: number; qty: number; targetPrice: number }> = new Map();
 
   private reusableOrderIntent!: OrderIntent;
 
@@ -309,7 +310,50 @@ export class StrategyEngine {
 
     this.userDataStream.subscribeOrderUpdates((update: OrderTradeUpdatePayload) => {
       const { order } = update;
+      const orderId = order.orderId;
+
       if (order.orderStatus === "FILLED" || order.orderStatus === "PARTIALLY_FILLED") {
+        // 1. Check if this is a pending ENTRY order confirmation from Binance
+        if (this.pendingEntryOrders.has(orderId)) {
+          const pending = this.pendingEntryOrders.get(orderId)!;
+          this.pendingEntryOrders.delete(orderId);
+
+          const execPx = order.lastFilledPrice > 0 ? order.lastFilledPrice : pending.targetPrice;
+          const execQty = order.cumulativeFilledQuantity > 0 ? order.cumulativeFilledQuantity : pending.qty;
+
+          console.log(`[BinanceExecution][WS_ENTRY_FILL_CONFIRMED] OrderId #${orderId} FILLED on Binance! Occupying local slot ${pending.slotId}. Qty: ${execQty} @ $${execPx}`);
+
+          const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
+          const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
+          const dynamicSlPct = Math.max(0.005, volEstimate * 2.0);
+          const dynamicSlPercent = dynamicSlPct * 100;
+
+          if (pending.posSide === "LONG") {
+            this.hedgeLedger.occupyCoreLong(execQty, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
+            this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch((err) => {
+              console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+            });
+          } else if (pending.posSide === "SHORT" && pending.slotIndex !== undefined) {
+            this.hedgeLedger.occupyShortSlot(pending.slotIndex, execQty, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
+            this.dispatchBatchPostOnlyTpOrders(pending.slotId, execPx, execQty, "SHORT").catch((err) => {
+              console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+            });
+          }
+
+          this.onExecutionCompleted({
+            symbol: this.config.symbol,
+            assetIndex: this.assetIndex,
+            side: order.side as "BUY" | "SELL",
+            positionSide: pending.posSide,
+            isCloseOrder: false,
+            executedQty: execQty,
+            executedPrice: execPx,
+            fillTimestampMs: Date.now(),
+          });
+          return;
+        }
+
+        // 2. Otherwise check if this is an EXIT or TP limit order fill
         if (order.orderType === "LIMIT" || order.isMaker) {
           console.log(`[MAKER_TP_ENGINE][WS_FILL_NOTIFIED] OrderId #${order.orderId} filled as ${order.isMaker ? "MAKER" : "TAKER"}. Qty: ${order.lastFilledQuantity} @ $${order.lastFilledPrice}`);
 
@@ -364,6 +408,11 @@ export class StrategyEngine {
               fillTimestampMs: Date.now(),
             });
           }
+        }
+      } else if (order.orderStatus === "CANCELED" || order.orderStatus === "EXPIRED" || (order.orderStatus as string) === "REJECTED") {
+        if (this.pendingEntryOrders.has(orderId)) {
+          console.warn(`[BinanceExecution][WS_ENTRY_CANCELLED] Pending entry OrderId #${orderId} was ${order.orderStatus} on Binance. Local slot remains FLAT.`);
+          this.pendingEntryOrders.delete(orderId);
         }
       }
     });
@@ -1251,35 +1300,57 @@ export class StrategyEngine {
           .then((res) => {
             if (res) {
               const execPx = parseFloat(res.price || res.avgPrice || "0") || targetPrice;
+              const executedQty = parseFloat(res.executedQty || "0");
+              const isFilled = res.status === "FILLED" || executedQty > 0;
+              const isPending = res.status === "NEW";
 
-              this.onExecutionCompleted({
-                symbol: this.config.symbol,
-                assetIndex: this.assetIndex,
-                side: res.side as "BUY" | "SELL",
-                positionSide: targetPosSide!,
-                isCloseOrder: false,
-                executedQty: finalQuantity,
-                executedPrice: execPx,
-                fillTimestampMs: Date.now(),
-              });
+              console.log(`[BinanceExecution][RESPONSE] OrderId: ${res.orderId}, Status: ${res.status}, ExecQty: ${executedQty}, Price: ${execPx}`);
 
-              console.log(`[BinanceExecution][SUCCESS] Order Executed on Binance! OrderId: ${res.orderId}, Status: ${res.status}, ExecQty: ${res.executedQty}`);
-              const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
-              const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
-              const dynamicSlPct = Math.max(0.005, volEstimate * 2.0);
-              const dynamicSlPercent = dynamicSlPct * 100;
-
-              if (targetPosSide === "LONG") {
-                this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
-                this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, finalQuantity, "LONG").catch((err) => {
-                  console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+              if (isFilled) {
+                // Confirmed Fill on REST Response! Occupy slot immediately
+                this.onExecutionCompleted({
+                  symbol: this.config.symbol,
+                  assetIndex: this.assetIndex,
+                  side: res.side as "BUY" | "SELL",
+                  positionSide: targetPosSide!,
+                  isCloseOrder: false,
+                  executedQty: executedQty > 0 ? executedQty : finalQuantity,
+                  executedPrice: execPx,
+                  fillTimestampMs: Date.now(),
                 });
-              } else if (targetPosSide === "SHORT" && targetSlotIndex !== undefined) {
-                const slotId = `SHORT_SLOT_${targetSlotIndex}`;
-                this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
-                this.dispatchBatchPostOnlyTpOrders(slotId, execPx, finalQuantity, "SHORT").catch((err) => {
-                  console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
-                });
+
+                const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
+                const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
+                const dynamicSlPct = Math.max(0.005, volEstimate * 2.0);
+                const dynamicSlPercent = dynamicSlPct * 100;
+
+                if (targetPosSide === "LONG") {
+                  this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
+                  this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, finalQuantity, "LONG").catch((err) => {
+                    console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+                  });
+                } else if (targetPosSide === "SHORT" && targetSlotIndex !== undefined) {
+                  const slotId = `SHORT_SLOT_${targetSlotIndex}`;
+                  this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
+                  this.dispatchBatchPostOnlyTpOrders(slotId, execPx, finalQuantity, "SHORT").catch((err) => {
+                    console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+                  });
+                }
+              } else if (isPending && res.orderId) {
+                // Pending Limit / Post-Only Order placed on Binance orderbook: DO NOT occupy slot until WS fill confirmation
+                const numericOrderId = typeof res.orderId === "number" ? res.orderId : parseInt(String(res.orderId), 10);
+                if (!isNaN(numericOrderId)) {
+                  this.pendingEntryOrders.set(numericOrderId, {
+                    slotId: targetSlotId!,
+                    posSide: targetPosSide!,
+                    slotIndex: targetSlotIndex,
+                    qty: finalQuantity,
+                    targetPrice: execPx,
+                  });
+                  console.log(`[BinanceExecution][PENDING_FILL] Registered pending entry OrderId #${numericOrderId} for slot ${targetSlotId}. Slot WILL NOT be occupied until WS fill confirmation.`);
+                }
+              } else {
+                console.warn(`[BinanceExecution][UNFILLED_ORDER] Order placement returned status "${res.status}". Local slot ${targetSlotId} remains FLAT.`);
               }
             }
             return res;

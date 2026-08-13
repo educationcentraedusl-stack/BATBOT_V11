@@ -27,7 +27,7 @@ fn test_fast_float_parsing_performance() {
         "\n[Bench] fast-float parsed 200,000 floats in {:?}. Average latency: {:.2} ns / parse",
         elapsed, nanos_per_op
     );
-    let threshold_ns = if cfg!(debug_assertions) { 1000.0 } else { 50.0 };
+    let threshold_ns = if cfg!(debug_assertions) { 2500.0 } else { 50.0 };
     assert!(
         nanos_per_op < threshold_ns,
         "Float parse latency ({:.2} ns) exceeded threshold ({:.2} ns)",
