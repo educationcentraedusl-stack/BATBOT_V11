@@ -196,14 +196,15 @@ export async function runProductionTuiLauncher(): Promise<void> {
                   const qtyNum = parseFloat(rawQty);
                   const displayPrice = avgPx > 0 ? avgPx : (px > 0 ? px : (cumQuote > 0 && qtyNum > 0 ? cumQuote / qtyNum : (result.bidPrice || result.askPrice)));
                   
+                  const priceDecimals = SymbolPrecisionRegistry.getPrecisionRule(res.symbol).priceDecimals;
                   const isFilled = res.status === "FILLED" || parseFloat(res.executedQty || "0") > 0;
                   if (isFilled) {
                     dashboard.pushNotification(
-                      `[ORDER_FILLED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${rawQty} @ $${displayPrice.toFixed(2)}`
+                      `[ORDER_FILLED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${rawQty} @ $${displayPrice.toFixed(priceDecimals)}`
                     );
                   } else {
                     dashboard.pushNotification(
-                      `[ORDER_SUBMITTED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${rawQty} @ $${displayPrice.toFixed(2)} (${res.timeInForce || "POST_ONLY"})`
+                      `[ORDER_SUBMITTED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${rawQty} @ $${displayPrice.toFixed(priceDecimals)} (${res.timeInForce || "POST_ONLY"})`
                     );
                   }
                 }
@@ -230,7 +231,8 @@ export async function runProductionTuiLauncher(): Promise<void> {
         }
       }
     } catch (err: unknown) {
-      // Non-blocking tick error handling
+      const msg = err instanceof Error ? err.message : String(err);
+      dashboard.pushNotification(`⚠️ [STRATEGY_TICK_ERROR] ${msg}`);
     }
   }, 10);
 

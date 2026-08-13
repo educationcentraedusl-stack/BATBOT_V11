@@ -140,7 +140,7 @@ export class MultiAssetStrategyEngine {
     
     this.reconciliationTimer = setInterval(() => {
       this.syncExchangeState().catch((err: any) => {
-        // Silently capture transient network issues
+        console.warn(`[MultiAssetStrategyEngine][ReconciliationHeartbeat] Notice during state sync: ${err?.message || String(err)}`);
       });
     }, intervalMs);
   }
@@ -153,6 +153,9 @@ export class MultiAssetStrategyEngine {
     if (this.centralizedUserDataStream) {
       this.centralizedUserDataStream.stop();
       this.centralizedUserDataStream = null;
+    }
+    for (const engine of this.engines.values()) {
+      engine.clearPendingEntryOrders();
     }
     console.log("[MultiAssetStrategyEngine] Continuous reconciliation & centralized stream stopped.");
   }
@@ -181,8 +184,8 @@ export class MultiAssetStrategyEngine {
         await engine.syncExchangeStateWithData(symbolPositions, symbolOrders);
 
         const summary = engine.getHedgeLedger().getSummary(0);
-        if (summary.side !== "FLAT" && summary.netQuantity > 0) {
-          const symbolGrossNotional = summary.netQuantity * summary.averageEntryPrice;
+        if (summary.side !== "FLAT" && summary.grossQuantity > 0) {
+          const symbolGrossNotional = summary.grossQuantity * summary.averageEntryPrice;
           totalNotional += symbolGrossNotional;
           this.riskGuard.updateSymbolNotional(symbol, symbolGrossNotional);
         }

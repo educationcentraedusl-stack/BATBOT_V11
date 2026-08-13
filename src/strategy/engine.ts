@@ -280,6 +280,15 @@ export class StrategyEngine {
     return false;
   }
 
+  public clearPendingEntryOrders(): void {
+    for (const pending of this.pendingEntryOrders.values()) {
+      if (pending.timeoutTimer) {
+        clearTimeout(pending.timeoutTimer);
+      }
+    }
+    this.pendingEntryOrders.clear();
+  }
+
   /**
    * Centralized fill lifecycle observer for both ENTRY and EXIT executions.
    * Enforces dual-tier cooldown synchronization across RiskGuard (software state)
@@ -587,12 +596,16 @@ export class StrategyEngine {
 
           if (targetPosSide === "LONG") {
             this.hedgeLedger.occupyCoreLong(execQty, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
-            this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch(() => {});
+            this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch((err) => {
+              console.error(`[BinanceExecution][UNTRACKED_TP_DISPATCH_ERROR] ${err?.message || String(err)}`);
+            });
           } else {
             const slotIdx = this.hedgeLedger.getAvailableShortSlotIndex();
             const targetIdx = slotIdx >= 0 ? slotIdx : 0;
             this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
-            this.dispatchBatchPostOnlyTpOrders(`SHORT_SLOT_${targetIdx}`, execPx, execQty, "SHORT").catch(() => {});
+            this.dispatchBatchPostOnlyTpOrders(`SHORT_SLOT_${targetIdx}`, execPx, execQty, "SHORT").catch((err) => {
+              console.error(`[BinanceExecution][UNTRACKED_TP_DISPATCH_ERROR] ${err?.message || String(err)}`);
+            });
           }
 
           this.onExecutionCompleted({
@@ -1610,6 +1623,10 @@ export class StrategyEngine {
                       console.log(`[BinanceExecution][PENDING_FALLBACK_CHECK] Auditing pending OrderId #${numericOrderId} for ${this.config.symbol}...`);
                       try {
                         const orderCheck = await this.executionClient.getOrder(this.config.symbol, numericOrderId);
+                        // Race Condition Defense: Verify order wasn't already filled by WebSocket during the getOrder await
+                        if (!this.pendingEntryOrders.has(numericOrderId)) {
+                          return;
+                        }
                         if (orderCheck && (orderCheck.status === "FILLED" || parseFloat(orderCheck.executedQty || "0") > 0)) {
                           const execQty = parseFloat(orderCheck.executedQty || "0") || finalQuantity;
                           const execPx = parseFloat(orderCheck.avgPrice || orderCheck.price || "0") || targetPrice;
@@ -1620,8 +1637,12 @@ export class StrategyEngine {
                           this.pendingEntryOrders.delete(numericOrderId);
                         }
                       } catch (err: any) {
-                        // In case getOrder fails, fall back to syncExchangeState
-                        this.syncExchangeState().catch(() => {});
+                        if (this.pendingEntryOrders.has(numericOrderId)) {
+                          console.error(`[BinanceExecution][FALLBACK_AUDIT_ERROR] Failed to audit order #${numericOrderId}: ${err?.message || String(err)}`);
+                          this.syncExchangeState().catch((syncErr: any) => {
+                            console.error(`[BinanceExecution][FALLBACK_SYNC_ERROR] ${syncErr?.message || String(syncErr)}`);
+                          });
+                        }
                       }
                     }
                   }, 2500);

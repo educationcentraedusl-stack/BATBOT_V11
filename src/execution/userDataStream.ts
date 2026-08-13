@@ -58,7 +58,9 @@ export class BinanceUserDataStream {
   private ws: WebSocket | null = null;
   private listenKey: string = "";
   private keepAliveTimer: NodeJS.Timeout | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
   private isConnected: boolean = false;
+  private isDisposed: boolean = false;
   private reconnectAttempts: number = 0;
   private orderCallbacks: Set<OrderTradeUpdateCallback> = new Set();
   private accountCallbacks: Set<AccountUpdateCallback> = new Set();
@@ -87,7 +89,7 @@ export class BinanceUserDataStream {
   }
 
   public isStreamConnected(): boolean {
-    return this.isConnected;
+    return this.isConnected && !this.isDisposed;
   }
 
   public async start(): Promise<boolean> {
@@ -95,6 +97,8 @@ export class BinanceUserDataStream {
       console.warn(`[BinanceUserDataStream] Execution client is not configured. User Data Stream disabled.`);
       return false;
     }
+
+    this.isDisposed = false;
 
     try {
       this.listenKey = await this.client.createListenKey();
@@ -113,16 +117,23 @@ export class BinanceUserDataStream {
   }
 
   private connectWebSocket(url: string): void {
+    if (this.isDisposed) return;
+
     try {
       this.ws = new WebSocket(url);
 
       this.ws.on("open", () => {
+        if (this.isDisposed) {
+          this.ws?.close();
+          return;
+        }
         this.isConnected = true;
         this.reconnectAttempts = 0;
         console.log(`[BinanceUserDataStream] Centralized account WebSocket connection established successfully.`);
       });
 
       this.ws.on("message", (data: WebSocket.RawData) => {
+        if (this.isDisposed) return;
         try {
           const payload = JSON.parse(data.toString());
           if (!payload) return;
@@ -199,37 +210,58 @@ export class BinanceUserDataStream {
       });
 
       this.ws.on("error", (err: Error) => {
+        if (this.isDisposed) return;
         console.error(`[BinanceUserDataStream] WebSocket Error: ${err.message}`);
       });
 
       this.ws.on("close", (code: number, reason: Buffer) => {
         this.isConnected = false;
+        if (this.isDisposed) return;
         console.warn(`[BinanceUserDataStream] WebSocket closed [Code: ${code}, Reason: ${reason.toString()}]`);
-        this.handleReconnect(url);
+        this.handleReconnect();
       });
     } catch (err: any) {
-      console.error(`[BinanceUserDataStream] Failed to initiate WebSocket: ${err.message}`);
+      if (!this.isDisposed) {
+        console.error(`[BinanceUserDataStream] Failed to initiate WebSocket: ${err.message}`);
+      }
     }
   }
 
-  private handleReconnect(url: string): void {
+  private handleReconnect(): void {
+    if (this.isDisposed) return;
+
     if (this.reconnectAttempts >= this.maxReconnectRetries) {
       console.error(`[BinanceUserDataStream] Exceeded max reconnect attempts (${this.maxReconnectRetries}). User Data Stream halted.`);
       return;
+    }
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
 
     this.reconnectAttempts++;
     const backoffMs = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
     console.log(`[BinanceUserDataStream] Reconnecting in ${backoffMs}ms (Attempt ${this.reconnectAttempts}/${this.maxReconnectRetries})...`);
 
-    setTimeout(() => {
-      this.connectWebSocket(url);
+    this.reconnectTimer = setTimeout(async () => {
+      if (this.isDisposed) return;
+      try {
+        this.listenKey = await this.client.createListenKey();
+        const wsBase = this.client.getWsUrl();
+        const wsUrl = `${wsBase}/ws/${this.listenKey}`;
+        this.connectWebSocket(wsUrl);
+      } catch (err: any) {
+        console.error(`[BinanceUserDataStream] Failed to renew listenKey on reconnect: ${err.message}`);
+        this.handleReconnect();
+      }
     }, backoffMs);
   }
 
   private startKeepAliveTimer(): void {
     if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
     this.keepAliveTimer = setInterval(async () => {
+      if (this.isDisposed) return;
       try {
         if (this.listenKey) {
           await this.client.keepAliveListenKey();
@@ -242,6 +274,11 @@ export class BinanceUserDataStream {
   }
 
   public stop(): void {
+    this.isDisposed = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (this.keepAliveTimer) {
       clearInterval(this.keepAliveTimer);
       this.keepAliveTimer = null;
@@ -252,6 +289,8 @@ export class BinanceUserDataStream {
       this.ws = null;
     }
     this.isConnected = false;
+    this.orderCallbacks.clear();
+    this.accountCallbacks.clear();
     console.log(`[BinanceUserDataStream] User Data Stream stopped.`);
   }
 }
