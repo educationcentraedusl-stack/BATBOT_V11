@@ -4,6 +4,7 @@ exports.MultiAssetStrategyEngine = void 0;
 const positionLedger_1 = require("./positionLedger");
 const engine_1 = require("./engine");
 const tradingSymbols_1 = require("../config/tradingSymbols");
+const userDataStream_1 = require("../execution/userDataStream");
 class MultiAssetStrategyEngine {
     client;
     riskGuard;
@@ -12,6 +13,9 @@ class MultiAssetStrategyEngine {
     activeSymbols;
     engines = new Map();
     state = "LIVE_ACTIVE";
+    // Centralized account-level User Data Stream & Reconciliation Heartbeat
+    centralizedUserDataStream = null;
+    reconciliationTimer = null;
     constructor(client, riskGuard, executionClient, symbols, positionLedger) {
         this.client = client;
         this.riskGuard = riskGuard;
@@ -50,19 +54,69 @@ class MultiAssetStrategyEngine {
             engine.setEngineState(state);
         }
     }
+    /**
+     * Initializes a single centralized Binance User Data Stream for the entire account
+     * and routes symbol-specific trade and position updates directly to matching StrategyEngine instances.
+     */
     async initUserDataStream() {
-        let anySuccess = false;
-        for (const engine of this.engines.values()) {
-            const started = await engine.initUserDataStream();
-            if (started)
-                anySuccess = true;
+        if (!this.executionClient.isConfigured()) {
+            console.warn("[MultiAssetStrategyEngine] Binance execution client unconfigured. Skipping User Data Stream.");
+            return false;
         }
-        return anySuccess;
+        if (this.centralizedUserDataStream && this.centralizedUserDataStream.isStreamConnected()) {
+            return true;
+        }
+        this.centralizedUserDataStream = new userDataStream_1.BinanceUserDataStream(this.executionClient);
+        // Multiplex incoming ORDER_TRADE_UPDATE events by symbol
+        this.centralizedUserDataStream.subscribeOrderUpdates((update) => {
+            const symbol = update.order.symbol;
+            const engine = this.engines.get(symbol);
+            if (engine) {
+                engine.handleWsOrderUpdate(update);
+            }
+        });
+        // Multiplex incoming ACCOUNT_UPDATE position events by symbol
+        this.centralizedUserDataStream.subscribeAccountUpdates((accUpdate) => {
+            for (const pos of accUpdate.positions) {
+                const engine = this.engines.get(pos.symbol);
+                if (engine) {
+                    engine.handleWsAccountPositionUpdate(pos);
+                }
+            }
+        });
+        const started = await this.centralizedUserDataStream.start();
+        if (started) {
+            console.log(`[MultiAssetStrategyEngine] Single Centralized Account-Level User Data Stream online across ${this.engines.size} symbols.`);
+        }
+        return started;
+    }
+    /**
+     * Starts a continuous background reconciliation heartbeat auditing live Binance positionRisk
+     * against internal ledgers every N milliseconds to guarantee zero-orphan state integrity.
+     */
+    startContinuousReconciliation(intervalMs = 5000) {
+        if (this.reconciliationTimer)
+            return;
+        console.log(`[MultiAssetStrategyEngine][ReconciliationHeartbeat] Continuous ${intervalMs}ms state reconciliation heartbeat online.`);
+        this.reconciliationTimer = setInterval(() => {
+            this.syncExchangeState().catch((err) => {
+                // Silently capture transient network issues
+            });
+        }, intervalMs);
+    }
+    stopContinuousReconciliation() {
+        if (this.reconciliationTimer) {
+            clearInterval(this.reconciliationTimer);
+            this.reconciliationTimer = null;
+        }
+        if (this.centralizedUserDataStream) {
+            this.centralizedUserDataStream.stop();
+            this.centralizedUserDataStream = null;
+        }
+        console.log("[MultiAssetStrategyEngine] Continuous reconciliation & centralized stream stopped.");
     }
     async syncExchangeState() {
-        console.log(`[MultiAssetStrategyEngine][StateSync] Initiating multi-asset state hydration across ${this.engines.size} active symbol engines...`);
         if (!this.executionClient.isConfigured()) {
-            console.log("[MultiAssetStrategyEngine][StateSync] BinanceExecutionClient unconfigured. Skipping state sync.");
             return;
         }
         try {
@@ -87,8 +141,6 @@ class MultiAssetStrategyEngine {
                 }
             }
             this.riskGuard.updatePositionNotional(totalNotional);
-            const activeCount = validPositions.filter((p) => Math.abs(parseFloat(p.positionAmt || "0")) > 0).length;
-            console.log(`[MultiAssetStrategyEngine][StateSync] Multi-asset state hydration complete. Synced ${activeCount} active open position(s). Active Portfolio Gross Notional: $${totalNotional.toFixed(2)} USDT`);
         }
         catch (err) {
             console.error(`[MultiAssetStrategyEngine][StateSync][ERROR] Failed to fetch Binance exchange state: ${err.message}`);

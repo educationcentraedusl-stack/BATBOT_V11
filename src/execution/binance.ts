@@ -610,6 +610,15 @@ export class BinanceExecutionClient {
     return this.request<BinanceAccountBalance[]>("GET", "/fapi/v2/account", {}, true);
   }
 
+  public async getOrder(symbol: string, orderId: number | string): Promise<BinanceOrderResponse> {
+    return this.request<BinanceOrderResponse>(
+      "GET",
+      "/fapi/v1/order",
+      { symbol, orderId },
+      true
+    );
+  }
+
   public async createListenKey(): Promise<string> {
     const res = await this.request<{ listenKey: string }>("POST", "/fapi/v1/listenKey", {}, true);
     return res.listenKey;

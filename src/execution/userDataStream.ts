@@ -33,7 +33,25 @@ export interface OrderTradeUpdatePayload {
   };
 }
 
+export interface AccountPositionUpdatePayload {
+  symbol: string;
+  positionAmt: number;
+  entryPrice: number;
+  accumulatedRealized: number;
+  unrealizedPnl: number;
+  positionSide: "LONG" | "SHORT" | "BOTH";
+}
+
+export interface AccountUpdatePayload {
+  eventType: string; // "ACCOUNT_UPDATE"
+  eventTime: number;
+  transactionTime: number;
+  reasonType: string; // "ORDER", "FUNDING_FEE", "DEPOSIT", "WITHDRAW", etc.
+  positions: AccountPositionUpdatePayload[];
+}
+
 export type OrderTradeUpdateCallback = (update: OrderTradeUpdatePayload) => void;
+export type AccountUpdateCallback = (update: AccountUpdatePayload) => void;
 
 export class BinanceUserDataStream {
   private client: BinanceExecutionClient;
@@ -42,7 +60,8 @@ export class BinanceUserDataStream {
   private keepAliveTimer: NodeJS.Timeout | null = null;
   private isConnected: boolean = false;
   private reconnectAttempts: number = 0;
-  private callbacks: Set<OrderTradeUpdateCallback> = new Set();
+  private orderCallbacks: Set<OrderTradeUpdateCallback> = new Set();
+  private accountCallbacks: Set<AccountUpdateCallback> = new Set();
 
   private keepAliveIntervalMs: number;
   private maxReconnectRetries: number;
@@ -54,9 +73,16 @@ export class BinanceUserDataStream {
   }
 
   public subscribeOrderUpdates(callback: OrderTradeUpdateCallback): () => void {
-    this.callbacks.add(callback);
+    this.orderCallbacks.add(callback);
     return () => {
-      this.callbacks.delete(callback);
+      this.orderCallbacks.delete(callback);
+    };
+  }
+
+  public subscribeAccountUpdates(callback: AccountUpdateCallback): () => void {
+    this.accountCallbacks.add(callback);
+    return () => {
+      this.accountCallbacks.delete(callback);
     };
   }
 
@@ -72,7 +98,7 @@ export class BinanceUserDataStream {
 
     try {
       this.listenKey = await this.client.createListenKey();
-      console.log(`[BinanceUserDataStream] Created listenKey: ${this.listenKey.substring(0, 8)}...`);
+      console.log(`[BinanceUserDataStream] Created centralized listenKey: ${this.listenKey.substring(0, 8)}...`);
 
       const wsBase = this.client.getWsUrl();
       const wsUrl = `${wsBase}/ws/${this.listenKey}`;
@@ -93,13 +119,15 @@ export class BinanceUserDataStream {
       this.ws.on("open", () => {
         this.isConnected = true;
         this.reconnectAttempts = 0;
-        console.log(`[BinanceUserDataStream] WebSocket connection established successfully.`);
+        console.log(`[BinanceUserDataStream] Centralized account WebSocket connection established successfully.`);
       });
 
       this.ws.on("message", (data: WebSocket.RawData) => {
         try {
           const payload = JSON.parse(data.toString());
-          if (payload && payload.e === "ORDER_TRADE_UPDATE") {
+          if (!payload) return;
+
+          if (payload.e === "ORDER_TRADE_UPDATE" && payload.o) {
             const parsedUpdate: OrderTradeUpdatePayload = {
               eventType: payload.e,
               eventTime: payload.E,
@@ -131,11 +159,37 @@ export class BinanceUserDataStream {
               },
             };
 
-            for (const cb of this.callbacks) {
+            for (const cb of this.orderCallbacks) {
               try {
                 cb(parsedUpdate);
               } catch (err: any) {
-                console.error(`[BinanceUserDataStream] Error in callback handler: ${err.message}`);
+                console.error(`[BinanceUserDataStream] Error in order callback handler: ${err.message}`);
+              }
+            }
+          } else if (payload.e === "ACCOUNT_UPDATE" && payload.a) {
+            const rawPositions = Array.isArray(payload.a.P) ? payload.a.P : [];
+            const positions: AccountPositionUpdatePayload[] = rawPositions.map((p: any) => ({
+              symbol: p.s,
+              positionAmt: parseFloat(p.pa || "0"),
+              entryPrice: parseFloat(p.ep || "0"),
+              accumulatedRealized: parseFloat(p.cr || "0"),
+              unrealizedPnl: parseFloat(p.up || "0"),
+              positionSide: p.ps || "BOTH",
+            }));
+
+            const accountUpdate: AccountUpdatePayload = {
+              eventType: payload.e,
+              eventTime: payload.E,
+              transactionTime: payload.T,
+              reasonType: payload.a.m || "ORDER",
+              positions,
+            };
+
+            for (const cb of this.accountCallbacks) {
+              try {
+                cb(accountUpdate);
+              } catch (err: any) {
+                console.error(`[BinanceUserDataStream] Error in account callback handler: ${err.message}`);
               }
             }
           }

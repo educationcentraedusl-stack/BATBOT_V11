@@ -238,219 +238,284 @@ class StrategyEngine {
             return false;
         this.userDataStream = new userDataStream_1.BinanceUserDataStream(this.executionClient);
         this.userDataStream.subscribeOrderUpdates((update) => {
-            const { order } = update;
-            if (order.symbol !== this.config.symbol)
-                return; // Strict asset symbol filter for zero cross-asset state pollution
-            const orderId = order.orderId;
-            if (order.orderStatus === "FILLED" || order.orderStatus === "PARTIALLY_FILLED") {
-                // 1. Check if this is a pending ENTRY order confirmation from Binance
-                if (this.pendingEntryOrders.has(orderId)) {
-                    const pending = this.pendingEntryOrders.get(orderId);
-                    this.pendingEntryOrders.delete(orderId);
-                    const execPx = order.lastFilledPrice > 0 ? order.lastFilledPrice : pending.targetPrice;
-                    const execQty = order.cumulativeFilledQuantity > 0 ? order.cumulativeFilledQuantity : pending.qty;
-                    console.log(`[BinanceExecution][WS_ENTRY_FILL_CONFIRMED] OrderId #${orderId} FILLED on Binance! Occupying local slot ${pending.slotId}. Qty: ${execQty} @ $${execPx}`);
+            this.handleWsOrderUpdate(update);
+        });
+        this.userDataStream.subscribeAccountUpdates((accUpdate) => {
+            for (const pos of accUpdate.positions) {
+                if (pos.symbol === this.config.symbol) {
+                    this.handleWsAccountPositionUpdate(pos);
+                }
+            }
+        });
+        return this.userDataStream.start();
+    }
+    handleConfirmedEntryFill(orderId, slotId, posSide, slotIndex, execQty, execPx) {
+        const pending = this.pendingEntryOrders.get(orderId);
+        if (pending?.timeoutTimer) {
+            clearTimeout(pending.timeoutTimer);
+        }
+        this.pendingEntryOrders.delete(orderId);
+        const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
+        const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
+        const dynamicSlPct = Math.max(0.005, volEstimate * 2.0);
+        const dynamicSlPercent = dynamicSlPct * 100;
+        if (posSide === "LONG") {
+            this.hedgeLedger.occupyCoreLong(execQty, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
+            this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch((err) => {
+                console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+            });
+        }
+        else if (posSide === "SHORT") {
+            const targetIdx = slotIndex !== undefined ? slotIndex : (this.hedgeLedger.getAvailableShortSlotIndex() >= 0 ? this.hedgeLedger.getAvailableShortSlotIndex() : 0);
+            const targetSlotId = `SHORT_SLOT_${targetIdx}`;
+            this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
+            this.dispatchBatchPostOnlyTpOrders(targetSlotId, execPx, execQty, "SHORT").catch((err) => {
+                console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+            });
+        }
+        this.onExecutionCompleted({
+            symbol: this.config.symbol,
+            assetIndex: this.assetIndex,
+            side: posSide === "LONG" ? "BUY" : "SELL",
+            positionSide: posSide,
+            isCloseOrder: false,
+            executedQty: execQty,
+            executedPrice: execPx,
+            fillTimestampMs: Date.now(),
+        });
+        this.syncSabPositionState();
+    }
+    handleWsAccountPositionUpdate(posUpdate) {
+        if (posUpdate.symbol !== this.config.symbol)
+            return;
+        const amt = posUpdate.positionAmt;
+        const entryPx = posUpdate.entryPrice;
+        const summary = this.hedgeLedger.getSummary();
+        const expectedSide = posUpdate.positionSide === "LONG" || (posUpdate.positionSide === "BOTH" && amt > 0) ? "LONG" : "SHORT";
+        const absQty = Math.abs(amt);
+        if (absQty === 0) {
+            if (summary.side !== "FLAT" && summary.netQuantity > 1e-6) {
+                console.log(`[BinanceExecution][WS_ACCOUNT_UPDATE] Exchange position FLAT for ${this.config.symbol}. Clearing local slots.`);
+                this.hedgeLedger.reset();
+                this.syncSabPositionState(0);
+            }
+        }
+        else if (absQty > 0 && entryPx > 0) {
+            const isTracked = (expectedSide === "LONG" && Math.abs(summary.longQuantity - absQty) < 1e-5) ||
+                (expectedSide === "SHORT" && Math.abs(summary.shortQuantity - absQty) < 1e-5);
+            if (!isTracked) {
+                console.warn(`[BinanceExecution][WS_ACCOUNT_UPDATE_DESYNC] Reconciling active ${expectedSide} position for ${this.config.symbol}: ${absQty} @ $${entryPx}`);
+                this.reconcileStartupPositions([
+                    {
+                        symbol: this.config.symbol,
+                        positionAmt: String(amt),
+                        entryPrice: String(entryPx),
+                        markPrice: "0",
+                        unRealizedProfit: String(posUpdate.unrealizedPnl),
+                        liquidationPrice: "0",
+                        leverage: String(this.config.leverageMultiplier),
+                        maxNotionalValue: "0",
+                        marginType: "cross",
+                        isolatedMargin: "0",
+                        isAutoAddMargin: "false",
+                        positionSide: posUpdate.positionSide,
+                        notional: String(absQty * entryPx),
+                        isolatedWallet: "0",
+                        updateTime: Date.now(),
+                    }
+                ]);
+                this.syncSabPositionState(0);
+            }
+        }
+    }
+    handleWsOrderUpdate(update) {
+        const { order } = update;
+        if (order.symbol !== this.config.symbol)
+            return; // Strict asset symbol filter for zero cross-asset state pollution
+        const orderId = order.orderId;
+        if (order.orderStatus === "FILLED" || order.orderStatus === "PARTIALLY_FILLED") {
+            // 1. Check if this is a pending ENTRY order confirmation from Binance
+            if (this.pendingEntryOrders.has(orderId)) {
+                const pending = this.pendingEntryOrders.get(orderId);
+                const execPx = order.lastFilledPrice > 0 ? order.lastFilledPrice : (order.averagePrice > 0 ? order.averagePrice : pending.targetPrice);
+                const execQty = order.cumulativeFilledQuantity > 0 ? order.cumulativeFilledQuantity : (order.lastFilledQuantity > 0 ? order.lastFilledQuantity : pending.qty);
+                console.log(`[BinanceExecution][WS_ENTRY_FILL_CONFIRMED] OrderId #${orderId} FILLED on Binance! Occupying local slot ${pending.slotId}. Qty: ${execQty} @ $${execPx}`);
+                this.handleConfirmedEntryFill(orderId, pending.slotId, pending.posSide, pending.slotIndex, execQty, execPx);
+                return;
+            }
+            // 2. Check if this is a TP limit order fill or exit order fill
+            if (order.orderType === "LIMIT" || order.isMaker) {
+                const coreLong = this.hedgeLedger.getCoreLong();
+                const shortSlots = this.hedgeLedger.getShortSlots();
+                let targetSlotId = null;
+                let posSide = "LONG";
+                let entryPx = 0;
+                if (coreLong.isOccupied && coreLong.activeTpOrderIds?.includes(order.orderId)) {
+                    targetSlotId = "CORE_LONG";
+                    posSide = "LONG";
+                    entryPx = coreLong.entryPrice;
+                }
+                else {
+                    for (const s of shortSlots) {
+                        if (s.isOccupied && s.activeTpOrderIds?.includes(order.orderId)) {
+                            targetSlotId = s.slotId;
+                            posSide = "SHORT";
+                            entryPx = s.entryPrice;
+                            break;
+                        }
+                    }
+                }
+                if (targetSlotId) {
+                    console.log(`[MAKER_TP_ENGINE][WS_FILL_NOTIFIED] OrderId #${order.orderId} filled as ${order.isMaker ? "MAKER" : "TAKER"}. Qty: ${order.lastFilledQuantity} @ $${order.lastFilledPrice}`);
+                    const res = this.hedgeLedger.processTpLimitFill(targetSlotId, order.orderId, order.lastFilledQuantity, order.lastFilledPrice, order.isMaker);
+                    console.log(`[MAKER_TP_ENGINE][RECONCILED] Slot ${targetSlotId} updated. Closed: ${res.isPositionClosed}, RemQty: ${res.remainingQuantity}, NewSL: $${res.newStopLossPrice}`);
+                    let realizedPnl = 0;
+                    if (entryPx > 0) {
+                        const makerFee = this.hedgeLedger.getSizingCalculator().getMakerFeeRate();
+                        const takerFee = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
+                        const feeRate = order.isMaker ? makerFee : takerFee;
+                        const grossPnl = posSide === "LONG"
+                            ? (order.lastFilledPrice - entryPx) * order.lastFilledQuantity
+                            : (entryPx - order.lastFilledPrice) * order.lastFilledQuantity;
+                        const totalFees = (entryPx * order.lastFilledQuantity * takerFee) + (order.lastFilledPrice * order.lastFilledQuantity * feeRate);
+                        realizedPnl = grossPnl - totalFees;
+                    }
+                    const fillSide = order.side;
+                    this.onExecutionCompleted({
+                        symbol: this.config.symbol,
+                        assetIndex: this.assetIndex,
+                        side: fillSide,
+                        positionSide: posSide,
+                        isCloseOrder: true,
+                        executedQty: order.lastFilledQuantity,
+                        executedPrice: order.lastFilledPrice,
+                        realizedPnl,
+                        fillTimestampMs: Date.now(),
+                    });
+                    this.syncSabPositionState();
+                    return;
+                }
+            }
+            // 3. Fallback: Untracked WebSocket fill classification & execution
+            const activeSummary = this.hedgeLedger.getSummary();
+            const rawPosSide = order.positionSide;
+            let isExitSide = false;
+            let isEntrySide = false;
+            let targetPosSide = "LONG";
+            if (rawPosSide === "LONG") {
+                if (order.side === "BUY") {
+                    isEntrySide = true;
+                    targetPosSide = "LONG";
+                }
+                else {
+                    isExitSide = true;
+                    targetPosSide = "LONG";
+                }
+            }
+            else if (rawPosSide === "SHORT") {
+                if (order.side === "SELL") {
+                    isEntrySide = true;
+                    targetPosSide = "SHORT";
+                }
+                else {
+                    isExitSide = true;
+                    targetPosSide = "SHORT";
+                }
+            }
+            else {
+                // Both or Undefined (One-Way Mode or missing positionSide WS attribute)
+                if (order.side === "SELL") {
+                    if (activeSummary.longQuantity > 1e-9) {
+                        isExitSide = true;
+                        targetPosSide = "LONG";
+                    }
+                    else {
+                        isEntrySide = true;
+                        targetPosSide = "SHORT";
+                    }
+                }
+                else {
+                    // order.side === "BUY"
+                    if (activeSummary.shortQuantity > 1e-9) {
+                        isExitSide = true;
+                        targetPosSide = "SHORT";
+                    }
+                    else {
+                        isEntrySide = true;
+                        targetPosSide = "LONG";
+                    }
+                }
+            }
+            const execPx = order.lastFilledPrice > 0 ? order.lastFilledPrice : (order.averagePrice > 0 ? order.averagePrice : order.originalPrice);
+            const execQty = order.lastFilledQuantity > 0 ? order.lastFilledQuantity : order.cumulativeFilledQuantity;
+            if (execPx > 0 && execQty > 0) {
+                if (isEntrySide) {
+                    console.log(`[BinanceExecution][UNTRACKED_ENTRY_FILL] OrderId #${orderId} filled for ${this.config.symbol} ${targetPosSide}! Occupying/accumulating slot. Qty: ${execQty} @ $${execPx}`);
                     const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
                     const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
-                    const dynamicSlPct = Math.max(0.005, volEstimate * 2.0);
-                    const dynamicSlPercent = dynamicSlPct * 100;
-                    if (pending.posSide === "LONG") {
+                    const dynamicSlPercent = Math.max(targetPosSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent, Math.min(2.0, volEstimate * 2.0 * 100));
+                    if (targetPosSide === "LONG") {
                         this.hedgeLedger.occupyCoreLong(execQty, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
-                        this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch((err) => {
-                            console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
-                        });
+                        this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch(() => { });
                     }
-                    else if (pending.posSide === "SHORT" && pending.slotIndex !== undefined) {
-                        this.hedgeLedger.occupyShortSlot(pending.slotIndex, execQty, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
-                        this.dispatchBatchPostOnlyTpOrders(pending.slotId, execPx, execQty, "SHORT").catch((err) => {
-                            console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
-                        });
+                    else {
+                        const slotIdx = this.hedgeLedger.getAvailableShortSlotIndex();
+                        const targetIdx = slotIdx >= 0 ? slotIdx : 0;
+                        this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
+                        this.dispatchBatchPostOnlyTpOrders(`SHORT_SLOT_${targetIdx}`, execPx, execQty, "SHORT").catch(() => { });
                     }
                     this.onExecutionCompleted({
                         symbol: this.config.symbol,
                         assetIndex: this.assetIndex,
                         side: order.side,
-                        positionSide: pending.posSide,
+                        positionSide: targetPosSide,
                         isCloseOrder: false,
                         executedQty: execQty,
                         executedPrice: execPx,
                         fillTimestampMs: Date.now(),
                     });
                     this.syncSabPositionState();
-                    return;
                 }
-                // 2. Check if this is a TP limit order fill or exit order fill
-                if (order.orderType === "LIMIT" || order.isMaker) {
-                    const coreLong = this.hedgeLedger.getCoreLong();
-                    const shortSlots = this.hedgeLedger.getShortSlots();
-                    let targetSlotId = null;
-                    let posSide = "LONG";
-                    let entryPx = 0;
-                    if (coreLong.isOccupied && coreLong.activeTpOrderIds?.includes(order.orderId)) {
-                        targetSlotId = "CORE_LONG";
-                        posSide = "LONG";
-                        entryPx = coreLong.entryPrice;
+                else if (isExitSide) {
+                    console.log(`[BinanceExecution][UNTRACKED_EXIT_FILL] OrderId #${orderId} filled for ${this.config.symbol} ${targetPosSide}! Deducting/releasing slot. Qty: ${execQty} @ $${execPx}`);
+                    if (targetPosSide === "LONG") {
+                        this.hedgeLedger.deductCoreLongQuantity(execQty, execPx, 0.0004, "EXTERNAL_EXIT");
                     }
                     else {
-                        for (const s of shortSlots) {
-                            if (s.isOccupied && s.activeTpOrderIds?.includes(order.orderId)) {
-                                targetSlotId = s.slotId;
-                                posSide = "SHORT";
-                                entryPx = s.entryPrice;
-                                break;
+                        let remainingQtyToDeduct = execQty;
+                        const slots = this.hedgeLedger.getShortSlots();
+                        for (let sIdx = 0; sIdx < slots.length && remainingQtyToDeduct > 1e-9; sIdx++) {
+                            const slot = slots[sIdx];
+                            if (slot.isOccupied && slot.quantity > 0) {
+                                const closedFromSlot = Math.min(slot.quantity, remainingQtyToDeduct);
+                                this.hedgeLedger.deductShortSlotQuantity(sIdx, closedFromSlot, execPx, 0.0004, "EXTERNAL_EXIT");
+                                remainingQtyToDeduct -= closedFromSlot;
                             }
                         }
                     }
-                    if (targetSlotId) {
-                        console.log(`[MAKER_TP_ENGINE][WS_FILL_NOTIFIED] OrderId #${order.orderId} filled as ${order.isMaker ? "MAKER" : "TAKER"}. Qty: ${order.lastFilledQuantity} @ $${order.lastFilledPrice}`);
-                        const res = this.hedgeLedger.processTpLimitFill(targetSlotId, order.orderId, order.lastFilledQuantity, order.lastFilledPrice, order.isMaker);
-                        console.log(`[MAKER_TP_ENGINE][RECONCILED] Slot ${targetSlotId} updated. Closed: ${res.isPositionClosed}, RemQty: ${res.remainingQuantity}, NewSL: $${res.newStopLossPrice}`);
-                        let realizedPnl = 0;
-                        if (entryPx > 0) {
-                            const makerFee = this.hedgeLedger.getSizingCalculator().getMakerFeeRate();
-                            const takerFee = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
-                            const feeRate = order.isMaker ? makerFee : takerFee;
-                            const grossPnl = posSide === "LONG"
-                                ? (order.lastFilledPrice - entryPx) * order.lastFilledQuantity
-                                : (entryPx - order.lastFilledPrice) * order.lastFilledQuantity;
-                            const totalFees = (entryPx * order.lastFilledQuantity * takerFee) + (order.lastFilledPrice * order.lastFilledQuantity * feeRate);
-                            realizedPnl = grossPnl - totalFees;
-                        }
-                        const fillSide = order.side;
-                        this.onExecutionCompleted({
-                            symbol: this.config.symbol,
-                            assetIndex: this.assetIndex,
-                            side: fillSide,
-                            positionSide: posSide,
-                            isCloseOrder: true,
-                            executedQty: order.lastFilledQuantity,
-                            executedPrice: order.lastFilledPrice,
-                            realizedPnl,
-                            fillTimestampMs: Date.now(),
-                        });
-                        this.syncSabPositionState();
-                        return;
-                    }
-                }
-                // 3. Fallback: Untracked WebSocket fill classification & execution
-                const activeSummary = this.hedgeLedger.getSummary();
-                const rawPosSide = order.positionSide;
-                let isExitSide = false;
-                let isEntrySide = false;
-                let targetPosSide = "LONG";
-                if (rawPosSide === "LONG") {
-                    if (order.side === "BUY") {
-                        isEntrySide = true;
-                        targetPosSide = "LONG";
-                    }
-                    else {
-                        isExitSide = true;
-                        targetPosSide = "LONG";
-                    }
-                }
-                else if (rawPosSide === "SHORT") {
-                    if (order.side === "SELL") {
-                        isEntrySide = true;
-                        targetPosSide = "SHORT";
-                    }
-                    else {
-                        isExitSide = true;
-                        targetPosSide = "SHORT";
-                    }
-                }
-                else {
-                    // Both or Undefined (One-Way Mode or missing positionSide WS attribute)
-                    if (order.side === "SELL") {
-                        if (activeSummary.longQuantity > 1e-9) {
-                            isExitSide = true;
-                            targetPosSide = "LONG";
-                        }
-                        else {
-                            isEntrySide = true;
-                            targetPosSide = "SHORT";
-                        }
-                    }
-                    else {
-                        // order.side === "BUY"
-                        if (activeSummary.shortQuantity > 1e-9) {
-                            isExitSide = true;
-                            targetPosSide = "SHORT";
-                        }
-                        else {
-                            isEntrySide = true;
-                            targetPosSide = "LONG";
-                        }
-                    }
-                }
-                const execPx = order.lastFilledPrice > 0 ? order.lastFilledPrice : order.originalPrice;
-                const execQty = order.lastFilledQuantity > 0 ? order.lastFilledQuantity : order.cumulativeFilledQuantity;
-                if (execPx > 0 && execQty > 0) {
-                    if (isEntrySide) {
-                        console.log(`[BinanceExecution][UNTRACKED_ENTRY_FILL] OrderId #${orderId} filled for ${this.config.symbol} ${targetPosSide}! Occupying/accumulating slot. Qty: ${execQty} @ $${execPx}`);
-                        const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
-                        const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
-                        const dynamicSlPercent = Math.max(targetPosSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent, Math.min(2.0, volEstimate * 2.0 * 100));
-                        if (targetPosSide === "LONG") {
-                            this.hedgeLedger.occupyCoreLong(execQty, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
-                            this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch(() => { });
-                        }
-                        else {
-                            const slotIdx = this.hedgeLedger.getAvailableShortSlotIndex();
-                            const targetIdx = slotIdx >= 0 ? slotIdx : 0;
-                            this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
-                            this.dispatchBatchPostOnlyTpOrders(`SHORT_SLOT_${targetIdx}`, execPx, execQty, "SHORT").catch(() => { });
-                        }
-                        this.onExecutionCompleted({
-                            symbol: this.config.symbol,
-                            assetIndex: this.assetIndex,
-                            side: order.side,
-                            positionSide: targetPosSide,
-                            isCloseOrder: false,
-                            executedQty: execQty,
-                            executedPrice: execPx,
-                            fillTimestampMs: Date.now(),
-                        });
-                        this.syncSabPositionState();
-                    }
-                    else if (isExitSide) {
-                        console.log(`[BinanceExecution][UNTRACKED_EXIT_FILL] OrderId #${orderId} filled for ${this.config.symbol} ${targetPosSide}! Deducting/releasing slot. Qty: ${execQty} @ $${execPx}`);
-                        if (targetPosSide === "LONG") {
-                            this.hedgeLedger.deductCoreLongQuantity(execQty, execPx, 0.0004, "EXTERNAL_EXIT");
-                        }
-                        else {
-                            let remainingQtyToDeduct = execQty;
-                            const slots = this.hedgeLedger.getShortSlots();
-                            for (let sIdx = 0; sIdx < slots.length && remainingQtyToDeduct > 1e-9; sIdx++) {
-                                const slot = slots[sIdx];
-                                if (slot.isOccupied && slot.quantity > 0) {
-                                    const closedFromSlot = Math.min(slot.quantity, remainingQtyToDeduct);
-                                    this.hedgeLedger.deductShortSlotQuantity(sIdx, closedFromSlot, execPx, 0.0004, "EXTERNAL_EXIT");
-                                    remainingQtyToDeduct -= closedFromSlot;
-                                }
-                            }
-                        }
-                        this.onExecutionCompleted({
-                            symbol: this.config.symbol,
-                            assetIndex: this.assetIndex,
-                            side: order.side,
-                            positionSide: targetPosSide,
-                            isCloseOrder: true,
-                            executedQty: execQty,
-                            executedPrice: execPx,
-                            fillTimestampMs: Date.now(),
-                        });
-                        this.syncSabPositionState();
-                    }
+                    this.onExecutionCompleted({
+                        symbol: this.config.symbol,
+                        assetIndex: this.assetIndex,
+                        side: order.side,
+                        positionSide: targetPosSide,
+                        isCloseOrder: true,
+                        executedQty: execQty,
+                        executedPrice: execPx,
+                        fillTimestampMs: Date.now(),
+                    });
+                    this.syncSabPositionState();
                 }
             }
-            else if (order.orderStatus === "CANCELED" || order.orderStatus === "EXPIRED" || order.orderStatus === "REJECTED") {
-                if (this.pendingEntryOrders.has(orderId)) {
-                    console.warn(`[BinanceExecution][WS_ENTRY_CANCELLED] Pending entry OrderId #${orderId} was ${order.orderStatus} on Binance. Local slot remains FLAT.`);
-                    this.pendingEntryOrders.delete(orderId);
-                }
+        }
+        else if (order.orderStatus === "CANCELED" || order.orderStatus === "EXPIRED" || order.orderStatus === "REJECTED") {
+            if (this.pendingEntryOrders.has(orderId)) {
+                const pending = this.pendingEntryOrders.get(orderId);
+                if (pending?.timeoutTimer)
+                    clearTimeout(pending.timeoutTimer);
+                console.warn(`[BinanceExecution][WS_ENTRY_CANCELLED] Pending entry OrderId #${orderId} was ${order.orderStatus} on Binance. Local slot remains FLAT.`);
+                this.pendingEntryOrders.delete(orderId);
             }
-        });
-        return this.userDataStream.start();
+        }
     }
     async dispatchBatchPostOnlyTpOrders(slotId, entryPrice, quantity, side) {
         let intents = [];
@@ -1218,14 +1283,37 @@ class StrategyEngine {
                             // Pending Limit / Post-Only Order placed on Binance orderbook: DO NOT occupy slot until WS fill confirmation
                             const numericOrderId = typeof res.orderId === "number" ? res.orderId : parseInt(String(res.orderId), 10);
                             if (!isNaN(numericOrderId)) {
+                                const fallbackTimer = setTimeout(async () => {
+                                    if (this.pendingEntryOrders.has(numericOrderId)) {
+                                        console.log(`[BinanceExecution][PENDING_FALLBACK_CHECK] Auditing pending OrderId #${numericOrderId} for ${this.config.symbol}...`);
+                                        try {
+                                            const orderCheck = await this.executionClient.getOrder(this.config.symbol, numericOrderId);
+                                            if (orderCheck && (orderCheck.status === "FILLED" || parseFloat(orderCheck.executedQty || "0") > 0)) {
+                                                const execQty = parseFloat(orderCheck.executedQty || "0") || finalQuantity;
+                                                const execPx = parseFloat(orderCheck.avgPrice || orderCheck.price || "0") || targetPrice;
+                                                console.log(`[BinanceExecution][FALLBACK_FILL_CONFIRMED] OrderId #${numericOrderId} confirmed FILLED via REST audit!`);
+                                                this.handleConfirmedEntryFill(numericOrderId, targetSlotId, targetPosSide, targetSlotIndex, execQty, execPx);
+                                            }
+                                            else if (orderCheck && (orderCheck.status === "CANCELED" || orderCheck.status === "EXPIRED" || orderCheck.status === "REJECTED")) {
+                                                console.warn(`[BinanceExecution][FALLBACK_CLEANUP] OrderId #${numericOrderId} was ${orderCheck.status}. Removing from pending.`);
+                                                this.pendingEntryOrders.delete(numericOrderId);
+                                            }
+                                        }
+                                        catch (err) {
+                                            // In case getOrder fails, fall back to syncExchangeState
+                                            this.syncExchangeState().catch(() => { });
+                                        }
+                                    }
+                                }, 2500);
                                 this.pendingEntryOrders.set(numericOrderId, {
                                     slotId: targetSlotId,
                                     posSide: targetPosSide,
                                     slotIndex: targetSlotIndex,
                                     qty: finalQuantity,
                                     targetPrice: execPx,
+                                    timeoutTimer: fallbackTimer,
                                 });
-                                console.log(`[BinanceExecution][PENDING_FILL] Registered pending entry OrderId #${numericOrderId} for slot ${targetSlotId}. Slot WILL NOT be occupied until WS fill confirmation.`);
+                                console.log(`[BinanceExecution][PENDING_FILL] Registered pending entry OrderId #${numericOrderId} for slot ${targetSlotId}. Slot WILL NOT be occupied until WS fill confirmation (2.5s fallback active).`);
                             }
                         }
                         else {

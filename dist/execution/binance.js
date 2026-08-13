@@ -472,6 +472,9 @@ class BinanceExecutionClient {
     async getAccountBalance() {
         return this.request("GET", "/fapi/v2/account", {}, true);
     }
+    async getOrder(symbol, orderId) {
+        return this.request("GET", "/fapi/v1/order", { symbol, orderId }, true);
+    }
     async createListenKey() {
         const res = await this.request("POST", "/fapi/v1/listenKey", {}, true);
         return res.listenKey;

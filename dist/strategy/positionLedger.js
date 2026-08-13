@@ -405,6 +405,13 @@ class HedgePositionLedger {
             };
         }
     }
+    reset() {
+        this.releaseCoreLong();
+        for (let i = 0; i < this.maxShortSlots; i++) {
+            this.releaseShortSlot(i);
+        }
+        this.legacyLedger.reset();
+    }
     getSizingCalculator() {
         return this.sizingCalc;
     }
@@ -1341,7 +1348,7 @@ class MultiAssetPositionLedger {
             const summary = ledger.getSummary(price);
             summaries.set(sym, summary);
             if (summary.side !== "FLAT") {
-                totalGrossNotional += summary.netQuantity * (price > 0 ? price : summary.averageEntryPrice);
+                totalGrossNotional += summary.grossQuantity * (price > 0 ? price : summary.averageEntryPrice);
                 totalUnrealized += summary.unrealizedPnl;
             }
             totalRealized += summary.cumulativeRealizedPnl;

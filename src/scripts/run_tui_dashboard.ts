@@ -40,7 +40,6 @@ export async function runProductionTuiLauncher(): Promise<void> {
   console.log(`  - Slots Per Asset: ${slotsPerAsset}`);
   console.log(`  - SharedArrayBuffer Size: ${totalSABBytes} bytes`);
 
-
   console.log("\n[Pre-Flight 2/3] Verifying Native Rust N-API Binary Module...");
   let platformBinary: string;
   switch (process.platform) {
@@ -108,7 +107,6 @@ export async function runProductionTuiLauncher(): Promise<void> {
 
   // Step 3: Launch Multi-Asset TUI Dashboard & Keypress Control Engine
   const dashboard = new MultiAssetCLIDashboard(client, true, activeSymbols);
-
   const keyEngine = new InteractiveKeypressEngine(client);
 
   const binanceClient = new BinanceExecutionClient();
@@ -126,9 +124,26 @@ export async function runProductionTuiLauncher(): Promise<void> {
   if (binanceClient.isConfigured()) {
     binanceClient.startBalancePolling(5000);
     dashboard.pushNotification("✅ Binance API credentials verified. Balance polling active.");
+
+    // SOTA Centralized Account-Level User Data Stream Initialization
+    multiEngine.initUserDataStream()
+      .then((started) => {
+        if (started) {
+          dashboard.pushNotification("✅ Centralized Account-Level User Data Stream online (Fills & Account Updates).");
+        }
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        dashboard.pushNotification(`⚠️ [UserDataStream Notice] ${msg}`);
+      });
+
+    // Startup State Synchronization & SL/TP Bracket Injection
     syncStateOnStartup(binanceClient, multiEngine, riskGuard)
       .then(() => {
         dashboard.pushNotification(`✅ Multi-Asset state synchronized with Binance API for ${activeSymbols.length} coins.`);
+        // SOTA Continuous 5-Second Active Reconciliation Heartbeat (Anti-Orphan Guard)
+        multiEngine.startContinuousReconciliation(5000);
+        dashboard.pushNotification("✅ 5-Second Continuous Reconciliation Heartbeat active.");
       })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
@@ -180,9 +195,17 @@ export async function runProductionTuiLauncher(): Promise<void> {
                   const cumQuote = parseFloat((res as any).cumQuote || "0");
                   const qtyNum = parseFloat(rawQty);
                   const displayPrice = avgPx > 0 ? avgPx : (px > 0 ? px : (cumQuote > 0 && qtyNum > 0 ? cumQuote / qtyNum : (result.bidPrice || result.askPrice)));
-                  dashboard.pushNotification(
-                    `[ORDER_FILLED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${rawQty} @ $${displayPrice.toFixed(2)}`
-                  );
+                  
+                  const isFilled = res.status === "FILLED" || parseFloat(res.executedQty || "0") > 0;
+                  if (isFilled) {
+                    dashboard.pushNotification(
+                      `[ORDER_FILLED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${rawQty} @ $${displayPrice.toFixed(2)}`
+                    );
+                  } else {
+                    dashboard.pushNotification(
+                      `[ORDER_SUBMITTED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${rawQty} @ $${displayPrice.toFixed(2)} (${res.timeInForce || "POST_ONLY"})`
+                    );
+                  }
                 }
               })
               .catch((err: unknown) => {
@@ -225,6 +248,7 @@ export async function runProductionTuiLauncher(): Promise<void> {
     if (isShuttingDown) return;
     isShuttingDown = true;
 
+    multiEngine.stopContinuousReconciliation();
     binanceClient.stopBalancePolling();
     clearInterval(strategyInterval);
     clearInterval(renderInterval);
@@ -250,4 +274,3 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-

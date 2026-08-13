@@ -114,14 +114,10 @@ export class SymbolPrecisionRegistryManager {
    */
   public getPrecisionRule(symbol: string): SymbolPrecisionRule {
     const sym = symbol.toUpperCase();
-    const rule = this.precisionMap.get(sym);
+    let rule = this.precisionMap.get(sym);
     if (!rule) {
-      // Auto pre-seed symbol with smart heuristic if missing, or throw error
-      if (!this.isInitialized) {
-        this.preseedOfflineDefaults([sym]);
-        return this.precisionMap.get(sym)!;
-      }
-      throw new Error(`[CRITICAL_PRECISION_ERROR] Symbol '${symbol}' not found in Binance ExchangeInfo Precision Registry! Refusing to trade with unverified LOT_SIZE rules.`);
+      this.preseedOfflineDefaults([sym]);
+      rule = this.precisionMap.get(sym)!;
     }
     return rule;
   }

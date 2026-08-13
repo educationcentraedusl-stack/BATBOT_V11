@@ -571,6 +571,14 @@ export class HedgePositionLedger {
     }
   }
 
+  public reset(): void {
+    this.releaseCoreLong();
+    for (let i = 0; i < this.maxShortSlots; i++) {
+      this.releaseShortSlot(i);
+    }
+    this.legacyLedger.reset();
+  }
+
   public getSizingCalculator(): DynamicSizingCalculator {
     return this.sizingCalc;
   }
