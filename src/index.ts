@@ -102,6 +102,7 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
 
   const sab = new SharedArrayBuffer(maxAssets * slotsPerAsset * 8);
   const client = new MarketDataClient(sab, maxAssets, slotsPerAsset);
+  client.flushTelemetry();
   const riskGuard = new RiskGuard();
   const executionClient = new BinanceExecutionClient();
   const symbol = process.env.SYMBOL ?? "BTCUSDT";

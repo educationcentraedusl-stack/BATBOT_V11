@@ -589,5 +589,12 @@ export class MarketDataClient {
       this.setTriggerRecalibrationFlag(trigger, i);
     }
   }
+
+  /**
+   * Zero-fills all SharedArrayBuffer slots across all assets to flush memory telemetry state.
+   */
+  public flushTelemetry(): void {
+    this.bigIntView.fill(0n);
+  }
 }
 

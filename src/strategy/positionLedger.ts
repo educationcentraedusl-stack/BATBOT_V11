@@ -98,6 +98,8 @@ export class PositionLedger {
     }
     this.reconciliationResult.symbol = symbol;
 
+    this.reset();
+
     this.cachedSummary = {
       symbol: this.symbol,
       side: "FLAT",
