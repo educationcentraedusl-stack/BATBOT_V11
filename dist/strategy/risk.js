@@ -140,24 +140,27 @@ class RiskGuard {
                 message: `Invalid order price (${intent.price}) or quantity (${intent.quantity}).`,
             };
         }
-        // 6. Max Position Size Limit
+        // 6. Max Position Size Limit (Evaluated per symbol)
         const proposedOrderNotional = intent.price * intent.quantity;
         const posSide = intent.currentPositionSide ?? currentPositionSide;
+        const currentSymbolNotional = (intent.symbol && this instanceof MultiAssetRiskGuard)
+            ? this.getSymbolNotional(intent.symbol)
+            : this.currentPositionNotionalUsdt;
         let netResultingNotional = proposedOrderNotional;
         if (posSide === "LONG") {
             if (intent.side === "BUY") {
-                netResultingNotional = this.currentPositionNotionalUsdt + proposedOrderNotional;
+                netResultingNotional = currentSymbolNotional + proposedOrderNotional;
             }
             else {
-                netResultingNotional = Math.max(0, this.currentPositionNotionalUsdt - proposedOrderNotional);
+                netResultingNotional = Math.max(0, currentSymbolNotional - proposedOrderNotional);
             }
         }
         else if (posSide === "SHORT") {
             if (intent.side === "SELL") {
-                netResultingNotional = this.currentPositionNotionalUsdt + proposedOrderNotional;
+                netResultingNotional = currentSymbolNotional + proposedOrderNotional;
             }
             else {
-                netResultingNotional = Math.max(0, this.currentPositionNotionalUsdt - proposedOrderNotional);
+                netResultingNotional = Math.max(0, currentSymbolNotional - proposedOrderNotional);
             }
         }
         else {
@@ -289,6 +292,9 @@ class MultiAssetRiskGuard extends RiskGuard {
     }
     resetSymbolNotionals() {
         this.activeSymbolNotionals.clear();
+    }
+    getSymbolNotional(symbol) {
+        return this.activeSymbolNotionals.get(symbol) ?? 0;
     }
     updateSymbolNotional(symbol, notionalUsdt) {
         if (notionalUsdt <= 0) {

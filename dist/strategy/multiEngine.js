@@ -65,21 +65,34 @@ class MultiAssetStrategyEngine {
             console.log("[MultiAssetStrategyEngine][StateSync] BinanceExecutionClient unconfigured. Skipping state sync.");
             return;
         }
-        for (const engine of this.engines.values()) {
-            await engine.syncExchangeState();
-        }
-        let totalNotional = 0;
-        this.riskGuard.resetSymbolNotionals();
-        for (const [symbol, engine] of this.engines.entries()) {
-            const summary = engine.getHedgeLedger().getSummary(0);
-            if (summary.side !== "FLAT" && summary.netQuantity > 0) {
-                const symbolGrossNotional = summary.netQuantity * summary.averageEntryPrice;
-                totalNotional += symbolGrossNotional;
-                this.riskGuard.updateSymbolNotional(symbol, symbolGrossNotional);
+        try {
+            // Single REST request to fetch ALL open positions and open orders across entire Binance account
+            const [allPositions, allOpenOrders] = await Promise.all([
+                this.executionClient.getPositionRisk(),
+                this.executionClient.getOpenOrders(),
+            ]);
+            const validPositions = Array.isArray(allPositions) ? allPositions : [];
+            const validOrders = Array.isArray(allOpenOrders) ? allOpenOrders : [];
+            let totalNotional = 0;
+            this.riskGuard.resetSymbolNotionals();
+            for (const [symbol, engine] of this.engines.entries()) {
+                const symbolPositions = validPositions.filter((p) => p.symbol === symbol);
+                const symbolOrders = validOrders.filter((o) => o.symbol === symbol);
+                await engine.syncExchangeStateWithData(symbolPositions, symbolOrders);
+                const summary = engine.getHedgeLedger().getSummary(0);
+                if (summary.side !== "FLAT" && summary.netQuantity > 0) {
+                    const symbolGrossNotional = summary.netQuantity * summary.averageEntryPrice;
+                    totalNotional += symbolGrossNotional;
+                    this.riskGuard.updateSymbolNotional(symbol, symbolGrossNotional);
+                }
             }
+            this.riskGuard.updatePositionNotional(totalNotional);
+            const activeCount = validPositions.filter((p) => Math.abs(parseFloat(p.positionAmt || "0")) > 0).length;
+            console.log(`[MultiAssetStrategyEngine][StateSync] Multi-asset state hydration complete. Synced ${activeCount} active open position(s). Active Portfolio Gross Notional: $${totalNotional.toFixed(2)} USDT`);
         }
-        this.riskGuard.updatePositionNotional(totalNotional);
-        console.log(`[MultiAssetStrategyEngine][StateSync] Multi-asset state hydration complete. Active Portfolio Gross Notional: $${totalNotional.toFixed(2)} USDT`);
+        catch (err) {
+            console.error(`[MultiAssetStrategyEngine][StateSync][ERROR] Failed to fetch Binance exchange state: ${err.message}`);
+        }
     }
     reconcileStartupPositions(positions) {
         let totalNotional = 0;

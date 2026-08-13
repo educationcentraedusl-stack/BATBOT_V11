@@ -212,22 +212,26 @@ export class RiskGuard {
       };
     }
 
-    // 6. Max Position Size Limit
+    // 6. Max Position Size Limit (Evaluated per symbol)
     const proposedOrderNotional = intent.price * intent.quantity;
     const posSide = intent.currentPositionSide ?? currentPositionSide;
+
+    const currentSymbolNotional = (intent.symbol && this instanceof MultiAssetRiskGuard)
+      ? (this as MultiAssetRiskGuard).getSymbolNotional(intent.symbol)
+      : this.currentPositionNotionalUsdt;
 
     let netResultingNotional = proposedOrderNotional;
     if (posSide === "LONG") {
       if (intent.side === "BUY") {
-        netResultingNotional = this.currentPositionNotionalUsdt + proposedOrderNotional;
+        netResultingNotional = currentSymbolNotional + proposedOrderNotional;
       } else {
-        netResultingNotional = Math.max(0, this.currentPositionNotionalUsdt - proposedOrderNotional);
+        netResultingNotional = Math.max(0, currentSymbolNotional - proposedOrderNotional);
       }
     } else if (posSide === "SHORT") {
       if (intent.side === "SELL") {
-        netResultingNotional = this.currentPositionNotionalUsdt + proposedOrderNotional;
+        netResultingNotional = currentSymbolNotional + proposedOrderNotional;
       } else {
-        netResultingNotional = Math.max(0, this.currentPositionNotionalUsdt - proposedOrderNotional);
+        netResultingNotional = Math.max(0, currentSymbolNotional - proposedOrderNotional);
       }
     } else {
       netResultingNotional = proposedOrderNotional;
@@ -400,6 +404,10 @@ export class MultiAssetRiskGuard extends RiskGuard {
 
   public resetSymbolNotionals(): void {
     this.activeSymbolNotionals.clear();
+  }
+
+  public getSymbolNotional(symbol: string): number {
+    return this.activeSymbolNotionals.get(symbol) ?? 0;
   }
 
   public updateSymbolNotional(symbol: string, notionalUsdt: number): void {

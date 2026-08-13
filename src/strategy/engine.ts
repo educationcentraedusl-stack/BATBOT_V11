@@ -602,25 +602,15 @@ export class StrategyEngine {
   }
 
   /**
+  /**
    * Phase 3 Emergency Remediation: State Hydration & Orphaned Position Guard.
-   * Runs strictly ONCE during startup initialization before WebSocket feeds open.
-   * Queries Binance Futures REST API (GET /fapi/v2/positionRisk & openOrders),
-   * maps active positions to PositionLedger, HedgePositionLedger & SAB slots,
-   * and attaches dynamic Phase 2 volatility SL/TP to any unprotected orphaned trades.
+   * Hydrates position state from caller-supplied Binance positionRisk & openOrders arrays.
    */
-  public async syncExchangeState(): Promise<void> {
-    if (!this.executionClient.isConfigured()) {
-      console.log(`[StrategyEngine][StateSync] BinanceExecutionClient unconfigured for ${this.config.symbol}. Skipping state sync.`);
-      return;
-    }
-
+  public async syncExchangeStateWithData(
+    positions: BinancePositionRisk[],
+    openOrders: BinanceOrderResponse[]
+  ): Promise<void> {
     try {
-      console.log(`[StrategyEngine][StateSync] Syncing exchange state & open orders for ${this.config.symbol}...`);
-      const [positions, openOrders] = await Promise.all([
-        this.executionClient.getPositionRisk(this.config.symbol),
-        this.executionClient.getOpenOrders(this.config.symbol),
-      ]);
-
       const activePositions = (Array.isArray(positions) ? positions : []).filter(
         (pos) => pos.symbol === this.config.symbol && Math.abs(parseFloat(pos.positionAmt || "0")) > 0
       );
@@ -725,6 +715,25 @@ export class StrategyEngine {
           console.log(`[ORPHAN_GUARD] Active ${posSide} position on ${this.config.symbol} has active exchange protective order(s).`);
         }
       }
+    } catch (err: any) {
+      console.error(`[StrategyEngine][StateSync][ERROR] Failed to sync exchange state for ${this.config.symbol}: ${err.message}`);
+    }
+  }
+
+  public async syncExchangeState(): Promise<void> {
+    if (!this.executionClient.isConfigured()) {
+      console.log(`[StrategyEngine][StateSync] BinanceExecutionClient unconfigured for ${this.config.symbol}. Skipping state sync.`);
+      return;
+    }
+
+    try {
+      console.log(`[StrategyEngine][StateSync] Syncing exchange state & open orders for ${this.config.symbol}...`);
+      const [positions, openOrders] = await Promise.all([
+        this.executionClient.getPositionRisk(this.config.symbol),
+        this.executionClient.getOpenOrders(this.config.symbol),
+      ]);
+
+      await this.syncExchangeStateWithData(positions, openOrders);
     } catch (err: any) {
       console.error(`[StrategyEngine][StateSync][ERROR] Failed to sync exchange state for ${this.config.symbol}: ${err.message}`);
     }
@@ -1269,7 +1278,14 @@ export class StrategyEngine {
       // Dynamic .env driven USDT Sizing & LOT_SIZE Precision Rounding (Unlocks All 10 Assets)
       let finalQuantity = 0.001;
       if (basePrice > 0) {
-        const targetNotionalUsdt = this.config.tradeSizeUsdt > 0 ? this.config.tradeSizeUsdt : 60.0;
+        let targetNotionalUsdt = this.config.tradeSizeUsdt > 0 ? this.config.tradeSizeUsdt : 60.0;
+
+        // Cap single order target notional against RiskGuard max position size limit
+        const maxPosSizeUsdt = this.riskGuard.getConfig().maxPositionSizeUsdt;
+        if (maxPosSizeUsdt > 0 && targetNotionalUsdt > maxPosSizeUsdt) {
+          targetNotionalUsdt = maxPosSizeUsdt;
+        }
+
         const rawQty = (targetNotionalUsdt / basePrice) * penaltyCoeff * targetSizeDecayCoeff;
         finalQuantity = formatQuantityForSymbol(this.config.symbol, rawQty, false);
 
