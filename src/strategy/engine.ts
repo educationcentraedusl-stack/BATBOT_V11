@@ -845,10 +845,7 @@ export class StrategyEngine {
       const aiDirection = Number.isFinite(rawDir) ? rawDir : 0.0;
       const aiConfidence = Number.isFinite(rawConf) ? Math.max(0.0, Math.min(1.0, rawConf)) : 0.0;
 
-      const rawMag = this.client.getAIDirectionMagnitude(this.assetIndex);
-      const aiDirectionMag = Number.isFinite(rawMag) && rawMag > 0
-        ? Math.abs(rawMag)
-        : Math.abs(aiDirection);
+      const aiDirectionMag = Math.abs(aiDirection);
       const latencyPenalty = this.client.getLatencyPenaltyCoefficient(this.assetIndex);
       const penaltyCoeff = latencyPenalty > 0 ? Math.max(0.75, latencyPenalty) : 1.0;
       const slippageTicks = this.client.getDynamicSlippageTicks(this.assetIndex);
@@ -1215,7 +1212,7 @@ export class StrategyEngine {
           isBuySignal = aiDirection > 0 && aiDirectionMag >= MIN_DIRECTIONAL_MAGNITUDE && obi >= this.config.obiBuyThreshold;
           isSellSignal = aiDirection < 0 && aiDirectionMag >= MIN_DIRECTIONAL_MAGNITUDE && obi <= this.config.obiSellThreshold;
           if (isBuySignal || isSellSignal) {
-            console.log(`[StrategyEngine][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)}), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
+            console.log(`[StrategyEngine][${this.config.symbol}][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)}), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
           }
         } else {
           // Weighted Composite Rule with dynamic effective confidence thresholding
@@ -1223,7 +1220,7 @@ export class StrategyEngine {
           isSellSignal = compositeScore < -0.12 && aiConfidence >= effectiveMinConfidence && obi <= this.config.obiSellThreshold;
         }
       } else if (seq % 1000n === 0n) {
-        console.log(`[StrategyEngine][CONVICTION_FLOOR_GATE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)} < DynamicFloor: ${dynamicConvictionFloor.toFixed(4)}, Z-Score: ${zScore.toFixed(2)} < 1.5) -> Signals Filtered`);
+        console.log(`[StrategyEngine][${this.config.symbol}][CONVICTION_FLOOR_GATE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)} < DynamicFloor: ${dynamicConvictionFloor.toFixed(4)}, Z-Score: ${zScore.toFixed(2)} < 1.5) -> Signals Filtered`);
       }
 
       // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
@@ -1232,7 +1229,7 @@ export class StrategyEngine {
       const isCooldownCleared = nowMs >= longCooldownLock;
 
       if (!isCoreLongOccupied && !hasPendingCoreLong && !isCooldownCleared) {
-        console.log(`[StrategyEngine][COOLDOWN_BLOCK] Seq #${seq} | nowMs: ${nowMs}, longCooldownLock: ${longCooldownLock}, diff: ${longCooldownLock - nowMs}ms`);
+        console.log(`[StrategyEngine][${this.config.symbol}][COOLDOWN_BLOCK] Seq #${seq} | nowMs: ${nowMs}, longCooldownLock: ${longCooldownLock}, diff: ${longCooldownLock - nowMs}ms`);
       }
 
       if (
@@ -1277,7 +1274,7 @@ export class StrategyEngine {
       if (signalType === "NONE") {
         if (seq % 500n === 0n) {
           console.log(
-            `[StrategyEngine][SignalGate] Seq #${seq} | Composite: ${compositeScore.toFixed(4)} | AI: (dir=${aiDirection.toFixed(2)}, conf=${(aiConfidence * 100).toFixed(0)}%) | OBI: ${obi.toFixed(2)} | CVD: ${cvd.toFixed(0)} | Status: NO SIGNAL TRIGGERED`
+            `[StrategyEngine][${this.config.symbol}][SignalGate] Seq #${seq} | Composite: ${compositeScore.toFixed(4)} | AI: (dir=${aiDirection.toFixed(2)}, conf=${(aiConfidence * 100).toFixed(0)}%) | OBI: ${obi.toFixed(2)} | CVD: ${cvd.toFixed(0)} | Status: NO SIGNAL TRIGGERED`
           );
         }
         this.staticResult.sequenceNum = seq;
@@ -1382,7 +1379,7 @@ export class StrategyEngine {
 
       if (!riskResult.passed) {
         if (seq % 1000n === 0n) {
-          console.log(`[StrategyEngine][RISK_REJECTED] Seq #${seq} | Reason: ${riskResult.reasonCode} - ${riskResult.message}`);
+          console.log(`[StrategyEngine][${this.config.symbol}][RISK_REJECTED] Seq #${seq} | Reason: ${riskResult.reasonCode} - ${riskResult.message}`);
         }
       } else {
         finalizedSignalVal = signalType === "BUY" ? 1.0 : signalType === "SELL" ? 2.0 : 0.0;
