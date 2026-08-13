@@ -32,7 +32,7 @@ export interface TradeLoggerStats {
   losingTrades: number;
   realizedPnl: number;
   unrealizedPnl: number;
-  positionSide: "FLAT" | "LONG" | "SHORT";
+  positionSide: "FLAT" | "LONG" | "SHORT" | "BOTH";
   netQuantity: number;
   averageEntryPrice: number;
   totalFees: number;
@@ -281,7 +281,7 @@ export class TradeLogger {
    */
   public getStats(positionInfo?: {
     unrealizedPnl?: number;
-    positionSide?: "FLAT" | "LONG" | "SHORT";
+    positionSide?: "FLAT" | "LONG" | "SHORT" | "BOTH";
     netQuantity?: number;
     averageEntryPrice?: number;
     cumulativeRealizedPnl?: number;

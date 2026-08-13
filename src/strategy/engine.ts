@@ -257,10 +257,11 @@ export class StrategyEngine {
    */
   public syncSabPositionState(currentMarkPrice: number = 0): void {
     const summary = this.hedgeLedger.getSummary(currentMarkPrice);
-    const netSignedQty = summary.side === "SHORT" ? -summary.netQuantity : summary.netQuantity;
     const sideCode = summary.side === "BOTH" ? 3.0 : summary.side === "LONG" ? 1.0 : summary.side === "SHORT" ? 2.0 : 0.0;
-    this.client.setOmsPositionQty(netSignedQty, this.assetIndex);
+    this.client.setOmsPositionQty(summary.netQuantity, this.assetIndex);
     this.client.setOmsPositionSide(sideCode, this.assetIndex);
+    this.client.setOmsLongPositionQty(summary.longQuantity, this.assetIndex);
+    this.client.setOmsShortPositionQty(summary.shortQuantity, this.assetIndex);
     this.client.setOmsAvgEntryPrice(summary.averageEntryPrice, this.assetIndex);
     this.client.setOmsRealizedPnl(summary.cumulativeRealizedPnl, this.assetIndex);
     this.client.setOmsUnrealizedPnl(summary.unrealizedPnl, this.assetIndex);
@@ -449,25 +450,67 @@ export class StrategyEngine {
           }
         }
 
-        // 3. Fallback: Untracked ENTRY fill handling (e.g. immediate fills or REST placement fills)
-        const isEntrySide = (order.side === "BUY" && (order.positionSide === "LONG" || order.positionSide === "BOTH")) ||
-                            (order.side === "SELL" && (order.positionSide === "SHORT" || order.positionSide === "BOTH"));
-        if (isEntrySide) {
-          const execPx = order.lastFilledPrice > 0 ? order.lastFilledPrice : order.originalPrice;
-          const execQty = order.lastFilledQuantity > 0 ? order.lastFilledQuantity : order.cumulativeFilledQuantity;
-          if (execPx > 0 && execQty > 0) {
-            const posSide: "LONG" | "SHORT" =
-              order.positionSide === "LONG" || order.positionSide === "SHORT"
-                ? order.positionSide
-                : (order.side === "BUY" ? "LONG" : "SHORT");
-            console.log(`[BinanceExecution][UNTRACKED_ENTRY_FILL] OrderId #${orderId} filled for ${this.config.symbol} ${posSide}! Occupying/accumulating slot. Qty: ${execQty} @ $${execPx}`);
+        // 3. Fallback: Untracked WebSocket fill classification & execution
+        const activeSummary = this.hedgeLedger.getSummary();
+        const rawPosSide = order.positionSide;
+
+        let isExitSide = false;
+        let isEntrySide = false;
+        let targetPosSide: "LONG" | "SHORT" = "LONG";
+
+        if (rawPosSide === "LONG") {
+          if (order.side === "BUY") {
+            isEntrySide = true;
+            targetPosSide = "LONG";
+          } else {
+            isExitSide = true;
+            targetPosSide = "LONG";
+          }
+        } else if (rawPosSide === "SHORT") {
+          if (order.side === "SELL") {
+            isEntrySide = true;
+            targetPosSide = "SHORT";
+          } else {
+            isExitSide = true;
+            targetPosSide = "SHORT";
+          }
+        } else {
+          // Both or Undefined (One-Way Mode or missing positionSide WS attribute)
+          if (order.side === "SELL") {
+            if (activeSummary.longQuantity > 1e-9) {
+              isExitSide = true;
+              targetPosSide = "LONG";
+            } else {
+              isEntrySide = true;
+              targetPosSide = "SHORT";
+            }
+          } else {
+            // order.side === "BUY"
+            if (activeSummary.shortQuantity > 1e-9) {
+              isExitSide = true;
+              targetPosSide = "SHORT";
+            } else {
+              isEntrySide = true;
+              targetPosSide = "LONG";
+            }
+          }
+        }
+
+        const execPx = order.lastFilledPrice > 0 ? order.lastFilledPrice : order.originalPrice;
+        const execQty = order.lastFilledQuantity > 0 ? order.lastFilledQuantity : order.cumulativeFilledQuantity;
+
+        if (execPx > 0 && execQty > 0) {
+          if (isEntrySide) {
+            console.log(`[BinanceExecution][UNTRACKED_ENTRY_FILL] OrderId #${orderId} filled for ${this.config.symbol} ${targetPosSide}! Occupying/accumulating slot. Qty: ${execQty} @ $${execPx}`);
 
             const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
             const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
-            const dynamicSlPct = Math.max(0.005, volEstimate * 2.0);
-            const dynamicSlPercent = dynamicSlPct * 100;
+            const dynamicSlPercent = Math.max(
+              targetPosSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent,
+              Math.min(2.0, volEstimate * 2.0 * 100)
+            );
 
-            if (posSide === "LONG") {
+            if (targetPosSide === "LONG") {
               this.hedgeLedger.occupyCoreLong(execQty, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
               this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch(() => {});
             } else {
@@ -481,43 +524,41 @@ export class StrategyEngine {
               symbol: this.config.symbol,
               assetIndex: this.assetIndex,
               side: order.side as "BUY" | "SELL",
-              positionSide: posSide,
+              positionSide: targetPosSide,
               isCloseOrder: false,
               executedQty: execQty,
               executedPrice: execPx,
               fillTimestampMs: Date.now(),
             });
             this.syncSabPositionState();
-          }
-        } else {
-          // 4. Fallback: Untracked EXIT fill handling (e.g. manual exchange close or SL market fill)
-          const isExitSide = (order.side === "SELL" && order.positionSide === "LONG") ||
-                             (order.side === "BUY" && order.positionSide === "SHORT");
-          if (isExitSide) {
-            const execPx = order.lastFilledPrice > 0 ? order.lastFilledPrice : order.originalPrice;
-            const execQty = order.lastFilledQuantity > 0 ? order.lastFilledQuantity : order.cumulativeFilledQuantity;
-            if (execPx > 0 && execQty > 0) {
-              const exitPosSide: "LONG" | "SHORT" = order.positionSide === "SHORT" ? "SHORT" : "LONG";
-              console.log(`[BinanceExecution][UNTRACKED_EXIT_FILL] OrderId #${orderId} filled for ${this.config.symbol} ${exitPosSide}! Deducting/releasing slot. Qty: ${execQty} @ $${execPx}`);
-              if (exitPosSide === "LONG") {
-                this.hedgeLedger.deductCoreLongQuantity(execQty, execPx, 0.0004, "EXTERNAL_EXIT");
-              } else {
-                for (let sIdx = 0; sIdx < this.config.maxShortSlots; sIdx++) {
-                  this.hedgeLedger.deductShortSlotQuantity(sIdx, execQty, execPx, 0.0004, "EXTERNAL_EXIT");
+          } else if (isExitSide) {
+            console.log(`[BinanceExecution][UNTRACKED_EXIT_FILL] OrderId #${orderId} filled for ${this.config.symbol} ${targetPosSide}! Deducting/releasing slot. Qty: ${execQty} @ $${execPx}`);
+            if (targetPosSide === "LONG") {
+              this.hedgeLedger.deductCoreLongQuantity(execQty, execPx, 0.0004, "EXTERNAL_EXIT");
+            } else {
+              let remainingQtyToDeduct = execQty;
+              const slots = this.hedgeLedger.getShortSlots();
+              for (let sIdx = 0; sIdx < slots.length && remainingQtyToDeduct > 1e-9; sIdx++) {
+                const slot = slots[sIdx];
+                if (slot.isOccupied && slot.quantity > 0) {
+                  const closedFromSlot = Math.min(slot.quantity, remainingQtyToDeduct);
+                  this.hedgeLedger.deductShortSlotQuantity(sIdx, closedFromSlot, execPx, 0.0004, "EXTERNAL_EXIT");
+                  remainingQtyToDeduct -= closedFromSlot;
                 }
               }
-              this.onExecutionCompleted({
-                symbol: this.config.symbol,
-                assetIndex: this.assetIndex,
-                side: order.side as "BUY" | "SELL",
-                positionSide: exitPosSide,
-                isCloseOrder: true,
-                executedQty: execQty,
-                executedPrice: execPx,
-                fillTimestampMs: Date.now(),
-              });
-              this.syncSabPositionState();
             }
+
+            this.onExecutionCompleted({
+              symbol: this.config.symbol,
+              assetIndex: this.assetIndex,
+              side: order.side as "BUY" | "SELL",
+              positionSide: targetPosSide,
+              isCloseOrder: true,
+              executedQty: execQty,
+              executedPrice: execPx,
+              fillTimestampMs: Date.now(),
+            });
+            this.syncSabPositionState();
           }
         }
       } else if (order.orderStatus === "CANCELED" || order.orderStatus === "EXPIRED" || (order.orderStatus as string) === "REJECTED") {

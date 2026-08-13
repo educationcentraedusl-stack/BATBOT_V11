@@ -15,6 +15,9 @@ export interface PositionSummary {
   symbol: string;
   side: "FLAT" | "LONG" | "SHORT" | "BOTH";
   netQuantity: number;
+  longQuantity: number;
+  shortQuantity: number;
+  grossQuantity: number;
   averageEntryPrice: number;
   unrealizedPnl: number;
   cumulativeRealizedPnl: number;
@@ -104,6 +107,9 @@ export class PositionLedger {
       symbol: this.symbol,
       side: "FLAT",
       netQuantity: 0,
+      longQuantity: 0,
+      shortQuantity: 0,
+      grossQuantity: 0,
       averageEntryPrice: 0,
       unrealizedPnl: 0,
       cumulativeRealizedPnl: 0,
@@ -308,6 +314,9 @@ export class PositionLedger {
     this.cachedSummary.symbol = this.symbol;
     this.cachedSummary.side = this.side;
     this.cachedSummary.netQuantity = Number(this.netQuantity.toFixed(6));
+    this.cachedSummary.longQuantity = this.side === "LONG" ? Number(this.netQuantity.toFixed(6)) : 0;
+    this.cachedSummary.shortQuantity = this.side === "SHORT" ? Number(this.netQuantity.toFixed(6)) : 0;
+    this.cachedSummary.grossQuantity = Number(this.netQuantity.toFixed(6));
     this.cachedSummary.averageEntryPrice = Number(this.averageEntryPrice.toFixed(4));
     this.cachedSummary.unrealizedPnl = Number(this.getUnrealizedPnl(currentMarkPrice).toFixed(4));
     this.cachedSummary.cumulativeRealizedPnl = Number(this.cumulativeRealizedPnl.toFixed(4));
@@ -514,6 +523,9 @@ export class HedgePositionLedger {
       symbol: this.symbol,
       side: "FLAT",
       netQuantity: 0,
+      longQuantity: 0,
+      shortQuantity: 0,
+      grossQuantity: 0,
       averageEntryPrice: 0,
       unrealizedPnl: 0,
       cumulativeRealizedPnl: 0,
@@ -632,13 +644,15 @@ export class HedgePositionLedger {
     }
 
     const netQty = longQty - shortQty;
-    const absQty = side === "BOTH" ? (longQty + shortQty) : Math.abs(netQty);
     const totalPosQty = longQty + shortQty;
     const avgEntry = totalPosQty > 0 ? weightedEntrySum / totalPosQty : 0;
 
     this.cachedSummary.symbol = this.symbol;
     this.cachedSummary.side = side;
-    this.cachedSummary.netQuantity = Number(absQty.toFixed(6));
+    this.cachedSummary.netQuantity = Number(netQty.toFixed(6));
+    this.cachedSummary.longQuantity = Number(longQty.toFixed(6));
+    this.cachedSummary.shortQuantity = Number(shortQty.toFixed(6));
+    this.cachedSummary.grossQuantity = Number(totalPosQty.toFixed(6));
     this.cachedSummary.averageEntryPrice = Number(avgEntry.toFixed(4));
     this.cachedSummary.unrealizedPnl = Number(this.getUnrealizedPnl(currentMarkPrice).toFixed(4));
     this.cachedSummary.cumulativeRealizedPnl = Number(this.cumulativeRealizedPnl.toFixed(4));

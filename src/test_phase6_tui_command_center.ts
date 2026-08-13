@@ -106,7 +106,7 @@ async function runPhase6TuiCommandCenterTests(): Promise<void> {
   console.log("  ✅ Synthetic 10-Asset orderbook and OMS state populated in SAB.\n");
 
   console.log(`[QA Test 3] Testing MultiAssetCLIDashboard Zero-Copy SAB Reader...`);
-  const dashboard = new MultiAssetCLIDashboard(client, true, sampleSymbols);
+  const dashboard = new MultiAssetCLIDashboard(client, false, sampleSymbols);
   dashboard.setFocusedAsset(2);
   assert(dashboard.getFocusedAsset() === 2, "Focused asset slot must be 2");
 
@@ -165,6 +165,6 @@ async function runPhase6TuiCommandCenterTests(): Promise<void> {
 }
 
 runPhase6TuiCommandCenterTests().catch((err) => {
-  console.error("❌ Test failed with unhandled error:", err);
+  console.error("❌ Test failed with unhandled error:", err?.stack || err);
   process.exit(1);
 });

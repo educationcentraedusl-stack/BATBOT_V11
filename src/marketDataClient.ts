@@ -547,6 +547,22 @@ export class MarketDataClient {
     this.writeAtomicFloat64Asset(assetIdx, 142, code);
   }
 
+  public getOmsLongPositionQty(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 143);
+  }
+
+  public setOmsLongPositionQty(qty: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 143, qty);
+  }
+
+  public getOmsShortPositionQty(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 144);
+  }
+
+  public setOmsShortPositionQty(qty: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 144, qty);
+  }
+
 
   /**
    * Broadcasts atomic Kill-Switch activation across all asset slots simultaneously.

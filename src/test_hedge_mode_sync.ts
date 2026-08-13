@@ -78,34 +78,48 @@ async function testHedgeModeSync() {
 
   // 3. Verify position ledger summary
   const summary = strategyEngine.getHedgeLedger().getSummary(1874.45);
-  console.log(`Position Summary -> Side: ${summary.side}, NetQty: ${summary.netQuantity}, AvgEntry: $${summary.averageEntryPrice}`);
+  console.log(`Position Summary -> Side: ${summary.side}, NetQty: ${summary.netQuantity}, LongQty: ${summary.longQuantity}, ShortQty: ${summary.shortQuantity}, GrossQty: ${summary.grossQuantity}, AvgEntry: $${summary.averageEntryPrice}`);
 
   if (summary.side !== "BOTH") {
     throw new Error(`FAIL: PositionLedger summary side must be 'BOTH', got '${summary.side}'`);
   }
 
-  if (summary.netQuantity !== 0.064) {
-    throw new Error(`FAIL: PositionLedger summary gross netQuantity must be 0.064, got ${summary.netQuantity}`);
+  if (Math.abs(summary.netQuantity) > 1e-5) {
+    throw new Error(`FAIL: PositionLedger netQuantity must be 0.0 for delta-neutral hedge, got ${summary.netQuantity}`);
   }
 
-  console.log("✓ Test 2 Passed: HedgePositionLedger summary correctly identifies 'BOTH' side and non-zero gross quantity (0.064).");
+  if (Math.abs(summary.grossQuantity - 0.064) > 1e-5) {
+    throw new Error(`FAIL: PositionLedger grossQuantity must be 0.064, got ${summary.grossQuantity}`);
+  }
+
+  console.log("✓ Test 2 Passed: HedgePositionLedger summary correctly identifies 'BOTH' side, 0.0 net quantity, and 0.064 gross quantity.");
 
   // 4. Verify SAB Position State Synchronization
   strategyEngine.syncSabPositionState(1874.45);
-  const omsQty = client.getOmsPositionQty(1);
+  const omsNetQty = client.getOmsPositionQty(1);
+  const omsLongQty = client.getOmsLongPositionQty(1);
+  const omsShortQty = client.getOmsShortPositionQty(1);
   const omsSideCode = client.getOmsPositionSide(1);
 
-  console.log(`SAB Metrics -> OmsPositionQty: ${omsQty}, OmsPositionSideCode: ${omsSideCode}`);
+  console.log(`SAB Metrics -> NetQty: ${omsNetQty}, LongQty: ${omsLongQty}, ShortQty: ${omsShortQty}, SideCode: ${omsSideCode}`);
 
-  if (Math.abs(omsQty - 0.064) > 1e-5) {
-    throw new Error(`FAIL: SAB OMS Position Quantity must be 0.064, got ${omsQty}`);
+  if (Math.abs(omsNetQty) > 1e-5) {
+    throw new Error(`FAIL: SAB OMS Net Position Quantity (Slot 105) must be 0.0, got ${omsNetQty}`);
+  }
+
+  if (Math.abs(omsLongQty - 0.032) > 1e-5) {
+    throw new Error(`FAIL: SAB OMS Long Position Quantity (Slot 143) must be 0.032, got ${omsLongQty}`);
+  }
+
+  if (Math.abs(omsShortQty - 0.032) > 1e-5) {
+    throw new Error(`FAIL: SAB OMS Short Position Quantity (Slot 144) must be 0.032, got ${omsShortQty}`);
   }
 
   if (omsSideCode !== 3.0) {
-    throw new Error(`FAIL: SAB OMS Position Side Code must be 3.0 (BOTH), got ${omsSideCode}`);
+    throw new Error(`FAIL: SAB OMS Position Side Code (Slot 142) must be 3.0 (BOTH), got ${omsSideCode}`);
   }
 
-  console.log("✓ Test 3 Passed: SAB memory state correctly populated with 0.064 gross size and 3.0 (BOTH) side code.");
+  console.log("✓ Test 3 Passed: SAB memory state correctly populated with 0.0 Net Qty (Slot 105), 0.032 Long Qty (Slot 143), 0.032 Short Qty (Slot 144), and 3.0 (BOTH) side code.");
 
   // 5. Verify Active Trades array contains 2 distinct active slots (1 LONG, 1 SHORT)
   const activeTradeSlots = strategyEngine.getActiveTrades(1874.45);
