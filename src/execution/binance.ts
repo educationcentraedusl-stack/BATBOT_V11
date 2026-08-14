@@ -373,6 +373,7 @@ export class BinanceExecutionClient {
   }
 
   public async placeOrder(params: BinanceOrderParams, retryCount: number = 0): Promise<BinanceOrderResponse> {
+    const isAlgoOrder = params.type === "STOP_MARKET" || params.type === "TAKE_PROFIT_MARKET";
     const formattedQty = params.quantity;
     const payload: Record<string, string | number | boolean> = {
       symbol: params.symbol,
@@ -414,9 +415,91 @@ export class BinanceExecutionClient {
     }
 
     try {
+      if (isAlgoOrder) {
+        // Route conditional stop orders through /fapi/v1/algoOrder endpoint with required algoType: "CONDITIONAL" and triggerPrice
+        try {
+          const algoPayload: Record<string, string | number | boolean> = {
+            ...payload,
+            algoType: "CONDITIONAL",
+          };
+          if (params.stopPrice !== undefined) {
+            algoPayload.triggerPrice = params.stopPrice;
+            delete algoPayload.stopPrice;
+          }
+          delete algoPayload.reduceOnly;
+
+          const algoRes = await this.request<any>("POST", "/fapi/v1/algoOrder", algoPayload, true);
+          if (algoRes && (algoRes.algoId || algoRes.orderId)) {
+            return {
+              orderId: algoRes.algoId || algoRes.orderId,
+              symbol: algoRes.symbol || params.symbol,
+              status: algoRes.algoStatus || algoRes.status || "NEW",
+              clientOrderId: algoRes.clientAlgoId || algoRes.clientOrderId || "",
+              price: String(algoRes.price || "0"),
+              avgPrice: String(algoRes.avgPrice || "0"),
+              origQty: String(algoRes.quantity || formattedQty),
+              executedQty: String(algoRes.executedQty || "0"),
+              cumQuote: String(algoRes.cumQuote || "0"),
+              timeInForce: algoRes.timeInForce || "GTC",
+              type: algoRes.orderType || params.type,
+              reduceOnly: false,
+              side: algoRes.side || params.side,
+              positionSide: algoRes.positionSide || params.positionSide || "BOTH",
+              stopPrice: String(algoRes.triggerPrice || params.stopPrice || "0"),
+              workingType: algoRes.workingType || params.workingType || "CONTRACT_PRICE",
+              updateTime: algoRes.updateTime || Date.now(),
+            };
+          }
+          return algoRes as BinanceOrderResponse;
+        } catch (algoErr: any) {
+          const algoMsg = algoErr?.message || String(algoErr);
+          if (algoMsg.includes("-4120") || algoMsg.includes("404") || algoMsg.includes("not supported")) {
+            // Fall back to standard /fapi/v1/order if algoOrder endpoint is unmapped
+            return await this.request<BinanceOrderResponse>("POST", "/fapi/v1/order", payload, true);
+          }
+          throw algoErr;
+        }
+      }
+
       return await this.request<BinanceOrderResponse>("POST", "/fapi/v1/order", payload, true);
     } catch (err: any) {
       const errMsg = err?.message || String(err);
+      if (errMsg.includes("-4120") && !isAlgoOrder) {
+        // Fallback to /fapi/v1/algoOrder if /fapi/v1/order threw -4120
+        const algoPayload: Record<string, string | number | boolean> = {
+          ...payload,
+          algoType: "CONDITIONAL",
+        };
+        if (params.stopPrice !== undefined) {
+          algoPayload.triggerPrice = params.stopPrice;
+          delete algoPayload.stopPrice;
+        }
+        delete algoPayload.reduceOnly;
+        const algoRes = await this.request<any>("POST", "/fapi/v1/algoOrder", algoPayload, true);
+        if (algoRes && (algoRes.algoId || algoRes.orderId)) {
+          return {
+            orderId: algoRes.algoId || algoRes.orderId,
+            symbol: algoRes.symbol || params.symbol,
+            status: algoRes.algoStatus || algoRes.status || "NEW",
+            clientOrderId: algoRes.clientAlgoId || algoRes.clientOrderId || "",
+            price: String(algoRes.price || "0"),
+            avgPrice: String(algoRes.avgPrice || "0"),
+            origQty: String(algoRes.quantity || formattedQty),
+            executedQty: String(algoRes.executedQty || "0"),
+            cumQuote: String(algoRes.cumQuote || "0"),
+            timeInForce: algoRes.timeInForce || "GTC",
+            type: algoRes.orderType || params.type,
+            reduceOnly: false,
+            side: algoRes.side || params.side,
+            positionSide: algoRes.positionSide || params.positionSide || "BOTH",
+            stopPrice: String(algoRes.triggerPrice || params.stopPrice || "0"),
+            workingType: algoRes.workingType || params.workingType || "CONTRACT_PRICE",
+            updateTime: algoRes.updateTime || Date.now(),
+          };
+        }
+        return algoRes as BinanceOrderResponse;
+      }
+
       if ((errMsg.includes("-5022") || errMsg.includes("5022")) && retryCount < 2) {
         const tickSize = SymbolPrecisionRegistry.getTickSize(params.symbol);
         const currentPrice = params.price || 0;
@@ -547,15 +630,55 @@ export class BinanceExecutionClient {
   }
 
   public async cancelOrder(symbol: string, orderId: number | string): Promise<BinanceOrderResponse> {
-    return this.request<BinanceOrderResponse>(
-      "DELETE",
-      "/fapi/v1/order",
-      { symbol, orderId },
-      true
-    );
+    try {
+      return await this.request<BinanceOrderResponse>(
+        "DELETE",
+        "/fapi/v1/order",
+        { symbol, orderId },
+        true
+      );
+    } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      if (errMsg.includes("-2011") || errMsg.includes("-4120") || errMsg.includes("Unknown order") || errMsg.includes("not found")) {
+        // Fallback to /fapi/v1/algoOrder cancellation
+        try {
+          const algoCancel = await this.request<any>(
+            "DELETE",
+            "/fapi/v1/algoOrder",
+            { symbol, algoId: orderId },
+            true
+          );
+          return {
+            orderId: Number(orderId),
+            symbol,
+            status: algoCancel.algoStatus || algoCancel.status || "CANCELED",
+            clientOrderId: algoCancel.clientAlgoId || algoCancel.clientOrderId || "",
+            price: "0",
+            avgPrice: "0",
+            origQty: "0",
+            executedQty: "0",
+            cumQuote: "0",
+            timeInForce: "GTC",
+            type: "STOP_MARKET",
+            reduceOnly: false,
+            side: "SELL",
+            positionSide: "BOTH",
+            stopPrice: "0",
+            workingType: "CONTRACT_PRICE",
+            updateTime: Date.now(),
+          };
+        } catch (algoErr: any) {
+          throw err;
+        }
+      }
+      throw err;
+    }
   }
 
   public async cancelAllOrders(symbol: string): Promise<BinanceCancelAllResponse> {
+    try {
+      await this.request<any>("DELETE", "/fapi/v1/algoOpenOrders", { symbol }, true).catch(() => {});
+    } catch {}
     return this.request<BinanceCancelAllResponse>(
       "DELETE",
       "/fapi/v1/allOpenOrders",
@@ -603,7 +726,32 @@ export class BinanceExecutionClient {
   public async getOpenOrders(symbol?: string): Promise<BinanceOrderResponse[]> {
     const params: Record<string, string> = {};
     if (symbol) params.symbol = symbol;
-    return this.request<BinanceOrderResponse[]>("GET", "/fapi/v1/openOrders", params, true);
+    const [standardOrders, algoOrders] = await Promise.all([
+      this.request<BinanceOrderResponse[]>("GET", "/fapi/v1/openOrders", params, true).catch(() => [] as BinanceOrderResponse[]),
+      this.request<any[]>("GET", "/fapi/v1/openAlgoOrders", params, true).catch(() => [] as any[]),
+    ]);
+
+    const mappedAlgoOrders: BinanceOrderResponse[] = (Array.isArray(algoOrders) ? algoOrders : []).map((ao) => ({
+      orderId: ao.algoId || ao.orderId,
+      symbol: ao.symbol,
+      status: ao.algoStatus || ao.status || "NEW",
+      clientOrderId: ao.clientAlgoId || ao.clientOrderId || "",
+      price: String(ao.price || "0"),
+      avgPrice: String(ao.avgPrice || "0"),
+      origQty: String(ao.quantity || ao.origQty || "0"),
+      executedQty: String(ao.executedQty || "0"),
+      cumQuote: String(ao.cumQuote || "0"),
+      timeInForce: ao.timeInForce || "GTC",
+      type: ao.orderType || ao.type || "STOP_MARKET",
+      reduceOnly: ao.reduceOnly || false,
+      side: ao.side,
+      positionSide: ao.positionSide || "BOTH",
+      stopPrice: String(ao.stopPrice || "0"),
+      workingType: ao.workingType || "CONTRACT_PRICE",
+      updateTime: ao.updateTime || Date.now(),
+    }));
+
+    return [...(Array.isArray(standardOrders) ? standardOrders : []), ...mappedAlgoOrders];
   }
 
   public async getAccountBalance(): Promise<BinanceAccountBalance[]> {
@@ -629,3 +777,4 @@ export class BinanceExecutionClient {
     return true;
   }
 }
+
