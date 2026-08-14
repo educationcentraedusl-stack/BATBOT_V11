@@ -415,7 +415,7 @@ export class MultiAssetCLIDashboard {
         const shortUPnlStr = `${shortUPnl >= 0 ? "+" : ""}$${shortUPnl.toFixed(2)}`;
         const shortUPnlFormatted = this.formatCell(shortUPnlStr, 56, false);
 
-        out += `| ${shortSlotStr} | ${sym} | ${shortSide} | ${this.formatCell(shortQty.toFixed(4), 10)} | $${this.formatCell(shortEntryPx.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell((0.0).toFixed(2), 10)} | ${shortUPnlColor}${bold}${shortUPnlFormatted}${reset} |${clearLine}\n`;
+        out += `| ${shortSlotStr} | ${sym} | ${shortSide} | ${this.formatCell(shortQty.toFixed(4), 10)} | $${this.formatCell(shortEntryPx.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${shortUPnlColor}${bold}${shortUPnlFormatted}${reset} |${clearLine}\n`;
       } else if (hasLong || (sideCode === 1.0 && Math.abs(qty) > 1e-6)) {
         hasActivePosition = true;
         const displayQty = hasLong ? longQty : Math.abs(qty);

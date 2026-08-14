@@ -1693,10 +1693,13 @@
   5. **Dynamic Stop-Loss Percentage Standardization (`engine.ts`):** Standardized dynamic stop-loss calculations in untracked entry fill handling to percentage floats.
   6. **TUI Dashboard Delta-Neutral Blindness Eradicated (`multiAssetDashboard.ts`):** Updated CLI dashboard position rendering loop to inspect `sideCode === 3.0` and Slots 143/144, properly displaying gross position quantity and `"BOTH"` in bright cyan.
   7. **QA Verification:** Passed 100% of TypeScript compilation (`npx tsc --noEmit` - 0 errors), `test_hedge_mode_sync.ts` (all 4 dual-directional assertions passed), `test_state_recovery.ts` (passed cleanly), and `test_phase6_tui_command_center.ts` (10-asset TUI command center verified).
+- **Date:** 2026-08-14
+- **Feature/Task:** Zero-Trust Line-by-Line Deep Scan Audit & Remediation on Hedge Mode Architecture
+- **Artifacts Created/Modified:** `src/strategy/positionLedger.ts`, `src/strategy/engine.ts`, `src/marketDataClient.ts`, `src/telemetry/multiAssetDashboard.ts`, `src/execution/userDataStream.ts`, `src/telemetry/server.ts`, `src/tests/test_hedge_mode_split.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Executed an unguided, line-by-line zero-trust deep scan audit across the hedge mode implementation:
+  1. **Dual-Directional Ledger Separation (`positionLedger.ts`):** Verified complete unblended tracking of `CORE_LONG` and `SHORT_SLOT_0..2`. Isolated `longAverageEntryPrice`, `shortAverageEntryPrice`, `longUnrealizedPnl`, and `shortUnrealizedPnl` with zero cross-contamination.
+  2. **WebSocket & Order Desync Defense (`engine.ts`, `userDataStream.ts`):** Fixed `handleWsAccountPositionUpdate` to release both Long and Short legs on `"BOTH"` side flat position updates and dynamically bound short slot loops to `config.maxShortSlots`. Added `reduceOnly` tracking to WebSocket trade payloads for deterministic untracked fill classification.
+  3. **Continuous Microstructure & HJB Inventory Fix (`engine.ts`):** Corrected signed inventory parameter to `summary.netQuantity` and computed unified maximum holding duration for simultaneous dual-leg positions.
+  4. **TUI Telemetry Formatting & RPC Resilience (`multiAssetDashboard.ts`, `server.ts`):** Replaced hardcoded Short realized PnL with dynamic `rPnl` and enabled both JSON and binary Protobuf control command decoding on WebSocket server.
+  5. **Verification:** 100% verified via `npx tsc --noEmit` (0 errors) and automated test suite (`npx tsx src/tests/test_hedge_mode_split.ts`, `npx tsx src/tests/test_dashboard_stress.ts`, `npx tsx src/tests/test_live_state_sync_and_orphan_healing.ts`, etc.).
 - **Status:** ✅ Completed & QA Verified
-
-
-
-
-
-

@@ -31,15 +31,30 @@ export class TelemetryWSServer {
 
         ws.on("message", async (data: Buffer | ArrayBuffer) => {
           try {
-            const buf = new Uint8Array(data as ArrayBuffer);
-            // Strict binary Protobuf control command decoding
-            const cmd = decodeControlCommand(buf);
+            let cmd: ControlCommand;
+            const isJson = typeof data === "string" || (Buffer.isBuffer(data) && data[0] === 123 /* '{' */);
+            if (isJson) {
+              const parsedJson = JSON.parse(data.toString());
+              cmd = {
+                action: parsedJson.action,
+                modelPath: parsedJson.modelPath,
+                timestamp: parsedJson.timestamp,
+              };
+            } else {
+              const buf = new Uint8Array(data as ArrayBuffer);
+              // Strict binary Protobuf control command decoding
+              cmd = decodeControlCommand(buf);
+            }
 
             if (this.commandHandler) {
               const res = await this.commandHandler(cmd);
               if (ws.readyState === WebSocket.OPEN) {
-                const responseBuf = encodeControlResponse(res.success, cmd.action, res.message);
-                ws.send(responseBuf);
+                if (isJson) {
+                  ws.send(JSON.stringify({ success: res.success, action: cmd.action, message: res.message, timestamp: Date.now() }));
+                } else {
+                  const responseBuf = encodeControlResponse(res.success, cmd.action, res.message);
+                  ws.send(responseBuf);
+                }
               }
             }
           } catch (err: any) {

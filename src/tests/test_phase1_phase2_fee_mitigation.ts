@@ -10,6 +10,7 @@ async function runPhase1Phase2Tests() {
 
   // 1. Verify Dynamic Sizing Calculator & Zero-Hardcoding Env Compliance
   console.log(`[TEST 1] Testing DynamicSizingCalculator (.env driven)...`);
+  process.env.DYNAMIC_SIZING_CONSOLIDATION_THRESHOLD_USDT = "150.0";
   const sizingCalc = new DynamicSizingCalculator();
 
   console.log(`- Maker Fee Rate from Env: ${(sizingCalc.getMakerFeeRate() * 100).toFixed(4)}%`);
@@ -31,7 +32,7 @@ async function runPhase1Phase2Tests() {
     throw new Error(`TEST FAILED: Large position should yield 3 stages and isConsolidated = false.`);
   }
 
-  // Test Case B: Small Position ($120 USDT Notional) -> 2-Stage Collapsed Ladder
+  // Test Case B: Small Position ($120 USDT Notional < $150 Threshold) -> 2-Stage Collapsed Ladder
   const smallRes = sizingCalc.calculateDynamicTpChunks(0.002, 60000); // 0.002 BTC @ $60,000 = $120 USDT
   console.log(`[Small Position Test] Total Notional: $${smallRes.totalNotionalUsdt} USDT`);
   console.log(`- Is Consolidated (2-stage): ${smallRes.isConsolidated}`);
