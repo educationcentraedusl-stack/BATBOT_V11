@@ -139,7 +139,7 @@ class BinanceExecutionClient {
         }
         catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            // Log failure silently to background telemetry log without interrupting HFT loops
+            console.log(`[BinanceExecutionClient] USDT balance fetch notice: ${msg}`);
         }
         return this.cachedUsdtAvailableBalance;
     }
@@ -147,9 +147,13 @@ class BinanceExecutionClient {
         if (this.balancePollTimer)
             return;
         // Trigger initial fetch asynchronously
-        this.fetchUsdtBalanceAsync().catch(() => { });
+        this.fetchUsdtBalanceAsync().catch((err) => {
+            console.log(`[BinanceExecutionClient] Initial USDT balance fetch notice: ${err instanceof Error ? err.message : String(err)}`);
+        });
         this.balancePollTimer = setInterval(() => {
-            this.fetchUsdtBalanceAsync().catch(() => { });
+            this.fetchUsdtBalanceAsync().catch((err) => {
+                console.log(`[BinanceExecutionClient] Polling USDT balance fetch notice: ${err instanceof Error ? err.message : String(err)}`);
+            });
         }, intervalMs);
     }
     stopBalancePolling() {
@@ -308,7 +312,7 @@ class BinanceExecutionClient {
                         algoType: "CONDITIONAL",
                     };
                     if (params.stopPrice !== undefined) {
-                        algoPayload.triggerPrice = params.stopPrice;
+                        algoPayload.triggerPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
                         delete algoPayload.stopPrice;
                     }
                     delete algoPayload.reduceOnly;
@@ -356,7 +360,7 @@ class BinanceExecutionClient {
                     algoType: "CONDITIONAL",
                 };
                 if (params.stopPrice !== undefined) {
-                    algoPayload.triggerPrice = params.stopPrice;
+                    algoPayload.triggerPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
                     delete algoPayload.stopPrice;
                 }
                 delete algoPayload.reduceOnly;
@@ -591,8 +595,14 @@ class BinanceExecutionClient {
         if (symbol)
             params.symbol = symbol;
         const [standardOrders, algoOrders] = await Promise.all([
-            this.request("GET", "/fapi/v1/openOrders", params, true).catch(() => []),
-            this.request("GET", "/fapi/v1/openAlgoOrders", params, true).catch(() => []),
+            this.request("GET", "/fapi/v1/openOrders", params, true).catch((err) => {
+                console.log(`[BinanceExecutionClient] Notice fetching standard open orders: ${err?.message || String(err)}`);
+                return [];
+            }),
+            this.request("GET", "/fapi/v1/openAlgoOrders", params, true).catch((err) => {
+                console.log(`[BinanceExecutionClient] Notice fetching open algo orders: ${err?.message || String(err)}`);
+                return [];
+            }),
         ]);
         const mappedAlgoOrders = (Array.isArray(algoOrders) ? algoOrders : []).map((ao) => ({
             orderId: ao.algoId || ao.orderId,

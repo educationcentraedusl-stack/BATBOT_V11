@@ -865,7 +865,7 @@ export class StrategyEngine {
         // If a subsequent ratchet target was queued while the network request was in-flight, process it immediately
         if (this.pendingSlSyncTargets.has(slotId)) {
           const queued = this.pendingSlSyncTargets.get(slotId)!;
-          if (queued.price !== currentTargetPrice) {
+          if (queued.price !== currentTargetPrice || queued.quantity !== targetQty) {
             currentTargetPrice = queued.price;
             currentQty = queued.quantity;
             currentSide = queued.side;
@@ -1239,7 +1239,7 @@ export class StrategyEngine {
         if (activeTriggers.length === 0) {
           const coreLong = this.hedgeLedger.getCoreLong();
           if (coreLong.isOccupied && coreLong.quantity > 0 && coreLong.stopLossPrice > 0) {
-            if (coreLong.lastSyncedSlPrice !== undefined && coreLong.stopLossPrice > coreLong.lastSyncedSlPrice) {
+            if (coreLong.lastSyncedSlPrice === undefined || coreLong.lastSyncedSlPrice === 0 || coreLong.stopLossPrice > coreLong.lastSyncedSlPrice) {
               this.syncExchangeStopLossOrder("CORE_LONG", coreLong.quantity, "LONG", coreLong.stopLossPrice).catch((err) => {
                 console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Core Long SL ratchet sync failed: ${err.message}`);
               });
@@ -1247,7 +1247,7 @@ export class StrategyEngine {
           }
           for (const s of this.hedgeLedger.getShortSlots()) {
             if (s.isOccupied && s.quantity > 0 && s.stopLossPrice > 0) {
-              if (s.lastSyncedSlPrice !== undefined && s.stopLossPrice < s.lastSyncedSlPrice) {
+              if (s.lastSyncedSlPrice === undefined || s.lastSyncedSlPrice === 0 || s.stopLossPrice < s.lastSyncedSlPrice) {
                 this.syncExchangeStopLossOrder(s.slotId, s.quantity, "SHORT", s.stopLossPrice).catch((err) => {
                   console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] ${s.slotId} SL ratchet sync failed: ${err.message}`);
                 });
