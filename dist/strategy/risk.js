@@ -41,6 +41,8 @@ class RiskGuard {
         const defaultMinRrRatio = !isNaN(envMinRrRatio) ? envMinRrRatio : 2.0;
         const envMaxPosition = process.env.MAX_POSITION_SIZE_USDT ? parseFloat(process.env.MAX_POSITION_SIZE_USDT) : NaN;
         const defaultMaxPosition = !isNaN(envMaxPosition) ? envMaxPosition : 10000.0;
+        const envMinNetAlpha = process.env.MIN_NET_ALPHA ? parseFloat(process.env.MIN_NET_ALPHA) : NaN;
+        const defaultMinNetAlpha = !isNaN(envMinNetAlpha) && envMinNetAlpha > 0 ? envMinNetAlpha : 0.0015;
         this.config = {
             maxPositionSizeUsdt: config?.maxPositionSizeUsdt ?? defaultMaxPosition,
             minCooldownMs: config?.minCooldownMs ?? 0,
@@ -48,6 +50,7 @@ class RiskGuard {
             maxPriceSlippagePercent: config?.maxPriceSlippagePercent ?? 0.5,
             dailyProfitLockTargetUsdt: config?.dailyProfitLockTargetUsdt ?? defaultProfitLock,
             minRiskRewardRatio: config?.minRiskRewardRatio ?? defaultMinRrRatio,
+            minNetAlpha: config?.minNetAlpha ?? defaultMinNetAlpha,
         };
     }
     getConfig() {
@@ -84,16 +87,20 @@ class RiskGuard {
                 };
             }
         }
-        // 2.2 Fee & Spread Friction Guard: Target Return >= 0.50% (50 bps Minimum Breathing Room)
+        // 2.2 SOTA Dynamic Alpha-to-Friction Barrier Guard: Target Return >= Total Friction + MIN_NET_ALPHA
         if (!intent.isCloseOrder && !intent.isHardStop && intent.price > 0) {
-            const minFrictionFloorPct = 0.005; // 0.005 (0.50% / 50 bps minimum floor)
+            const envMinNetAlpha = process.env.MIN_NET_ALPHA ? parseFloat(process.env.MIN_NET_ALPHA) : NaN;
+            const minNetAlpha = !isNaN(envMinNetAlpha) && envMinNetAlpha > 0 ? envMinNetAlpha : this.config.minNetAlpha;
+            const makerFee = process.env.MAKER_FEE_RATE ? parseFloat(process.env.MAKER_FEE_RATE) : 0.00018;
+            const takerFee = process.env.TAKER_FEE_RATE ? parseFloat(process.env.TAKER_FEE_RATE) : 0.00045;
+            const minFrictionFloorPct = (makerFee + takerFee) + minNetAlpha;
             if (intent.takeProfitPrice !== undefined && intent.takeProfitPrice > 0) {
                 const returnPct = Math.abs(intent.takeProfitPrice - intent.price) / intent.price;
                 if (returnPct < minFrictionFloorPct - 1e-6) {
                     return {
                         passed: false,
                         reasonCode: "REJECTED_FRICTION_GUARD",
-                        message: `Order rejected: Expected profit margin (${(returnPct * 100).toFixed(3)}%) is below mandatory friction defense floor (${(minFrictionFloorPct * 100).toFixed(3)}%).`,
+                        message: `Order rejected: Expected profit margin (${(returnPct * 100).toFixed(3)}%) is below mandatory friction defense floor (${(minFrictionFloorPct * 100).toFixed(3)}% = fees ${((makerFee + takerFee) * 100).toFixed(3)}% + alpha ${(minNetAlpha * 100).toFixed(3)}%).`,
                     };
                 }
             }
@@ -190,7 +197,7 @@ class RiskGuard {
                 };
             }
         }
-        // 8. Strict Minimum Risk/Reward Ratio Enforcement (Floor: 2.0)
+        // 8. SOTA Drawdown-Aware Asymmetric Payoff Skew Expansion (APSE)
         if (!intent.isCloseOrder && intent.takeProfitPrice !== undefined && intent.stopLossPrice !== undefined && intent.price > 0) {
             let rewardDistance = 0;
             let riskDistance = 0;
@@ -204,12 +211,14 @@ class RiskGuard {
             }
             if (riskDistance > 0) {
                 const rrRatio = rewardDistance / riskDistance;
-                const requiredMin = this.config.minRiskRewardRatio ?? 2.0;
+                const baseMin = this.config.minRiskRewardRatio ?? 2.0;
+                const isDrawdown = this.cumulativeDailyRealizedPnl < 0;
+                const requiredMin = isDrawdown ? Math.min(3.5, baseMin + 1.0) : baseMin;
                 if (rrRatio < requiredMin - 1e-4) {
                     return {
                         passed: false,
                         reasonCode: "INVALID_RISK_REWARD",
-                        message: `Order rejected: Risk/Reward ratio (${rrRatio.toFixed(2)}) is below mandatory minimum floor (${requiredMin.toFixed(2)}).`,
+                        message: `Order rejected: Risk/Reward ratio (${rrRatio.toFixed(2)}) is below mandatory floor (${requiredMin.toFixed(2)}${isDrawdown ? " [APSE DRAWDOWN EXPANSION ACTIVE]" : ""}).`,
                     };
                 }
             }

@@ -1529,31 +1529,12 @@ export class StrategyEngine {
 
       let targetSizeDecayCoeff = 1.0;
 
-      // 50-25-25 Weighted Composite Signal Engine & High-Confidence AI Override
-      const obiScore = Math.max(-1.0, Math.min(1.0, obi));
-      const cvdScore = cvd > 0 ? 1.0 : cvd < 0 ? -1.0 : 0.0;
-      const aiScore = Math.max(-1.0, Math.min(1.0, aiDirection * aiConfidence));
+      // Dynamic Environment Ingestion (Zero-Hardcoding Protocol)
+      const envMinNetAlpha = process.env.MIN_NET_ALPHA ? parseFloat(process.env.MIN_NET_ALPHA) : NaN;
+      const minNetAlpha = !isNaN(envMinNetAlpha) && envMinNetAlpha > 0 ? envMinNetAlpha : 0.0015;
+      const makerFeeRate = this.hedgeLedger.getSizingCalculator().getMakerFeeRate();
+      const takerFeeRate = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
 
-      // Regime-aware AI confidence threshold adaptation:
-      // In strong trend regime (Hurst > 0.55), lower required minAiConfidence to 0.52 for fast momentum capture.
-      let effectiveMinConfidence = this.config.minAiConfidence;
-      if (hurstExponent > 0.55 && garmanKlassRV > 0.001) {
-        effectiveMinConfidence = Math.max(0.50, this.config.minAiConfidence - 0.15);
-      }
-
-      // Weights: AI Model = 50% (0.50), OBI = 25% (0.25), CVD = 25% (0.25)
-      const compositeScore = 0.50 * aiScore + 0.25 * obiScore + 0.25 * cvdScore;
-
-      const isHighConfidenceAi = aiConfidence >= this.config.aggressiveConfidenceThreshold;
-
-      let isBuySignal = false;
-      let isSellSignal = false;
-
-      // SOTA Dynamic Volatility-Normalized Conviction Floor Gate (K_conviction)
-      // Eradicates micro-return fee traps. Explicitly includes round-trip exchange fees (10 bps) + half spread.
-      const ROUND_TRIP_FEE_BPS = 0.001; // 10 bps mandatory exchange fee floor
-      const MIN_DIRECTIONAL_MAGNITUDE = 0.05; // Mandatory 0.05 conviction floor to eradicate micro-magnitude noise
-      
       const midPrice = askPrice > 0 && bidPrice > 0 && Number.isFinite(askPrice) && Number.isFinite(bidPrice)
         ? (bidPrice + askPrice) / 2.0
         : 1.0;
@@ -1567,34 +1548,72 @@ export class StrategyEngine {
       const volEstimate = safeGarmanKlass > 0 ? Math.sqrt(safeGarmanKlass) : 0.005;
 
       const safeHawkes = Number.isFinite(hawkesIntensity) && hawkesIntensity > 0 ? hawkesIntensity : 0;
-      const hawkesMultiplier = 1.0 + 0.2 * Math.log(1.0 + safeHawkes);
-      
-      // Dynamic Conviction Floor: K_conviction(t) MUST exceed half spread + round trip fees, bounded by absolute 0.05 floor
-      const rawDynamicFloor = Math.max(
-        MIN_DIRECTIONAL_MAGNITUDE,
-        halfSpreadBps + ROUND_TRIP_FEE_BPS,
-        0.5 * volEstimate * hawkesMultiplier
-      );
-      const dynamicConvictionFloor = Number.isFinite(rawDynamicFloor) && rawDynamicFloor >= MIN_DIRECTIONAL_MAGNITUDE
-        ? rawDynamicFloor
-        : MIN_DIRECTIONAL_MAGNITUDE;
-      
+      const hawkesMultiplier = 1.0 + 0.15 * Math.log(1.0 + safeHawkes);
+
+      // SOTA Alpha-to-Friction Barrier Model (August 2026)
+      // E[alpha] = |aiDirection| * volEstimate * sqrt(horizon_s) * hawkesMultiplier
+      // Total Friction = 2 * MakerFee + HalfSpread + SlippageEst
+      const horizonSec = 0.1; // 100ms prediction horizon
+      const expectedAlpha = aiDirectionMag * volEstimate * Math.sqrt(horizonSec) * hawkesMultiplier;
+      const estimatedSlippage = (spreadVelocity > 0 ? Math.min(0.0005, (spreadVelocity / 50.0) * 0.0002) : 0.0);
+      const totalFrictionBarrier = (2.0 * makerFeeRate) + halfSpreadBps + estimatedSlippage;
+      const expectedNetAlpha = expectedAlpha - totalFrictionBarrier;
+
+      // SOTA Volatility, Toxicity & Drawdown Adjusted Dynamic Conviction Floor (theta_conf)
+      const baseMinConfidence = this.config.minAiConfidence;
+      let effectiveMinConfidence = baseMinConfidence;
+      const sessionPnl = this.riskGuard.getCumulativeDailyRealizedPnl();
+      const isDrawdown = sessionPnl < 0;
+
+      // 1. Low Volatility Surcharge: If volatility is compressed (< 0.003), elevate conviction floor to eliminate sub-fee churn
+      if (volEstimate < 0.003) {
+        effectiveMinConfidence += 0.08;
+      } else if (hurstExponent > 0.55 && safeGarmanKlass > 0.001) {
+        // Strong trend regime: allow faster capture
+        effectiveMinConfidence = Math.max(0.50, effectiveMinConfidence - 0.08);
+      }
+
+      // 2. Microstructure Toxicity Surcharge: Elevate required confidence under toxic flow
+      const vpinVal = this.client.getVPIN(this.assetIndex);
+      if (vpinVal >= 0.75) {
+        effectiveMinConfidence += 0.08;
+      }
+
+      // 3. Drawdown Memory Surcharge: In session drawdown, enforce high-conviction recovery threshold
+      if (isDrawdown) {
+        effectiveMinConfidence += 0.08;
+      }
+
+      effectiveMinConfidence = Math.min(0.90, Math.max(0.50, effectiveMinConfidence));
+
+      // 50-25-25 Weighted Composite Signal Engine & High-Confidence AI Override
+      const obiScore = Math.max(-1.0, Math.min(1.0, obi));
+      const cvdScore = cvd > 0 ? 1.0 : cvd < 0 ? -1.0 : 0.0;
+      const aiScore = Math.max(-1.0, Math.min(1.0, aiDirection * aiConfidence));
+      const compositeScore = 0.50 * aiScore + 0.25 * obiScore + 0.25 * cvdScore;
+
+      const isHighConfidenceAi = aiConfidence >= Math.max(this.config.aggressiveConfidenceThreshold, effectiveMinConfidence);
+
       // Volatility-Standardized Z-Score of the signal
       const safeVol = Number.isFinite(volEstimate) && volEstimate >= 0.0001 ? volEstimate : 0.005;
       const rawZScore = aiDirectionMag / safeVol;
       const zScore = Number.isFinite(rawZScore) ? rawZScore : 0.0;
 
-      // Dynamic Conviction Authorization: Require BOTH dynamicConvictionFloor AND Z-Score >= 1.5
-      const minZScoreThreshold = 1.5;
-      const isConvictionValid = aiDirectionMag >= dynamicConvictionFloor && zScore >= minZScoreThreshold;
+      // Dynamic Conviction Authorization: Require Alpha-to-Friction Barrier clearance AND Z-Score >= 1.5 (2.0 during drawdown)
+      const minZScoreThreshold = isDrawdown ? 2.0 : 1.5;
+      const isAlphaFrictionPassed = expectedNetAlpha >= minNetAlpha;
+      const isConvictionValid = isAlphaFrictionPassed && zScore >= minZScoreThreshold && aiConfidence >= effectiveMinConfidence;
+
+      let isBuySignal = false;
+      let isSellSignal = false;
 
       if (isConvictionValid) {
         if (isHighConfidenceAi) {
-          // AI-Override Rule: High-confidence AI must satisfy strict OBI directional pressure (+/- 0.35) and MIN_DIRECTIONAL_MAGNITUDE (0.05)
-          isBuySignal = aiDirection > 0 && aiDirectionMag >= MIN_DIRECTIONAL_MAGNITUDE && obi >= this.config.obiBuyThreshold;
-          isSellSignal = aiDirection < 0 && aiDirectionMag >= MIN_DIRECTIONAL_MAGNITUDE && obi <= this.config.obiSellThreshold;
+          // AI-Override Rule: High-confidence AI must satisfy strict OBI directional pressure (+/- 0.35)
+          isBuySignal = aiDirection > 0 && obi >= this.config.obiBuyThreshold;
+          isSellSignal = aiDirection < 0 && obi <= this.config.obiSellThreshold;
           if (isBuySignal || isSellSignal) {
-            console.log(`[StrategyEngine][${this.config.symbol}][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)}), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
+            console.log(`[StrategyEngine][${this.config.symbol}][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (NetAlpha: ${(expectedNetAlpha * 10000).toFixed(1)} bps >= ${(minNetAlpha * 10000).toFixed(1)} bps), Conf: ${(aiConfidence * 100).toFixed(1)}% (Floor: ${(effectiveMinConfidence * 100).toFixed(1)}%), OBI: ${obi.toFixed(4)}, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
           }
         } else {
           // Weighted Composite Rule with dynamic effective confidence thresholding
@@ -1602,7 +1621,7 @@ export class StrategyEngine {
           isSellSignal = compositeScore < -0.12 && aiConfidence >= effectiveMinConfidence && obi <= this.config.obiSellThreshold;
         }
       } else if (seq % 1000n === 0n) {
-        console.log(`[StrategyEngine][${this.config.symbol}][CONVICTION_FLOOR_GATE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (Mag: ${aiDirectionMag.toFixed(4)} < DynamicFloor: ${dynamicConvictionFloor.toFixed(4)}, Z-Score: ${zScore.toFixed(2)} < 1.5) -> Signals Filtered`);
+        console.log(`[StrategyEngine][${this.config.symbol}][CONVICTION_FLOOR_GATE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (NetAlpha: ${(expectedNetAlpha * 10000).toFixed(1)} bps < Hurdle: ${(minNetAlpha * 10000).toFixed(1)} bps, Conf: ${(aiConfidence * 100).toFixed(1)}% < ${(effectiveMinConfidence * 100).toFixed(1)}%, Z: ${zScore.toFixed(2)} < ${minZScoreThreshold.toFixed(1)}) -> Signals Filtered`);
       }
 
       // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
@@ -1680,10 +1699,20 @@ export class StrategyEngine {
       const timeInForce: "GTC" | "IOC" | "GTX" = "GTX";
       let targetPrice: number = signalType === "BUY" ? bidPrice : askPrice;
 
-      // Dynamic .env driven USDT Sizing & LOT_SIZE Precision Rounding (Unlocks All 10 Assets)
+      // SOTA August 2026 Alpha-Gated Dynamic Kelly Recovery Sizing (AG-DKRS)
       let finalQuantity = 0.001;
       if (basePrice > 0) {
-        let targetNotionalUsdt = this.config.tradeSizeUsdt > 0 ? this.config.tradeSizeUsdt : 60.0;
+        const baseNotional = this.config.tradeSizeUsdt > 0 ? this.config.tradeSizeUsdt : 60.0;
+        const maxDailyLoss = this.riskGuard.getConfig().maxDailyLossUsdt;
+        const sizingRes = this.hedgeLedger.getSizingCalculator().calculateAlphaGatedRecoverySize(
+          baseNotional,
+          sessionPnl,
+          maxDailyLoss,
+          aiConfidence,
+          zScore,
+          hurstExponent
+        );
+        let targetNotionalUsdt = sizingRes.targetNotionalUsdt;
 
         // Cap single order target notional against RiskGuard max position size limit
         const maxPosSizeUsdt = this.riskGuard.getConfig().maxPositionSizeUsdt;

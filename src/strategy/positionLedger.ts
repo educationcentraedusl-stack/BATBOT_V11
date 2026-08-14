@@ -531,6 +531,8 @@ export class HedgePositionLedger {
   private winningTrades = 0;
   private losingTrades = 0;
   private leverage: number = parseInt(process.env.LEVERAGE || "10", 10);
+  private highWaterMarkPnl = 0;
+  private sessionDrawdownPnl = 0;
 
   // Zero-GC Pre-allocated Reusable SOTA Exit Triggers Array & Slots
   private readonly sotaTriggers: SlotExitTrigger[] = [];
@@ -654,11 +656,26 @@ export class HedgePositionLedger {
     this.cumulativeFees += totalFee;
     this.totalTrades++;
 
+    if (this.cumulativeRealizedPnl > this.highWaterMarkPnl) {
+      this.highWaterMarkPnl = this.cumulativeRealizedPnl;
+      this.sessionDrawdownPnl = 0;
+    } else {
+      this.sessionDrawdownPnl = this.highWaterMarkPnl - this.cumulativeRealizedPnl;
+    }
+
     if (netTradePnl > 0) {
       this.winningTrades++;
     } else if (netTradePnl < 0) {
       this.losingTrades++;
     }
+  }
+
+  public getSessionDrawdown(): number {
+    return this.sessionDrawdownPnl;
+  }
+
+  public getHighWaterMark(): number {
+    return this.highWaterMarkPnl;
   }
 
   public getSummary(currentMarkPrice: number = 0): PositionSummary {
@@ -764,12 +781,22 @@ export class HedgePositionLedger {
     const tpStagePrices: number[] = [];
     const tpStageQuantities: number[] = [];
 
-    // Micro-scalp target offsets: Stage 1 = 0.25%, Stage 2 = 0.50%, Stage 3 = 1.00%
-    const tpOffsets = isLong ? [0.0025, 0.0050, 0.0100] : [-0.0025, -0.0050, -0.0100];
+    // SOTA Dynamic Friction Clearance Offsets:
+    // Stage 1 MUST clear round-trip fees (maker+taker or 2x maker) + MIN_NET_ALPHA.
+    const minNetAlpha = this.sizingCalc.getMinNetAlpha();
+    const makerFee = this.sizingCalc.getMakerFeeRate();
+    const takerFee = this.sizingCalc.getTakerFeeRate();
+    const stage1Offset = Math.max(0.0035, makerFee + takerFee + minNetAlpha);
+    const stage2Offset = Math.max(0.0065, stage1Offset * 1.8);
+    const stage3Offset = Math.max(0.0120, stage1Offset * 3.2);
+
+    const tpOffsets = isLong
+      ? [stage1Offset, stage2Offset, stage3Offset]
+      : [-stage1Offset, -stage2Offset, -stage3Offset];
 
     for (let i = 0; i < dynamicRes.chunks.length; i++) {
       const chunk = dynamicRes.chunks[i];
-      const offset = tpOffsets[i] !== undefined ? tpOffsets[i] : (isLong ? 0.0025 * (i + 1) : -0.0025 * (i + 1));
+      const offset = tpOffsets[i] !== undefined ? tpOffsets[i] : (isLong ? stage1Offset * (i + 1) : -stage1Offset * (i + 1));
       const targetPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1.0 + offset));
       const formattedQty = SymbolPrecisionRegistry.formatQuantity(this.symbol, chunk.quantity);
 

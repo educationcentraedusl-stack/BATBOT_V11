@@ -27,6 +27,7 @@ export class DynamicSizingCalculator {
   private minNotionalUsdt: number;
   private makerFeeRate: number;
   private takerFeeRate: number;
+  private minNetAlpha: number;
 
   constructor() {
     // Dynamically parse configuration from process.env (Zero hardcoding rule - Strict Error Enforcement)
@@ -79,6 +80,16 @@ export class DynamicSizingCalculator {
       throw new Error("[DynamicSizingCalculator] Missing required environment variable: TAKER_FEE_RATE");
     }
     this.takerFeeRate = parseFloat(rawTakerFee);
+
+    const rawMinNetAlpha = process.env.MIN_NET_ALPHA;
+    this.minNetAlpha = rawMinNetAlpha ? parseFloat(rawMinNetAlpha) : 0.0015;
+    if (isNaN(this.minNetAlpha) || this.minNetAlpha <= 0) {
+      this.minNetAlpha = 0.0015;
+    }
+  }
+
+  public getMinNetAlpha(): number {
+    return this.minNetAlpha;
   }
 
   public getMakerFeeRate(): number {
@@ -200,5 +211,70 @@ export class DynamicSizingCalculator {
       exitFeeUsdt: Number(exitFeeUsdt.toFixed(4)),
       totalFeeUsdt: Number(totalFeeUsdt.toFixed(4)),
     };
+  }
+
+  /**
+   * SOTA August 2026 Alpha-Gated Dynamic Kelly Recovery Sizing (AG-DKRS).
+   * Dynamically adjusts position sizing during session drawdown:
+   * - Never doubles down (Strict Zero-Martingale protocol).
+   * - When cumulativeRealizedPnl < 0:
+   *   * Alpha Regime 1 (High Conviction: aiConfidence >= 0.80, zScore >= 2.0):
+   *     Scales notional by: S_recovery = S_base * (1.0 + min(0.50, (|Drawdown| / MaxDailyLoss) * (aiConfidence / 1.0)))
+   *     Clamped strictly up to 1.50x base size.
+   *   * Marginal Regimes (aiConfidence < 0.80):
+   *     Scales down notional to 0.75x to preserve capital until alpha regime returns.
+   * - When cumulativeRealizedPnl >= 0:
+   *   * Normal conviction sizing between 1.0x and 1.20x based on AI confidence.
+   */
+  public calculateAlphaGatedRecoverySize(
+    baseNotionalUsdt: number,
+    cumulativeRealizedPnl: number,
+    maxDailyLossUsdt: number = 500.0,
+    aiConfidence: number = 0.50,
+    zScore: number = 0.0,
+    hurstExponent: number = 0.50
+  ): { targetNotionalUsdt: number; sizingMultiplier: number; recoveryActive: boolean; reason: string } {
+    const safeBase = Math.max(10.0, baseNotionalUsdt);
+    const isDrawdown = cumulativeRealizedPnl < 0;
+    const safeMaxDailyLoss = Math.max(10.0, maxDailyLossUsdt);
+
+    if (!isDrawdown) {
+      // Normal / Positive PnL regime: Base sizing scaled gently by high confidence
+      const confidenceBonus = aiConfidence >= 0.85 && zScore >= 2.0 ? 1.20 : 1.0;
+      const targetNotional = safeBase * confidenceBonus;
+      return {
+        targetNotionalUsdt: Number(targetNotional.toFixed(2)),
+        sizingMultiplier: confidenceBonus,
+        recoveryActive: false,
+        reason: "NORMAL_PROFIT_REGIME",
+      };
+    }
+
+    const drawdownUsdt = Math.abs(cumulativeRealizedPnl);
+    const drawdownRatio = Math.min(1.0, drawdownUsdt / safeMaxDailyLoss);
+    const isHighConvictionAlpha = aiConfidence >= 0.80 && zScore >= 2.0 && hurstExponent >= 0.50;
+
+    if (isHighConvictionAlpha) {
+      // SOTA Alpha-Gated Recovery Sizing: Boost only on high-conviction setups
+      const recoveryBoost = Math.min(0.50, drawdownRatio * (aiConfidence / 1.0));
+      const sizingMultiplier = Math.min(1.50, 1.0 + recoveryBoost);
+      const targetNotional = safeBase * sizingMultiplier;
+      return {
+        targetNotionalUsdt: Number(targetNotional.toFixed(2)),
+        sizingMultiplier: Number(sizingMultiplier.toFixed(3)),
+        recoveryActive: true,
+        reason: `ALPHA_RECOVERY_BOOST (+${(recoveryBoost * 100).toFixed(1)}%)`,
+      };
+    } else {
+      // Defensive Capital Preservation: Reduce size on marginal setups during drawdown
+      const defensiveMultiplier = 0.75;
+      const targetNotional = safeBase * defensiveMultiplier;
+      return {
+        targetNotionalUsdt: Number(targetNotional.toFixed(2)),
+        sizingMultiplier: defensiveMultiplier,
+        recoveryActive: true,
+        reason: "DEFENSIVE_DRAWDOWN_REDUCTION (0.75x)",
+      };
+    }
   }
 }

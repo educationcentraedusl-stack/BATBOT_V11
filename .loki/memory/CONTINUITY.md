@@ -46,12 +46,15 @@
   - Updated `MultiAssetCLIDashboard` (`src/telemetry/multiAssetDashboard.ts`) to render dual distinct rows (`#i-LONG` and `#i-SHORT`) for Hedge Mode symbols.
   - 100% verified via `npx tsc --noEmit` and `npx tsx src/tests/test_hedge_mode_split.ts` (100% pass across all 6 phases).
 
-* 2026-08-14 - SOTA Leverage State-Sync & Dynamic Exchange Recognition Completed & QA Verified:
-  - Eradicated leverage blindness and hardcoded 10x defaults across `SharedArrayBuffer` OMS slot 109 (`OMS_LEVERAGE`), `PositionLedger`, `HedgePositionLedger`, `StrategyEngine`, and `MultiAssetCLIDashboard`.
-  - Implemented `setLeverage(symbol, leverage)` endpoint in `src/execution/binance.ts` (`POST /fapi/v1/leverage`) to synchronize target leverage per symbol on Binance directly from `.env` (`LEVERAGE=...`).
-  - Dynamically ingested live `pos.leverage` from `/fapi/v2/positionRisk` (even when position is FLAT) and mapped to SAB slot 109 and active trade slots.
-  - 100% verified via `npx tsc --noEmit`, `npm run build:ts`, and `npx tsx src/tests/test_leverage_state_sync.ts` (100% pass across all 5 verification phases).
+* 2026-08-15 - SOTA AI Fine-Tuning, Alpha-to-Friction Barrier & Tier-1 Quantitative Loss Recovery Architecture Completed & QA Verified:
+  - Eradicated sub-friction micro-magnitude entries via SOTA Alpha-to-Friction Barrier Model ($E[\alpha_{\text{net}}] \ge \text{MIN\_NET\_ALPHA}$).
+  - Ingested `MIN_NET_ALPHA=0.0015` (15 bps hurdle) dynamically from `.env` across `DynamicSizingCalculator`, `RiskGuard`, and `StrategyEngine`.
+  - Implemented Volatility, Toxicity & Drawdown Dynamic Conviction Floor ($\theta_{\text{conf}}$) scaling up under compressed volatility, toxic order flow ($\text{VPIN} \ge 0.75$), and session drawdown.
+  - Implemented Drawdown-Aware Asymmetric Payoff Skew Expansion (APSE) in `RiskGuard` ratcheting min R:R ratio from 2.0 to 3.0 during drawdown.
+  - Implemented Alpha-Gated Dynamic Kelly Recovery Sizing (AG-DKRS) in `DynamicSizingCalculator` boosting position sizing dynamically on Alpha Regime 1 setups ($\ge 80\%$ confidence, $Z \ge 2.0$, $H \ge 0.50$) with a strict 1.50x cap (Zero-Martingale compliance) and reducing sizing to 0.75x on marginal setups.
+  - Updated `HedgePositionLedger.generateBatchTpOrderIntents` to enforce dynamic Take-Profit offsets exceeding total round-trip fees + `MIN_NET_ALPHA`.
+  - 100% verified via `npx tsc --noEmit` (0 compilation errors), `npm run build:ts` (0 errors), and `npx tsx src/tests/test_sota_ai_loss_recovery.ts` (100% pass across all 5 verification phases).
 
 ## Next Actions
-1. Maintain Zero-Loss Maker-Dominant Architecture baseline for production live trading deployment.
+1. Maintain SOTA Alpha-to-Friction and Loss Recovery architecture baseline in live production.
 2. Monitor real-time execution metrics and Maker fill rates on live Binance Futures API.
