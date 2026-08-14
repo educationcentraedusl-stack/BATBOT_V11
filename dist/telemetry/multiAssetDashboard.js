@@ -196,8 +196,14 @@ class MultiAssetCLIDashboard {
             totalTrades += this.client.getOmsTotalTrades(i);
             totalWinningTrades += this.client.getOmsWinningTrades(i);
             totalLosingTrades += this.client.getOmsLosingTrades(i);
-            if (Math.abs(this.client.getOmsPositionQty(i)) > 1e-6) {
-                activePositionCount++;
+            const lQty = this.client.getOmsLongPositionQty(i);
+            const sQty = this.client.getOmsShortPositionQty(i);
+            const nQty = Math.abs(this.client.getOmsPositionQty(i));
+            if (lQty > 1e-6 && sQty > 1e-6) {
+                activePositionCount += 2;
+            }
+            else if (lQty > 1e-6 || sQty > 1e-6 || nQty > 1e-6) {
+                activePositionCount += 1;
             }
         }
         const numTrades = Number(totalTrades);
@@ -303,33 +309,64 @@ class MultiAssetCLIDashboard {
             const sideCode = this.client.getOmsPositionSide(i);
             const longQty = this.client.getOmsLongPositionQty(i);
             const shortQty = this.client.getOmsShortPositionQty(i);
-            const isBoth = sideCode === 3.0;
-            const displayQty = isBoth ? (longQty + shortQty) : Math.abs(qty);
-            if (isBoth ? (longQty > 1e-6 || shortQty > 1e-6) : Math.abs(qty) > 1e-6) {
+            const longEntry = this.client.getOmsLongAvgEntryPrice(i);
+            const shortEntry = this.client.getOmsShortAvgEntryPrice(i);
+            const posBid = this.client.getBestBidPrice(i);
+            const posAsk = this.client.getBestAskPrice(i);
+            const mark = (posBid > 0 && posAsk > 0) ? (posBid + posAsk) / 2.0 : (posBid > 0 ? posBid : posAsk);
+            const symName = this.assetSymbols[i] || `ASSET_${i}`;
+            const posPrecisionRule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(symName);
+            const posDec = posPrecisionRule.priceDecimals;
+            const sym = this.formatCell(symName, 8, false);
+            const levText = `${this.client.getOmsLeverage(i).toFixed(0)}x`;
+            const levFormatted = this.formatCell(levText, 8);
+            const rPnl = this.client.getOmsRealizedPnl(i);
+            const hasLong = longQty > 1e-6;
+            const hasShort = shortQty > 1e-6;
+            if (hasLong && hasShort) {
                 hasActivePosition = true;
-                const symName = this.assetSymbols[i] || `ASSET_${i}`;
-                const posPrecisionRule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(symName);
-                const posDec = posPrecisionRule.priceDecimals;
-                const sym = this.formatCell(symName, 8, false);
-                const sideText = isBoth ? "BOTH" : (sideCode === 2.0 || qty < 0) ? "SHORT" : "LONG";
-                const sideFormatted = this.formatCell(sideText, 8, false);
-                const side = isBoth
-                    ? `${cyan}${bold}${sideFormatted}${reset}`
-                    : sideText === "LONG"
-                        ? `${green}${sideFormatted}${reset}`
-                        : `${red}${sideFormatted}${reset}`;
-                const entry = this.client.getOmsAvgEntryPrice(i);
-                const posBid = this.client.getBestBidPrice(i);
-                const posAsk = this.client.getBestAskPrice(i);
-                const mark = (posBid > 0 && posAsk > 0) ? (posBid + posAsk) / 2.0 : (posBid > 0 ? posBid : posAsk);
-                const levText = `${this.client.getOmsLeverage(i).toFixed(0)}x`;
-                const levFormatted = this.formatCell(levText, 8);
-                const rPnl = this.client.getOmsRealizedPnl(i);
-                const uPnl = this.client.getOmsUnrealizedPnl(i);
+                // 1. Render #i-LONG slot
+                const longSlotStr = this.formatCell(`#${i}-LONG`, 6, false);
+                const longSide = `${green}${this.formatCell("LONG", 8, false)}${reset}`;
+                const longEntryPx = longEntry > 0 ? longEntry : this.client.getOmsAvgEntryPrice(i);
+                const longUPnl = mark > 0 && longEntryPx > 0 ? (mark - longEntryPx) * longQty : this.client.getOmsLongUnrealizedPnl(i);
+                const longUPnlColor = longUPnl >= 0 ? green : red;
+                const longUPnlStr = `${longUPnl >= 0 ? "+" : ""}$${longUPnl.toFixed(2)}`;
+                const longUPnlFormatted = this.formatCell(longUPnlStr, 56, false);
+                out += `| ${longSlotStr} | ${sym} | ${longSide} | ${this.formatCell(longQty.toFixed(4), 10)} | $${this.formatCell(longEntryPx.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${longUPnlColor}${bold}${longUPnlFormatted}${reset} |${clearLine}\n`;
+                // 2. Render #i-SHORT slot
+                const shortSlotStr = this.formatCell(`#${i}-SHORT`, 6, false);
+                const shortSide = `${red}${this.formatCell("SHORT", 8, false)}${reset}`;
+                const shortEntryPx = shortEntry > 0 ? shortEntry : this.client.getOmsAvgEntryPrice(i);
+                const shortUPnl = mark > 0 && shortEntryPx > 0 ? (shortEntryPx - mark) * shortQty : this.client.getOmsShortUnrealizedPnl(i);
+                const shortUPnlColor = shortUPnl >= 0 ? green : red;
+                const shortUPnlStr = `${shortUPnl >= 0 ? "+" : ""}$${shortUPnl.toFixed(2)}`;
+                const shortUPnlFormatted = this.formatCell(shortUPnlStr, 56, false);
+                out += `| ${shortSlotStr} | ${sym} | ${shortSide} | ${this.formatCell(shortQty.toFixed(4), 10)} | $${this.formatCell(shortEntryPx.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${shortUPnlColor}${bold}${shortUPnlFormatted}${reset} |${clearLine}\n`;
+            }
+            else if (hasLong || (sideCode === 1.0 && Math.abs(qty) > 1e-6)) {
+                hasActivePosition = true;
+                const displayQty = hasLong ? longQty : Math.abs(qty);
+                const entry = longEntry > 0 ? longEntry : this.client.getOmsAvgEntryPrice(i);
+                const slotStr = this.formatCell(`#${i}-LONG`, 6, false);
+                const side = `${green}${this.formatCell("LONG", 8, false)}${reset}`;
+                const uPnl = mark > 0 && entry > 0 ? (mark - entry) * displayQty : this.client.getOmsUnrealizedPnl(i);
                 const uPnlColor = uPnl >= 0 ? green : red;
                 const uPnlStr = `${uPnl >= 0 ? "+" : ""}$${uPnl.toFixed(2)}`;
                 const uPnlFormatted = this.formatCell(uPnlStr, 56, false);
-                out += `| #${i}   | ${sym} | ${side} | ${this.formatCell(displayQty.toFixed(4), 10)} | $${this.formatCell(entry.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${uPnlColor}${bold}${uPnlFormatted}${reset} |${clearLine}\n`;
+                out += `| ${slotStr} | ${sym} | ${side} | ${this.formatCell(displayQty.toFixed(4), 10)} | $${this.formatCell(entry.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${uPnlColor}${bold}${uPnlFormatted}${reset} |${clearLine}\n`;
+            }
+            else if (hasShort || (sideCode === 2.0 && Math.abs(qty) > 1e-6)) {
+                hasActivePosition = true;
+                const displayQty = hasShort ? shortQty : Math.abs(qty);
+                const entry = shortEntry > 0 ? shortEntry : this.client.getOmsAvgEntryPrice(i);
+                const slotStr = this.formatCell(`#${i}-SHORT`, 6, false);
+                const side = `${red}${this.formatCell("SHORT", 8, false)}${reset}`;
+                const uPnl = mark > 0 && entry > 0 ? (entry - mark) * displayQty : this.client.getOmsUnrealizedPnl(i);
+                const uPnlColor = uPnl >= 0 ? green : red;
+                const uPnlStr = `${uPnl >= 0 ? "+" : ""}$${uPnl.toFixed(2)}`;
+                const uPnlFormatted = this.formatCell(uPnlStr, 56, false);
+                out += `| ${slotStr} | ${sym} | ${side} | ${this.formatCell(displayQty.toFixed(4), 10)} | $${this.formatCell(entry.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${uPnlColor}${bold}${uPnlFormatted}${reset} |${clearLine}\n`;
             }
         }
         if (!hasActivePosition) {

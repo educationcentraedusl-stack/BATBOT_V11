@@ -25,14 +25,31 @@ class TelemetryWSServer {
                 this.clients.add(ws);
                 ws.on("message", async (data) => {
                     try {
-                        const buf = new Uint8Array(data);
-                        // Strict binary Protobuf control command decoding
-                        const cmd = (0, proto_1.decodeControlCommand)(buf);
+                        let cmd;
+                        const isJson = typeof data === "string" || (Buffer.isBuffer(data) && data[0] === 123 /* '{' */);
+                        if (isJson) {
+                            const parsedJson = JSON.parse(data.toString());
+                            cmd = {
+                                action: parsedJson.action,
+                                modelPath: parsedJson.modelPath,
+                                timestamp: parsedJson.timestamp,
+                            };
+                        }
+                        else {
+                            const buf = new Uint8Array(data);
+                            // Strict binary Protobuf control command decoding
+                            cmd = (0, proto_1.decodeControlCommand)(buf);
+                        }
                         if (this.commandHandler) {
                             const res = await this.commandHandler(cmd);
                             if (ws.readyState === ws_1.WebSocket.OPEN) {
-                                const responseBuf = (0, proto_1.encodeControlResponse)(res.success, cmd.action, res.message);
-                                ws.send(responseBuf);
+                                if (isJson) {
+                                    ws.send(JSON.stringify({ success: res.success, action: cmd.action, message: res.message, timestamp: Date.now() }));
+                                }
+                                else {
+                                    const responseBuf = (0, proto_1.encodeControlResponse)(res.success, cmd.action, res.message);
+                                    ws.send(responseBuf);
+                                }
                             }
                         }
                     }

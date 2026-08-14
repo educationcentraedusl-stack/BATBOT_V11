@@ -45,20 +45,13 @@ async function runPrecisionRegistryTest() {
         throw new Error(`❌ MinNotional guard failed! Resulting notional $${resultingNotional} < required $${minNotionalUsdt}`);
     }
     console.log(`  ✅ MinNotional guard verified! Resulting notional $${resultingNotional} >= $${minNotionalUsdt} USDT threshold.`);
-    // Step 4: Test Safe Fallback Exception for Unknown Symbol
-    console.log("\n[Test 4/4] Testing Safe Fallback Error for Unmapped Symbol...");
-    try {
-        symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule("UNKNOWN_COIN_XYZ");
-        throw new Error("❌ Safe fallback failed! Expected exception for unknown symbol.");
+    // Step 4: Test Safe Default Fallback for Unmapped Symbol
+    console.log("\n[Test 4/4] Testing Safe Fallback Rule for Unmapped Symbol...");
+    const fallbackRule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule("UNKNOWN_COIN_XYZ");
+    if (!fallbackRule || fallbackRule.qtyDecimals !== 2 || fallbackRule.stepSize !== 0.01 || fallbackRule.minNotional !== 5.0) {
+        throw new Error(`❌ Safe fallback failed! Unexpected fallback rule: ${JSON.stringify(fallbackRule)}`);
     }
-    catch (err) {
-        if (err.message.includes("CRITICAL_PRECISION_ERROR")) {
-            console.log(`  ✅ Safe fallback error intercepted successfully: ${err.message}`);
-        }
-        else {
-            throw err;
-        }
-    }
+    console.log(`  ✅ Safe fallback default rule generated successfully: decimals=${fallbackRule.qtyDecimals}, stepSize=${fallbackRule.stepSize}, minNotional=${fallbackRule.minNotional}`);
     console.log("\n=========================================================================");
     console.log("  ✅ ALL DYNAMIC PRECISION REGISTRY UNIT TESTS PASSED DETERMINISTICALLY!   ");
     console.log("=========================================================================\n");

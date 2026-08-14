@@ -187,6 +187,10 @@ class StrategyEngine {
         this.client.setOmsLongPositionQty(summary.longQuantity, this.assetIndex);
         this.client.setOmsShortPositionQty(summary.shortQuantity, this.assetIndex);
         this.client.setOmsAvgEntryPrice(summary.averageEntryPrice, this.assetIndex);
+        this.client.setOmsLongAvgEntryPrice(summary.longAverageEntryPrice, this.assetIndex);
+        this.client.setOmsShortAvgEntryPrice(summary.shortAverageEntryPrice, this.assetIndex);
+        this.client.setOmsLongUnrealizedPnl(summary.longUnrealizedPnl, this.assetIndex);
+        this.client.setOmsShortUnrealizedPnl(summary.shortUnrealizedPnl, this.assetIndex);
         this.client.setOmsRealizedPnl(summary.cumulativeRealizedPnl, this.assetIndex);
         this.client.setOmsUnrealizedPnl(summary.unrealizedPnl, this.assetIndex);
         this.client.setOmsLeverage(this.config.leverageMultiplier, this.assetIndex);
@@ -311,39 +315,43 @@ class StrategyEngine {
         const amt = posUpdate.positionAmt;
         const entryPx = posUpdate.entryPrice;
         const summary = this.hedgeLedger.getSummary();
-        const expectedSide = posUpdate.positionSide === "LONG" || (posUpdate.positionSide === "BOTH" && amt > 0) ? "LONG" : "SHORT";
         const absQty = Math.abs(amt);
         if (absQty === 0) {
-            if (summary.side !== "FLAT" && summary.netQuantity > 1e-6) {
-                console.log(`[BinanceExecution][WS_ACCOUNT_UPDATE] Exchange position FLAT for ${this.config.symbol}. Clearing local slots.`);
-                this.hedgeLedger.reset();
+            if ((posUpdate.positionSide === "LONG" || posUpdate.positionSide === "BOTH") && summary.longQuantity > 1e-6) {
+                console.log(`[BinanceExecution][WS_ACCOUNT_UPDATE] Exchange LONG position FLAT for ${this.config.symbol}. Clearing local coreLong slot.`);
+                this.hedgeLedger.releaseCoreLong();
+                this.syncSabPositionState(0);
+            }
+            if ((posUpdate.positionSide === "SHORT" || posUpdate.positionSide === "BOTH") && summary.shortQuantity > 1e-6) {
+                console.log(`[BinanceExecution][WS_ACCOUNT_UPDATE] Exchange SHORT position FLAT for ${this.config.symbol}. Clearing local shortSlots.`);
+                for (let i = 0; i < this.config.maxShortSlots; i++) {
+                    this.hedgeLedger.releaseShortSlot(i);
+                }
                 this.syncSabPositionState(0);
             }
         }
         else if (absQty > 0 && entryPx > 0) {
-            const isTracked = (expectedSide === "LONG" && Math.abs(summary.longQuantity - absQty) < 1e-5) ||
-                (expectedSide === "SHORT" && Math.abs(summary.shortQuantity - absQty) < 1e-5);
+            const targetSide = posUpdate.positionSide === "LONG" || (posUpdate.positionSide === "BOTH" && amt > 0) ? "LONG" : "SHORT";
+            const isTracked = (targetSide === "LONG" && Math.abs(summary.longQuantity - absQty) < 1e-5) ||
+                (targetSide === "SHORT" && Math.abs(summary.shortQuantity - absQty) < 1e-5);
             if (!isTracked) {
-                console.warn(`[BinanceExecution][WS_ACCOUNT_UPDATE_DESYNC] Reconciling active ${expectedSide} position for ${this.config.symbol}: ${absQty} @ $${entryPx}`);
-                this.reconcileStartupPositions([
-                    {
-                        symbol: this.config.symbol,
-                        positionAmt: String(amt),
-                        entryPrice: String(entryPx),
-                        markPrice: "0",
-                        unRealizedProfit: String(posUpdate.unrealizedPnl),
-                        liquidationPrice: "0",
-                        leverage: String(this.config.leverageMultiplier),
-                        maxNotionalValue: "0",
-                        marginType: "cross",
-                        isolatedMargin: "0",
-                        isAutoAddMargin: "false",
-                        positionSide: posUpdate.positionSide,
-                        notional: String(absQty * entryPx),
-                        isolatedWallet: "0",
-                        updateTime: Date.now(),
+                console.warn(`[BinanceExecution][WS_ACCOUNT_UPDATE_DESYNC] Reconciling active ${targetSide} position for ${this.config.symbol}: ${absQty} @ $${entryPx}`);
+                if (targetSide === "LONG") {
+                    this.hedgeLedger.occupyCoreLong(absQty, entryPx, this.config.longTakeProfitPercent, this.config.longStopLossPercent);
+                    if (posUpdate.positionSide === "BOTH") {
+                        for (let i = 0; i < this.config.maxShortSlots; i++) {
+                            this.hedgeLedger.releaseShortSlot(i);
+                        }
                     }
-                ]);
+                }
+                else {
+                    const availIdx = this.hedgeLedger.getAvailableShortSlotIndex();
+                    const slotIdx = availIdx >= 0 ? availIdx : 0;
+                    this.hedgeLedger.occupyShortSlot(slotIdx, absQty, entryPx, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent);
+                    if (posUpdate.positionSide === "BOTH") {
+                        this.hedgeLedger.releaseCoreLong();
+                    }
+                }
                 this.syncSabPositionState(0);
             }
         }
@@ -458,25 +466,38 @@ class StrategyEngine {
             }
             else {
                 // Both or Undefined (One-Way Mode or missing positionSide WS attribute)
-                if (order.side === "SELL") {
-                    if (activeSummary.longQuantity > 1e-9) {
+                const isReduce = order.reduceOnly === true;
+                if (isReduce) {
+                    if (order.side === "SELL") {
                         isExitSide = true;
                         targetPosSide = "LONG";
                     }
                     else {
-                        isEntrySide = true;
+                        isExitSide = true;
                         targetPosSide = "SHORT";
                     }
                 }
                 else {
-                    // order.side === "BUY"
-                    if (activeSummary.shortQuantity > 1e-9) {
-                        isExitSide = true;
-                        targetPosSide = "SHORT";
+                    if (order.side === "SELL") {
+                        if (activeSummary.longQuantity > 1e-9 && activeSummary.shortQuantity <= 1e-9) {
+                            isExitSide = true;
+                            targetPosSide = "LONG";
+                        }
+                        else {
+                            isEntrySide = true;
+                            targetPosSide = "SHORT";
+                        }
                     }
                     else {
-                        isEntrySide = true;
-                        targetPosSide = "LONG";
+                        // order.side === "BUY"
+                        if (activeSummary.shortQuantity > 1e-9 && activeSummary.longQuantity <= 1e-9) {
+                            isExitSide = true;
+                            targetPosSide = "SHORT";
+                        }
+                        else {
+                            isEntrySide = true;
+                            targetPosSide = "LONG";
+                        }
                     }
                 }
             }
@@ -950,25 +971,21 @@ class StrategyEngine {
             const summary = this.hedgeLedger.getSummary(markPrice > 0 ? markPrice : 0);
             const activePosSide = summary.side === "SHORT" ? "SHORT" : "LONG";
             let holdingDurationMs = 0;
-            if (summary.side === "LONG") {
-                const coreLong = this.hedgeLedger.getCoreLong();
-                holdingDurationMs = coreLong.isOccupied && coreLong.openTime > 0 ? Math.max(0, Date.now() - coreLong.openTime) : 0;
-            }
-            else if (summary.side === "SHORT") {
-                const shortSlots = this.hedgeLedger.getShortSlots();
-                let oldestOpenTime = 0;
-                for (const slot of shortSlots) {
-                    if (slot.isOccupied && slot.openTime > 0) {
-                        if (oldestOpenTime === 0 || slot.openTime < oldestOpenTime) {
-                            oldestOpenTime = slot.openTime;
-                        }
-                    }
+            const coreLong = this.hedgeLedger.getCoreLong();
+            const coreLongDuration = coreLong.isOccupied && coreLong.openTime > 0 ? Math.max(0, Date.now() - coreLong.openTime) : 0;
+            let shortDuration = 0;
+            const shortSlots = this.hedgeLedger.getShortSlots();
+            for (const slot of shortSlots) {
+                if (slot.isOccupied && slot.openTime > 0) {
+                    const dur = Math.max(0, Date.now() - slot.openTime);
+                    if (dur > shortDuration)
+                        shortDuration = dur;
                 }
-                holdingDurationMs = oldestOpenTime > 0 ? Math.max(0, Date.now() - oldestOpenTime) : 0;
             }
+            holdingDurationMs = Math.max(coreLongDuration, shortDuration);
             const hazardMetrics = this.hazardEngine.getHazardMetrics(activePosSide, aiConfidence, holdingDurationMs);
             const volMetrics = this.volEngine.getVolatilitySurfaceMetrics();
-            const signedInventory = summary.side === "SHORT" ? -summary.netQuantity : summary.netQuantity;
+            const signedInventory = summary.netQuantity;
             const hjbResPrice = this.hjbEngine.calculateReservationPrice(markPrice, signedInventory, holdingDurationMs, volMetrics.garmanKlass1s);
             // Atomically sync SAB Telemetry Slots 138-141 for Live TUI Monitor & OMS
             this.client.setOFI(hazardMetrics.ofi, this.assetIndex);

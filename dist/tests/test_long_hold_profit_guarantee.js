@@ -11,28 +11,28 @@ async function testLongHoldProfitGuaranteeQA() {
     // TEST 1: Asymmetric Risk/Reward Ratio Enforcement (Floor: 2.0)
     // -------------------------------------------------------------------------
     console.log("[TEST 1] Testing Risk/Reward Ratio Enforcement...");
-    // Non-compliant OrderIntent: Entry @ 1900, TP @ 1904.75 (+0.25%), SL @ 1896.20 (-0.20%) -> R:R = 1.25
+    // Non-compliant OrderIntent: Entry @ 1900, TP @ 1912.00 (+0.63%), SL @ 1890.40 (-0.505%) -> R:R = 1.25 (< 2.0)
     const nonCompliantIntent = {
         symbol: "ETHUSDT",
         side: "BUY",
         quantity: 0.05,
         price: 1900.00,
-        takeProfitPrice: 1904.75,
-        stopLossPrice: 1896.20,
+        takeProfitPrice: 1912.00,
+        stopLossPrice: 1890.40,
     };
     const nonCompliantRes = riskGuard.validateOrder(nonCompliantIntent, true);
     console.log("  Non-Compliant R:R (1.25) Result:", nonCompliantRes.reasonCode, "| Passed:", nonCompliantRes.passed);
     if (nonCompliantRes.passed || nonCompliantRes.reasonCode !== "INVALID_RISK_REWARD") {
         throw new Error(`FAIL: Expected INVALID_RISK_REWARD rejection for R:R 1.25, received: ${nonCompliantRes.reasonCode}`);
     }
-    // Compliant OrderIntent: Entry @ 1900, TP @ 1908.55 (+0.45%), SL @ 1897.15 (-0.15%) -> R:R = 3.00
+    // Compliant OrderIntent: Entry @ 1900, TP @ 1928.50 (+1.50%), SL @ 1890.50 (-0.50%) -> R:R = 3.00 (>= 2.0)
     const compliantIntent = {
         symbol: "ETHUSDT",
         side: "BUY",
         quantity: 0.05,
         price: 1900.00,
-        takeProfitPrice: 1908.55,
-        stopLossPrice: 1897.15,
+        takeProfitPrice: 1928.50,
+        stopLossPrice: 1890.50,
     };
     const compliantRes = riskGuard.validateOrder(compliantIntent, true);
     console.log("  Compliant R:R (3.00) Result:", compliantRes.reasonCode, "| Passed:", compliantRes.passed);

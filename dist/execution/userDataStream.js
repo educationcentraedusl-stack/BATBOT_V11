@@ -109,6 +109,7 @@ class BinanceUserDataStream {
                                 isMaker: payload.o.m === true,
                                 positionSide: payload.o.ps || "BOTH",
                                 realizedPnl: parseFloat(payload.o.rp || "0"),
+                                reduceOnly: payload.o.R === true,
                             },
                         };
                         for (const cb of this.orderCallbacks) {
