@@ -2,8 +2,11 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 require("dotenv/config");
 const positionLedger_1 = require("./strategy/positionLedger");
+const engine_1 = require("./strategy/engine");
+const risk_1 = require("./strategy/risk");
+const marketDataClient_1 = require("./marketDataClient");
 const binance_1 = require("./execution/binance");
-class MockBinanceClient extends binance_1.BinanceExecutionClient {
+class AuditedBinanceClient extends binance_1.BinanceExecutionClient {
     placedOrders = [];
     cancelledOrderIds = [];
     orderIdCounter = 900001;
@@ -24,6 +27,13 @@ class MockBinanceClient extends binance_1.BinanceExecutionClient {
             timeInForce: params.timeInForce || "GTC",
             type: params.type,
             side: params.side,
+            reduceOnly: false,
+            positionSide: params.positionSide || "BOTH",
+            stopPrice: String(params.stopPrice || 0),
+            workingType: "CONTRACT_PRICE",
+            cumQuote: "0",
+            avgPrice: "0",
+            updateTime: Date.now(),
         };
     }
     async cancelOrder(symbol, orderId) {
@@ -40,6 +50,13 @@ class MockBinanceClient extends binance_1.BinanceExecutionClient {
             timeInForce: "GTC",
             type: "MARKET",
             side: "SELL",
+            reduceOnly: false,
+            positionSide: "BOTH",
+            stopPrice: "0",
+            workingType: "CONTRACT_PRICE",
+            cumQuote: "0",
+            avgPrice: "0",
+            updateTime: Date.now(),
         };
     }
 }
@@ -47,65 +64,64 @@ async function runPhase3Proof() {
     console.log("==========================================================================================");
     console.log("  🔍 PHASE 3 PROOF: EXCHANGE-NATIVE STOP_MARKET ORDER DISPATCH & TRACKING VERIFICATION");
     console.log("==========================================================================================\n");
-    const mockClient = new MockBinanceClient();
+    const mockClient = new AuditedBinanceClient();
     const symbol = "BTCUSDT";
     const entryPrice = 60000.0;
     const initialSl = 59880.0;
     const qty = 0.005;
+    const sab = new SharedArrayBuffer(1024 * 64);
+    const mdc = new marketDataClient_1.MarketDataClient(sab, 10);
+    const risk = new risk_1.RiskGuard();
     const ledger = new positionLedger_1.HedgePositionLedger(symbol);
+    const engine = new engine_1.StrategyEngine(mdc, risk, mockClient, { symbol, assetIndex: 0 }, ledger.getLegacyLedger(), ledger);
     ledger.occupyCoreLong(qty, entryPrice, 0.40, 0.20);
     console.log(`[Position Entry] Long 0.005 BTC @ $${entryPrice} | Target SL: $${initialSl}`);
-    // 1. Dispatch Initial Exchange STOP_MARKET Order
+    // 1. Dispatch Initial Exchange STOP_MARKET Order via StrategyEngine
     console.log("\n------------------------------------------------------------------------------------------");
-    console.log("[TEST 1] Dispatching Initial Exchange-Native STOP_MARKET Order to Binance");
-    const slRes = await mockClient.placeOrder({
-        symbol,
-        side: "SELL",
-        type: "STOP_MARKET",
-        quantity: qty,
-        stopPrice: initialSl,
-        positionSide: "LONG",
-    });
-    ledger.registerActiveStopLossOrderId("CORE_LONG", slRes.orderId);
+    console.log("[TEST 1] Dispatching Initial Exchange-Native STOP_MARKET Order via StrategyEngine");
+    const orderId = await engine.dispatchExchangeStopLossOrder("CORE_LONG", entryPrice, qty, "LONG", initialSl);
     const trackedSlId = ledger.getActiveStopLossOrderId("CORE_LONG");
-    console.log(`  binance.placeOrder() Response -> OrderId: #${slRes.orderId} | Status: ${slRes.status} | Type: ${slRes.type}`);
+    console.log(`  dispatchExchangeStopLossOrder() Response -> OrderId: #${orderId}`);
     console.log(`  PositionLedger Registered activeStopLossOrderId: #${trackedSlId}`);
-    if (trackedSlId !== slRes.orderId) {
-        throw new Error(`❌ PROOF FAILED: activeStopLossOrderId #${trackedSlId} does not match placed order #${slRes.orderId}`);
+    if (trackedSlId !== orderId || !orderId) {
+        throw new Error(`❌ PROOF FAILED: activeStopLossOrderId #${trackedSlId} does not match placed order #${orderId}`);
     }
     console.log("  ✅ TEST 1 PASSED: Exchange-Native STOP_MARKET Order placed & ID tracked!");
-    // 2. Test Cancel-Replace Ratchet Sync on AI Breakeven Shift
+    // 2. Test Cancel-Replace Ratchet Sync via StrategyEngine
     console.log("\n------------------------------------------------------------------------------------------");
     console.log("[TEST 2] Testing AI Breakeven SL Ratchet Cancel-Replace Sync (Target SL: $60124.50)");
     const newSlPrice = 60124.50;
-    // Cancel previous SL order
-    if (trackedSlId) {
-        await mockClient.cancelOrder(symbol, trackedSlId);
-        console.log(`  Cancelled Previous SL OrderId: #${trackedSlId}`);
-    }
-    // Place new ratcheted SL order
-    const newSlRes = await mockClient.placeOrder({
-        symbol,
-        side: "SELL",
-        type: "STOP_MARKET",
-        quantity: qty,
-        stopPrice: newSlPrice,
-        positionSide: "LONG",
-    });
-    ledger.registerActiveStopLossOrderId("CORE_LONG", newSlRes.orderId);
+    await engine.syncExchangeStopLossOrder("CORE_LONG", qty, "LONG", newSlPrice);
     const updatedSlId = ledger.getActiveStopLossOrderId("CORE_LONG");
-    console.log(`  Placed New Ratcheted SL OrderId: #${newSlRes.orderId} @ stopPrice $${newSlPrice}`);
     console.log(`  PositionLedger Active SL ID Updated: #${updatedSlId}`);
-    if (mockClient.cancelledOrderIds[0] !== slRes.orderId) {
-        throw new Error(`❌ PROOF FAILED: Previous SL OrderId #${slRes.orderId} was not cancelled during ratchet!`);
+    if (mockClient.cancelledOrderIds[0] !== orderId) {
+        throw new Error(`❌ PROOF FAILED: Previous SL OrderId #${orderId} was not cancelled during ratchet!`);
     }
-    if (updatedSlId !== newSlRes.orderId) {
-        throw new Error(`❌ PROOF FAILED: Updated activeStopLossOrderId #${updatedSlId} mismatch!`);
+    if (updatedSlId === orderId || !updatedSlId) {
+        throw new Error(`❌ PROOF FAILED: Updated activeStopLossOrderId #${updatedSlId} was not assigned new ID!`);
     }
     console.log("  ✅ TEST 2 PASSED: Cancel-Replace Ratchet correctly cancelled old SL and activated new SL!");
-    // 3. Test Order Summary Audit
+    // 3. Test Concurrency Lock & Debounce Protection on Simultaneous Ratchets
     console.log("\n------------------------------------------------------------------------------------------");
-    console.log("[TEST 3] Exchange Client Order History Audit");
+    console.log("[TEST 3] Testing Concurrency Lock & Debounce Defense on Simultaneous Ratchet Dispatches");
+    const preConcurrentCount = mockClient.placedOrders.length;
+    // Trigger 5 concurrent simultaneous sync calls for CORE_LONG
+    await Promise.all([
+        engine.syncExchangeStopLossOrder("CORE_LONG", qty, "LONG", 60130.0),
+        engine.syncExchangeStopLossOrder("CORE_LONG", qty, "LONG", 60135.0),
+        engine.syncExchangeStopLossOrder("CORE_LONG", qty, "LONG", 60140.0),
+        engine.syncExchangeStopLossOrder("CORE_LONG", qty, "LONG", 60145.0),
+    ]);
+    const postConcurrentCount = mockClient.placedOrders.length;
+    const newOrdersPlaced = postConcurrentCount - preConcurrentCount;
+    console.log(`  Concurrent Dispatches: 4 | New Orders Placed: ${newOrdersPlaced} (Mutex Lock Active)`);
+    if (newOrdersPlaced !== 1) {
+        throw new Error(`❌ PROOF FAILED: Mutex lock failed! Expected exactly 1 order placed, got ${newOrdersPlaced}`);
+    }
+    console.log("  ✅ TEST 3 PASSED: Concurrency lock successfully blocked duplicate overlapping SL orders!");
+    // 4. Test Order Summary Audit
+    console.log("\n------------------------------------------------------------------------------------------");
+    console.log("[TEST 4] Exchange Client Order History Audit");
     console.log(`  Total Orders Placed: ${mockClient.placedOrders.length}`);
     console.log(`  Total Orders Cancelled: ${mockClient.cancelledOrderIds.length}`);
     mockClient.placedOrders.forEach((ord, idx) => {

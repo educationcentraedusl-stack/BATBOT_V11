@@ -549,6 +549,12 @@ class HedgePositionLedger {
         const slot = slotId === "CORE_LONG" ? this.coreLong : this.shortSlots.find((s) => s.slotId === slotId);
         return slot?.activeStopLossOrderId;
     }
+    updateLastSyncedSlPrice(slotId, price) {
+        const slot = slotId === "CORE_LONG" ? this.coreLong : this.shortSlots.find((s) => s.slotId === slotId);
+        if (slot) {
+            slot.lastSyncedSlPrice = price;
+        }
+    }
     /**
      * Processes a filled WebSocket POST_ONLY limit TP order update.
      * Advances tpStageReached, records realized exit accounting, and updates fee-adjusted Break-Even / Trailing Stop-Loss price.
@@ -564,7 +570,7 @@ class HedgePositionLedger {
         const actualClosedQty = Math.min(slot.quantity, fillQuantity);
         const entryPx = slot.entryPrice;
         const slotSide = slot.side;
-        slot.quantity = Math.max(0, Number((slot.quantity - fillQuantity).toFixed(3)));
+        slot.quantity = symbolPrecision_1.SymbolPrecisionRegistry.formatQuantity(this.symbol, Math.max(0, slot.quantity - fillQuantity));
         const currentStage = (slot.tpStageReached || 0) + 1;
         slot.tpStageReached = currentStage;
         // Record realized trade accounting for the POST_ONLY limit fill
@@ -575,7 +581,7 @@ class HedgePositionLedger {
         // Advance Trailing Stop Loss with strict Breakeven ($0.00 Loss) floor
         const takerFee = this.sizingCalc.getTakerFeeRate();
         const feeBuffer = (makerFee + takerFee) * 2.5; // Fee-adjusted Break-Even
-        const calcBePrice = isLong ? slot.entryPrice * (1 + feeBuffer) : slot.entryPrice * (1 - feeBuffer);
+        const calcBePrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1 + feeBuffer) : slot.entryPrice * (1 - feeBuffer));
         if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
             slot.breakEvenPrice = calcBePrice;
         }
@@ -593,6 +599,7 @@ class HedgePositionLedger {
                 ? Math.max(slot.tpStagePrices[1], slot.breakEvenPrice)
                 : Math.min(slot.tpStagePrices[1], slot.breakEvenPrice);
         }
+        slot.stopLossPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, slot.stopLossPrice);
         const isClosed = slot.quantity <= 0;
         if (isClosed) {
             if (slotId === "CORE_LONG") {
@@ -701,20 +708,21 @@ class HedgePositionLedger {
             const makerFee = this.sizingCalc.getMakerFeeRate();
             const takerFee = this.sizingCalc.getTakerFeeRate();
             const feeMultiplier = (makerFee + takerFee) * 2.5;
-            this.coreLong.breakEvenPrice = newAvgEntry * (1.0 + feeMultiplier);
-            this.coreLong.takeProfitPrice = newAvgEntry * (1 + tpPercent / 100);
-            this.coreLong.stopLossPrice = newAvgEntry * (1 - slPercent / 100);
+            this.coreLong.breakEvenPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1.0 + feeMultiplier));
+            this.coreLong.takeProfitPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + tpPercent / 100));
+            this.coreLong.stopLossPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - slPercent / 100));
+            this.coreLong.lastSyncedSlPrice = this.coreLong.stopLossPrice;
             const tp1Pct = Math.min(2.0, tpPercent * 1.0);
             const tp2Pct = Math.min(3.0, tpPercent * 2.0);
             const tp3Pct = Math.min(5.0, tpPercent * 4.0);
             const tp4Pct = Math.min(8.0, tpPercent * 6.0);
             const tp5Pct = Math.min(12.0, tpPercent * 10.0);
             this.coreLong.tpPrices = [
-                newAvgEntry * (1 + tp1Pct / 100),
-                newAvgEntry * (1 + tp2Pct / 100),
-                newAvgEntry * (1 + tp3Pct / 100),
-                newAvgEntry * (1 + tp4Pct / 100),
-                newAvgEntry * (1 + tp5Pct / 100),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + tp1Pct / 100)),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + tp2Pct / 100)),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + tp3Pct / 100)),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + tp4Pct / 100)),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + tp5Pct / 100)),
             ];
             this.legacyLedger.syncActivePosition("LONG", newQty, newAvgEntry);
             return;
@@ -732,9 +740,10 @@ class HedgePositionLedger {
         const makerFee = this.sizingCalc.getMakerFeeRate();
         const takerFee = this.sizingCalc.getTakerFeeRate();
         const feeMultiplier = (makerFee + takerFee) * 2.5; // Fee-adjusted zero-loss buffer loaded from .env
-        this.coreLong.breakEvenPrice = entryPrice * (1.0 + feeMultiplier);
-        this.coreLong.takeProfitPrice = entryPrice * (1 + tpPercent / 100);
-        this.coreLong.stopLossPrice = entryPrice * (1 - slPercent / 100);
+        this.coreLong.breakEvenPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1.0 + feeMultiplier));
+        this.coreLong.takeProfitPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tpPercent / 100));
+        this.coreLong.stopLossPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - slPercent / 100));
+        this.coreLong.lastSyncedSlPrice = this.coreLong.stopLossPrice;
         // 5-Stage TP Micro-Ladder Targets: 0.25%, 0.50%, 1.00%, 1.50%, 2.50% price moves (tpPercent * 1.0, 2.0, 4.0, 6.0, 10.0)
         const tp1Pct = Math.min(2.0, tpPercent * 1.0);
         const tp2Pct = Math.min(3.0, tpPercent * 2.0);
@@ -742,11 +751,11 @@ class HedgePositionLedger {
         const tp4Pct = Math.min(8.0, tpPercent * 6.0);
         const tp5Pct = Math.min(12.0, tpPercent * 10.0);
         this.coreLong.tpPrices = [
-            entryPrice * (1 + tp1Pct / 100),
-            entryPrice * (1 + tp2Pct / 100),
-            entryPrice * (1 + tp3Pct / 100),
-            entryPrice * (1 + tp4Pct / 100),
-            entryPrice * (1 + tp5Pct / 100),
+            symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tp1Pct / 100)),
+            symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tp2Pct / 100)),
+            symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tp3Pct / 100)),
+            symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tp4Pct / 100)),
+            symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tp5Pct / 100)),
         ];
         this.legacyLedger.syncActivePosition("LONG", quantity, entryPrice);
     }
@@ -828,20 +837,21 @@ class HedgePositionLedger {
             const makerFee = this.sizingCalc.getMakerFeeRate();
             const takerFee = this.sizingCalc.getTakerFeeRate();
             const feeMultiplier = (makerFee + takerFee) * 2.5;
-            slot.breakEvenPrice = newAvgEntry * (1.0 - feeMultiplier);
-            slot.takeProfitPrice = newAvgEntry * (1 - tpPercent / 100);
-            slot.stopLossPrice = newAvgEntry * (1 + slPercent / 100);
+            slot.breakEvenPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1.0 - feeMultiplier));
+            slot.takeProfitPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - tpPercent / 100));
+            slot.stopLossPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + slPercent / 100));
+            slot.lastSyncedSlPrice = slot.stopLossPrice;
             const tp1Pct = Math.min(2.0, tpPercent * 1.0);
             const tp2Pct = Math.min(3.0, tpPercent * 2.0);
             const tp3Pct = Math.min(5.0, tpPercent * 4.0);
             const tp4Pct = Math.min(8.0, tpPercent * 6.0);
             const tp5Pct = Math.min(12.0, tpPercent * 10.0);
             slot.tpPrices = [
-                newAvgEntry * (1 - tp1Pct / 100),
-                newAvgEntry * (1 - tp2Pct / 100),
-                newAvgEntry * (1 - tp3Pct / 100),
-                newAvgEntry * (1 - tp4Pct / 100),
-                newAvgEntry * (1 - tp5Pct / 100),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - tp1Pct / 100)),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - tp2Pct / 100)),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - tp3Pct / 100)),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - tp4Pct / 100)),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - tp5Pct / 100)),
             ];
             this.legacyLedger.syncActivePosition("SHORT", newQty, newAvgEntry);
             return true;
@@ -859,20 +869,21 @@ class HedgePositionLedger {
         const makerFee = this.sizingCalc.getMakerFeeRate();
         const takerFee = this.sizingCalc.getTakerFeeRate();
         const feeMultiplier = (makerFee + takerFee) * 2.5; // Fee-adjusted zero-loss buffer loaded from .env
-        slot.breakEvenPrice = entryPrice * (1.0 - feeMultiplier);
-        slot.takeProfitPrice = entryPrice * (1 - tpPercent / 100);
-        slot.stopLossPrice = entryPrice * (1 + slPercent / 100);
+        slot.breakEvenPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1.0 - feeMultiplier));
+        slot.takeProfitPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tpPercent / 100));
+        slot.stopLossPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + slPercent / 100));
+        slot.lastSyncedSlPrice = slot.stopLossPrice;
         const tp1Pct = Math.min(2.0, tpPercent * 1.0);
         const tp2Pct = Math.min(3.0, tpPercent * 2.0);
         const tp3Pct = Math.min(5.0, tpPercent * 4.0);
         const tp4Pct = Math.min(8.0, tpPercent * 6.0);
         const tp5Pct = Math.min(12.0, tpPercent * 10.0);
         slot.tpPrices = [
-            entryPrice * (1 - tp1Pct / 100),
-            entryPrice * (1 - tp2Pct / 100),
-            entryPrice * (1 - tp3Pct / 100),
-            entryPrice * (1 - tp4Pct / 100),
-            entryPrice * (1 - tp5Pct / 100),
+            symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tp1Pct / 100)),
+            symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tp2Pct / 100)),
+            symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tp3Pct / 100)),
+            symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tp4Pct / 100)),
+            symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tp5Pct / 100)),
         ];
         this.legacyLedger.syncActivePosition("SHORT", quantity, entryPrice);
         return true;
@@ -938,6 +949,16 @@ class HedgePositionLedger {
             const makerFee = this.sizingCalc.getMakerFeeRate();
             const takerFee = this.sizingCalc.getTakerFeeRate();
             const feeBuffer = (makerFee + takerFee) * 2.5;
+            const buildCancelOrderIds = () => {
+                const ids = [];
+                if (slot.activeTpOrderIds && slot.activeTpOrderIds.length > 0) {
+                    ids.push(...slot.activeTpOrderIds);
+                }
+                if (slot.activeStopLossOrderId && slot.activeStopLossOrderId > 0) {
+                    ids.push(slot.activeStopLossOrderId);
+                }
+                return ids;
+            };
             // 0A. AI Conviction Hard-Reversal Exit Signal (100% Dynamic - Zero Timers)
             const isAiHardReversal = isLong
                 ? (aiDirection <= -0.15 && aiConfidence >= 0.70)
@@ -951,7 +972,7 @@ class HedgePositionLedger {
                     entryPrice: slot.entryPrice,
                     markPrice,
                     isPartialClose: false,
-                    cancelOrderIds: slot.activeTpOrderIds ? [...slot.activeTpOrderIds] : [],
+                    cancelOrderIds: buildCancelOrderIds(),
                 });
                 return;
             }
@@ -959,7 +980,7 @@ class HedgePositionLedger {
             const isToxicFlow = vpin >= 0.80 || (isLong ? ofi < -0.3 : ofi > 0.3);
             const isHawkesBurst = hawkes > 2.5;
             if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
-                slot.breakEvenPrice = isLong ? slot.entryPrice * (1.0 + feeBuffer) : slot.entryPrice * (1.0 - feeBuffer);
+                slot.breakEvenPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + feeBuffer) : slot.entryPrice * (1.0 - feeBuffer));
             }
             const isCrossedIntoProfit = isLong ? markPrice >= slot.breakEvenPrice : markPrice <= slot.breakEvenPrice;
             if (isCrossedIntoProfit) {
@@ -970,16 +991,14 @@ class HedgePositionLedger {
                 if (isToxicFlow) {
                     // Ratchet SL to Breakeven + 0.05% offset to lock profit under toxicity
                     const offset = feeBuffer + 0.0005;
-                    targetSl = isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset);
+                    targetSl = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset));
                 }
                 else if (isHawkesBurst) {
                     // Ratchet SL under order arrival velocity spike
                     const offset = feeBuffer + 0.0010;
-                    targetSl = isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset);
+                    targetSl = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset));
                 }
-                slot.stopLossPrice = isLong
-                    ? Math.max(slot.stopLossPrice, targetSl)
-                    : Math.min(slot.stopLossPrice, targetSl);
+                slot.stopLossPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? Math.max(slot.stopLossPrice, targetSl) : Math.min(slot.stopLossPrice, targetSl));
             }
             // 1. Symmetrical Immediate Take-Profit Evaluation (Zero Holding Time Hysteresis - Symmetrical to SL)
             if (!hasActiveLimitOrders && tpPrices.length === 5) {
@@ -1092,7 +1111,7 @@ class HedgePositionLedger {
                     entryPrice: slot.entryPrice,
                     markPrice,
                     isPartialClose: false,
-                    cancelOrderIds: slot.activeTpOrderIds ? [...slot.activeTpOrderIds] : [],
+                    cancelOrderIds: buildCancelOrderIds(),
                 });
                 return;
             }
@@ -1141,13 +1160,13 @@ class HedgePositionLedger {
         const durationMs = Math.max(0, nowMs - (slot.openTime || nowMs));
         // 1. Cox Proportional Hazard Rate Survival Exit
         if (hazardMetrics.isHazardExitTriggered) {
-            this.pushSotaTrigger(slot.slotId, slot.side, `HAZARD_FLUSH_EXIT_${slot.side}`, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds);
+            this.pushSotaTrigger(slot.slotId, slot.side, `HAZARD_FLUSH_EXIT_${slot.side}`, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId);
             return;
         }
         // 2. Avellaneda-Stoikov HJB Optimal Stopping Liquidation Boundary
         const hjbEval = hjbEngine.getOptimalExitBoundary(slot.side, slot.entryPrice, markPrice, slot.quantity, durationMs, volMetrics.garmanKlass1s);
         if (hjbEval.isLiquidationTriggered) {
-            this.pushSotaTrigger(slot.slotId, slot.side, hjbEval.exitReason, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds);
+            this.pushSotaTrigger(slot.slotId, slot.side, hjbEval.exitReason, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId);
             return;
         }
         // 3. MVA-TS (Microstructure-Aware Volatility Adaptive Trailing Stop)
@@ -1195,10 +1214,10 @@ class HedgePositionLedger {
         }
         const isMvaTriggered = isLong ? markPrice <= mvaStopPrice : markPrice >= mvaStopPrice;
         if (isMvaTriggered) {
-            this.pushSotaTrigger(slot.slotId, slot.side, `MVA_TRAILING_STOP_${slot.side}`, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds);
+            this.pushSotaTrigger(slot.slotId, slot.side, `MVA_TRAILING_STOP_${slot.side}`, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId);
         }
     }
-    pushSotaTrigger(slotId, side, reason, quantity, entryPrice, markPrice, isPartialClose, activeTpOrderIds) {
+    pushSotaTrigger(slotId, side, reason, quantity, entryPrice, markPrice, isPartialClose, activeTpOrderIds, activeStopLossOrderId) {
         const idx = this.sotaTriggers.length;
         if (idx < this.preallocatedTriggers.length) {
             const trg = this.preallocatedTriggers[idx];
@@ -1209,7 +1228,14 @@ class HedgePositionLedger {
             trg.entryPrice = entryPrice;
             trg.markPrice = markPrice;
             trg.isPartialClose = isPartialClose;
-            trg.cancelOrderIds = activeTpOrderIds && activeTpOrderIds.length > 0 ? activeTpOrderIds : undefined;
+            const cancelIds = [];
+            if (activeTpOrderIds && activeTpOrderIds.length > 0) {
+                cancelIds.push(...activeTpOrderIds);
+            }
+            if (activeStopLossOrderId && activeStopLossOrderId > 0) {
+                cancelIds.push(activeStopLossOrderId);
+            }
+            trg.cancelOrderIds = cancelIds.length > 0 ? cancelIds : undefined;
             this.sotaTriggers.push(trg);
         }
     }
