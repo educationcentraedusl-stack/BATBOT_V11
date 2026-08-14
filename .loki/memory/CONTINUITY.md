@@ -46,6 +46,12 @@
   - Updated `MultiAssetCLIDashboard` (`src/telemetry/multiAssetDashboard.ts`) to render dual distinct rows (`#i-LONG` and `#i-SHORT`) for Hedge Mode symbols.
   - 100% verified via `npx tsc --noEmit` and `npx tsx src/tests/test_hedge_mode_split.ts` (100% pass across all 6 phases).
 
+* 2026-08-14 - SOTA Leverage State-Sync & Dynamic Exchange Recognition Completed & QA Verified:
+  - Eradicated leverage blindness and hardcoded 10x defaults across `SharedArrayBuffer` OMS slot 109 (`OMS_LEVERAGE`), `PositionLedger`, `HedgePositionLedger`, `StrategyEngine`, and `MultiAssetCLIDashboard`.
+  - Implemented `setLeverage(symbol, leverage)` endpoint in `src/execution/binance.ts` (`POST /fapi/v1/leverage`) to synchronize target leverage per symbol on Binance directly from `.env` (`LEVERAGE=...`).
+  - Dynamically ingested live `pos.leverage` from `/fapi/v2/positionRisk` (even when position is FLAT) and mapped to SAB slot 109 and active trade slots.
+  - 100% verified via `npx tsc --noEmit`, `npm run build:ts`, and `npx tsx src/tests/test_leverage_state_sync.ts` (100% pass across all 5 verification phases).
+
 ## Next Actions
 1. Maintain Zero-Loss Maker-Dominant Architecture baseline for production live trading deployment.
 2. Monitor real-time execution metrics and Maker fill rates on live Binance Futures API.

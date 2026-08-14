@@ -376,6 +376,27 @@ export class BinanceExecutionClient {
     }
   }
 
+  public async setLeverage(
+    symbol: string,
+    leverage: number
+  ): Promise<{ symbol: string; leverage: number; maxNotionalValue: string } | null> {
+    if (!this.isConfigured() || !symbol || leverage <= 0) return null;
+    try {
+      const roundedLev = Math.round(leverage);
+      const res = await this.request<{ symbol: string; leverage: number; maxNotionalValue: string }>(
+        "POST",
+        "/fapi/v1/leverage",
+        { symbol, leverage: roundedLev },
+        true
+      );
+      console.log(`[BinanceExecutionClient] Exchange Leverage for ${symbol} set to ${res.leverage}x (MaxNotional: $${res.maxNotionalValue})`);
+      return res;
+    } catch (err: any) {
+      console.warn(`[BinanceExecutionClient] Unable to set leverage for ${symbol} to ${leverage}x: ${err?.message || String(err)}`);
+      return null;
+    }
+  }
+
   public async placeOrder(params: BinanceOrderParams, retryCount: number = 0): Promise<BinanceOrderResponse> {
     const isAlgoOrder = params.type === "STOP_MARKET" || params.type === "TAKE_PROFIT_MARKET";
     const formattedQty = SymbolPrecisionRegistry.formatQuantity(params.symbol, params.quantity);

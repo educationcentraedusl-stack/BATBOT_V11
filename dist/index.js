@@ -74,6 +74,17 @@ async function syncStateOnStartup(executionClient, strategyEngine, riskGuard) {
         await executionClient.syncServerTime();
         // 2. Enable Dual-Side Hedge Mode on Binance Futures
         await executionClient.setHedgeMode(true);
+        // 2.5. Synchronize Target Leverage from .env to Binance Futures per symbol
+        const envLeverage = parseInt(process.env.LEVERAGE || "10", 10);
+        if (Number.isFinite(envLeverage) && envLeverage > 0) {
+            if (strategyEngine instanceof multiEngine_1.MultiAssetStrategyEngine) {
+                await strategyEngine.syncLeverageWithExchange(envLeverage);
+            }
+            else if ("getConfig" in strategyEngine && typeof strategyEngine.getConfig === "function") {
+                const symbol = strategyEngine.getConfig().symbol;
+                await executionClient.setLeverage(symbol, envLeverage);
+            }
+        }
         // 3. Fetch USDT Account Balance
         const balance = await executionClient.fetchUsdtBalanceAsync();
         console.log(`[StateSync] Binance Wallet Available Balance Synced: $${balance.toFixed(2)} USDT`);

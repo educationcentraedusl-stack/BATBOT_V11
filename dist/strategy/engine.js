@@ -198,6 +198,17 @@ class StrategyEngine {
         this.client.setOmsWinningTrades(summary.winningTrades, this.assetIndex);
         this.client.setOmsLosingTrades(summary.losingTrades, this.assetIndex);
     }
+    setLeverageMultiplier(leverage) {
+        if (Number.isFinite(leverage) && leverage > 0) {
+            this.config.leverageMultiplier = leverage;
+            this.positionLedger.setLeverage(leverage);
+            this.hedgeLedger.setLeverage(leverage);
+            this.client.setOmsLeverage(leverage, this.assetIndex);
+        }
+    }
+    getLeverageMultiplier() {
+        return this.config.leverageMultiplier;
+    }
     hasPendingEntryForSlot(slotId) {
         for (const pending of this.pendingEntryOrders.values()) {
             if (pending.slotId === slotId) {
@@ -771,16 +782,24 @@ class StrategyEngine {
      */
     async syncExchangeStateWithData(positions, openOrders) {
         try {
-            const activePositions = (Array.isArray(positions) ? positions : []).filter((pos) => pos.symbol === this.config.symbol && Math.abs(parseFloat(pos.positionAmt || "0")) > 0);
+            const symbolPositions = (Array.isArray(positions) ? positions : []).filter((pos) => pos.symbol === this.config.symbol);
+            // Ingest live exchange leverage setting for this symbol (even if position is currently FLAT)
+            const matchingPosWithLev = symbolPositions.find((p) => parseFloat(p.leverage || "0") > 0);
+            if (matchingPosWithLev) {
+                const liveLev = parseFloat(matchingPosWithLev.leverage);
+                this.setLeverageMultiplier(liveLev);
+            }
+            const activePositions = symbolPositions.filter((pos) => Math.abs(parseFloat(pos.positionAmt || "0")) > 0);
             const symbolOpenOrders = Array.isArray(openOrders)
                 ? openOrders.filter((o) => o.symbol === this.config.symbol)
                 : [];
             if (activePositions.length === 0) {
-                console.log(`[StrategyEngine][StateSync] Binance position state: FLAT (0.0000) for ${this.config.symbol}.`);
-                this.hedgeLedger.syncStartupPositions([], this.config.longTakeProfitPercent, this.config.longStopLossPercent, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent);
+                console.log(`[StrategyEngine][StateSync] Binance position state: FLAT (0.0000) for ${this.config.symbol} (Leverage: ${this.config.leverageMultiplier}x).`);
+                this.hedgeLedger.syncStartupPositions([], this.config.longTakeProfitPercent, this.config.longStopLossPercent, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent, this.config.leverageMultiplier);
                 this.client.setOmsPositionQty(0, this.assetIndex);
                 this.client.setOmsPositionSide(0, this.assetIndex);
                 this.client.setOmsAvgEntryPrice(0, this.assetIndex);
+                this.client.setOmsLeverage(this.config.leverageMultiplier, this.assetIndex);
                 return;
             }
             // Reconcile active position(s) into internal ledgers (strictly overwrites and assigns exact Binance position size)
@@ -870,6 +889,11 @@ class StrategyEngine {
             console.log(`[StrategyEngine][StateRecovery] No active positions returned from Binance REST API for ${this.config.symbol}.`);
             return;
         }
+        const matchingPosWithLev = rawPositions.find((p) => p.symbol === this.config.symbol && parseFloat(p.leverage || "0") > 0);
+        if (matchingPosWithLev) {
+            const liveLev = parseFloat(matchingPosWithLev.leverage);
+            this.setLeverageMultiplier(liveLev);
+        }
         const recovered = [];
         for (const pos of rawPositions) {
             if (pos.symbol !== this.config.symbol)
@@ -886,11 +910,11 @@ class StrategyEngine {
             });
         }
         if (recovered.length > 0) {
-            this.hedgeLedger.syncStartupPositions(recovered, this.config.longTakeProfitPercent, this.config.longStopLossPercent, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent);
-            console.log(`[StrategyEngine][StateRecovery] Successfully recovered ${recovered.length} open position(s) from Binance REST API for ${this.config.symbol}.`);
+            this.hedgeLedger.syncStartupPositions(recovered, this.config.longTakeProfitPercent, this.config.longStopLossPercent, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent, this.config.leverageMultiplier);
+            console.log(`[StrategyEngine][StateRecovery] Successfully recovered ${recovered.length} open position(s) from Binance REST API for ${this.config.symbol} at ${this.config.leverageMultiplier}x leverage.`);
         }
         else {
-            console.log(`[StrategyEngine][StateRecovery] Binance position state: FLAT (0.0000) for ${this.config.symbol}.`);
+            console.log(`[StrategyEngine][StateRecovery] Binance position state: FLAT (0.0000) for ${this.config.symbol} at ${this.config.leverageMultiplier}x leverage.`);
         }
         this.syncSabPositionState(0);
     }

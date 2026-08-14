@@ -30,6 +30,7 @@ export interface PositionSummary {
   totalTrades: number;
   winningTrades: number;
   losingTrades: number;
+  leverage: number;
 }
 
 export interface ClosedTradeInfo {
@@ -78,6 +79,7 @@ export class PositionLedger {
   private totalTrades = 0;
   private winningTrades = 0;
   private losingTrades = 0;
+  private leverage: number = parseInt(process.env.LEVERAGE || "10", 10);
 
   // Pre-allocated summary object for zero-GC per-tick telemetry
   private cachedSummary: PositionSummary;
@@ -126,6 +128,7 @@ export class PositionLedger {
       totalTrades: 0,
       winningTrades: 0,
       losingTrades: 0,
+      leverage: this.leverage,
     };
   }
 
@@ -338,8 +341,20 @@ export class PositionLedger {
     this.cachedSummary.totalTrades = this.totalTrades;
     this.cachedSummary.winningTrades = this.winningTrades;
     this.cachedSummary.losingTrades = this.losingTrades;
+    this.cachedSummary.leverage = this.leverage;
 
     return this.cachedSummary;
+  }
+
+  public setLeverage(leverage: number): void {
+    if (Number.isFinite(leverage) && leverage > 0) {
+      this.leverage = leverage;
+      this.cachedSummary.leverage = leverage;
+    }
+  }
+
+  public getLeverage(): number {
+    return this.leverage;
   }
 
   public getSide(): "FLAT" | "LONG" | "SHORT" {
@@ -515,6 +530,7 @@ export class HedgePositionLedger {
   private totalTrades = 0;
   private winningTrades = 0;
   private losingTrades = 0;
+  private leverage: number = parseInt(process.env.LEVERAGE || "10", 10);
 
   // Zero-GC Pre-allocated Reusable SOTA Exit Triggers Array & Slots
   private readonly sotaTriggers: SlotExitTrigger[] = [];
@@ -553,6 +569,7 @@ export class HedgePositionLedger {
       totalTrades: 0,
       winningTrades: 0,
       losingTrades: 0,
+      leverage: this.leverage,
     };
 
     this.coreLong = {
@@ -707,8 +724,21 @@ export class HedgePositionLedger {
     this.cachedSummary.totalTrades = this.totalTrades;
     this.cachedSummary.winningTrades = this.winningTrades;
     this.cachedSummary.losingTrades = this.losingTrades;
+    this.cachedSummary.leverage = this.leverage;
 
     return this.cachedSummary;
+  }
+
+  public setLeverage(leverage: number): void {
+    if (Number.isFinite(leverage) && leverage > 0) {
+      this.leverage = leverage;
+      this.cachedSummary.leverage = leverage;
+      this.legacyLedger.setLeverage(leverage);
+    }
+  }
+
+  public getLeverage(): number {
+    return this.leverage;
   }
 
   /**
@@ -1052,8 +1082,12 @@ export class HedgePositionLedger {
     longTpPct: number,
     longSlPct: number,
     shortTpPct: number,
-    shortSlPct: number
+    shortSlPct: number,
+    liveLeverage?: number
   ): void {
+    if (liveLeverage !== undefined && liveLeverage > 0) {
+      this.setLeverage(liveLeverage);
+    }
     this.releaseCoreLong();
     for (let i = 0; i < this.maxShortSlots; i++) {
       this.releaseShortSlot(i);
@@ -1709,7 +1743,7 @@ export class HedgePositionLedger {
 
   public getActiveTradeSlots(
     currentPrice: number = 0,
-    leverage: number = 10,
+    leverage: number = this.leverage,
     longTpPct: number = 2.5,
     longSlPct: number = 1.2,
     shortTpPct: number = 0.6,

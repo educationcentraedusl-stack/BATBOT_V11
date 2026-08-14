@@ -118,6 +118,28 @@ class MultiAssetStrategyEngine {
         }
         console.log("[MultiAssetStrategyEngine] Continuous reconciliation & centralized stream stopped.");
     }
+    async syncLeverageWithExchange(targetLeverage) {
+        const envLeverage = parseInt(process.env.LEVERAGE || "10", 10);
+        const leverageToSet = targetLeverage && targetLeverage > 0 ? targetLeverage : envLeverage;
+        if (!this.executionClient.isConfigured())
+            return;
+        for (const symbol of this.activeSymbols) {
+            if (!symbol)
+                continue;
+            try {
+                const res = await this.executionClient.setLeverage(symbol, leverageToSet);
+                if (res) {
+                    const engine = this.engines.get(symbol);
+                    if (engine) {
+                        engine.setLeverageMultiplier(res.leverage);
+                    }
+                }
+            }
+            catch (err) {
+                console.warn(`[MultiAssetStrategyEngine] Notice setting leverage for ${symbol}: ${err?.message || String(err)}`);
+            }
+        }
+    }
     async syncExchangeState() {
         if (!this.executionClient.isConfigured()) {
             return;

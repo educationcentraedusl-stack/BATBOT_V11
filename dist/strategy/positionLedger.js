@@ -21,6 +21,7 @@ class PositionLedger {
     totalTrades = 0;
     winningTrades = 0;
     losingTrades = 0;
+    leverage = parseInt(process.env.LEVERAGE || "10", 10);
     // Pre-allocated summary object for zero-GC per-tick telemetry
     cachedSummary;
     // Pre-allocated result object for zero-GC hot path return
@@ -64,6 +65,7 @@ class PositionLedger {
             totalTrades: 0,
             winningTrades: 0,
             losingTrades: 0,
+            leverage: this.leverage,
         };
     }
     /**
@@ -246,7 +248,17 @@ class PositionLedger {
         this.cachedSummary.totalTrades = this.totalTrades;
         this.cachedSummary.winningTrades = this.winningTrades;
         this.cachedSummary.losingTrades = this.losingTrades;
+        this.cachedSummary.leverage = this.leverage;
         return this.cachedSummary;
+    }
+    setLeverage(leverage) {
+        if (Number.isFinite(leverage) && leverage > 0) {
+            this.leverage = leverage;
+            this.cachedSummary.leverage = leverage;
+        }
+    }
+    getLeverage() {
+        return this.leverage;
     }
     getSide() {
         return this.side;
@@ -349,6 +361,7 @@ class HedgePositionLedger {
     totalTrades = 0;
     winningTrades = 0;
     losingTrades = 0;
+    leverage = parseInt(process.env.LEVERAGE || "10", 10);
     // Zero-GC Pre-allocated Reusable SOTA Exit Triggers Array & Slots
     sotaTriggers = [];
     preallocatedTriggers = Array.from({ length: 8 }, () => ({
@@ -384,6 +397,7 @@ class HedgePositionLedger {
             totalTrades: 0,
             winningTrades: 0,
             losingTrades: 0,
+            leverage: this.leverage,
         };
         this.coreLong = {
             slotId: "CORE_LONG",
@@ -514,7 +528,18 @@ class HedgePositionLedger {
         this.cachedSummary.totalTrades = this.totalTrades;
         this.cachedSummary.winningTrades = this.winningTrades;
         this.cachedSummary.losingTrades = this.losingTrades;
+        this.cachedSummary.leverage = this.leverage;
         return this.cachedSummary;
+    }
+    setLeverage(leverage) {
+        if (Number.isFinite(leverage) && leverage > 0) {
+            this.leverage = leverage;
+            this.cachedSummary.leverage = leverage;
+            this.legacyLedger.setLeverage(leverage);
+        }
+    }
+    getLeverage() {
+        return this.leverage;
     }
     /**
      * Generates batch POST_ONLY (GTX) limit TP order intents for an occupied position slot.
@@ -788,7 +813,10 @@ class HedgePositionLedger {
         ];
         this.legacyLedger.syncActivePosition("LONG", quantity, entryPrice);
     }
-    syncStartupPositions(recoveredPositions, longTpPct, longSlPct, shortTpPct, shortSlPct) {
+    syncStartupPositions(recoveredPositions, longTpPct, longSlPct, shortTpPct, shortSlPct, liveLeverage) {
+        if (liveLeverage !== undefined && liveLeverage > 0) {
+            this.setLeverage(liveLeverage);
+        }
         this.releaseCoreLong();
         for (let i = 0; i < this.maxShortSlots; i++) {
             this.releaseShortSlot(i);
@@ -1295,7 +1323,7 @@ class HedgePositionLedger {
         }
         return totalPnl;
     }
-    getActiveTradeSlots(currentPrice = 0, leverage = 10, longTpPct = 2.5, longSlPct = 1.2, shortTpPct = 0.6, shortSlPct = 0.5) {
+    getActiveTradeSlots(currentPrice = 0, leverage = this.leverage, longTpPct = 2.5, longSlPct = 1.2, shortTpPct = 0.6, shortSlPct = 0.5) {
         const slots = [];
         const now = Date.now();
         // 1. Core Long
