@@ -737,6 +737,60 @@ export class StrategyEngine {
     }
   }
 
+  public async dispatchExchangeStopLossOrder(
+    slotId: string,
+    entryPrice: number,
+    quantity: number,
+    side: "LONG" | "SHORT",
+    stopLossPrice: number
+  ): Promise<number | undefined> {
+    if (stopLossPrice <= 0 || quantity <= 0) return undefined;
+    const exitSide: "BUY" | "SELL" = side === "LONG" ? "SELL" : "BUY";
+    const formattedSlPx = SymbolPrecisionRegistry.formatPrice(this.config.symbol, stopLossPrice);
+    const formattedQty = SymbolPrecisionRegistry.formatQuantity(this.config.symbol, quantity);
+
+    try {
+      console.log(
+        `[EXCHANGE_SL_ENGINE][DISPATCHING] Submitting resting STOP_MARKET order on Binance for ${slotId}: ${exitSide} ${formattedQty} @ stopPrice $${formattedSlPx}...`
+      );
+      const res = await this.executionClient.placeOrder({
+        symbol: this.config.symbol,
+        side: exitSide,
+        type: "STOP_MARKET",
+        quantity: formattedQty,
+        stopPrice: formattedSlPx,
+        positionSide: side,
+      });
+
+      if (res && res.orderId) {
+        this.hedgeLedger.registerActiveStopLossOrderId(slotId, res.orderId);
+        console.log(`[EXCHANGE_SL_ENGINE][SUCCESS] Registered resting Exchange STOP_MARKET OrderId #${res.orderId} for ${slotId}`);
+        return res.orderId;
+      }
+    } catch (err: any) {
+      console.error(`[EXCHANGE_SL_ENGINE][ERROR] Failed to dispatch exchange STOP_MARKET order: ${err.message}`);
+    }
+    return undefined;
+  }
+
+  public async syncExchangeStopLossOrder(
+    slotId: string,
+    quantity: number,
+    side: "LONG" | "SHORT",
+    newStopLossPrice: number
+  ): Promise<void> {
+    const existingSlId = this.hedgeLedger.getActiveStopLossOrderId(slotId);
+    if (existingSlId) {
+      try {
+        console.log(`[EXCHANGE_SL_ENGINE][RATCHET_CANCEL] Cancelling previous resting Exchange STOP_MARKET OrderId #${existingSlId} for ${slotId}...`);
+        await this.executionClient.cancelOrder(this.config.symbol, existingSlId);
+      } catch (err: any) {
+        console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] Unable to cancel previous SL order #${existingSlId}: ${err.message}`);
+      }
+    }
+    await this.dispatchExchangeStopLossOrder(slotId, 0, quantity, side, newStopLossPrice);
+  }
+
   public getEngineState(): EngineState {
     return this.state;
   }
@@ -1081,7 +1135,15 @@ export class StrategyEngine {
           ? this.hedgeLedger.evaluateSotaDynamicExits(markPrice, hazardMetrics, this.hjbEngine, volMetrics)
           : [];
         // Priority 2: Evaluate Hedge Slot Dynamic TP/SL (Fixed/Trailing TP/SL, Profit Lock)
-        const hedgeTriggers = this.hedgeLedger.evaluateHedgeDynamicTpSl(markPrice);
+        const hedgeTriggers = this.hedgeLedger.evaluateHedgeDynamicTpSl(
+          markPrice,
+          aiDirection,
+          aiConfidence,
+          hazardMetrics.vpin,
+          0,
+          volMetrics.garmanKlass1s,
+          hazardMetrics.ofi
+        );
 
         const activeTriggers = sotaTriggers.length > 0 ? sotaTriggers : hedgeTriggers;
 

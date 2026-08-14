@@ -3,6 +3,7 @@ import { BinanceOrderParams } from "../execution/binance";
 import { MicrostructureHazardEngine, MicrostructureMetrics } from "./microstructureHazardEngine";
 import { VolatilitySurfaceEngine, VolatilitySurfaceMetrics } from "./volatilitySurfaceEngine";
 import { HJBReservationEngine, HJBExitEvaluation } from "./hjbReservationEngine";
+import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
 
 
 export interface PositionLot {
@@ -394,6 +395,7 @@ export interface PositionSlot {
   troughPrice?: number;
   // Phase 3 Maker-Taker Post-Only tracking fields
   activeTpOrderIds?: number[];
+  activeStopLossOrderId?: number;
   tpStagePrices?: number[];
   tpStageQuantities?: number[];
 }
@@ -685,7 +687,8 @@ export class HedgePositionLedger {
     const slot = slotId === "CORE_LONG" ? this.coreLong : this.shortSlots.find((s) => s.slotId === slotId);
     if (!slot || entryPrice <= 0 || quantity <= 0) return [];
 
-    const dynamicRes = this.sizingCalc.calculateDynamicTpChunks(quantity, entryPrice);
+    const rule = SymbolPrecisionRegistry.getPrecisionRule(this.symbol);
+    const dynamicRes = this.sizingCalc.calculateDynamicTpChunks(quantity, entryPrice, rule.qtyDecimals);
     if (dynamicRes.chunks.length === 0) return [];
 
     const isLong = side === "LONG";
@@ -700,16 +703,19 @@ export class HedgePositionLedger {
     for (let i = 0; i < dynamicRes.chunks.length; i++) {
       const chunk = dynamicRes.chunks[i];
       const offset = tpOffsets[i] !== undefined ? tpOffsets[i] : (isLong ? 0.0025 * (i + 1) : -0.0025 * (i + 1));
-      const targetPrice = Number((entryPrice * (1.0 + offset)).toFixed(2));
+      const targetPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1.0 + offset));
+      const formattedQty = SymbolPrecisionRegistry.formatQuantity(this.symbol, chunk.quantity);
+
+      if (formattedQty <= 0) continue;
 
       tpStagePrices.push(targetPrice);
-      tpStageQuantities.push(chunk.quantity);
+      tpStageQuantities.push(formattedQty);
 
       orderParamsList.push({
         symbol: this.symbol,
         side: exitSide,
         type: "LIMIT",
-        quantity: chunk.quantity,
+        quantity: formattedQty,
         price: targetPrice,
         timeInForce: "GTX", // Post-Only guarantee
         positionSide: side,
@@ -731,6 +737,18 @@ export class HedgePositionLedger {
     if (slot) {
       slot.activeTpOrderIds = orderIds;
     }
+  }
+
+  public registerActiveStopLossOrderId(slotId: string, orderId: number): void {
+    const slot = slotId === "CORE_LONG" ? this.coreLong : this.shortSlots.find((s) => s.slotId === slotId);
+    if (slot) {
+      slot.activeStopLossOrderId = orderId;
+    }
+  }
+
+  public getActiveStopLossOrderId(slotId: string): number | undefined {
+    const slot = slotId === "CORE_LONG" ? this.coreLong : this.shortSlots.find((s) => s.slotId === slotId);
+    return slot?.activeStopLossOrderId;
   }
 
   /**
@@ -1185,7 +1203,15 @@ export class HedgePositionLedger {
     }
   }
 
-  public evaluateHedgeDynamicTpSl(markPrice: number, nowMs: number = Date.now()): SlotExitTrigger[] {
+  public evaluateHedgeDynamicTpSl(
+    markPrice: number,
+    aiDirection: number = 0,
+    aiConfidence: number = 0,
+    vpin: number = 0,
+    hawkes: number = 0,
+    garmanKlass: number = 0,
+    ofi: number = 0
+  ): SlotExitTrigger[] {
     const triggers: SlotExitTrigger[] = [];
     if (markPrice <= 0) return triggers;
 
@@ -1199,14 +1225,33 @@ export class HedgePositionLedger {
 
       const hasActiveLimitOrders = slot.activeTpOrderIds && slot.activeTpOrderIds.length > 0;
 
-      // 0. Evaluate 4-Tier Institutional Time-Decay Profit Lock & Harvest Timeout
-      const openTime = slot.openTime && slot.openTime > 0 ? slot.openTime : nowMs;
-      const holdingTimeMs = Math.max(0, nowMs - openTime);
       const makerFee = this.sizingCalc.getMakerFeeRate();
       const takerFee = this.sizingCalc.getTakerFeeRate();
       const feeBuffer = (makerFee + takerFee) * 2.5;
 
-      // Strict Breakeven ($0.00 Loss Floor) & Profit Hunting Enforcement
+      // 0A. AI Conviction Hard-Reversal Exit Signal (100% Dynamic - Zero Timers)
+      const isAiHardReversal = isLong
+        ? (aiDirection <= -0.15 && aiConfidence >= 0.70)
+        : (aiDirection >= 0.15 && aiConfidence >= 0.70);
+
+      if (isAiHardReversal) {
+        triggers.push({
+          slotId: slot.slotId,
+          side: slot.side,
+          reason: `AI_REVERSAL_EXIT_${slot.side}`,
+          quantity: slot.quantity,
+          entryPrice: slot.entryPrice,
+          markPrice,
+          isPartialClose: false,
+          cancelOrderIds: slot.activeTpOrderIds ? [...slot.activeTpOrderIds] : [],
+        });
+        return;
+      }
+
+      // 0B. VPIN Toxicity & Hawkes Microstructure Breakeven Ratchet (100% Dynamic - Zero Timers)
+      const isToxicFlow = vpin >= 0.80 || (isLong ? ofi < -0.3 : ofi > 0.3);
+      const isHawkesBurst = hawkes > 2.5;
+
       if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
         slot.breakEvenPrice = isLong ? slot.entryPrice * (1.0 + feeBuffer) : slot.entryPrice * (1.0 - feeBuffer);
       }
@@ -1217,57 +1262,20 @@ export class HedgePositionLedger {
       }
 
       if (slot.breakEvenLocked && slot.breakEvenPrice > 0) {
-        if (isLong ? markPrice > slot.breakEvenPrice : markPrice < slot.breakEvenPrice) {
-          slot.stopLossPrice = isLong
-            ? Math.max(slot.stopLossPrice, slot.breakEvenPrice)
-            : Math.min(slot.stopLossPrice, slot.breakEvenPrice);
+        let targetSl = slot.breakEvenPrice;
+        if (isToxicFlow) {
+          // Ratchet SL to Breakeven + 0.05% offset to lock profit under toxicity
+          const offset = feeBuffer + 0.0005;
+          targetSl = isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset);
+        } else if (isHawkesBurst) {
+          // Ratchet SL under order arrival velocity spike
+          const offset = feeBuffer + 0.0010;
+          targetSl = isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset);
         }
-      }
 
-      // Tier 4: Hard Harvest Timeout (t >= 1800s / 30 min)
-      if (holdingTimeMs >= 1800000) {
-        triggers.push({
-          slotId: slot.slotId,
-          side: slot.side,
-          reason: "LONG_HOLD_PROFIT_HARVEST",
-          quantity: slot.quantity,
-          entryPrice: slot.entryPrice,
-          markPrice,
-          isPartialClose: false,
-          cancelOrderIds: slot.activeTpOrderIds ? [...slot.activeTpOrderIds] : [],
-        });
-        return;
-      }
-
-      // Tier 3: Guaranteed Profit Lock (t >= 600s / 10 min) -> SL = Entry + Fee + 0.12%
-      if (holdingTimeMs >= 600000) {
-        const lockOffset = feeBuffer + 0.0012;
-        const lockedSl = isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset);
-        if (isLong ? (markPrice > lockedSl && lockedSl > slot.stopLossPrice) : (markPrice < lockedSl && lockedSl < slot.stopLossPrice)) {
-          slot.stopLossPrice = lockedSl;
-          slot.breakEvenLocked = true;
-          slot.timeDecayTier = 3;
-        }
-      }
-      // Tier 2: Micro-Profit Guard (t >= 180s / 3 min) -> SL = Entry + Fee + 0.05%
-      else if (holdingTimeMs >= 180000) {
-        const lockOffset = feeBuffer + 0.0005;
-        const lockedSl = isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset);
-        if (isLong ? (markPrice > lockedSl && lockedSl > slot.stopLossPrice) : (markPrice < lockedSl && lockedSl < slot.stopLossPrice)) {
-          slot.stopLossPrice = lockedSl;
-          slot.breakEvenLocked = true;
-          slot.timeDecayTier = 2;
-        }
-      }
-      // Tier 1: Breakeven Lock (t >= 30s) -> SL = Entry + Fee (0 Loss)
-      else if (holdingTimeMs >= 30000) {
-        const lockOffset = feeBuffer;
-        const lockedSl = isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset);
-        if (isLong ? (markPrice > lockedSl && lockedSl > slot.stopLossPrice) : (markPrice < lockedSl && lockedSl < slot.stopLossPrice)) {
-          slot.stopLossPrice = lockedSl;
-          slot.breakEvenLocked = true;
-          slot.timeDecayTier = 1;
-        }
+        slot.stopLossPrice = isLong
+          ? Math.max(slot.stopLossPrice, targetSl)
+          : Math.min(slot.stopLossPrice, targetSl);
       }
 
       // 1. Symmetrical Immediate Take-Profit Evaluation (Zero Holding Time Hysteresis - Symmetrical to SL)

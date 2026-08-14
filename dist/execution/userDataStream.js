@@ -11,7 +11,9 @@ class BinanceUserDataStream {
     ws = null;
     listenKey = "";
     keepAliveTimer = null;
+    reconnectTimer = null;
     isConnected = false;
+    isDisposed = false;
     reconnectAttempts = 0;
     orderCallbacks = new Set();
     accountCallbacks = new Set();
@@ -35,13 +37,14 @@ class BinanceUserDataStream {
         };
     }
     isStreamConnected() {
-        return this.isConnected;
+        return this.isConnected && !this.isDisposed;
     }
     async start() {
         if (!this.client.isConfigured()) {
             console.warn(`[BinanceUserDataStream] Execution client is not configured. User Data Stream disabled.`);
             return false;
         }
+        this.isDisposed = false;
         try {
             this.listenKey = await this.client.createListenKey();
             console.log(`[BinanceUserDataStream] Created centralized listenKey: ${this.listenKey.substring(0, 8)}...`);
@@ -57,14 +60,22 @@ class BinanceUserDataStream {
         }
     }
     connectWebSocket(url) {
+        if (this.isDisposed)
+            return;
         try {
             this.ws = new ws_1.default(url);
             this.ws.on("open", () => {
+                if (this.isDisposed) {
+                    this.ws?.close();
+                    return;
+                }
                 this.isConnected = true;
                 this.reconnectAttempts = 0;
                 console.log(`[BinanceUserDataStream] Centralized account WebSocket connection established successfully.`);
             });
             this.ws.on("message", (data) => {
+                if (this.isDisposed)
+                    return;
                 try {
                     const payload = JSON.parse(data.toString());
                     if (!payload)
@@ -141,34 +152,59 @@ class BinanceUserDataStream {
                 }
             });
             this.ws.on("error", (err) => {
+                if (this.isDisposed)
+                    return;
                 console.error(`[BinanceUserDataStream] WebSocket Error: ${err.message}`);
             });
             this.ws.on("close", (code, reason) => {
                 this.isConnected = false;
+                if (this.isDisposed)
+                    return;
                 console.warn(`[BinanceUserDataStream] WebSocket closed [Code: ${code}, Reason: ${reason.toString()}]`);
-                this.handleReconnect(url);
+                this.handleReconnect();
             });
         }
         catch (err) {
-            console.error(`[BinanceUserDataStream] Failed to initiate WebSocket: ${err.message}`);
+            if (!this.isDisposed) {
+                console.error(`[BinanceUserDataStream] Failed to initiate WebSocket: ${err.message}`);
+            }
         }
     }
-    handleReconnect(url) {
+    handleReconnect() {
+        if (this.isDisposed)
+            return;
         if (this.reconnectAttempts >= this.maxReconnectRetries) {
             console.error(`[BinanceUserDataStream] Exceeded max reconnect attempts (${this.maxReconnectRetries}). User Data Stream halted.`);
             return;
         }
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
         this.reconnectAttempts++;
         const backoffMs = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
         console.log(`[BinanceUserDataStream] Reconnecting in ${backoffMs}ms (Attempt ${this.reconnectAttempts}/${this.maxReconnectRetries})...`);
-        setTimeout(() => {
-            this.connectWebSocket(url);
+        this.reconnectTimer = setTimeout(async () => {
+            if (this.isDisposed)
+                return;
+            try {
+                this.listenKey = await this.client.createListenKey();
+                const wsBase = this.client.getWsUrl();
+                const wsUrl = `${wsBase}/ws/${this.listenKey}`;
+                this.connectWebSocket(wsUrl);
+            }
+            catch (err) {
+                console.error(`[BinanceUserDataStream] Failed to renew listenKey on reconnect: ${err.message}`);
+                this.handleReconnect();
+            }
         }, backoffMs);
     }
     startKeepAliveTimer() {
         if (this.keepAliveTimer)
             clearInterval(this.keepAliveTimer);
         this.keepAliveTimer = setInterval(async () => {
+            if (this.isDisposed)
+                return;
             try {
                 if (this.listenKey) {
                     await this.client.keepAliveListenKey();
@@ -181,6 +217,11 @@ class BinanceUserDataStream {
         }, this.keepAliveIntervalMs);
     }
     stop() {
+        this.isDisposed = true;
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
         if (this.keepAliveTimer) {
             clearInterval(this.keepAliveTimer);
             this.keepAliveTimer = null;
@@ -191,6 +232,8 @@ class BinanceUserDataStream {
             this.ws = null;
         }
         this.isConnected = false;
+        this.orderCallbacks.clear();
+        this.accountCallbacks.clear();
         console.log(`[BinanceUserDataStream] User Data Stream stopped.`);
     }
 }

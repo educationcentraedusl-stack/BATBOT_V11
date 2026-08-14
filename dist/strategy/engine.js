@@ -200,6 +200,14 @@ class StrategyEngine {
         }
         return false;
     }
+    clearPendingEntryOrders() {
+        for (const pending of this.pendingEntryOrders.values()) {
+            if (pending.timeoutTimer) {
+                clearTimeout(pending.timeoutTimer);
+            }
+        }
+        this.pendingEntryOrders.clear();
+    }
     /**
      * Centralized fill lifecycle observer for both ENTRY and EXIT executions.
      * Enforces dual-tier cooldown synchronization across RiskGuard (software state)
@@ -456,13 +464,17 @@ class StrategyEngine {
                     const dynamicSlPercent = Math.max(targetPosSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent, Math.min(2.0, volEstimate * 2.0 * 100));
                     if (targetPosSide === "LONG") {
                         this.hedgeLedger.occupyCoreLong(execQty, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
-                        this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch(() => { });
+                        this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch((err) => {
+                            console.error(`[BinanceExecution][UNTRACKED_TP_DISPATCH_ERROR] ${err?.message || String(err)}`);
+                        });
                     }
                     else {
                         const slotIdx = this.hedgeLedger.getAvailableShortSlotIndex();
                         const targetIdx = slotIdx >= 0 ? slotIdx : 0;
                         this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
-                        this.dispatchBatchPostOnlyTpOrders(`SHORT_SLOT_${targetIdx}`, execPx, execQty, "SHORT").catch(() => { });
+                        this.dispatchBatchPostOnlyTpOrders(`SHORT_SLOT_${targetIdx}`, execPx, execQty, "SHORT").catch((err) => {
+                            console.error(`[BinanceExecution][UNTRACKED_TP_DISPATCH_ERROR] ${err?.message || String(err)}`);
+                        });
                     }
                     this.onExecutionCompleted({
                         symbol: this.config.symbol,
@@ -589,6 +601,46 @@ class StrategyEngine {
                 console.error(`[MAKER_TP_ENGINE][ERROR] Failed to submit batch POST_ONLY TP orders: ${err.message}`);
             }
         }
+    }
+    async dispatchExchangeStopLossOrder(slotId, entryPrice, quantity, side, stopLossPrice) {
+        if (stopLossPrice <= 0 || quantity <= 0)
+            return undefined;
+        const exitSide = side === "LONG" ? "SELL" : "BUY";
+        const formattedSlPx = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.config.symbol, stopLossPrice);
+        const formattedQty = symbolPrecision_1.SymbolPrecisionRegistry.formatQuantity(this.config.symbol, quantity);
+        try {
+            console.log(`[EXCHANGE_SL_ENGINE][DISPATCHING] Submitting resting STOP_MARKET order on Binance for ${slotId}: ${exitSide} ${formattedQty} @ stopPrice $${formattedSlPx}...`);
+            const res = await this.executionClient.placeOrder({
+                symbol: this.config.symbol,
+                side: exitSide,
+                type: "STOP_MARKET",
+                quantity: formattedQty,
+                stopPrice: formattedSlPx,
+                positionSide: side,
+            });
+            if (res && res.orderId) {
+                this.hedgeLedger.registerActiveStopLossOrderId(slotId, res.orderId);
+                console.log(`[EXCHANGE_SL_ENGINE][SUCCESS] Registered resting Exchange STOP_MARKET OrderId #${res.orderId} for ${slotId}`);
+                return res.orderId;
+            }
+        }
+        catch (err) {
+            console.error(`[EXCHANGE_SL_ENGINE][ERROR] Failed to dispatch exchange STOP_MARKET order: ${err.message}`);
+        }
+        return undefined;
+    }
+    async syncExchangeStopLossOrder(slotId, quantity, side, newStopLossPrice) {
+        const existingSlId = this.hedgeLedger.getActiveStopLossOrderId(slotId);
+        if (existingSlId) {
+            try {
+                console.log(`[EXCHANGE_SL_ENGINE][RATCHET_CANCEL] Cancelling previous resting Exchange STOP_MARKET OrderId #${existingSlId} for ${slotId}...`);
+                await this.executionClient.cancelOrder(this.config.symbol, existingSlId);
+            }
+            catch (err) {
+                console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] Unable to cancel previous SL order #${existingSlId}: ${err.message}`);
+            }
+        }
+        await this.dispatchExchangeStopLossOrder(slotId, 0, quantity, side, newStopLossPrice);
     }
     getEngineState() {
         return this.state;
@@ -857,7 +909,7 @@ class StrategyEngine {
                     ? this.hedgeLedger.evaluateSotaDynamicExits(markPrice, hazardMetrics, this.hjbEngine, volMetrics)
                     : [];
                 // Priority 2: Evaluate Hedge Slot Dynamic TP/SL (Fixed/Trailing TP/SL, Profit Lock)
-                const hedgeTriggers = this.hedgeLedger.evaluateHedgeDynamicTpSl(markPrice);
+                const hedgeTriggers = this.hedgeLedger.evaluateHedgeDynamicTpSl(markPrice, aiDirection, aiConfidence, hazardMetrics.vpin, 0, volMetrics.garmanKlass1s, hazardMetrics.ofi);
                 const activeTriggers = sotaTriggers.length > 0 ? sotaTriggers : hedgeTriggers;
                 if (activeTriggers.length > 0) {
                     const trigger = activeTriggers[0];
@@ -1288,6 +1340,10 @@ class StrategyEngine {
                                         console.log(`[BinanceExecution][PENDING_FALLBACK_CHECK] Auditing pending OrderId #${numericOrderId} for ${this.config.symbol}...`);
                                         try {
                                             const orderCheck = await this.executionClient.getOrder(this.config.symbol, numericOrderId);
+                                            // Race Condition Defense: Verify order wasn't already filled by WebSocket during the getOrder await
+                                            if (!this.pendingEntryOrders.has(numericOrderId)) {
+                                                return;
+                                            }
                                             if (orderCheck && (orderCheck.status === "FILLED" || parseFloat(orderCheck.executedQty || "0") > 0)) {
                                                 const execQty = parseFloat(orderCheck.executedQty || "0") || finalQuantity;
                                                 const execPx = parseFloat(orderCheck.avgPrice || orderCheck.price || "0") || targetPrice;
@@ -1300,8 +1356,12 @@ class StrategyEngine {
                                             }
                                         }
                                         catch (err) {
-                                            // In case getOrder fails, fall back to syncExchangeState
-                                            this.syncExchangeState().catch(() => { });
+                                            if (this.pendingEntryOrders.has(numericOrderId)) {
+                                                console.error(`[BinanceExecution][FALLBACK_AUDIT_ERROR] Failed to audit order #${numericOrderId}: ${err?.message || String(err)}`);
+                                                this.syncExchangeState().catch((syncErr) => {
+                                                    console.error(`[BinanceExecution][FALLBACK_SYNC_ERROR] ${syncErr?.message || String(syncErr)}`);
+                                                });
+                                            }
                                         }
                                     }
                                 }, 2500);

@@ -198,12 +198,13 @@ async function runProductionTuiLauncher() {
                                 const cumQuote = parseFloat(res.cumQuote || "0");
                                 const qtyNum = parseFloat(rawQty);
                                 const displayPrice = avgPx > 0 ? avgPx : (px > 0 ? px : (cumQuote > 0 && qtyNum > 0 ? cumQuote / qtyNum : (result.bidPrice || result.askPrice)));
+                                const priceDecimals = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(res.symbol).priceDecimals;
                                 const isFilled = res.status === "FILLED" || parseFloat(res.executedQty || "0") > 0;
                                 if (isFilled) {
-                                    dashboard.pushNotification(`[ORDER_FILLED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${rawQty} @ $${displayPrice.toFixed(2)}`);
+                                    dashboard.pushNotification(`[ORDER_FILLED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${rawQty} @ $${displayPrice.toFixed(priceDecimals)}`);
                                 }
                                 else {
-                                    dashboard.pushNotification(`[ORDER_SUBMITTED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${rawQty} @ $${displayPrice.toFixed(2)} (${res.timeInForce || "POST_ONLY"})`);
+                                    dashboard.pushNotification(`[ORDER_SUBMITTED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${rawQty} @ $${displayPrice.toFixed(priceDecimals)} (${res.timeInForce || "POST_ONLY"})`);
                                 }
                             }
                         })
@@ -232,7 +233,8 @@ async function runProductionTuiLauncher() {
             }
         }
         catch (err) {
-            // Non-blocking tick error handling
+            const msg = err instanceof Error ? err.message : String(err);
+            dashboard.pushNotification(`⚠️ [STRATEGY_TICK_ERROR] ${msg}`);
         }
     }, 10);
     // Active double-buffered ANSI refresh loop (~6.6 Hz / 150ms interval)
