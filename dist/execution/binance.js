@@ -259,7 +259,8 @@ class BinanceExecutionClient {
         }
     }
     async placeOrder(params, retryCount = 0) {
-        const formattedQty = params.quantity;
+        const isAlgoOrder = params.type === "STOP_MARKET" || params.type === "TAKE_PROFIT_MARKET";
+        const formattedQty = symbolPrecision_1.SymbolPrecisionRegistry.formatQuantity(params.symbol, params.quantity);
         const payload = {
             symbol: params.symbol,
             side: params.side,
@@ -267,9 +268,9 @@ class BinanceExecutionClient {
             quantity: formattedQty,
         };
         if (params.price !== undefined)
-            payload.price = params.price;
+            payload.price = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, params.price);
         if (params.stopPrice !== undefined)
-            payload.stopPrice = params.stopPrice;
+            payload.stopPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
         // Binance API Error -1106: Parameter 'timeinforce' sent when not required.
         // timeInForce MUST NOT be sent for MARKET, STOP_MARKET, or TAKE_PROFIT_MARKET orders.
         if (params.type !== "MARKET" &&
@@ -299,10 +300,90 @@ class BinanceExecutionClient {
             delete payload.reduceOnly;
         }
         try {
+            if (isAlgoOrder) {
+                // Route conditional stop orders through /fapi/v1/algoOrder endpoint with required algoType: "CONDITIONAL" and triggerPrice
+                try {
+                    const algoPayload = {
+                        ...payload,
+                        algoType: "CONDITIONAL",
+                    };
+                    if (params.stopPrice !== undefined) {
+                        algoPayload.triggerPrice = params.stopPrice;
+                        delete algoPayload.stopPrice;
+                    }
+                    delete algoPayload.reduceOnly;
+                    const algoRes = await this.request("POST", "/fapi/v1/algoOrder", algoPayload, true);
+                    if (algoRes && (algoRes.algoId || algoRes.orderId)) {
+                        return {
+                            orderId: algoRes.algoId || algoRes.orderId,
+                            symbol: algoRes.symbol || params.symbol,
+                            status: algoRes.algoStatus || algoRes.status || "NEW",
+                            clientOrderId: algoRes.clientAlgoId || algoRes.clientOrderId || "",
+                            price: String(algoRes.price || "0"),
+                            avgPrice: String(algoRes.avgPrice || "0"),
+                            origQty: String(algoRes.quantity || formattedQty),
+                            executedQty: String(algoRes.executedQty || "0"),
+                            cumQuote: String(algoRes.cumQuote || "0"),
+                            timeInForce: algoRes.timeInForce || "GTC",
+                            type: algoRes.orderType || params.type,
+                            reduceOnly: false,
+                            side: algoRes.side || params.side,
+                            positionSide: algoRes.positionSide || params.positionSide || "BOTH",
+                            stopPrice: String(algoRes.triggerPrice || params.stopPrice || "0"),
+                            workingType: algoRes.workingType || params.workingType || "CONTRACT_PRICE",
+                            updateTime: algoRes.updateTime || Date.now(),
+                        };
+                    }
+                    return algoRes;
+                }
+                catch (algoErr) {
+                    const algoMsg = algoErr?.message || String(algoErr);
+                    if (algoMsg.includes("-4120") || algoMsg.includes("404") || algoMsg.includes("not supported")) {
+                        // Fall back to standard /fapi/v1/order if algoOrder endpoint is unmapped
+                        return await this.request("POST", "/fapi/v1/order", payload, true);
+                    }
+                    throw algoErr;
+                }
+            }
             return await this.request("POST", "/fapi/v1/order", payload, true);
         }
         catch (err) {
             const errMsg = err?.message || String(err);
+            if (errMsg.includes("-4120") && !isAlgoOrder) {
+                // Fallback to /fapi/v1/algoOrder if /fapi/v1/order threw -4120
+                const algoPayload = {
+                    ...payload,
+                    algoType: "CONDITIONAL",
+                };
+                if (params.stopPrice !== undefined) {
+                    algoPayload.triggerPrice = params.stopPrice;
+                    delete algoPayload.stopPrice;
+                }
+                delete algoPayload.reduceOnly;
+                const algoRes = await this.request("POST", "/fapi/v1/algoOrder", algoPayload, true);
+                if (algoRes && (algoRes.algoId || algoRes.orderId)) {
+                    return {
+                        orderId: algoRes.algoId || algoRes.orderId,
+                        symbol: algoRes.symbol || params.symbol,
+                        status: algoRes.algoStatus || algoRes.status || "NEW",
+                        clientOrderId: algoRes.clientAlgoId || algoRes.clientOrderId || "",
+                        price: String(algoRes.price || "0"),
+                        avgPrice: String(algoRes.avgPrice || "0"),
+                        origQty: String(algoRes.quantity || formattedQty),
+                        executedQty: String(algoRes.executedQty || "0"),
+                        cumQuote: String(algoRes.cumQuote || "0"),
+                        timeInForce: algoRes.timeInForce || "GTC",
+                        type: algoRes.orderType || params.type,
+                        reduceOnly: false,
+                        side: algoRes.side || params.side,
+                        positionSide: algoRes.positionSide || params.positionSide || "BOTH",
+                        stopPrice: String(algoRes.triggerPrice || params.stopPrice || "0"),
+                        workingType: algoRes.workingType || params.workingType || "CONTRACT_PRICE",
+                        updateTime: algoRes.updateTime || Date.now(),
+                    };
+                }
+                return algoRes;
+            }
             if ((errMsg.includes("-5022") || errMsg.includes("5022")) && retryCount < 2) {
                 const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(params.symbol);
                 const currentPrice = params.price || 0;
@@ -342,7 +423,7 @@ class BinanceExecutionClient {
         }
         const targetOrders = orders.slice(0, maxBatchLimit);
         const formattedOrders = targetOrders.map((params) => {
-            const formattedQty = params.quantity;
+            const formattedQty = symbolPrecision_1.SymbolPrecisionRegistry.formatQuantity(params.symbol, params.quantity);
             const orderObj = {
                 symbol: params.symbol,
                 side: params.side,
@@ -350,9 +431,9 @@ class BinanceExecutionClient {
                 quantity: formattedQty,
             };
             if (params.price !== undefined)
-                orderObj.price = params.price;
+                orderObj.price = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, params.price);
             if (params.stopPrice !== undefined)
-                orderObj.stopPrice = params.stopPrice;
+                orderObj.stopPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
             if (params.type !== "MARKET" &&
                 params.type !== "STOP_MARKET" &&
                 params.type !== "TAKE_PROFIT_MARKET" &&
@@ -422,9 +503,51 @@ class BinanceExecutionClient {
         return this.request("DELETE", "/fapi/v1/batchOrders", payload, true);
     }
     async cancelOrder(symbol, orderId) {
-        return this.request("DELETE", "/fapi/v1/order", { symbol, orderId }, true);
+        try {
+            return await this.request("DELETE", "/fapi/v1/order", { symbol, orderId }, true);
+        }
+        catch (err) {
+            const errMsg = err?.message || String(err);
+            if (errMsg.includes("-2011") || errMsg.includes("-4120") || errMsg.includes("Unknown order") || errMsg.includes("not found")) {
+                // Fallback to /fapi/v1/algoOrder cancellation
+                try {
+                    const algoCancel = await this.request("DELETE", "/fapi/v1/algoOrder", { symbol, algoId: orderId }, true);
+                    return {
+                        orderId: Number(orderId),
+                        symbol,
+                        status: algoCancel.algoStatus || algoCancel.status || "CANCELED",
+                        clientOrderId: algoCancel.clientAlgoId || algoCancel.clientOrderId || "",
+                        price: "0",
+                        avgPrice: "0",
+                        origQty: "0",
+                        executedQty: "0",
+                        cumQuote: "0",
+                        timeInForce: "GTC",
+                        type: "STOP_MARKET",
+                        reduceOnly: false,
+                        side: "SELL",
+                        positionSide: "BOTH",
+                        stopPrice: "0",
+                        workingType: "CONTRACT_PRICE",
+                        updateTime: Date.now(),
+                    };
+                }
+                catch (algoErr) {
+                    throw err;
+                }
+            }
+            throw err;
+        }
     }
     async cancelAllOrders(symbol) {
+        try {
+            await this.request("DELETE", "/fapi/v1/algoOpenOrders", { symbol }, true).catch((err) => {
+                console.log(`[BinanceExecutionClient] Notice during algoOpenOrders cancellation: ${err?.message || String(err)}`);
+            });
+        }
+        catch (err) {
+            console.log(`[BinanceExecutionClient] Notice during algoOpenOrders dispatch: ${err?.message || String(err)}`);
+        }
         return this.request("DELETE", "/fapi/v1/allOpenOrders", { symbol }, true);
     }
     async flattenPositions(symbol) {
@@ -467,7 +590,30 @@ class BinanceExecutionClient {
         const params = {};
         if (symbol)
             params.symbol = symbol;
-        return this.request("GET", "/fapi/v1/openOrders", params, true);
+        const [standardOrders, algoOrders] = await Promise.all([
+            this.request("GET", "/fapi/v1/openOrders", params, true).catch(() => []),
+            this.request("GET", "/fapi/v1/openAlgoOrders", params, true).catch(() => []),
+        ]);
+        const mappedAlgoOrders = (Array.isArray(algoOrders) ? algoOrders : []).map((ao) => ({
+            orderId: ao.algoId || ao.orderId,
+            symbol: ao.symbol,
+            status: ao.algoStatus || ao.status || "NEW",
+            clientOrderId: ao.clientAlgoId || ao.clientOrderId || "",
+            price: String(ao.price || "0"),
+            avgPrice: String(ao.avgPrice || "0"),
+            origQty: String(ao.quantity || ao.origQty || "0"),
+            executedQty: String(ao.executedQty || "0"),
+            cumQuote: String(ao.cumQuote || "0"),
+            timeInForce: ao.timeInForce || "GTC",
+            type: ao.orderType || ao.type || "STOP_MARKET",
+            reduceOnly: ao.reduceOnly || false,
+            side: ao.side,
+            positionSide: ao.positionSide || "BOTH",
+            stopPrice: String(ao.stopPrice || "0"),
+            workingType: ao.workingType || "CONTRACT_PRICE",
+            updateTime: ao.updateTime || Date.now(),
+        }));
+        return [...(Array.isArray(standardOrders) ? standardOrders : []), ...mappedAlgoOrders];
     }
     async getAccountBalance() {
         return this.request("GET", "/fapi/v2/account", {}, true);

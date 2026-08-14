@@ -114,11 +114,17 @@ async function runPhase3Proof() {
     ]);
     const postConcurrentCount = mockClient.placedOrders.length;
     const newOrdersPlaced = postConcurrentCount - preConcurrentCount;
-    console.log(`  Concurrent Dispatches: 4 | New Orders Placed: ${newOrdersPlaced} (Mutex Lock Active)`);
-    if (newOrdersPlaced !== 1) {
-        throw new Error(`❌ PROOF FAILED: Mutex lock failed! Expected exactly 1 order placed, got ${newOrdersPlaced}`);
+    const finalActiveSlId = ledger.getActiveStopLossOrderId("CORE_LONG");
+    const finalPlacedOrder = mockClient.placedOrders[mockClient.placedOrders.length - 1];
+    console.log(`  Concurrent Dispatches: 4 | New Orders Placed: ${newOrdersPlaced} (Sequential Queue Drained)`);
+    console.log(`  Final Active SL OrderId: #${finalActiveSlId} @ stopPrice $${finalPlacedOrder.stopPrice}`);
+    if (newOrdersPlaced > 2) {
+        throw new Error(`❌ PROOF FAILED: Overlapping orders placed! Expected at most 2 orders placed during queue drain, got ${newOrdersPlaced}`);
     }
-    console.log("  ✅ TEST 3 PASSED: Concurrency lock successfully blocked duplicate overlapping SL orders!");
+    if (parseFloat(String(finalPlacedOrder.stopPrice)) !== 60145.0) {
+        throw new Error(`❌ PROOF FAILED: Final resting SL price ($${finalPlacedOrder.stopPrice}) did not match latest queued target ($60145.0)!`);
+    }
+    console.log("  ✅ TEST 3 PASSED: Concurrency mutex & sequential queue successfully synchronized final SL to $60145 with zero orphan orders!");
     // 4. Test Order Summary Audit
     console.log("\n------------------------------------------------------------------------------------------");
     console.log("[TEST 4] Exchange Client Order History Audit");

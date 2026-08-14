@@ -89,6 +89,7 @@ export class StrategyEngine {
   private assetIndex: number = 0;
   private isOrderInFlight: boolean = false;
   private slSyncLocks: Set<string> = new Set();
+  private pendingSlSyncTargets: Map<string, { quantity: number; side: "LONG" | "SHORT"; price: number }> = new Map();
   private pendingEntryOrders: Map<number, { slotId: string; posSide: "LONG" | "SHORT"; slotIndex?: number; qty: number; targetPrice: number; timeoutTimer?: NodeJS.Timeout }> = new Map();
 
   private reusableOrderIntent!: OrderIntent;
@@ -818,37 +819,61 @@ export class StrategyEngine {
     newStopLossPrice: number
   ): Promise<void> {
     if (this.slSyncLocks.has(slotId)) {
-      console.log(`[EXCHANGE_SL_ENGINE][LOCKED] Sync for ${slotId} is already in-flight. Skipping overlapping request.`);
+      this.pendingSlSyncTargets.set(slotId, { quantity, side, price: newStopLossPrice });
+      console.log(`[EXCHANGE_SL_ENGINE][LOCKED] Sync for ${slotId} is already in-flight. Queued latest target SL $${newStopLossPrice}.`);
       return;
     }
     this.slSyncLocks.add(slotId);
 
     try {
-      const slot = slotId === "CORE_LONG" ? this.hedgeLedger.getCoreLong() : this.hedgeLedger.getShortSlots().find((s) => s.slotId === slotId);
-      if (!slot || !slot.isOccupied || slot.quantity <= 0) {
-        console.log(`[EXCHANGE_SL_ENGINE][SKIP] Slot ${slotId} is not occupied. Skipping SL placement.`);
-        return;
-      }
+      let currentTargetPrice = newStopLossPrice;
+      let currentQty = quantity;
+      let currentSide = side;
 
-      const existingSlId = this.hedgeLedger.getActiveStopLossOrderId(slotId);
-      if (existingSlId) {
-        this.hedgeLedger.registerActiveStopLossOrderId(slotId, 0);
-        try {
-          console.log(`[EXCHANGE_SL_ENGINE][RATCHET_CANCEL] Cancelling previous resting Exchange STOP_MARKET OrderId #${existingSlId} for ${slotId}...`);
-          await this.executionClient.cancelOrder(this.config.symbol, existingSlId);
-        } catch (err: any) {
-          console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] Unable to cancel previous SL order #${existingSlId}: ${err.message}`);
+      while (true) {
+        this.pendingSlSyncTargets.delete(slotId);
+
+        const slot = slotId === "CORE_LONG" ? this.hedgeLedger.getCoreLong() : this.hedgeLedger.getShortSlots().find((s) => s.slotId === slotId);
+        if (!slot || !slot.isOccupied || slot.quantity <= 0) {
+          console.log(`[EXCHANGE_SL_ENGINE][SKIP] Slot ${slotId} is not occupied. Skipping SL placement.`);
+          return;
         }
-      }
 
-      // Re-verify slot is still occupied after awaiting order cancellation
-      if (!slot.isOccupied || slot.quantity <= 0) {
-        console.log(`[EXCHANGE_SL_ENGINE][SKIP] Slot ${slotId} closed during cancellation. Skipping new SL order.`);
-        return;
-      }
+        const existingSlId = this.hedgeLedger.getActiveStopLossOrderId(slotId);
+        if (existingSlId) {
+          this.hedgeLedger.registerActiveStopLossOrderId(slotId, 0);
+          try {
+            console.log(`[EXCHANGE_SL_ENGINE][RATCHET_CANCEL] Cancelling previous resting Exchange STOP_MARKET OrderId #${existingSlId} for ${slotId}...`);
+            await this.executionClient.cancelOrder(this.config.symbol, existingSlId);
+          } catch (err: any) {
+            console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] Unable to cancel previous SL order #${existingSlId}: ${err.message}`);
+          }
+        }
 
-      const targetQty = slot.quantity;
-      await this.dispatchExchangeStopLossOrder(slotId, slot.entryPrice, targetQty, side, newStopLossPrice);
+        // Re-verify slot is still occupied after awaiting order cancellation
+        if (!slot.isOccupied || slot.quantity <= 0) {
+          console.log(`[EXCHANGE_SL_ENGINE][SKIP] Slot ${slotId} closed during cancellation. Skipping new SL order.`);
+          return;
+        }
+
+        const targetQty = slot.quantity > 0 ? slot.quantity : currentQty;
+        const placedOrderId = await this.dispatchExchangeStopLossOrder(slotId, slot.entryPrice, targetQty, currentSide, currentTargetPrice);
+        if (placedOrderId) {
+          this.hedgeLedger.updateLastSyncedSlPrice(slotId, currentTargetPrice);
+        }
+
+        // If a subsequent ratchet target was queued while the network request was in-flight, process it immediately
+        if (this.pendingSlSyncTargets.has(slotId)) {
+          const queued = this.pendingSlSyncTargets.get(slotId)!;
+          if (queued.price !== currentTargetPrice) {
+            currentTargetPrice = queued.price;
+            currentQty = queued.quantity;
+            currentSide = queued.side;
+            continue;
+          }
+        }
+        break;
+      }
     } finally {
       this.slSyncLocks.delete(slotId);
     }
@@ -1215,7 +1240,6 @@ export class StrategyEngine {
           const coreLong = this.hedgeLedger.getCoreLong();
           if (coreLong.isOccupied && coreLong.quantity > 0 && coreLong.stopLossPrice > 0) {
             if (coreLong.lastSyncedSlPrice !== undefined && coreLong.stopLossPrice > coreLong.lastSyncedSlPrice) {
-              this.hedgeLedger.updateLastSyncedSlPrice("CORE_LONG", coreLong.stopLossPrice);
               this.syncExchangeStopLossOrder("CORE_LONG", coreLong.quantity, "LONG", coreLong.stopLossPrice).catch((err) => {
                 console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Core Long SL ratchet sync failed: ${err.message}`);
               });
@@ -1224,7 +1248,6 @@ export class StrategyEngine {
           for (const s of this.hedgeLedger.getShortSlots()) {
             if (s.isOccupied && s.quantity > 0 && s.stopLossPrice > 0) {
               if (s.lastSyncedSlPrice !== undefined && s.stopLossPrice < s.lastSyncedSlPrice) {
-                this.hedgeLedger.updateLastSyncedSlPrice(s.slotId, s.stopLossPrice);
                 this.syncExchangeStopLossOrder(s.slotId, s.quantity, "SHORT", s.stopLossPrice).catch((err) => {
                   console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] ${s.slotId} SL ratchet sync failed: ${err.message}`);
                 });

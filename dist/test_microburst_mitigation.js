@@ -65,7 +65,7 @@ async function runMicroburstMitigationTests() {
     // TEST 3: Strategy Engine Sub-Millisecond Microburst Suppression
     // -------------------------------------------------------------------
     console.log("\n[TEST 3] Testing Strategy Engine Sub-Millisecond Microburst Suppression...");
-    const sab = new SharedArrayBuffer(2048);
+    const sab = new SharedArrayBuffer(20480);
     const bigIntView = new BigInt64Array(sab);
     const client = new marketDataClient_1.MarketDataClient(sab);
     const riskGuard = new risk_1.RiskGuard();

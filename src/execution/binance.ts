@@ -374,7 +374,7 @@ export class BinanceExecutionClient {
 
   public async placeOrder(params: BinanceOrderParams, retryCount: number = 0): Promise<BinanceOrderResponse> {
     const isAlgoOrder = params.type === "STOP_MARKET" || params.type === "TAKE_PROFIT_MARKET";
-    const formattedQty = params.quantity;
+    const formattedQty = SymbolPrecisionRegistry.formatQuantity(params.symbol, params.quantity);
     const payload: Record<string, string | number | boolean> = {
       symbol: params.symbol,
       side: params.side,
@@ -382,8 +382,8 @@ export class BinanceExecutionClient {
       quantity: formattedQty,
     };
 
-    if (params.price !== undefined) payload.price = params.price;
-    if (params.stopPrice !== undefined) payload.stopPrice = params.stopPrice;
+    if (params.price !== undefined) payload.price = SymbolPrecisionRegistry.formatPrice(params.symbol, params.price);
+    if (params.stopPrice !== undefined) payload.stopPrice = SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
     
     // Binance API Error -1106: Parameter 'timeinforce' sent when not required.
     // timeInForce MUST NOT be sent for MARKET, STOP_MARKET, or TAKE_PROFIT_MARKET orders.
@@ -542,7 +542,7 @@ export class BinanceExecutionClient {
 
     const targetOrders = orders.slice(0, maxBatchLimit);
     const formattedOrders = targetOrders.map((params) => {
-      const formattedQty = params.quantity;
+      const formattedQty = SymbolPrecisionRegistry.formatQuantity(params.symbol, params.quantity);
       const orderObj: Record<string, string | number | boolean> = {
         symbol: params.symbol,
         side: params.side,
@@ -550,8 +550,8 @@ export class BinanceExecutionClient {
         quantity: formattedQty,
       };
 
-      if (params.price !== undefined) orderObj.price = params.price;
-      if (params.stopPrice !== undefined) orderObj.stopPrice = params.stopPrice;
+      if (params.price !== undefined) orderObj.price = SymbolPrecisionRegistry.formatPrice(params.symbol, params.price);
+      if (params.stopPrice !== undefined) orderObj.stopPrice = SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
 
       if (
         params.type !== "MARKET" &&
@@ -677,8 +677,12 @@ export class BinanceExecutionClient {
 
   public async cancelAllOrders(symbol: string): Promise<BinanceCancelAllResponse> {
     try {
-      await this.request<any>("DELETE", "/fapi/v1/algoOpenOrders", { symbol }, true).catch(() => {});
-    } catch {}
+      await this.request<any>("DELETE", "/fapi/v1/algoOpenOrders", { symbol }, true).catch((err) => {
+        console.log(`[BinanceExecutionClient] Notice during algoOpenOrders cancellation: ${err?.message || String(err)}`);
+      });
+    } catch (err: any) {
+      console.log(`[BinanceExecutionClient] Notice during algoOpenOrders dispatch: ${err?.message || String(err)}`);
+    }
     return this.request<BinanceCancelAllResponse>(
       "DELETE",
       "/fapi/v1/allOpenOrders",

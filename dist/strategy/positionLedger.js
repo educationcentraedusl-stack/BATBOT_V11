@@ -1189,7 +1189,7 @@ class HedgePositionLedger {
         if (isLong) {
             slot.peakPrice = Math.max(slot.peakPrice || slot.entryPrice, markPrice);
             const offsetUsdt = slot.peakPrice * adaptedDistPct;
-            mvaStopPrice = slot.peakPrice - offsetUsdt;
+            mvaStopPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, slot.peakPrice - offsetUsdt);
             // Ratchet up only
             if (mvaStopPrice > slot.stopLossPrice) {
                 slot.stopLossPrice = mvaStopPrice;
@@ -1200,7 +1200,7 @@ class HedgePositionLedger {
                 ? Math.min(slot.troughPrice, markPrice)
                 : markPrice;
             const offsetUsdt = slot.troughPrice * adaptedDistPct;
-            mvaStopPrice = slot.troughPrice + offsetUsdt;
+            mvaStopPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, slot.troughPrice + offsetUsdt);
             // Ratchet down only
             if (slot.stopLossPrice === 0 || mvaStopPrice < slot.stopLossPrice) {
                 slot.stopLossPrice = mvaStopPrice;
