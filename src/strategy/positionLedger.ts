@@ -20,6 +20,10 @@ export interface PositionSummary {
   shortQuantity: number;
   grossQuantity: number;
   averageEntryPrice: number;
+  longAverageEntryPrice: number;
+  shortAverageEntryPrice: number;
+  longUnrealizedPnl: number;
+  shortUnrealizedPnl: number;
   unrealizedPnl: number;
   cumulativeRealizedPnl: number;
   cumulativeFees: number;
@@ -112,6 +116,10 @@ export class PositionLedger {
       shortQuantity: 0,
       grossQuantity: 0,
       averageEntryPrice: 0,
+      longAverageEntryPrice: 0,
+      shortAverageEntryPrice: 0,
+      longUnrealizedPnl: 0,
+      shortUnrealizedPnl: 0,
       unrealizedPnl: 0,
       cumulativeRealizedPnl: 0,
       cumulativeFees: 0,
@@ -319,7 +327,12 @@ export class PositionLedger {
     this.cachedSummary.shortQuantity = this.side === "SHORT" ? Number(this.netQuantity.toFixed(6)) : 0;
     this.cachedSummary.grossQuantity = Number(this.netQuantity.toFixed(6));
     this.cachedSummary.averageEntryPrice = Number(this.averageEntryPrice.toFixed(4));
-    this.cachedSummary.unrealizedPnl = Number(this.getUnrealizedPnl(currentMarkPrice).toFixed(4));
+    this.cachedSummary.longAverageEntryPrice = this.side === "LONG" ? Number(this.averageEntryPrice.toFixed(4)) : 0;
+    this.cachedSummary.shortAverageEntryPrice = this.side === "SHORT" ? Number(this.averageEntryPrice.toFixed(4)) : 0;
+    const uPnl = this.getUnrealizedPnl(currentMarkPrice);
+    this.cachedSummary.longUnrealizedPnl = this.side === "LONG" ? Number(uPnl.toFixed(4)) : 0;
+    this.cachedSummary.shortUnrealizedPnl = this.side === "SHORT" ? Number(uPnl.toFixed(4)) : 0;
+    this.cachedSummary.unrealizedPnl = Number(uPnl.toFixed(4));
     this.cachedSummary.cumulativeRealizedPnl = Number(this.cumulativeRealizedPnl.toFixed(4));
     this.cachedSummary.cumulativeFees = Number(this.cumulativeFees.toFixed(4));
     this.cachedSummary.totalTrades = this.totalTrades;
@@ -530,6 +543,10 @@ export class HedgePositionLedger {
       shortQuantity: 0,
       grossQuantity: 0,
       averageEntryPrice: 0,
+      longAverageEntryPrice: 0,
+      shortAverageEntryPrice: 0,
+      longUnrealizedPnl: 0,
+      shortUnrealizedPnl: 0,
       unrealizedPnl: 0,
       cumulativeRealizedPnl: 0,
       cumulativeFees: 0,
@@ -630,18 +647,19 @@ export class HedgePositionLedger {
   public getSummary(currentMarkPrice: number = 0): PositionSummary {
     let longQty = 0;
     let shortQty = 0;
-    let weightedEntrySum = 0;
+    let longEntrySum = 0;
+    let shortEntrySum = 0;
 
     if (this.coreLong.isOccupied && this.coreLong.quantity > 0) {
       longQty += this.coreLong.quantity;
-      weightedEntrySum += this.coreLong.entryPrice * this.coreLong.quantity;
+      longEntrySum += this.coreLong.entryPrice * this.coreLong.quantity;
     }
 
     for (let i = 0; i < this.maxShortSlots; i++) {
       const slot = this.shortSlots[i];
       if (slot.isOccupied && slot.quantity > 0) {
         shortQty += slot.quantity;
-        weightedEntrySum += slot.entryPrice * slot.quantity;
+        shortEntrySum += slot.entryPrice * slot.quantity;
       }
     }
 
@@ -656,7 +674,21 @@ export class HedgePositionLedger {
 
     const netQty = longQty - shortQty;
     const totalPosQty = longQty + shortQty;
-    const avgEntry = totalPosQty > 0 ? weightedEntrySum / totalPosQty : 0;
+    const longAvgEntry = longQty > 0 ? (this.coreLong.isOccupied ? this.coreLong.entryPrice : 0) : 0;
+    const shortAvgEntry = shortQty > 0 ? shortEntrySum / shortQty : 0;
+    const blendedAvgEntry = totalPosQty > 0 ? (longEntrySum + shortEntrySum) / totalPosQty : 0;
+
+    let longUnrealized = 0;
+    if (longQty > 0 && currentMarkPrice > 0 && longAvgEntry > 0) {
+      longUnrealized = (currentMarkPrice - longAvgEntry) * longQty;
+    }
+
+    let shortUnrealized = 0;
+    if (shortQty > 0 && currentMarkPrice > 0 && shortAvgEntry > 0) {
+      shortUnrealized = (shortAvgEntry - currentMarkPrice) * shortQty;
+    }
+
+    const totalUnrealized = longUnrealized + shortUnrealized;
 
     this.cachedSummary.symbol = this.symbol;
     this.cachedSummary.side = side;
@@ -664,8 +696,12 @@ export class HedgePositionLedger {
     this.cachedSummary.longQuantity = Number(longQty.toFixed(6));
     this.cachedSummary.shortQuantity = Number(shortQty.toFixed(6));
     this.cachedSummary.grossQuantity = Number(totalPosQty.toFixed(6));
-    this.cachedSummary.averageEntryPrice = Number(avgEntry.toFixed(4));
-    this.cachedSummary.unrealizedPnl = Number(this.getUnrealizedPnl(currentMarkPrice).toFixed(4));
+    this.cachedSummary.averageEntryPrice = Number(blendedAvgEntry.toFixed(4));
+    this.cachedSummary.longAverageEntryPrice = Number(longAvgEntry.toFixed(4));
+    this.cachedSummary.shortAverageEntryPrice = Number(shortAvgEntry.toFixed(4));
+    this.cachedSummary.longUnrealizedPnl = Number(longUnrealized.toFixed(4));
+    this.cachedSummary.shortUnrealizedPnl = Number(shortUnrealized.toFixed(4));
+    this.cachedSummary.unrealizedPnl = Number(totalUnrealized.toFixed(4));
     this.cachedSummary.cumulativeRealizedPnl = Number(this.cumulativeRealizedPnl.toFixed(4));
     this.cachedSummary.cumulativeFees = Number(this.cumulativeFees.toFixed(4));
     this.cachedSummary.totalTrades = this.totalTrades;
@@ -1060,9 +1096,16 @@ export class HedgePositionLedger {
     }
 
     if (hasLong && hasShort) {
-      const grossQty = longQty + shortQty;
-      const avgPx = (longPxSum + shortPxSum) / grossQty;
-      this.legacyLedger.syncActivePosition("LONG", grossQty, avgPx);
+      // In dual Hedge Mode, legacyLedger must not blend opposing directional positions.
+      // Set net directional bias for legacy single-direction callers while preserving unblended coreLong & shortSlots.
+      const netQty = longQty - shortQty;
+      if (netQty > 1e-6 && longQty > 0) {
+        this.legacyLedger.syncActivePosition("LONG", netQty, longPxSum / longQty);
+      } else if (netQty < -1e-6 && shortQty > 0) {
+        this.legacyLedger.syncActivePosition("SHORT", Math.abs(netQty), shortPxSum / shortQty);
+      } else {
+        this.legacyLedger.reset();
+      }
     } else if (hasLong && longQty > 0) {
       const avgPx = longPxSum / longQty;
       this.legacyLedger.syncActivePosition("LONG", longQty, avgPx);

@@ -38,6 +38,14 @@
   - **Phase 3 (Friction & Churn Defense):** Implemented Fee & Spread Friction Guard in `src/strategy/risk.ts` rejecting sub-economic orders where expected alpha $< \text{Maker/Taker Fee} + \text{Half-Spread}$, along with 10s entry churn interval while allowing immediate stop-loss / hard-stop exits.
   - **Phase 4 (Full QA Verification & Finalization):** Passed 100% zero-error compilation across both TypeScript (`npm run build:ts`) and native Rust (`npm run build:rust`).
 
+* 2026-08-14 - SOTA Hedge Mode Dual-Directional Ledger Split & State Synchronization Completed & QA Verified:
+  - Eradicated Hedge Mode position aggregation flaw where Long and Short positions on the same asset were collapsed into a single `BOTH` slot with a blended average entry price.
+  - Split Hedge Mode positions into distinct unblended slots (`CORE_LONG` and `SHORT_SLOT_0..2`) in `src/strategy/positionLedger.ts` and extended `PositionSummary` with `longAverageEntryPrice`, `shortAverageEntryPrice`, `longUnrealizedPnl`, and `shortUnrealizedPnl`.
+  - Allocated zero-copy atomic 64-bit float SAB slots 145..148 (`OMS_LONG_AVG_ENTRY_PRICE`, `OMS_SHORT_AVG_ENTRY_PRICE`, `OMS_LONG_UNREALIZED_PNL`, `OMS_SHORT_UNREALIZED_PNL`) in `src/marketDataClient.ts`.
+  - Isolated WebSocket account position updates in `src/strategy/engine.ts` to release only the closed side without corrupting opposing directional legs.
+  - Updated `MultiAssetCLIDashboard` (`src/telemetry/multiAssetDashboard.ts`) to render dual distinct rows (`#i-LONG` and `#i-SHORT`) for Hedge Mode symbols.
+  - 100% verified via `npx tsc --noEmit` and `npx tsx src/tests/test_hedge_mode_split.ts` (100% pass across all 6 phases).
+
 ## Next Actions
 1. Maintain Zero-Loss Maker-Dominant Architecture baseline for production live trading deployment.
 2. Monitor real-time execution metrics and Maker fill rates on live Binance Futures API.

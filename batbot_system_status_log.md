@@ -1,6 +1,18 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-14
+- **Feature/Task:** SOTA Hedge Mode Dual-Directional Ledger Split & Independent State Synchronization
+- **Artifacts Created/Modified:** `src/marketDataClient.ts`, `src/strategy/positionLedger.ts`, `src/strategy/engine.ts`, `src/telemetry/multiAssetDashboard.ts`, `src/tests/test_hedge_mode_split.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Eradicated Hedge Mode position aggregation flaw and restored 100% independent AI exit evaluations:
+  1. **Dual-Slot Cost Basis Isolation (`positionLedger.ts`):** Split Hedge Mode positions into distinct unblended slots (`CORE_LONG` and `SHORT_SLOT_0..2`). Extended `PositionSummary` with `longAverageEntryPrice`, `shortAverageEntryPrice`, `longUnrealizedPnl`, and `shortUnrealizedPnl`. Prevented `legacyLedger` from blending Long and Short positions into synthetic mutant slots with distorted average entry prices.
+  2. **Zero-Copy SAB Telemetry Schema (`marketDataClient.ts`):** Allocated dedicated atomic 64-bit float slots for `OMS_LONG_AVG_ENTRY_PRICE` (Slot 145), `OMS_SHORT_AVG_ENTRY_PRICE` (Slot 146), `OMS_LONG_UNREALIZED_PNL` (Slot 147), and `OMS_SHORT_UNREALIZED_PNL` (Slot 148).
+  3. **Isolated Lifecycle & Account Update Sync (`engine.ts`):** Refactored `syncSabPositionState()` to populate slots 143..148 with unblended directional metrics. Hardened `handleWsAccountPositionUpdate()` to strictly release matching slots upon position closure without clearing or corrupting opposing directional legs.
+  4. **Multi-Asset TUI Split Slot Rendering (`multiAssetDashboard.ts`):** Refactored CLI dashboard to render dual distinct rows (`#i-LONG` and `#i-SHORT`) for Hedge Mode symbols, displaying exact independent quantities, entry prices, and unrealized PnLs.
+  5. **Verification & Proof:** 100% verified via `npx tsc --noEmit` (0 compilation errors), `npx tsx src/tests/test_hedge_mode_split.ts` (100% pass across all 6 phases: dual ingestion, cost basis isolation, SAB mapping, active trades telemetry, independent dynamic TP/SL triggers, and isolated single-leg closure lifecycle), `npx tsx src/test_hedge_mode_sync.ts` (100% pass), and `npx tsx src/tests/test_live_state_sync_and_orphan_healing.ts` (100% pass).
+- **Status:** ✅ Completed & QA Verified
+
+
+- **Date:** 2026-08-14
 - **Feature/Task:** SOTA Profit Hunting Deep Scan Audit & Robustness Seal
 - **Artifacts Created/Modified:** `src/execution/binance.ts`, `src/strategy/engine.ts`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Hostile line-by-line zero-trust audit completed across `.env`, `positionLedger.ts`, `engine.ts`, and `binance.ts`:
