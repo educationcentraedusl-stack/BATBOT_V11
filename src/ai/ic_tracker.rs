@@ -15,12 +15,10 @@ pub struct ICTracker {
     adaptive_threshold: f64,
     is_drifted: bool,
     alpha: f64,
-    min_samples_for_drift: usize,
 }
 
 impl ICTracker {
     pub fn new(window_size: usize) -> Self {
-        let min_samples_for_drift = if window_size <= 100 { 30 } else { MIN_SAMPLES_FOR_DRIFT };
         Self {
             window_size,
             pairs: VecDeque::with_capacity(window_size),
@@ -30,7 +28,6 @@ impl ICTracker {
             adaptive_threshold: MODEL_DRIFT_FLOOR,
             is_drifted: false,
             alpha: 0.05,
-            min_samples_for_drift,
         }
     }
 
@@ -66,16 +63,32 @@ impl ICTracker {
         let ic = self.compute_spearman_ic();
         self.current_ic = ic;
 
-        // Update EWMA mean & variance of IC for volatility-adjusted dynamic thresholding
-        if self.pairs.len() >= 10 {
-            if self.ewma_ic == 0.0 && self.ewma_var == 0.0 {
-                self.ewma_ic = ic;
-                self.ewma_var = 0.0025; // Baseline variance initial estimate
-            } else {
-                let delta = ic - self.ewma_ic;
-                self.ewma_ic += self.alpha * delta;
-                self.ewma_var = (1.0 - self.alpha) * (self.ewma_var + self.alpha * delta * delta);
+        // WARM-UP GRACE PERIOD:
+        // If the rolling window has not collected enough statistically significant samples
+        // (i.e. self.pairs.len() < self.window_size), it is mathematically invalid to compute
+        // a definitive negative IC that triggers physical model swap. Return early, force
+        // is_drifted = false, and broadcast 0.0 drift flag to SAB.
+        if self.pairs.len() < self.window_size {
+            self.is_drifted = false;
+            if let Some(bridge) = sab {
+                bridge.store_f64_asset(asset_idx, 101, ic);
+                bridge.store_f64_asset(asset_idx, 102, 0.0);
+                if asset_idx != 0 {
+                    bridge.store_f64_asset(0, 101, ic);
+                    bridge.store_f64_asset(0, 102, 0.0);
+                }
             }
+            return ic;
+        }
+
+        // Update EWMA mean & variance of IC for volatility-adjusted dynamic thresholding
+        if self.ewma_ic == 0.0 && self.ewma_var == 0.0 {
+            self.ewma_ic = ic;
+            self.ewma_var = 0.0025; // Baseline variance initial estimate
+        } else {
+            let delta = ic - self.ewma_ic;
+            self.ewma_ic += self.alpha * delta;
+            self.ewma_var = (1.0 - self.alpha) * (self.ewma_var + self.alpha * delta * delta);
         }
 
         let std_dev = self.ewma_var.sqrt();
@@ -83,10 +96,8 @@ impl ICTracker {
         let dynamic_thresh = (self.ewma_ic - 2.0 * std_dev).clamp(MODEL_DRIFT_FLOOR, 0.0500);
         self.adaptive_threshold = dynamic_thresh;
 
-        // Adaptive drift trigger condition:
-        // Requires at least min_samples_for_drift (100) observations
-        // and IC falling below the dynamic threshold AND below absolute floor 0.0200
-        if self.pairs.len() >= self.min_samples_for_drift && ic < dynamic_thresh && ic < 0.0200 {
+        // Adaptive drift trigger condition (strictly evaluated once window is full):
+        if ic < dynamic_thresh && ic < 0.0200 {
             if !self.is_drifted {
                 self.is_drifted = true;
                 eprintln!(
@@ -234,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_perfect_positive_correlation() {
-        let mut tracker = ICTracker::new(100);
+        let mut tracker = ICTracker::new(50);
         for i in 1..=50 {
             let val = i as f64;
             tracker.add_observation(val, val * 2.0, None);
@@ -246,7 +257,7 @@ mod tests {
 
     #[test]
     fn test_perfect_negative_correlation() {
-        let mut tracker = ICTracker::new(100);
+        let mut tracker = ICTracker::new(50);
         for i in 1..=50 {
             let val = i as f64;
             tracker.add_observation(val, -val, None);
@@ -269,7 +280,7 @@ mod tests {
     fn test_sab_slot_101_write() {
         let mut buffer = vec![0u8; 2048];
         let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len()).unwrap();
-        let mut tracker = ICTracker::new(100);
+        let mut tracker = ICTracker::new(50);
 
         for i in 1..=50 {
             tracker.add_observation(i as f64, i as f64, Some(&bridge));
@@ -285,7 +296,7 @@ mod tests {
     fn test_ic_tracker_reset_and_drift_slot() {
         let mut buffer = vec![0u8; 2048];
         let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len()).unwrap();
-        let mut tracker = ICTracker::new(100);
+        let mut tracker = ICTracker::new(50);
 
         for i in 1..=50 {
             tracker.add_observation(i as f64, - (i as f64), Some(&bridge));
@@ -298,5 +309,26 @@ mod tests {
         assert!(!tracker.is_drifted());
         assert_eq!(tracker.len(), 0);
         assert_eq!(tracker.current_ic(), 0.0);
+    }
+
+    #[test]
+    fn test_warmup_grace_period_blocks_premature_drift() {
+        let mut tracker = ICTracker::new(100);
+        // Add 50 observations of negative correlation (unfilled window 50/100)
+        for i in 1..=50 {
+            let val = i as f64;
+            tracker.add_observation(val, -val, None);
+        }
+        // Even with negative IC, drift must NOT trigger until window is full (100)
+        assert!(!tracker.is_drifted(), "Drift must be false during warm-up period");
+        assert_eq!(tracker.len(), 50);
+
+        // Fill remaining 50 observations to reach 100/100
+        for i in 51..=100 {
+            let val = i as f64;
+            tracker.add_observation(val, -val, None);
+        }
+        assert_eq!(tracker.len(), 100);
+        assert!(tracker.is_drifted(), "Drift must trigger once window is full with sustained negative IC");
     }
 }

@@ -1849,4 +1849,12 @@
   4. **QA Verification:** Passed 100% of Rust tests (`cargo test --lib` - 36/36 passed clean), N-API native release compilation (`napi build --platform --release` - 0 errors), and TypeScript compilation (`npm run build:ts` - 0 errors).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-08-16
+- **Feature/Task:** Critical Cold-Start Volatility & Premature Recalibration Fix (ICTracker Warm-up Grace Period)
+- **Artifacts Created/Modified:** `src/ai/ic_tracker.rs`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Remediated statistical flaw in rolling Spearman Information Coefficient (IC) tracking where rank correlation was evaluated on unfilled windows (`pairs.len() < window_size`, e.g. 247/1000 pairs), generating noisy negative IC excursions that falsely tripped `is_drifted = true` and caused runaway premature recalibration loops. Enforced strict Warm-up Grace Period in `ICTracker::add_observation_asset`: early return if `self.pairs.len() < self.window_size`, forcing `self.is_drifted = false` and broadcasting `0.0` drift state to SAB slot 102 until 1000 full observation pairs have accumulated. Verified 100% via Rust unit tests (`cargo test --lib ic_tracker` - 6/6 passed), release binary compilation (`napi build --platform --release`), and TypeScript build (`npm run build:ts`).
+- **Status:** ✅ Completed & QA Verified
+
+
+
 
