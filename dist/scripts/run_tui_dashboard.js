@@ -195,6 +195,7 @@ async function runProductionTuiLauncher() {
             // Active Model Drift Evaluation & Self-Healing Trigger (SAB Slot 101 & 102)
             let rollingIc = client.getRollingIC();
             let isDrifted = client.getIsModelDrifted();
+            let sampleCount = 0;
             if (nativeModule && typeof nativeModule.getIcStatus === "function") {
                 try {
                     const rawJson = nativeModule.getIcStatus();
@@ -203,21 +204,30 @@ async function runProductionTuiLauncher() {
                         rollingIc = parsed.ic;
                     }
                     if (typeof parsed.is_drifted === "boolean") {
-                        isDrifted = isDrifted || parsed.is_drifted;
+                        isDrifted = parsed.is_drifted;
+                    }
+                    if (typeof parsed.sample_count === "number") {
+                        sampleCount = parsed.sample_count;
                     }
                 }
                 catch { }
             }
+            // Physical Hard Gate: Clamp drift to false during warm-up period (< 1000 pairs)
+            if (sampleCount < 1000) {
+                isDrifted = false;
+            }
             const seqNum = client.getSequenceNum(0);
             if (riskGuard.isProfitLockedState()) {
                 recalibrationManager.enableShadowMode();
-                recalibrationManager.evaluateShadowTick(seqNum, rollingIc);
+                if (sampleCount >= 1000) {
+                    recalibrationManager.evaluateShadowTick(seqNum, rollingIc);
+                }
             }
             else {
                 recalibrationManager.evaluateTickDrift(rollingIc, isDrifted);
             }
-            // Check scheduled offline T-KAN initialization (throttled to once every 1000 ticks / ~10s to eliminate hot-path GC allocations)
-            if (tickCounter % 1000 === 0) {
+            // Check scheduled offline T-KAN initialization (throttled to once every 1000 ticks / ~10s and gated by 1000-pair warm-up)
+            if (tickCounter % 1000 === 0 && sampleCount >= 1000) {
                 recalibrationManager.checkAndRunScheduledTkan()
                     .then((executed) => {
                     if (executed) {

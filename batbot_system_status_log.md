@@ -1847,14 +1847,12 @@
   2. **Multi-Asset SharedArrayBuffer Training State Synchronization (`src/ai/recalibrationWorker.ts`, `src/strategy/engine.ts`):** Injected `setMarketDataClient` and `broadcastDriftState` into `AutoRecalibrationManager` to assert `is_drifted = 1.0` in SAB slot 102 across all 10 asset slots during both T-KAN spatial initialization (`runTkanTrainingPipeline`) and CfC recalibration (`runRecalibrationPipeline`). Added dual-redundant safety guard in `StrategyEngine.evaluateTick` (`isDriftedSab || autoRecal.getStatus().isRecalibrating || autoRecal.isTkanTrainingActive()`) to unconditionally force `aiConfidence = 0.0` during training.
   3. **Spearman IC SAB Broadcast Bridge (`src/ai/engine.rs`, `src/ai/ic_tracker.rs`, `src/telemetry/multiAssetDashboard.ts`, `src/scripts/run_tui_dashboard.ts`):** Passed `Some(sab)` and `asset_idx` to `tracker.add_observation_asset` in `engine.rs`, ensuring `store_f64_asset` writes live IC and drift state to SAB slot 101/102 for the active asset and asset 0. Synchronized CLI dashboard and strategy launcher with `nativeAddon.getIcStatus()`.
   4. **QA Verification:** Passed 100% of Rust tests (`cargo test --lib` - 36/36 passed clean), N-API native release compilation (`napi build --platform --release` - 0 errors), and TypeScript compilation (`npm run build:ts` - 0 errors).
-- **Status:** ✅ Completed & QA Verified
-
 - **Date:** 2026-08-16
-- **Feature/Task:** Critical Cold-Start Volatility & Premature Recalibration Fix (ICTracker Warm-up Grace Period)
-- **Artifacts Created/Modified:** `src/ai/ic_tracker.rs`, `batbot_system_status_log.md`
-- **HFT/Performance Compliance:** Remediated statistical flaw in rolling Spearman Information Coefficient (IC) tracking where rank correlation was evaluated on unfilled windows (`pairs.len() < window_size`, e.g. 247/1000 pairs), generating noisy negative IC excursions that falsely tripped `is_drifted = true` and caused runaway premature recalibration loops. Enforced strict Warm-up Grace Period in `ICTracker::add_observation_asset`: early return if `self.pairs.len() < self.window_size`, forcing `self.is_drifted = false` and broadcasting `0.0` drift state to SAB slot 102 until 1000 full observation pairs have accumulated. Verified 100% via Rust unit tests (`cargo test --lib ic_tracker` - 6/6 passed), release binary compilation (`napi build --platform --release`), and TypeScript build (`npm run build:ts`).
+- **Feature/Task:** Eradication of Phantom Boot Training Trigger & TypeScript Warm-Up Hard Gating
+- **Artifacts Created/Modified:** `src/ai/recalibrationWorker.ts`, `src/telemetry/multiAssetDashboard.ts`, `src/scripts/run_tui_dashboard.ts`, `src/tests/test_local_ai_and_tui_integration.ts`, `src/test_local_recalibration.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** Remediated rogue cold-start scheduler trigger that bypassed the Rust 1000-pair warm-up grace period.
+  1. **Fixed Cold-Start Timestamp Initialization (`src/ai/recalibrationWorker.ts`):** `lastTkanTrainingTimestamp` now initializes to `Date.now()` on boot (instead of `0`) when `.tkan_last_train` is missing, preventing `checkAndRunScheduledTkan()` from immediately evaluating as overdue on boot at tick 1000 (~10s into runtime).
+  2. **Physical Native Warm-Up Hard Gate (`src/ai/recalibrationWorker.ts`):** Added `isRustWarmupComplete()` (`sampleCount >= 1000` via N-API `getIcStatus()`). Implemented strict rejection in `checkAndRunScheduledTkan()`, `runTkanTrainingPipeline()`, `runRecalibrationPipeline()`, `evaluateTickDrift()`, `evaluateShadowTick()`, and `broadcastDriftState()` preventing any background training or SAB Slot 102 (`is_drifted`) stomping while `sample_count < 1000`.
+  3. **Dashboard & Launcher Warm-Up Gating (`src/telemetry/multiAssetDashboard.ts`, `src/scripts/run_tui_dashboard.ts`):** Clamped `isDrifted` and `isAnyTrainingActive` to `false` when `sampleCount < 1000`, ensuring UI renders clean `[HEALTHY - CALIBRATED]` / `[STANDBY]` status during the warm-up grace period.
+  4. **QA Verification:** Verified via `npm run build:ts` (0 errors) and automated integration suite `node dist/tests/test_local_ai_and_tui_integration.js` (4/4 tests passed 100%).
 - **Status:** ✅ Completed & QA Verified
-
-
-
-

@@ -51,7 +51,7 @@ async function runLocalRecalibrationTest() {
     console.log(`[STAGE 1 PASSED] Initial status: isRecalibrating=${statusBefore.isRecalibrating}, totalRecalibrations=${statusBefore.totalRecalibrations}`);
     console.log("\n[STAGE 2] Executing 100% Free Local Asynchronous Recalibration Pipeline...");
     const startTime = Date.now();
-    const success = await manager.runRecalibrationPipeline(0.0150);
+    const success = await manager.runRecalibrationPipeline(0.0150, true);
     const durationMs = Date.now() - startTime;
     if (!success) {
         console.error("❌ STAGE 2 FAILED: AutoRecalibrationManager.runRecalibrationPipeline returned false.");

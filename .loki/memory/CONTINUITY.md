@@ -70,6 +70,18 @@
   - Calibrated operational thresholds in `.env`: `MIN_NET_ALPHA=0.00045` (4.5 bps), `MIN_AI_CONFIDENCE=0.55`, `AGGRESSIVE_CONFIDENCE_THRESHOLD=0.65`, `OBI_BUY_THRESHOLD=0.25`, `OBI_SELL_THRESHOLD=-0.25`.
   - 100% verified via `npm run build:ts` (0 errors) and test suites (`test_sota_ai_loss_recovery.ts`).
 
+* 2026-08-15 - Eradication of 98.2% Logit Clamp Paradox, Safety Guard Training Desync, and IC Spearman SAB Broadcast Gap:
+  - Implemented continuous adaptive volatility damping (`vol_damping = 1.0 + (gk_vol / 0.0010).clamp(0.0, 3.0)`), SNR normalization, and calibrated logit mapping in `src/ai/engine.rs` & `src/ai/weights.rs` to restore dynamic range (50%–98%) without ceiling pinning.
+  - Injected `setMarketDataClient` and `broadcastDriftState` into `AutoRecalibrationManager` to assert `is_drifted = 1.0` in SAB slot 102 during active training and forced `aiConfidence = 0.0` in `StrategyEngine`.
+  - Bound live IC and drift state to SAB slot 101/102 for active and global asset 0. Passed all 36 Rust unit tests (`cargo test --lib`).
+
+* 2026-08-16 - Eradication of Phantom Boot Training Trigger & TypeScript Warm-Up Hard Gating:
+  - Remediated rogue cold-start scheduler trigger in `src/ai/recalibrationWorker.ts` where uninitialized `lastTkanTrainingTimestamp === 0` caused `checkAndRunScheduledTkan()` to immediately launch `runTkanTrainingPipeline()` at tick 1000 (~10s into runtime / Seq #77).
+  - Enforced `lastTkanTrainingTimestamp = Date.now()` on startup when `.tkan_last_train` is absent.
+  - Hardcoded physical `isRustWarmupComplete()` gate (`sample_count >= 1000` from N-API `getIcStatus()`) in `src/ai/recalibrationWorker.ts`: blocking `checkAndRunScheduledTkan()`, `runTkanTrainingPipeline()`, `runRecalibrationPipeline()`, `evaluateTickDrift()`, `evaluateShadowTick()`, and `broadcastDriftState()` from triggering or writing `is_drifted = 1.0` to SAB Slot 102 while `sample_count < 1000`.
+  - Enforced warm-up clamping in `src/telemetry/multiAssetDashboard.ts` and `src/scripts/run_tui_dashboard.ts` so `isDrifted` is clamped to `false` and UI renders `[HEALTHY - CALIBRATED]` / `[STANDBY]`.
+  - 100% verified via `npm run build:ts` (0 errors) and `node dist/tests/test_local_ai_and_tui_integration.js` (4/4 tests passed).
+
 ## Next Actions
-1. Deploy and launch live multi-asset TUI command center (`npm run start:live`).
+1. Deploy and launch live multi-asset TUI command center (`npm run start:live` / `npm start`).
 2. Monitor real-time tick-to-trade execution throughput and Binance fill confirmation streams.

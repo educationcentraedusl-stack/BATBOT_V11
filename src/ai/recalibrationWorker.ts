@@ -87,12 +87,13 @@ export class AutoRecalibrationManager {
     const envDays = process.env.TKAN_TRAINING_INTERVAL_DAYS ? parseFloat(process.env.TKAN_TRAINING_INTERVAL_DAYS) : 7.0;
     this.tkanScheduleIntervalDays = Number.isFinite(envDays) && envDays > 0 ? envDays : 7.0;
 
-    // Load last T-KAN training timestamp if persisted on disk
+    // Load last T-KAN training timestamp if persisted on disk, defaulting to boot time to prevent cold-start triggers
+    this.lastTkanTrainingTimestamp = Date.now();
     try {
       if (fs.existsSync(this.tkanScheduleFilePath)) {
         const raw = fs.readFileSync(this.tkanScheduleFilePath, "utf-8").trim();
         const parsed = parseInt(raw, 10);
-        if (!isNaN(parsed) && parsed > 0) {
+        if (!isNaN(parsed) && parsed > 0 && parsed <= Date.now()) {
           this.lastTkanTrainingTimestamp = parsed;
         }
       }
@@ -121,7 +122,28 @@ export class AutoRecalibrationManager {
     this.maxAssetSlots = maxSlots;
   }
 
+  /**
+   * Evaluates if native Rust IC Tracker has processed at least 1000 observation pairs (Warm-Up complete).
+   */
+  public isRustWarmupComplete(): boolean {
+    if (nativeAddon && typeof nativeAddon.getIcStatus === "function") {
+      try {
+        const rawJson = nativeAddon.getIcStatus();
+        const parsed = JSON.parse(rawJson);
+        const sampleCount = typeof parsed.sample_count === "number" ? parsed.sample_count : 0;
+        return sampleCount >= 1000;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+
   public broadcastDriftState(isDrifted: boolean): void {
+    // Physical Hard Gate: NEVER broadcast drift (true) to SAB if warm-up is incomplete
+    if (isDrifted && !this.isRustWarmupComplete()) {
+      return;
+    }
     if (this.client) {
       for (let i = 0; i < this.maxAssetSlots; i++) {
         this.client.setIsModelDrifted(isDrifted, i);
@@ -142,11 +164,16 @@ export class AutoRecalibrationManager {
       return false;
     }
 
+    // Physical Hard Gate: Reject if Rust IC Tracker is in warm-up grace period (< 1000 pairs)
+    if (!this.isRustWarmupComplete()) {
+      return false;
+    }
+
     const intervalMs = this.tkanScheduleIntervalDays * 24 * 60 * 60 * 1000;
     const now = Date.now();
 
     // Check if interval has elapsed since last training
-    if (this.lastTkanTrainingTimestamp === 0 || now - this.lastTkanTrainingTimestamp >= intervalMs) {
+    if (now - this.lastTkanTrainingTimestamp >= intervalMs) {
       return this.runTkanTrainingPipeline();
     }
 
@@ -158,8 +185,13 @@ export class AutoRecalibrationManager {
    * validates the 20MB binary LUT export (tkan_luts.bin), and triggers
    * zero-latency dual RCU hot-swap via load_ai_model_full.
    */
-  public async runTkanTrainingPipeline(): Promise<boolean> {
+  public async runTkanTrainingPipeline(force: boolean = false): Promise<boolean> {
     if (this.isTkanTraining) {
+      return false;
+    }
+
+    // Physical Hard Gate: Block training and SAB drift broadcast during warm-up (< 1000 pairs) unless forced
+    if (!force && !this.isRustWarmupComplete()) {
       return false;
     }
 
@@ -282,7 +314,7 @@ export class AutoRecalibrationManager {
   }
 
   public evaluateShadowTick(seq: bigint, ic: number): void {
-    if (!this.isShadowMode || this.isRecalibrating || this.isPromptActive) return;
+    if (!this.isShadowMode || this.isRecalibrating || this.isPromptActive || !this.isRustWarmupComplete()) return;
 
     this.shadowTickCounter++;
     if (
@@ -309,6 +341,12 @@ export class AutoRecalibrationManager {
 
   public evaluateTickDrift(ic: number, isDrifted: boolean): void {
     if (this.isRecalibrating) {
+      return;
+    }
+
+    // Physical Hard Gate: Block drift accumulation during warm-up (< 1000 pairs)
+    if (!this.isRustWarmupComplete()) {
+      this.driftTickCounter = 0;
       return;
     }
 
@@ -370,8 +408,13 @@ export class AutoRecalibrationManager {
     }
   }
 
-  public async runRecalibrationPipeline(currentIc: number): Promise<boolean> {
+  public async runRecalibrationPipeline(currentIc: number, force: boolean = false): Promise<boolean> {
     if (this.isRecalibrating) {
+      return false;
+    }
+
+    // Physical Hard Gate: Block background recalibration during warm-up (< 1000 pairs) unless forced
+    if (!force && !this.isRustWarmupComplete()) {
       return false;
     }
 

@@ -29,7 +29,7 @@ async function runLocalAiAndTuiIntegrationTests(): Promise<void> {
   const signalsSize = fs.existsSync(signalsPath) ? fs.statSync(signalsPath).size : 0;
   console.log(`  - Current signals.jsonl size: ${signalsSize} bytes (Simulating Cold Start)`);
 
-  const coldStartSuccess = await recalManager.runRecalibrationPipeline(0.005);
+  const coldStartSuccess = await recalManager.runRecalibrationPipeline(0.005, true);
   console.log(`  - Recalibration Execution Result: ${coldStartSuccess}`);
   if (!coldStartSuccess) {
     throw new Error("AutoRecalibrationManager failed on cold-start fallback execution!");

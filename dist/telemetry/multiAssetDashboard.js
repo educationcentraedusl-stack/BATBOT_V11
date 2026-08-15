@@ -469,7 +469,7 @@ class MultiAssetCLIDashboard {
                     rollingIc = parsed.ic;
                 }
                 if (typeof parsed.is_drifted === "boolean") {
-                    isDrifted = isDrifted || parsed.is_drifted;
+                    isDrifted = parsed.is_drifted;
                 }
                 ewmaIc = parsed.ewma_ic ?? 0;
                 adaptiveThreshold = parsed.adaptive_threshold ?? 0.01;
@@ -479,20 +479,24 @@ class MultiAssetCLIDashboard {
                 // Safe non-blocking parse
             }
         }
+        // Physical Hard Gate: Clamp drift to false during warm-up period (< 1000 pairs)
+        if (sampleCount < 1000) {
+            isDrifted = false;
+        }
         const recalStatus = recalibrationWorker_1.AutoRecalibrationManager.getInstance().getStatus();
         const isTkanRunning = recalibrationWorker_1.AutoRecalibrationManager.getInstance().isTkanTrainingActive();
-        const isAnyTrainingActive = isDrifted || recalStatus.isRecalibrating || isTkanRunning;
+        const isAnyTrainingActive = (sampleCount >= 1000) && (isDrifted || recalStatus.isRecalibrating || isTkanRunning);
         const trainingProgress = readTrainingProgress();
         const icSign = rollingIc >= 0 ? "+" : "";
         const icColor = rollingIc >= 0.03 ? green + bold : rollingIc >= 0.01 ? cyan : red + bold;
         const ewmaSign = ewmaIc >= 0 ? "+" : "";
         const driftStateStr = isAnyTrainingActive ? `${red}${bold}[DRIFT DETECTED - RECALIBRATING]${reset}` : `${green}${bold}[HEALTHY - CALIBRATED]${reset}`;
-        const trainerStateStr = recalStatus.isRecalibrating
+        const trainerStateStr = (sampleCount >= 1000 && recalStatus.isRecalibrating)
             ? `${yellow}${bold}[CfC TRAINING ACTIVE]${reset}`
-            : isTkanRunning
+            : (sampleCount >= 1000 && isTkanRunning)
                 ? `${cyan}${bold}[T-KAN INIT ACTIVE]${reset}`
                 : `${green}[STANDBY]${reset}`;
-        const progressVal = trainingProgress !== null ? trainingProgress : (recalStatus.isRecalibrating || isTkanRunning ? 50 : 0);
+        const progressVal = (isAnyTrainingActive && trainingProgress !== null) ? trainingProgress : (isAnyTrainingActive ? 50 : 0);
         const totalBlocks = 20;
         const filledBlocks = Math.round((progressVal / 100) * totalBlocks);
         const emptyBlocks = totalBlocks - filledBlocks;
