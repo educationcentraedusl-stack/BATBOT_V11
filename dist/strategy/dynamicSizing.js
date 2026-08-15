@@ -55,9 +55,12 @@ class DynamicSizingCalculator {
         }
         this.takerFeeRate = parseFloat(rawTakerFee);
         const rawMinNetAlpha = process.env.MIN_NET_ALPHA;
-        this.minNetAlpha = rawMinNetAlpha ? parseFloat(rawMinNetAlpha) : 0.0015;
+        if (!rawMinNetAlpha) {
+            throw new Error("[DynamicSizingCalculator] Missing required environment variable: MIN_NET_ALPHA");
+        }
+        this.minNetAlpha = parseFloat(rawMinNetAlpha);
         if (isNaN(this.minNetAlpha) || this.minNetAlpha <= 0) {
-            this.minNetAlpha = 0.0015;
+            throw new Error("[DynamicSizingCalculator] Invalid MIN_NET_ALPHA environment variable format.");
         }
     }
     getMinNetAlpha() {

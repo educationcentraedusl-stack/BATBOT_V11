@@ -209,8 +209,16 @@ export class MarketDataClient {
     return this.readAtomicFloat64Asset(assetIdx, 101);
   }
 
+  public setRollingIC(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 101, val);
+  }
+
   public getIsModelDrifted(assetIdx: number = 0): boolean {
     return this.readAtomicFloat64Asset(assetIdx, 102) > 0.5;
+  }
+
+  public setIsModelDrifted(isDrifted: boolean, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 102, isDrifted ? 1.0 : 0.0);
   }
 
   public getAIInferenceLatencyNs(assetIdx: number = 0): bigint {

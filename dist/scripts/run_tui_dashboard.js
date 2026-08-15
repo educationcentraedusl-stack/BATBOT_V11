@@ -46,6 +46,7 @@ const multiEngine_1 = require("../strategy/multiEngine");
 const risk_1 = require("../strategy/risk");
 const index_1 = require("../index");
 const symbolPrecision_1 = require("../config/symbolPrecision");
+const recalibrationWorker_1 = require("../ai/recalibrationWorker");
 async function runProductionTuiLauncher() {
     console.log("=========================================================================");
     console.log("  BATBOT_V11 HIGH-FREQUENCY TRADING SYSTEM - PRODUCTION TUI LAUNCHER     ");
@@ -178,10 +179,38 @@ async function runProductionTuiLauncher() {
         dashboard.pushNotification(msg);
     });
     keyEngine.start();
+    // Initialize Local Asynchronous Auto-Recalibration Manager
+    const recalibrationManager = recalibrationWorker_1.AutoRecalibrationManager.getInstance();
+    recalibrationManager.setSustainedDriftThreshold(50);
+    recalibrationManager.setOnStateChangeCallback((state) => {
+        dashboard.pushNotification(`[RECALIBRATION_STATE] State Transition: -> ${state}`);
+    });
     // Active High-Frequency 10ms Vectorized Multi-Asset Strategy Engine Tick Loop
     const strategyInterval = setInterval(() => {
         try {
             const batch = multiEngine.evaluateAllTicks();
+            // Active Model Drift Evaluation & Self-Healing Trigger (SAB Slot 101 & 102)
+            const rollingIc = client.getRollingIC();
+            const isDrifted = client.getIsModelDrifted();
+            const seqNum = client.getSequenceNum(0);
+            if (riskGuard.isProfitLockedState()) {
+                recalibrationManager.enableShadowMode();
+                recalibrationManager.evaluateShadowTick(seqNum, rollingIc);
+            }
+            else {
+                recalibrationManager.evaluateTickDrift(rollingIc, isDrifted);
+            }
+            // Check scheduled offline T-KAN initialization (interval from .env TKAN_TRAINING_INTERVAL_DAYS)
+            recalibrationManager.checkAndRunScheduledTkan()
+                .then((executed) => {
+                if (executed) {
+                    dashboard.pushNotification("✅ [T-KAN_SCHEDULER] Periodic T-KAN spatial initialization completed & hot-swapped.");
+                }
+            })
+                .catch((err) => {
+                const msg = err instanceof Error ? err.message : String(err);
+                dashboard.pushNotification(`⚠️ [T-KAN_SCHEDULER_ERROR] ${msg}`);
+            });
             for (const [symbol, result] of batch.results.entries()) {
                 if (result.signalType !== "NONE") {
                     dashboard.pushNotification(`[STRATEGY_SIGNAL] ${result.signalType} | Sym: ${symbol} | Seq #${result.sequenceNum} | Bid: $${result.bidPrice.toFixed(2)} / Ask: $${result.askPrice.toFixed(2)}`);

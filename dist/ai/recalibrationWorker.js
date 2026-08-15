@@ -63,18 +63,135 @@ class AutoRecalibrationManager {
     signalsPath;
     weightsPath;
     errorLogPath;
+    tkanPath;
+    tkanFeaturesPath;
+    cfcFeaturesPath;
+    tkanScheduleIntervalDays;
+    lastTkanTrainingTimestamp = 0;
+    tkanScheduleFilePath;
+    isTkanTraining = false;
     constructor() {
         this.projectRoot = process.cwd();
         this.dataDir = path.join(this.projectRoot, "data");
         this.signalsPath = path.join(this.dataDir, "signals.jsonl");
         this.weightsPath = path.join(this.projectRoot, "models", "cfc_weights.safetensors");
+        this.tkanPath = path.join(this.projectRoot, "models", "tkan_luts.bin");
+        this.tkanFeaturesPath = path.join(this.dataDir, "tkan_features.safetensors");
+        this.cfcFeaturesPath = path.join(this.dataDir, "cfc_features.safetensors");
         this.errorLogPath = path.join(this.dataDir, "recalibration_errors.log");
+        this.tkanScheduleFilePath = path.join(this.dataDir, ".tkan_last_train");
+        const envDays = process.env.TKAN_TRAINING_INTERVAL_DAYS ? parseFloat(process.env.TKAN_TRAINING_INTERVAL_DAYS) : 7.0;
+        this.tkanScheduleIntervalDays = Number.isFinite(envDays) && envDays > 0 ? envDays : 7.0;
+        // Load last T-KAN training timestamp if persisted on disk
+        try {
+            if (fs.existsSync(this.tkanScheduleFilePath)) {
+                const raw = fs.readFileSync(this.tkanScheduleFilePath, "utf-8").trim();
+                const parsed = parseInt(raw, 10);
+                if (!isNaN(parsed) && parsed > 0) {
+                    this.lastTkanTrainingTimestamp = parsed;
+                }
+            }
+        }
+        catch {
+            // Safe fallback
+        }
     }
     static getInstance() {
         if (!AutoRecalibrationManager.instance) {
             AutoRecalibrationManager.instance = new AutoRecalibrationManager();
         }
         return AutoRecalibrationManager.instance;
+    }
+    getTkanScheduleIntervalDays() {
+        return this.tkanScheduleIntervalDays;
+    }
+    getLastTkanTrainingTimestamp() {
+        return this.lastTkanTrainingTimestamp;
+    }
+    isTkanTrainingActive() {
+        return this.isTkanTraining;
+    }
+    /**
+     * Evaluates if the dynamic .env T-KAN training interval has elapsed.
+     * If elapsed, runs the offline spatial manifold trainer (train_tkan.py) in the background.
+     */
+    async checkAndRunScheduledTkan() {
+        if (this.isTkanTraining || this.isRecalibrating) {
+            return false;
+        }
+        const intervalMs = this.tkanScheduleIntervalDays * 24 * 60 * 60 * 1000;
+        const now = Date.now();
+        // Check if interval has elapsed since last training
+        if (this.lastTkanTrainingTimestamp === 0 || now - this.lastTkanTrainingTimestamp >= intervalMs) {
+            return this.runTkanTrainingPipeline();
+        }
+        return false;
+    }
+    /**
+     * Executes offline T-KAN spatial manifold training (train_tkan.py),
+     * validates the 20MB binary LUT export (tkan_luts.bin), and triggers
+     * zero-latency dual RCU hot-swap via load_ai_model_full.
+     */
+    async runTkanTrainingPipeline() {
+        if (this.isTkanTraining) {
+            return false;
+        }
+        this.isTkanTraining = true;
+        try {
+            console.log(`[BATBOT_V11][T-KAN_SCHEDULER] Triggering scheduled offline T-KAN spatial initialization (Interval: ${this.tkanScheduleIntervalDays} days)...`);
+            const pythonCmd = this.getPythonExecutable();
+            const tkanScript = path.join(this.projectRoot, "training", "train_tkan.py");
+            if (!fs.existsSync(tkanScript)) {
+                throw new Error(`T-KAN trainer script not found at '${tkanScript}'.`);
+            }
+            // Check if dataset exists, if not run prepare_data first
+            if (!fs.existsSync(this.tkanFeaturesPath) && fs.existsSync(this.signalsPath) && fs.statSync(this.signalsPath).size >= 100) {
+                const prepScript = path.join(this.projectRoot, "training", "prepare_data.py");
+                await execFileAsync(pythonCmd, [prepScript], {
+                    cwd: this.projectRoot,
+                    env: { ...process.env },
+                    timeout: 300000,
+                });
+            }
+            console.log(`[BATBOT_V11][T-KAN_SCHEDULER] Executing train_tkan.py using runtime '${pythonCmd}'...`);
+            const trainResult = await execFileAsync(pythonCmd, [tkanScript], {
+                cwd: this.projectRoot,
+                env: { ...process.env, PYTHONUNBUFFERED: "1" },
+                timeout: 600000, // 10 minutes timeout for heavy manifold spline fitting
+            });
+            if (trainResult.stderr && trainResult.stderr.trim().length > 0) {
+                console.warn(`[BATBOT_V11][T-KAN_SCHEDULER] train_tkan stderr log: ${trainResult.stderr.trim()}`);
+            }
+            // Validate exported binary LUT file
+            if (!fs.existsSync(this.tkanPath) || fs.statSync(this.tkanPath).size < 1000000) {
+                throw new Error(`Exported T-KAN LUT binary '${this.tkanPath}' is missing or invalid.`);
+            }
+            console.log(`[BATBOT_V11][T-KAN_SCHEDULER] T-KAN binary LUT validation passed (${fs.statSync(this.tkanPath).size} bytes). Triggering load_ai_model_full RCU swap...`);
+            // Perform dual hot-swap
+            const swapped = nativeAddon.loadAiModelFull
+                ? nativeAddon.loadAiModelFull(this.weightsPath, this.tkanPath)
+                : (nativeAddon.loadAiModel ? nativeAddon.loadAiModel(this.weightsPath) : false);
+            if (!swapped) {
+                throw new Error("NAPI loadAiModelFull failed to hot-swap T-KAN LUTs.");
+            }
+            this.lastTkanTrainingTimestamp = Date.now();
+            try {
+                fs.writeFileSync(this.tkanScheduleFilePath, this.lastTkanTrainingTimestamp.toString(), "utf-8");
+            }
+            catch {
+                // Safe persistence fallback
+            }
+            console.log("[BATBOT_V11][T-KAN_SCHEDULER] T-KAN spatial initialization completed and hot-swapped successfully!");
+            return true;
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`\x1b[33m[BATBOT_V11][T-KAN_SCHEDULER NOTICE] Scheduled T-KAN training failed: ${msg}\x1b[0m`);
+            return false;
+        }
+        finally {
+            this.isTkanTraining = false;
+        }
     }
     setOnSuccessCallback(callback) {
         this.onSuccessCallback = callback;
@@ -209,24 +326,34 @@ class AutoRecalibrationManager {
             console.log(`[BATBOT_V11][SHADOW-RECALIBRATION] Triggered background recalibration (IC: ${currentIc.toFixed(4)}, Drift Ticks: ${this.driftTickCounter}). Engine remains LIVE_ACTIVE trading on Generation N weights.`);
             this.cleanupLockAndProgressFiles();
             this.lastError = null;
-            // Step 1: Ensure dataset signals log exists and has data
-            if (!fs.existsSync(this.signalsPath)) {
-                throw new Error(`Telemetry signals file missing at '${this.signalsPath}'. Cannot extract LOB tick features.`);
-            }
-            const stats = fs.statSync(this.signalsPath);
-            if (stats.size < 100) {
-                throw new Error(`Telemetry signals file '${this.signalsPath}' contains insufficient data (${stats.size} bytes).`);
-            }
             const pythonCmd = this.getPythonExecutable();
-            console.log(`[BATBOT_V11][SHADOW-RECALIBRATION] Step 1/4: Executing Python data preparation (prepare_data.py) using runtime '${pythonCmd}'...`);
-            const prepScript = path.join(this.projectRoot, "training", "prepare_data.py");
-            const prepResult = await execFileAsync(pythonCmd, [prepScript], {
-                cwd: this.projectRoot,
-                env: { ...process.env },
-                timeout: 300000,
-            });
-            if (prepResult.stderr && prepResult.stderr.trim().length > 0) {
-                console.warn(`[BATBOT_V11][SHADOW-RECALIBRATION] Data prep stderr log: ${prepResult.stderr.trim()}`);
+            let hasFreshSignals = false;
+            if (fs.existsSync(this.signalsPath)) {
+                const stats = fs.statSync(this.signalsPath);
+                if (stats.size >= 100) {
+                    hasFreshSignals = true;
+                }
+            }
+            if (hasFreshSignals) {
+                console.log(`[BATBOT_V11][SHADOW-RECALIBRATION] Step 1/4: Executing Python data preparation (prepare_data.py) using runtime '${pythonCmd}'...`);
+                const prepScript = path.join(this.projectRoot, "training", "prepare_data.py");
+                const prepResult = await execFileAsync(pythonCmd, [prepScript], {
+                    cwd: this.projectRoot,
+                    env: { ...process.env },
+                    timeout: 300000,
+                });
+                if (prepResult.stderr && prepResult.stderr.trim().length > 0) {
+                    console.warn(`[BATBOT_V11][SHADOW-RECALIBRATION] Data prep stderr log: ${prepResult.stderr.trim()}`);
+                }
+            }
+            else {
+                // Cold-Start Fallback: Check if pre-existing cfc_features.safetensors is available
+                if (fs.existsSync(this.cfcFeaturesPath) && fs.statSync(this.cfcFeaturesPath).size >= 1000) {
+                    console.log(`[BATBOT_V11][SHADOW-RECALIBRATION] Step 1/4: Telemetry signals log is below 100 bytes (Cold-Start). Fallback active: Training directly on existing SafeTensors dataset (${fs.statSync(this.cfcFeaturesPath).size} bytes)...`);
+                }
+                else {
+                    throw new Error(`Telemetry signals file '${this.signalsPath}' contains insufficient data (${fs.existsSync(this.signalsPath) ? fs.statSync(this.signalsPath).size : 0} bytes) and no pre-existing cfc_features.safetensors fallback exists.`);
+                }
             }
             // Step 2: Execute 100% Free Local Asynchronous PyTorch 2.6 Background Trainer
             console.log(`[BATBOT_V11][SHADOW-RECALIBRATION] Step 2/4: Executing 100% Free Local PyTorch 2.6 Background Recalibrator (local_async_trainer.py)...`);

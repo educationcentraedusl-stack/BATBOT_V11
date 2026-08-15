@@ -560,7 +560,7 @@ class StrategyEngine {
                 else if (isExitSide) {
                     console.log(`[BinanceExecution][UNTRACKED_EXIT_FILL] OrderId #${orderId} filled for ${this.config.symbol} ${targetPosSide}! Deducting/releasing slot. Qty: ${execQty} @ $${execPx}`);
                     if (targetPosSide === "LONG") {
-                        this.hedgeLedger.deductCoreLongQuantity(execQty, execPx, 0.0004, "EXTERNAL_EXIT");
+                        this.hedgeLedger.deductCoreLongQuantity(execQty, execPx, this.hedgeLedger.getSizingCalculator().getTakerFeeRate(), "EXTERNAL_EXIT");
                     }
                     else {
                         let remainingQtyToDeduct = execQty;
@@ -569,7 +569,7 @@ class StrategyEngine {
                             const slot = slots[sIdx];
                             if (slot.isOccupied && slot.quantity > 0) {
                                 const closedFromSlot = Math.min(slot.quantity, remainingQtyToDeduct);
-                                this.hedgeLedger.deductShortSlotQuantity(sIdx, closedFromSlot, execPx, 0.0004, "EXTERNAL_EXIT");
+                                this.hedgeLedger.deductShortSlotQuantity(sIdx, closedFromSlot, execPx, this.hedgeLedger.getSizingCalculator().getTakerFeeRate(), "EXTERNAL_EXIT");
                                 remainingQtyToDeduct -= closedFromSlot;
                             }
                         }
@@ -1244,8 +1244,7 @@ class StrategyEngine {
             const shortCooldownLock = rawShortCooldownLock > nowMs + 60000 ? 0 : rawShortCooldownLock;
             let targetSizeDecayCoeff = 1.0;
             // Dynamic Environment Ingestion (Zero-Hardcoding Protocol)
-            const envMinNetAlpha = process.env.MIN_NET_ALPHA ? parseFloat(process.env.MIN_NET_ALPHA) : NaN;
-            const minNetAlpha = !isNaN(envMinNetAlpha) && envMinNetAlpha > 0 ? envMinNetAlpha : 0.0015;
+            const minNetAlpha = this.hedgeLedger.getSizingCalculator().getMinNetAlpha();
             const makerFeeRate = this.hedgeLedger.getSizingCalculator().getMakerFeeRate();
             const takerFeeRate = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
             const midPrice = askPrice > 0 && bidPrice > 0 && Number.isFinite(askPrice) && Number.isFinite(bidPrice)

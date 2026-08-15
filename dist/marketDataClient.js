@@ -168,8 +168,14 @@ class MarketDataClient {
     getRollingIC(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 101);
     }
+    setRollingIC(val, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 101, val);
+    }
     getIsModelDrifted(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 102) > 0.5;
+    }
+    setIsModelDrifted(isDrifted, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 102, isDrifted ? 1.0 : 0.0);
     }
     getAIInferenceLatencyNs(assetIdx = 0) {
         return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 103));

@@ -1,6 +1,33 @@
+import * as fs from "fs";
+import * as path from "path";
 import { MarketDataClient } from "../marketDataClient";
 import { getTradingSymbols } from "../config/tradingSymbols";
 import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
+import { AutoRecalibrationManager } from "../ai/recalibrationWorker";
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+let nativeAddon: any = null;
+try {
+  nativeAddon = require("../../index.js");
+} catch {
+  // Safe fallback
+}
+
+function readTrainingProgress(): number | null {
+  try {
+    const progressPath = path.resolve(process.cwd(), ".training_progress");
+    if (fs.existsSync(progressPath)) {
+      const raw = fs.readFileSync(progressPath, "utf-8").trim();
+      const val = parseInt(raw, 10);
+      if (!isNaN(val) && val >= 0 && val <= 100) {
+        return val;
+      }
+    }
+  } catch (_e) {
+    // Safe non-blocking read
+  }
+  return null;
+}
 
 export interface ActiveTradeSlot {
   assetIdx: number;
@@ -466,6 +493,54 @@ export class MultiAssetCLIDashboard {
         }
       }
     }
+
+    // AI Recalibration & Model Drift Monitor (SAB Slots 101/102 & IC Tracker)
+    out += MultiAssetCLIDashboard.SUB_DIVIDER;
+    out += `${bold}--- AI RECALIBRATION & MODEL DRIFT MONITOR (SAB SLOTS 101/102 & IC TRACKER) ---${reset}${clearLine}\n`;
+
+    const rollingIc = this.client.getRollingIC();
+    const isDrifted = this.client.getIsModelDrifted();
+
+    let ewmaIc = 0;
+    let adaptiveThreshold = 0.01;
+    let sampleCount = 0;
+
+    if (nativeAddon && typeof nativeAddon.getIcStatus === "function") {
+      try {
+        const rawJson = nativeAddon.getIcStatus();
+        const parsed = JSON.parse(rawJson);
+        ewmaIc = parsed.ewma_ic ?? 0;
+        adaptiveThreshold = parsed.adaptive_threshold ?? 0.01;
+        sampleCount = parsed.sample_count ?? 0;
+      } catch {
+        // Safe non-blocking parse
+      }
+    }
+
+    const recalStatus = AutoRecalibrationManager.getInstance().getStatus();
+    const isTkanRunning = AutoRecalibrationManager.getInstance().isTkanTrainingActive();
+    const trainingProgress = readTrainingProgress();
+
+    const icSign = rollingIc >= 0 ? "+" : "";
+    const icColor = rollingIc >= 0.03 ? green + bold : rollingIc >= 0.01 ? cyan : red + bold;
+    const ewmaSign = ewmaIc >= 0 ? "+" : "";
+    const driftStateStr = isDrifted ? `${red}${bold}[DRIFT DETECTED - RECALIBRATING]${reset}` : `${green}${bold}[HEALTHY - CALIBRATED]${reset}`;
+
+    const trainerStateStr = recalStatus.isRecalibrating
+      ? `${yellow}${bold}[CfC TRAINING ACTIVE]${reset}`
+      : isTkanRunning
+      ? `${cyan}${bold}[T-KAN INIT ACTIVE]${reset}`
+      : `${green}[STANDBY]${reset}`;
+
+    const progressVal = trainingProgress !== null ? trainingProgress : (recalStatus.isRecalibrating || isTkanRunning ? 50 : 0);
+    const totalBlocks = 20;
+    const filledBlocks = Math.round((progressVal / 100) * totalBlocks);
+    const emptyBlocks = totalBlocks - filledBlocks;
+    const progressBar = progressVal > 0 ? `${green}${"▓".repeat(filledBlocks)}${gray}${"░".repeat(emptyBlocks)}${reset}` : `${gray}${"-".repeat(20)}${reset}`;
+
+    out += ` IC (Spearman): ${icColor}${icSign}${rollingIc.toFixed(4)}${reset} | EWMA IC: ${ewmaSign}${ewmaIc.toFixed(4)} | Threshold: ${adaptiveThreshold.toFixed(4)} | Drift State: ${driftStateStr} | Window Pairs: ${sampleCount}/1000${clearLine}\n`;
+    out += ` Auto-Trainer: ${trainerStateStr} | Drift Ticks: ${recalStatus.driftTickCounter}/50 | Recalibrations: ${recalStatus.totalRecalibrations} | Hot-Swap: ${green}[ACTIVE]${reset} | Training: [${progressBar}] ${progressVal}%${clearLine}\n`;
+
     out += MultiAssetCLIDashboard.BORDER;
     out += "\x1b[J";
 

@@ -8,6 +8,8 @@ export interface RiskConfig {
   dailyProfitLockTargetUsdt: number;
   minRiskRewardRatio: number;
   minNetAlpha: number;
+  makerFeeRate?: number;
+  takerFeeRate?: number;
 }
 
 export interface OrderIntent {
@@ -98,7 +100,8 @@ export class RiskGuard {
     const defaultMaxPosition = !isNaN(envMaxPosition) ? envMaxPosition : 10000.0;
 
     const envMinNetAlpha = process.env.MIN_NET_ALPHA ? parseFloat(process.env.MIN_NET_ALPHA) : NaN;
-    const defaultMinNetAlpha = !isNaN(envMinNetAlpha) && envMinNetAlpha > 0 ? envMinNetAlpha : 0.0015;
+    const envMakerFee = process.env.MAKER_FEE_RATE ? parseFloat(process.env.MAKER_FEE_RATE) : NaN;
+    const envTakerFee = process.env.TAKER_FEE_RATE ? parseFloat(process.env.TAKER_FEE_RATE) : NaN;
 
     this.config = {
       maxPositionSizeUsdt: config?.maxPositionSizeUsdt ?? defaultMaxPosition,
@@ -107,7 +110,9 @@ export class RiskGuard {
       maxPriceSlippagePercent: config?.maxPriceSlippagePercent ?? 0.5,
       dailyProfitLockTargetUsdt: config?.dailyProfitLockTargetUsdt ?? defaultProfitLock,
       minRiskRewardRatio: config?.minRiskRewardRatio ?? defaultMinRrRatio,
-      minNetAlpha: config?.minNetAlpha ?? defaultMinNetAlpha,
+      minNetAlpha: config?.minNetAlpha ?? (!isNaN(envMinNetAlpha) ? envMinNetAlpha : 0.0015),
+      makerFeeRate: config?.makerFeeRate ?? (!isNaN(envMakerFee) ? envMakerFee : 0.00018),
+      takerFeeRate: config?.takerFeeRate ?? (!isNaN(envTakerFee) ? envTakerFee : 0.00045),
     };
   }
 
@@ -158,10 +163,9 @@ export class RiskGuard {
 
     // 2.2 SOTA Dynamic Alpha-to-Friction Barrier Guard: Target Return >= Total Friction + MIN_NET_ALPHA
     if (!intent.isCloseOrder && !intent.isHardStop && intent.price > 0) {
-      const envMinNetAlpha = process.env.MIN_NET_ALPHA ? parseFloat(process.env.MIN_NET_ALPHA) : NaN;
-      const minNetAlpha = !isNaN(envMinNetAlpha) && envMinNetAlpha > 0 ? envMinNetAlpha : this.config.minNetAlpha;
-      const makerFee = process.env.MAKER_FEE_RATE ? parseFloat(process.env.MAKER_FEE_RATE) : 0.00018;
-      const takerFee = process.env.TAKER_FEE_RATE ? parseFloat(process.env.TAKER_FEE_RATE) : 0.00045;
+      const minNetAlpha = this.config.minNetAlpha;
+      const makerFee = this.config.makerFeeRate ?? 0.00018;
+      const takerFee = this.config.takerFeeRate ?? 0.00045;
       const minFrictionFloorPct = (makerFee + takerFee) + minNetAlpha;
 
       if (intent.takeProfitPrice !== undefined && intent.takeProfitPrice > 0) {

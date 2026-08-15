@@ -10,6 +10,7 @@ import { MultiAssetStrategyEngine } from "../strategy/multiEngine";
 import { MultiAssetRiskGuard } from "../strategy/risk";
 import { syncStateOnStartup } from "../index";
 import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
+import { AutoRecalibrationManager } from "../ai/recalibrationWorker";
 
 export interface NativeIngestionModule {
   startIngestion?: (sabBuffer: Buffer, symbols?: string[]) => boolean;
@@ -169,10 +170,42 @@ export async function runProductionTuiLauncher(): Promise<void> {
 
   keyEngine.start();
 
+  // Initialize Local Asynchronous Auto-Recalibration Manager
+  const recalibrationManager = AutoRecalibrationManager.getInstance();
+  recalibrationManager.setSustainedDriftThreshold(50);
+  recalibrationManager.setOnStateChangeCallback((state) => {
+    dashboard.pushNotification(`[RECALIBRATION_STATE] State Transition: -> ${state}`);
+  });
+
   // Active High-Frequency 10ms Vectorized Multi-Asset Strategy Engine Tick Loop
   const strategyInterval = setInterval(() => {
     try {
       const batch = multiEngine.evaluateAllTicks();
+
+      // Active Model Drift Evaluation & Self-Healing Trigger (SAB Slot 101 & 102)
+      const rollingIc = client.getRollingIC();
+      const isDrifted = client.getIsModelDrifted();
+      const seqNum = client.getSequenceNum(0);
+
+      if (riskGuard.isProfitLockedState()) {
+        recalibrationManager.enableShadowMode();
+        recalibrationManager.evaluateShadowTick(seqNum, rollingIc);
+      } else {
+        recalibrationManager.evaluateTickDrift(rollingIc, isDrifted);
+      }
+
+      // Check scheduled offline T-KAN initialization (interval from .env TKAN_TRAINING_INTERVAL_DAYS)
+      recalibrationManager.checkAndRunScheduledTkan()
+        .then((executed) => {
+          if (executed) {
+            dashboard.pushNotification("✅ [T-KAN_SCHEDULER] Periodic T-KAN spatial initialization completed & hot-swapped.");
+          }
+        })
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          dashboard.pushNotification(`⚠️ [T-KAN_SCHEDULER_ERROR] ${msg}`);
+        });
+
       for (const [symbol, result] of batch.results.entries()) {
         if (result.signalType !== "NONE") {
           dashboard.pushNotification(

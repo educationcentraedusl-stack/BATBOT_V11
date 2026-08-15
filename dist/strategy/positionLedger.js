@@ -376,11 +376,16 @@ class HedgePositionLedger {
         isPartialClose: false,
         cancelOrderIds: undefined,
     }));
+    priceTickSize;
+    priceFactor;
     constructor(symbol = "BTCUSDT", maxShortSlots = 3) {
         this.symbol = symbol;
         this.maxShortSlots = maxShortSlots;
         this.legacyLedger = new PositionLedger(symbol);
         this.sizingCalc = new dynamicSizing_1.DynamicSizingCalculator();
+        const rule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(symbol);
+        this.priceTickSize = rule.tickSize;
+        this.priceFactor = Math.pow(10, rule.priceDecimals);
         this.cachedSummary = {
             symbol: this.symbol,
             side: "FLAT",
@@ -452,10 +457,8 @@ class HedgePositionLedger {
     recordRealizedExit(slotSide, entryPrice, exitPrice, closedQty, exitFeeRate, exitReason = "SIGNAL_EXIT") {
         if (closedQty <= 0 || entryPrice <= 0 || exitPrice <= 0)
             return;
-        // Standard 0.05% (0.0005) taker fee floor per leg to guarantee true wallet loss reflection
-        const defaultTakerFee = 0.0005;
-        const takerFee = Math.max(defaultTakerFee, this.sizingCalc.getTakerFeeRate());
-        const feeRate = exitFeeRate !== undefined ? Math.max(0.0002, exitFeeRate) : takerFee;
+        const takerFee = this.sizingCalc.getTakerFeeRate();
+        const feeRate = exitFeeRate !== undefined ? exitFeeRate : takerFee;
         const grossPnl = slotSide === "LONG"
             ? (exitPrice - entryPrice) * closedQty
             : (entryPrice - exitPrice) * closedQty;
@@ -1279,7 +1282,7 @@ class HedgePositionLedger {
         if (isLong) {
             slot.peakPrice = Math.max(slot.peakPrice || slot.entryPrice, markPrice);
             const offsetUsdt = slot.peakPrice * adaptedDistPct;
-            mvaStopPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, slot.peakPrice - offsetUsdt);
+            mvaStopPrice = this.formatPriceFast(slot.peakPrice - offsetUsdt);
             // Ratchet up only
             if (mvaStopPrice > slot.stopLossPrice) {
                 slot.stopLossPrice = mvaStopPrice;
@@ -1290,7 +1293,7 @@ class HedgePositionLedger {
                 ? Math.min(slot.troughPrice, markPrice)
                 : markPrice;
             const offsetUsdt = slot.troughPrice * adaptedDistPct;
-            mvaStopPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, slot.troughPrice + offsetUsdt);
+            mvaStopPrice = this.formatPriceFast(slot.troughPrice + offsetUsdt);
             // Ratchet down only
             if (slot.stopLossPrice === 0 || mvaStopPrice < slot.stopLossPrice) {
                 slot.stopLossPrice = mvaStopPrice;
@@ -1306,6 +1309,12 @@ class HedgePositionLedger {
         if (isMvaTriggered) {
             this.pushSotaTrigger(slot.slotId, slot.side, `MVA_TRAILING_STOP_${slot.side}`, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId);
         }
+    }
+    formatPriceFast(rawPrice) {
+        if (rawPrice <= 0)
+            return 0;
+        const rounded = Math.round(rawPrice / this.priceTickSize) * this.priceTickSize;
+        return Math.round(rounded * this.priceFactor) / this.priceFactor;
     }
     pushSotaTrigger(slotId, side, reason, quantity, entryPrice, markPrice, isPartialClose, activeTpOrderIds, activeStopLossOrderId) {
         const idx = this.sotaTriggers.length;

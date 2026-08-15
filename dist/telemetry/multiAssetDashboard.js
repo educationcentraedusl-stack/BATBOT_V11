@@ -1,8 +1,68 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MultiAssetCLIDashboard = exports.DEFAULT_ASSET_SYMBOLS = void 0;
+const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
 const tradingSymbols_1 = require("../config/tradingSymbols");
 const symbolPrecision_1 = require("../config/symbolPrecision");
+const recalibrationWorker_1 = require("../ai/recalibrationWorker");
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+let nativeAddon = null;
+try {
+    nativeAddon = require("../../index.js");
+}
+catch {
+    // Safe fallback
+}
+function readTrainingProgress() {
+    try {
+        const progressPath = path.resolve(process.cwd(), ".training_progress");
+        if (fs.existsSync(progressPath)) {
+            const raw = fs.readFileSync(progressPath, "utf-8").trim();
+            const val = parseInt(raw, 10);
+            if (!isNaN(val) && val >= 0 && val <= 100) {
+                return val;
+            }
+        }
+    }
+    catch (_e) {
+        // Safe non-blocking read
+    }
+    return null;
+}
 exports.DEFAULT_ASSET_SYMBOLS = (0, tradingSymbols_1.getTradingSymbols)();
 class MultiAssetCLIDashboard {
     client;
@@ -393,6 +453,45 @@ class MultiAssetCLIDashboard {
                 }
             }
         }
+        // AI Recalibration & Model Drift Monitor (SAB Slots 101/102 & IC Tracker)
+        out += MultiAssetCLIDashboard.SUB_DIVIDER;
+        out += `${bold}--- AI RECALIBRATION & MODEL DRIFT MONITOR (SAB SLOTS 101/102 & IC TRACKER) ---${reset}${clearLine}\n`;
+        const rollingIc = this.client.getRollingIC();
+        const isDrifted = this.client.getIsModelDrifted();
+        let ewmaIc = 0;
+        let adaptiveThreshold = 0.01;
+        let sampleCount = 0;
+        if (nativeAddon && typeof nativeAddon.getIcStatus === "function") {
+            try {
+                const rawJson = nativeAddon.getIcStatus();
+                const parsed = JSON.parse(rawJson);
+                ewmaIc = parsed.ewma_ic ?? 0;
+                adaptiveThreshold = parsed.adaptive_threshold ?? 0.01;
+                sampleCount = parsed.sample_count ?? 0;
+            }
+            catch {
+                // Safe non-blocking parse
+            }
+        }
+        const recalStatus = recalibrationWorker_1.AutoRecalibrationManager.getInstance().getStatus();
+        const isTkanRunning = recalibrationWorker_1.AutoRecalibrationManager.getInstance().isTkanTrainingActive();
+        const trainingProgress = readTrainingProgress();
+        const icSign = rollingIc >= 0 ? "+" : "";
+        const icColor = rollingIc >= 0.03 ? green + bold : rollingIc >= 0.01 ? cyan : red + bold;
+        const ewmaSign = ewmaIc >= 0 ? "+" : "";
+        const driftStateStr = isDrifted ? `${red}${bold}[DRIFT DETECTED - RECALIBRATING]${reset}` : `${green}${bold}[HEALTHY - CALIBRATED]${reset}`;
+        const trainerStateStr = recalStatus.isRecalibrating
+            ? `${yellow}${bold}[CfC TRAINING ACTIVE]${reset}`
+            : isTkanRunning
+                ? `${cyan}${bold}[T-KAN INIT ACTIVE]${reset}`
+                : `${green}[STANDBY]${reset}`;
+        const progressVal = trainingProgress !== null ? trainingProgress : (recalStatus.isRecalibrating || isTkanRunning ? 50 : 0);
+        const totalBlocks = 20;
+        const filledBlocks = Math.round((progressVal / 100) * totalBlocks);
+        const emptyBlocks = totalBlocks - filledBlocks;
+        const progressBar = progressVal > 0 ? `${green}${"▓".repeat(filledBlocks)}${gray}${"░".repeat(emptyBlocks)}${reset}` : `${gray}${"-".repeat(20)}${reset}`;
+        out += ` IC (Spearman): ${icColor}${icSign}${rollingIc.toFixed(4)}${reset} | EWMA IC: ${ewmaSign}${ewmaIc.toFixed(4)} | Threshold: ${adaptiveThreshold.toFixed(4)} | Drift State: ${driftStateStr} | Window Pairs: ${sampleCount}/1000${clearLine}\n`;
+        out += ` Auto-Trainer: ${trainerStateStr} | Drift Ticks: ${recalStatus.driftTickCounter}/50 | Recalibrations: ${recalStatus.totalRecalibrations} | Hot-Swap: ${green}[ACTIVE]${reset} | Training: [${progressBar}] ${progressVal}%${clearLine}\n`;
         out += MultiAssetCLIDashboard.BORDER;
         out += "\x1b[J";
         process.stdout.write(out);
