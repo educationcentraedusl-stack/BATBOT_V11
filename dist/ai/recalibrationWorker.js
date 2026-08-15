@@ -71,6 +71,8 @@ class AutoRecalibrationManager {
     lastTkanTrainingTimestamp = 0;
     tkanScheduleFilePath;
     isTkanTraining = false;
+    client = null;
+    maxAssetSlots = 10;
     constructor() {
         this.projectRoot = process.cwd();
         this.dataDir = path.join(this.projectRoot, "data");
@@ -109,6 +111,17 @@ class AutoRecalibrationManager {
     getLastTkanTrainingTimestamp() {
         return this.lastTkanTrainingTimestamp;
     }
+    setMarketDataClient(client, maxSlots = 10) {
+        this.client = client;
+        this.maxAssetSlots = maxSlots;
+    }
+    broadcastDriftState(isDrifted) {
+        if (this.client) {
+            for (let i = 0; i < this.maxAssetSlots; i++) {
+                this.client.setIsModelDrifted(isDrifted, i);
+            }
+        }
+    }
     isTkanTrainingActive() {
         return this.isTkanTraining;
     }
@@ -138,6 +151,7 @@ class AutoRecalibrationManager {
             return false;
         }
         this.isTkanTraining = true;
+        this.broadcastDriftState(true);
         try {
             console.log(`[BATBOT_V11][T-KAN_SCHEDULER] Triggering scheduled offline T-KAN spatial initialization (Interval: ${this.tkanScheduleIntervalDays} days)...`);
             const pythonCmd = this.getPythonExecutable();
@@ -192,6 +206,7 @@ class AutoRecalibrationManager {
         }
         finally {
             this.isTkanTraining = false;
+            this.broadcastDriftState(false);
         }
     }
     setOnSuccessCallback(callback) {
@@ -320,8 +335,9 @@ class AutoRecalibrationManager {
         // Set attempt timestamp IMMEDIATELY at entry to enforce cooldown on all execution paths
         this.lastAttemptTimestamp = Date.now();
         this.recalibrationFailed = false;
-        // Single-Flight Atomic Mutex Acquisition (Non-blocking: Engine remains LIVE_ACTIVE)
+        // Single-Flight Atomic Mutex Acquisition & SAB Drift Assertion
         this.isRecalibrating = true;
+        this.broadcastDriftState(true);
         let isSuccess = false;
         try {
             console.log(`[BATBOT_V11][SHADOW-RECALIBRATION] Triggered background recalibration (IC: ${currentIc.toFixed(4)}, Drift Ticks: ${this.driftTickCounter}). Engine remains LIVE_ACTIVE trading on Generation N weights.`);
@@ -423,6 +439,7 @@ class AutoRecalibrationManager {
         }
         finally {
             this.isRecalibrating = false;
+            this.broadcastDriftState(false);
             // Do NOT set state to TRAINING_LOCK. Engine continues trading on last known good weights.
         }
     }

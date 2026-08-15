@@ -5,7 +5,7 @@ import { execFile, execSync } from "child_process";
 import { promisify } from "util";
 import * as readline from "readline";
 import { CLIDashboard } from "../telemetry/dashboard";
-import { TerminalOutputMux } from "../telemetry/terminalMux";
+import { MarketDataClient } from "../marketDataClient";
 
 const execFileAsync = promisify(execFile);
 
@@ -70,6 +70,8 @@ export class AutoRecalibrationManager {
   private lastTkanTrainingTimestamp: number = 0;
   private tkanScheduleFilePath: string;
   private isTkanTraining: boolean = false;
+  private client: MarketDataClient | null = null;
+  private maxAssetSlots: number = 10;
 
   private constructor() {
     this.projectRoot = process.cwd();
@@ -114,6 +116,19 @@ export class AutoRecalibrationManager {
     return this.lastTkanTrainingTimestamp;
   }
 
+  public setMarketDataClient(client: MarketDataClient, maxSlots: number = 10): void {
+    this.client = client;
+    this.maxAssetSlots = maxSlots;
+  }
+
+  public broadcastDriftState(isDrifted: boolean): void {
+    if (this.client) {
+      for (let i = 0; i < this.maxAssetSlots; i++) {
+        this.client.setIsModelDrifted(isDrifted, i);
+      }
+    }
+  }
+
   public isTkanTrainingActive(): boolean {
     return this.isTkanTraining;
   }
@@ -149,6 +164,7 @@ export class AutoRecalibrationManager {
     }
 
     this.isTkanTraining = true;
+    this.broadcastDriftState(true);
     try {
       console.log(
         `[BATBOT_V11][T-KAN_SCHEDULER] Triggering scheduled offline T-KAN spatial initialization (Interval: ${this.tkanScheduleIntervalDays} days)...`
@@ -215,6 +231,7 @@ export class AutoRecalibrationManager {
       return false;
     } finally {
       this.isTkanTraining = false;
+      this.broadcastDriftState(false);
     }
   }
 
@@ -362,8 +379,9 @@ export class AutoRecalibrationManager {
     this.lastAttemptTimestamp = Date.now();
     this.recalibrationFailed = false;
 
-    // Single-Flight Atomic Mutex Acquisition (Non-blocking: Engine remains LIVE_ACTIVE)
+    // Single-Flight Atomic Mutex Acquisition & SAB Drift Assertion
     this.isRecalibrating = true;
+    this.broadcastDriftState(true);
 
     let isSuccess = false;
 
@@ -500,6 +518,7 @@ export class AutoRecalibrationManager {
       return false;
     } finally {
       this.isRecalibrating = false;
+      this.broadcastDriftState(false);
       // Do NOT set state to TRAINING_LOCK. Engine continues trading on last known good weights.
     }
   }

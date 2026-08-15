@@ -12,6 +12,7 @@ const hjbReservationEngine_1 = require("./hjbReservationEngine");
 const userDataStream_1 = require("../execution/userDataStream");
 const symbolPrecision_1 = require("../config/symbolPrecision");
 const tradingSymbols_1 = require("../config/tradingSymbols");
+const recalibrationWorker_1 = require("../ai/recalibrationWorker");
 function getSymbolQuantityPrecision(symbol) {
     const rule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(symbol);
     return {
@@ -986,12 +987,12 @@ class StrategyEngine {
             const rawConf = this.client.getAIPredictionConfidence(this.assetIndex);
             const aiDirection = Number.isFinite(rawDir) ? rawDir : 0.0;
             const rawAiConfidence = Number.isFinite(rawConf) ? Math.max(0.0, Math.min(1.0, rawConf)) : 0.0;
-            // CRITICAL FIX (BUG-3): Safety guard — force confidence to 0.0 during CfC recalibration.
-            // During [CfC TRAINING ACTIVE], the live model's slot-94 values are stale/invalid.
-            // Forcing aiConfidence=0.0 makes isConvictionValid=false unconditionally (0.0 < any floor),
-            // guaranteeing ZERO signal throughput for ALL assets while a new model trains.
-            const isCurrentlyRecalibrating = this.client.getIsModelDrifted(this.assetIndex);
-            const aiConfidence = isCurrentlyRecalibrating ? 0.0 : rawAiConfidence;
+            // Dual-redundant safety guard: enforce zero AI confidence if SAB indicates drift OR if background training (CfC or T-KAN) is active.
+            // During active training or drift, forcing aiConfidence=0.0 guarantees zero signal execution on stale/invalid models.
+            const isDriftedSab = this.client.getIsModelDrifted(this.assetIndex);
+            const autoRecal = recalibrationWorker_1.AutoRecalibrationManager.getInstance();
+            const isTrainingActive = isDriftedSab || autoRecal.getStatus().isRecalibrating || autoRecal.isTkanTrainingActive();
+            const aiConfidence = isTrainingActive ? 0.0 : rawAiConfidence;
             const aiDirectionMag = Math.abs(aiDirection);
             const latencyPenalty = this.client.getLatencyPenaltyCoefficient(this.assetIndex);
             const penaltyCoeff = latencyPenalty > 0 ? Math.max(0.75, latencyPenalty) : 1.0;

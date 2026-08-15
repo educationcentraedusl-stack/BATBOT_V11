@@ -98,12 +98,14 @@ impl ICTracker {
             self.is_drifted = false;
         }
 
-        // CRITICAL FIX (BUG-2b): Use per-asset store_f64_asset so multi-asset inference
-        // for asset_idx > 0 does NOT corrupt asset-0's SAB slots 101/102.
-        // The global IC displayed in the telemetry reads from asset_idx=0, slot 101.
+        // Broadcast IC and drift state to current asset slot and asset 0 (global monitor)
         if let Some(bridge) = sab {
             bridge.store_f64_asset(asset_idx, 101, ic);
             bridge.store_f64_asset(asset_idx, 102, if self.is_drifted { 1.0 } else { 0.0 });
+            if asset_idx != 0 {
+                bridge.store_f64_asset(0, 101, ic);
+                bridge.store_f64_asset(0, 102, if self.is_drifted { 1.0 } else { 0.0 });
+            }
         }
 
         ic

@@ -172,6 +172,7 @@ export async function runProductionTuiLauncher(): Promise<void> {
 
   // Initialize Local Asynchronous Auto-Recalibration Manager
   const recalibrationManager = AutoRecalibrationManager.getInstance();
+  recalibrationManager.setMarketDataClient(client, maxAssets);
   recalibrationManager.setSustainedDriftThreshold(50);
   recalibrationManager.setOnStateChangeCallback((state) => {
     dashboard.pushNotification(`[RECALIBRATION_STATE] State Transition: -> ${state}`);
@@ -185,8 +186,22 @@ export async function runProductionTuiLauncher(): Promise<void> {
       const batch = multiEngine.evaluateAllTicks();
 
       // Active Model Drift Evaluation & Self-Healing Trigger (SAB Slot 101 & 102)
-      const rollingIc = client.getRollingIC();
-      const isDrifted = client.getIsModelDrifted();
+      let rollingIc = client.getRollingIC();
+      let isDrifted = client.getIsModelDrifted();
+
+      if (nativeModule && typeof (nativeModule as any).getIcStatus === "function") {
+        try {
+          const rawJson = (nativeModule as any).getIcStatus();
+          const parsed = JSON.parse(rawJson);
+          if (typeof parsed.ic === "number" && !isNaN(parsed.ic)) {
+            rollingIc = parsed.ic;
+          }
+          if (typeof parsed.is_drifted === "boolean") {
+            isDrifted = isDrifted || parsed.is_drifted;
+          }
+        } catch {}
+      }
+
       const seqNum = client.getSequenceNum(0);
 
       if (riskGuard.isProfitLockedState()) {

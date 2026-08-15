@@ -498,8 +498,8 @@ export class MultiAssetCLIDashboard {
     out += MultiAssetCLIDashboard.SUB_DIVIDER;
     out += `${bold}--- AI RECALIBRATION & MODEL DRIFT MONITOR (SAB SLOTS 101/102 & IC TRACKER) ---${reset}${clearLine}\n`;
 
-    const rollingIc = this.client.getRollingIC();
-    const isDrifted = this.client.getIsModelDrifted();
+    let rollingIc = this.client.getRollingIC();
+    let isDrifted = this.client.getIsModelDrifted();
 
     let ewmaIc = 0;
     let adaptiveThreshold = 0.01;
@@ -509,6 +509,12 @@ export class MultiAssetCLIDashboard {
       try {
         const rawJson = nativeAddon.getIcStatus();
         const parsed = JSON.parse(rawJson);
+        if (typeof parsed.ic === "number" && !isNaN(parsed.ic)) {
+          rollingIc = parsed.ic;
+        }
+        if (typeof parsed.is_drifted === "boolean") {
+          isDrifted = isDrifted || parsed.is_drifted;
+        }
         ewmaIc = parsed.ewma_ic ?? 0;
         adaptiveThreshold = parsed.adaptive_threshold ?? 0.01;
         sampleCount = parsed.sample_count ?? 0;
@@ -519,12 +525,13 @@ export class MultiAssetCLIDashboard {
 
     const recalStatus = AutoRecalibrationManager.getInstance().getStatus();
     const isTkanRunning = AutoRecalibrationManager.getInstance().isTkanTrainingActive();
+    const isAnyTrainingActive = isDrifted || recalStatus.isRecalibrating || isTkanRunning;
     const trainingProgress = readTrainingProgress();
 
     const icSign = rollingIc >= 0 ? "+" : "";
     const icColor = rollingIc >= 0.03 ? green + bold : rollingIc >= 0.01 ? cyan : red + bold;
     const ewmaSign = ewmaIc >= 0 ? "+" : "";
-    const driftStateStr = isDrifted ? `${red}${bold}[DRIFT DETECTED - RECALIBRATING]${reset}` : `${green}${bold}[HEALTHY - CALIBRATED]${reset}`;
+    const driftStateStr = isAnyTrainingActive ? `${red}${bold}[DRIFT DETECTED - RECALIBRATING]${reset}` : `${green}${bold}[HEALTHY - CALIBRATED]${reset}`;
 
     const trainerStateStr = recalStatus.isRecalibrating
       ? `${yellow}${bold}[CfC TRAINING ACTIVE]${reset}`

@@ -525,16 +525,10 @@ impl AIEngine {
         };
 
         if last_mid > 0.0 && current_mid > 0.0 && last_pred != 0.0 {
-            // CRITICAL FIX (BUG-2): Realized return must be current_mid - last_mid (positive = price rose).
-            // Prediction direction is positive = expecting price rise. This is the correct correlation.
-            // Verified: (current_mid - last_mid) / last_mid, positive if price went up.
+            // Realized return: (current_mid - last_mid) / last_mid, positive if price rose.
             let realized_return = (current_mid - last_mid) / last_mid;
             if let Ok(mut tracker) = self.ic_tracker.lock() {
-                // CRITICAL FIX (BUG-2b): Pass None for SAB here. The IC tracker's SAB write
-                // uses the asset-0-only legacy bridge.store_f64() which writes to the WRONG asset slot
-                // for assets 1-9. The correct per-asset IC is written below after inference.
-                // The global IC (slot 101 on asset-0) is updated by the TypeScript layer via getRollingIC.
-                tracker.add_observation(last_pred, realized_return, None);
+                tracker.add_observation_asset(last_pred, realized_return, Some(sab), asset_idx);
             }
         }
 
@@ -578,43 +572,35 @@ impl AIEngine {
         let direction = raw_direction.tanh();
         let direction_magnitude = direction.abs();
 
-        // Garman-Klass Volatility & Signal Z-Score (Z_signal)
-        // CRITICAL FIX (BUG-1): When gk_rv is near 0 (common at startup / low-vol ticks),
-        // gk_vol falls back to 0.005. With direction_magnitude ~0.12, z_score = 0.12/0.005 = 24.0.
-        // Multiplied by snr_scalar ~2.5 → net_conviction_z = 57.5, logit clamps to 4.6,
-        // sigmoid(4.6) = 0.990 → every asset pins to 99.0%. Fix: hard-clamp z_score to [0.0, 3.0]
-        // BEFORE SNR amplification. Maximum safe logit input = (1.0*2.0*2.5+0.5+0)/0.05 = 110,
-        // but we limit net_conviction_z so logit stays physically in (-4.0, 4.0) range.
-        let gk_rv = sab.load_f64_asset(asset_idx, 121);
-        let gk_vol = if gk_rv > 0.000001 { gk_rv.sqrt() } else { 0.005 };
-        // Clamp z_score: maximum 3.0 std-devs — beyond this is noise, not signal.
-        let z_score = (direction_magnitude / gk_vol.max(0.0001)).min(3.0);
+        // Adaptive Volatility Damping & Platt-Calibrated Confidence Formulation:
+        // Slot 121 stores per-microbar Garman-Klass realized volatility sigma_GK (e.g. ~0.00007).
+        // Continuous adaptive volatility damping softens confidence during elevated volatility/noise:
+        // vol_damping = 1.0 + (gk_vol / 0.0010).clamp(0.0, 3.0), where 0.0010 (10 bps) is baseline ref vol.
+        let gk_vol = sab.load_f64_asset(asset_idx, 121).max(0.0);
+        let vol_damping = 1.0 + (gk_vol / 0.0010).clamp(0.0, 3.0);
 
-        // Temperature Scaling (T) & Genuine Platt Calibration Formula:
+        // Feature Signal-to-Noise Ratio normalized to [0.5, 2.0]
+        let snr_norm = (snr_score / 2.0).clamp(0.5, 2.0);
+
+        // Effective continuous conviction scaled by SNR and damped by market volatility
+        let effective_conviction = (direction_magnitude * snr_norm) / vol_damping;
+
+        // Temperature Scaling & Platt Calibration Parameters
         let sab_temp = sab.load_f64_asset(asset_idx, 127);
         let sab_scale = sab.load_f64_asset(asset_idx, 128);
         let sab_offset = sab.load_f64_asset(asset_idx, 129);
 
-        let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature };
-        let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale };
-        let offset = sab_offset;
+        let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.2, 3.0);
+        let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale }.clamp(0.5, 5.0);
+        let offset = sab_offset.clamp(-1.0, 1.0);
 
-        let alpha = scale.max(1.0);
         let obi = sab.load_f64_asset(asset_idx, 1);
         let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
         let obi_align = obi * direction_sign;
 
-        // SNR scales conviction magnitude (z_score - 1.0). With z_score clamped to 3.0 and
-        // snr_scalar clamped to 2.5, net_conviction_z max = (3.0-1.0)*2.5 = 5.0.
-        // Final logit max = (1.0*5.0 + 0.5 + 0) / 0.05 = 110 → re-clamp to (-4.0, 4.0)
-        // to keep confidence within a meaningful [0.02, 0.98] regime.
-        let snr_scalar = (snr_score / 2.0).clamp(0.2, 2.5);
-        let net_conviction_z = (z_score - 1.0) * snr_scalar;
-
-        // CRITICAL FIX: Tighten logit clamp to (-4.0, 4.0). sigmoid(-4)=0.018, sigmoid(4)=0.982.
-        // Previous (-10.0, 4.6) allowed the explosion to 4.6 → 0.990 for every z_score explosion.
-        let calibrated_logit: f64 = ((alpha * net_conviction_z + obi_align * 0.5 + offset) / temp.max(0.05)).clamp(-4.0, 4.0);
-        let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.01f64, 0.99f64);
+        // Calibrated continuous logit: smooth mapping to dynamic confidence spectrum (50% - 98%)
+        let calibrated_logit: f64 = ((scale * effective_conviction * 3.0 + obi_align * 0.4 + offset) / temp).clamp(-4.0, 4.0);
+        let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.05f64, 0.98f64);
 
         let end_ns = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -724,26 +710,25 @@ impl AIEngine {
         let direction = raw_direction.tanh();
         let direction_magnitude = direction.abs();
 
-        let gk_rv = sab.load_f64(121);
-        let gk_vol = if gk_rv > 0.000001 { gk_rv.sqrt() } else { 0.005 };
-        let z_score = direction_magnitude / gk_vol.max(0.0001);
+        let gk_vol = sab.load_f64(121).max(0.0);
+        let vol_damping = 1.0 + (gk_vol / 0.0010).clamp(0.0, 3.0);
+        let snr_norm = (snr_score / 2.0).clamp(0.5, 2.0);
+        let effective_conviction = (direction_magnitude * snr_norm) / vol_damping;
 
         let sab_temp = sab.load_f64(127);
         let sab_scale = sab.load_f64(128);
         let sab_offset = sab.load_f64(129);
 
-        let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature };
-        let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale };
-        let offset = sab_offset;
+        let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.2, 3.0);
+        let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale }.clamp(0.5, 5.0);
+        let offset = sab_offset.clamp(-1.0, 1.0);
 
-        let alpha = scale.max(1.0);
-        let beta = 0.8;
         let obi = sab.load_f64(1);
         let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
         let obi_align = obi * direction_sign;
 
-        let calibrated_logit: f64 = ((alpha * z_score + beta * snr_score + obi_align * 0.5 + offset) / temp.max(0.05)).clamp(0.0, 4.6);
-        let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.99f64);
+        let calibrated_logit: f64 = ((scale * effective_conviction * 3.0 + obi_align * 0.4 + offset) / temp).clamp(-4.0, 4.0);
+        let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.05f64, 0.98f64);
 
         let end_ns = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -803,21 +788,24 @@ impl AIEngine {
                     let direction = raw_direction.tanh();
                     let direction_magnitude = direction.abs();
 
-                    let vol = features[35].max(0.0001);
-                    let z_score = direction_magnitude / vol;
+                    let vol = features[35].max(0.0);
+                    let vol_damping = 1.0 + (vol / 0.0010).clamp(0.0, 3.0);
                     let obi = features[8];
                     let obi_z = obi.abs();
                     let cvd_z = features[21].abs();
                     let vel_z = features[24].abs();
                     let micro_z = features[2].abs();
                     let snr_score = 1.0 + 0.6 * (obi_z + 0.8 * cvd_z + 0.5 * vel_z + 0.5 * micro_z).min(8.0);
-                    let alpha = self.calibration_params.platt_scale.max(1.0);
-                    let beta = 0.8;
+                    let snr_norm = (snr_score / 2.0).clamp(0.5, 2.0);
+                    let effective_conviction = (direction_magnitude * snr_norm) / vol_damping;
+
+                    let scale = self.calibration_params.platt_scale.clamp(0.5, 5.0);
+                    let temp = self.calibration_params.temperature.clamp(0.2, 3.0);
                     let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
                     let obi_align = obi * direction_sign;
 
-                    let calibrated_logit: f64 = ((alpha * z_score + beta * snr_score + obi_align * 0.5 + self.calibration_params.platt_offset) / self.calibration_params.temperature.max(0.05)).clamp(0.0, 4.6);
-                    let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.99f64);
+                    let calibrated_logit: f64 = ((scale * effective_conviction * 3.0 + obi_align * 0.4 + self.calibration_params.platt_offset) / temp).clamp(-4.0, 4.0);
+                    let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.05f64, 0.98f64);
                     return (direction, confidence);
                 }
             }
