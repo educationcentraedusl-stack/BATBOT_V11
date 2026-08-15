@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use candle_core::{DType, Device, Error, Result, Tensor};
 
@@ -359,6 +359,21 @@ impl StreamingFeaturePipeline {
     }
 }
 
+#[derive(Debug)]
+pub struct AssetTelemetryTracker {
+    pub last_mid_price: AtomicU64,
+    pub last_prediction_dir: AtomicU64,
+}
+
+impl AssetTelemetryTracker {
+    pub fn new() -> Self {
+        Self {
+            last_mid_price: AtomicU64::new(0.0f64.to_bits()),
+            last_prediction_dir: AtomicU64::new(0.0f64.to_bits()),
+        }
+    }
+}
+
 pub struct AIEngine {
     pub tkan: TKANLayer,
     pub cell: Option<CfCCell>,
@@ -368,8 +383,7 @@ pub struct AIEngine {
     pub last_inference_ns: AtomicU64,
     pub inference_seq: AtomicU64,
     pub ic_tracker: Mutex<ICTracker>,
-    pub last_mid_price: AtomicU64,
-    pub last_prediction_dir: AtomicU64,
+    pub asset_trackers: RwLock<Vec<AssetTelemetryTracker>>,
     pub feature_pipeline: Mutex<StreamingFeaturePipeline>,
 }
 
@@ -386,6 +400,20 @@ impl AIEngine {
 
         let weights_engine = AiEngine::load_from_file(cfc_path);
 
+        // Dynamically provision asset tracking memory strictly based on .env configuration
+        let num_assets = if let Ok(symbols_str) = std::env::var("TRADING_SYMBOLS") {
+            symbols_str.split(',').filter(|s| !s.trim().is_empty()).count().max(1)
+        } else if let Ok(max_assets_str) = std::env::var("MAX_CONCURRENT_ASSETS") {
+            max_assets_str.trim().parse::<usize>().unwrap_or(10).max(1)
+        } else {
+            10
+        };
+
+        let mut asset_trackers = Vec::with_capacity(num_assets);
+        for _ in 0..num_assets {
+            asset_trackers.push(AssetTelemetryTracker::new());
+        }
+
         Self {
             tkan,
             cell: weights_engine.cell,
@@ -395,8 +423,7 @@ impl AIEngine {
             last_inference_ns: AtomicU64::new(0),
             inference_seq: AtomicU64::new(0),
             ic_tracker: Mutex::new(ICTracker::default_1000()),
-            last_mid_price: AtomicU64::new(0.0f64.to_bits()),
-            last_prediction_dir: AtomicU64::new(0.0f64.to_bits()),
+            asset_trackers: RwLock::new(asset_trackers),
             feature_pipeline: Mutex::new(StreamingFeaturePipeline::new()),
         }
     }
@@ -457,8 +484,17 @@ impl AIEngine {
             pipeline.update_and_normalize_with_snr_asset(sab, lat_us_val, asset_idx)?
         };
 
-        let last_mid = f64::from_bits(self.last_mid_price.load(Ordering::Relaxed));
-        let last_pred = f64::from_bits(self.last_prediction_dir.load(Ordering::Relaxed));
+        let (last_mid, last_pred) = {
+            let trackers = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
+            if asset_idx < trackers.len() {
+                (
+                    f64::from_bits(trackers[asset_idx].last_mid_price.load(Ordering::Relaxed)),
+                    f64::from_bits(trackers[asset_idx].last_prediction_dir.load(Ordering::Relaxed)),
+                )
+            } else {
+                (0.0, 0.0)
+            }
+        };
 
         if last_mid > 0.0 && current_mid > 0.0 && last_pred != 0.0 {
             let realized_return = (current_mid - last_mid) / last_mid;
@@ -532,8 +568,22 @@ impl AIEngine {
         let spread_vel = sab.load_f64_asset(asset_idx, 3);
         let slippage_ticks = (2.0 + (spread_vel.abs() / 0.5).floor()).min(20.0);
 
-        self.last_mid_price.store(current_mid.to_bits(), Ordering::Relaxed);
-        self.last_prediction_dir.store(direction.to_bits(), Ordering::Relaxed);
+        // Store intra-asset telemetry with auto-expansion protection
+        {
+            let trackers = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
+            if asset_idx < trackers.len() {
+                trackers[asset_idx].last_mid_price.store(current_mid.to_bits(), Ordering::Relaxed);
+                trackers[asset_idx].last_prediction_dir.store(direction.to_bits(), Ordering::Relaxed);
+            } else {
+                drop(trackers);
+                let mut trackers_mut = self.asset_trackers.write().unwrap_or_else(|e| e.into_inner());
+                while trackers_mut.len() <= asset_idx {
+                    trackers_mut.push(AssetTelemetryTracker::new());
+                }
+                trackers_mut[asset_idx].last_mid_price.store(current_mid.to_bits(), Ordering::Relaxed);
+                trackers_mut[asset_idx].last_prediction_dir.store(direction.to_bits(), Ordering::Relaxed);
+            }
+        }
 
         let seq = self.inference_seq.fetch_add(1, Ordering::Relaxed);
 

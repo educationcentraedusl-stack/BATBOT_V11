@@ -85,8 +85,8 @@ class StrategyEngine {
         const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.50;
         const defaultProfitLock = !isNaN(envProfitLock) ? envProfitLock : 10.0;
         const defaultMaxShortSlots = !isNaN(envMaxShortSlots) ? envMaxShortSlots : 3;
-        const defaultMinAiConfidence = !isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.65;
-        const defaultAggressiveConfidence = !isNaN(envAggressiveConfidence) ? envAggressiveConfidence : 0.75;
+        const defaultMinAiConfidence = !isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.653;
+        const defaultAggressiveConfidence = !isNaN(envAggressiveConfidence) ? envAggressiveConfidence : 0.750;
         const defaultObiBuy = !isNaN(envObiBuy) ? envObiBuy : 0.35;
         const defaultObiSell = !isNaN(envObiSell) ? envObiSell : -0.35;
         const defaultCvdBuy = !isNaN(envCvdBuy) ? envCvdBuy : 0.0;
@@ -1253,28 +1253,30 @@ class StrategyEngine {
             const totalFrictionBarrier = (2.0 * makerFeeRate) + halfSpreadBps + estimatedSlippage;
             const expectedNetAlpha = expectedAlpha - totalFrictionBarrier;
             // SOTA Volatility, Toxicity & Drawdown Adjusted Dynamic Conviction Floor (theta_conf)
+            // Strict base confidence constraint locked to exactly 0.653 (65.3%)
             const baseMinConfidence = this.config.minAiConfidence;
             let effectiveMinConfidence = baseMinConfidence;
             const sessionPnl = this.riskGuard.getCumulativeDailyRealizedPnl();
-            const isDrawdown = sessionPnl < 0;
-            // 1. Low Volatility Surcharge: If volatility is compressed (< 0.003), elevate conviction floor to eliminate sub-fee churn
-            if (volEstimate < 0.003) {
-                effectiveMinConfidence += 0.08;
+            const isDrawdown = sessionPnl < -5.0; // Enforce drawdown penalty only on significant drawdowns (> $5)
+            // Dynamic Regime Conviction: Modulate confidence with bounded proportional scaling rather than rigid +800 bps spikes
+            if (volEstimate < 0.0015) {
+                effectiveMinConfidence = Math.min(0.75, effectiveMinConfidence + 0.02);
             }
             else if (hurstExponent > 0.55 && safeGarmanKlass > 0.001) {
-                // Strong trend regime: allow faster capture
-                effectiveMinConfidence = Math.max(0.50, effectiveMinConfidence - 0.08);
+                // Strong trend regime: allow frictionless capture down to base floor
+                effectiveMinConfidence = Math.max(baseMinConfidence, effectiveMinConfidence - 0.02);
             }
-            // 2. Microstructure Toxicity Surcharge: Elevate required confidence under toxic flow
+            // Microstructure Toxicity Surcharge: Scaled proportionally with VPIN severity
             const vpinVal = this.client.getVPIN(this.assetIndex);
-            if (vpinVal >= 0.75) {
-                effectiveMinConfidence += 0.08;
+            if (vpinVal >= 0.90) {
+                effectiveMinConfidence = Math.min(0.75, effectiveMinConfidence + 0.03);
             }
-            // 3. Drawdown Memory Surcharge: In session drawdown, enforce high-conviction recovery threshold
+            // Drawdown Surcharge: Apply moderate protection during deep drawdown
             if (isDrawdown) {
-                effectiveMinConfidence += 0.08;
+                effectiveMinConfidence = Math.min(0.75, effectiveMinConfidence + 0.03);
             }
-            effectiveMinConfidence = Math.min(0.90, Math.max(0.50, effectiveMinConfidence));
+            // Strict bounding around base conviction floor
+            effectiveMinConfidence = Math.min(0.85, Math.max(baseMinConfidence, effectiveMinConfidence));
             // 50-25-25 Weighted Composite Signal Engine & High-Confidence AI Override
             const obiScore = Math.max(-1.0, Math.min(1.0, obi));
             const cvdScore = cvd > 0 ? 1.0 : cvd < 0 ? -1.0 : 0.0;
@@ -1307,7 +1309,17 @@ class StrategyEngine {
                 }
             }
             else if (seq % 1000n === 0n) {
-                console.log(`[StrategyEngine][${this.config.symbol}][CONVICTION_FLOOR_GATE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (NetAlpha: ${(expectedNetAlpha * 10000).toFixed(1)} bps < Hurdle: ${(minNetAlpha * 10000).toFixed(1)} bps, Conf: ${(aiConfidence * 100).toFixed(1)}% < ${(effectiveMinConfidence * 100).toFixed(1)}%, Z: ${zScore.toFixed(2)} < ${minZScoreThreshold.toFixed(1)}) -> Signals Filtered`);
+                const netAlphaBps = (expectedNetAlpha * 10000).toFixed(1);
+                const hurdleBps = (minNetAlpha * 10000).toFixed(1);
+                const confPct = (aiConfidence * 100).toFixed(1);
+                const floorPct = (effectiveMinConfidence * 100).toFixed(1);
+                const alphaOp = isAlphaFrictionPassed ? ">=" : "<";
+                const confOp = aiConfidence >= effectiveMinConfidence ? ">=" : "<";
+                const zOp = zScore >= minZScoreThreshold ? ">=" : "<";
+                console.log(`[StrategyEngine][${this.config.symbol}][CONVICTION_FLOOR_GATE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} ` +
+                    `(NetAlpha: ${netAlphaBps} bps ${alphaOp} Hurdle: ${hurdleBps} bps [${isAlphaFrictionPassed ? "PASS" : "FAIL"}], ` +
+                    `Conf: ${confPct}% ${confOp} Floor: ${floorPct}% [${aiConfidence >= effectiveMinConfidence ? "PASS" : "FAIL"}], ` +
+                    `Z: ${zScore.toFixed(2)} ${zOp} ${minZScoreThreshold.toFixed(1)} [${zScore >= minZScoreThreshold ? "PASS" : "FAIL"}]) -> Signals Filtered`);
             }
             // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
             const isCoreLongOccupied = this.hedgeLedger.getCoreLong().isOccupied;
