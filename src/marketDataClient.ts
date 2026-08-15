@@ -108,6 +108,12 @@ export class MarketDataClient {
     return this.readAtomicFloat64Asset(assetIdx, 6);
   }
 
+  public getMidPrice(assetIdx: number = 0): number {
+    const bid = this.readAtomicFloat64Asset(assetIdx, 4);
+    const ask = this.readAtomicFloat64Asset(assetIdx, 6);
+    return bid > 0 && ask > 0 ? (bid + ask) / 2 : (bid > 0 ? bid : ask);
+  }
+
   public getBestAskQuantity(assetIdx: number = 0): number {
     return this.readAtomicFloat64Asset(assetIdx, 7);
   }

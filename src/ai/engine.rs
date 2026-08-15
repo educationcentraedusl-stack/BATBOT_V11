@@ -572,20 +572,9 @@ impl AIEngine {
         let direction = raw_direction.tanh();
         let direction_magnitude = direction.abs();
 
-        // Adaptive Volatility Damping & Platt-Calibrated Confidence Formulation:
+        // Adaptive Dual-Regime Volatility Damping & Platt-Calibrated Confidence Formulation:
         // Slot 121 stores per-microbar Garman-Klass realized volatility sigma_GK (e.g. ~0.00007).
-        // Continuous adaptive volatility damping softens confidence during elevated volatility/noise:
-        // vol_damping = 1.0 + (gk_vol / 0.0010).clamp(0.0, 3.0), where 0.0010 (10 bps) is baseline ref vol.
         let gk_vol = sab.load_f64_asset(asset_idx, 121).max(0.0);
-        let vol_damping = 1.0 + (gk_vol / 0.0010).clamp(0.0, 3.0);
-
-        // Feature Signal-to-Noise Ratio normalized to [0.5, 2.0]
-        let snr_norm = (snr_score / 2.0).clamp(0.5, 2.0);
-
-        // Effective continuous conviction scaled by SNR and damped by market volatility
-        let effective_conviction = (direction_magnitude * snr_norm) / vol_damping;
-
-        // Temperature Scaling & Platt Calibration Parameters
         let sab_temp = sab.load_f64_asset(asset_idx, 127);
         let sab_scale = sab.load_f64_asset(asset_idx, 128);
         let sab_offset = sab.load_f64_asset(asset_idx, 129);
@@ -593,14 +582,18 @@ impl AIEngine {
         let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.2, 3.0);
         let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale }.clamp(0.5, 5.0);
         let offset = sab_offset.clamp(-1.0, 1.0);
-
         let obi = sab.load_f64_asset(asset_idx, 1);
-        let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
-        let obi_align = obi * direction_sign;
 
-        // Calibrated continuous logit: smooth mapping to dynamic confidence spectrum (50% - 98%)
-        let calibrated_logit: f64 = ((scale * effective_conviction * 3.0 + obi_align * 0.4 + offset) / temp).clamp(-4.0, 4.0);
-        let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.05f64, 0.98f64);
+        let confidence = compute_calibrated_confidence(
+            direction_magnitude,
+            snr_score,
+            gk_vol,
+            obi,
+            direction,
+            temp,
+            scale,
+            offset,
+        );
 
         let end_ns = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -711,10 +704,6 @@ impl AIEngine {
         let direction_magnitude = direction.abs();
 
         let gk_vol = sab.load_f64(121).max(0.0);
-        let vol_damping = 1.0 + (gk_vol / 0.0010).clamp(0.0, 3.0);
-        let snr_norm = (snr_score / 2.0).clamp(0.5, 2.0);
-        let effective_conviction = (direction_magnitude * snr_norm) / vol_damping;
-
         let sab_temp = sab.load_f64(127);
         let sab_scale = sab.load_f64(128);
         let sab_offset = sab.load_f64(129);
@@ -722,13 +711,18 @@ impl AIEngine {
         let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.2, 3.0);
         let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale }.clamp(0.5, 5.0);
         let offset = sab_offset.clamp(-1.0, 1.0);
-
         let obi = sab.load_f64(1);
-        let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
-        let obi_align = obi * direction_sign;
 
-        let calibrated_logit: f64 = ((scale * effective_conviction * 3.0 + obi_align * 0.4 + offset) / temp).clamp(-4.0, 4.0);
-        let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.05f64, 0.98f64);
+        let confidence = compute_calibrated_confidence(
+            direction_magnitude,
+            snr_score,
+            gk_vol,
+            obi,
+            direction,
+            temp,
+            scale,
+            offset,
+        );
 
         let end_ns = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -789,29 +783,68 @@ impl AIEngine {
                     let direction_magnitude = direction.abs();
 
                     let vol = features[35].max(0.0);
-                    let vol_damping = 1.0 + (vol / 0.0010).clamp(0.0, 3.0);
                     let obi = features[8];
                     let obi_z = obi.abs();
                     let cvd_z = features[21].abs();
                     let vel_z = features[24].abs();
                     let micro_z = features[2].abs();
                     let snr_score = 1.0 + 0.6 * (obi_z + 0.8 * cvd_z + 0.5 * vel_z + 0.5 * micro_z).min(8.0);
-                    let snr_norm = (snr_score / 2.0).clamp(0.5, 2.0);
-                    let effective_conviction = (direction_magnitude * snr_norm) / vol_damping;
 
                     let scale = self.calibration_params.platt_scale.clamp(0.5, 5.0);
                     let temp = self.calibration_params.temperature.clamp(0.2, 3.0);
-                    let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
-                    let obi_align = obi * direction_sign;
+                    let offset = self.calibration_params.platt_offset.clamp(-1.0, 1.0);
 
-                    let calibrated_logit: f64 = ((scale * effective_conviction * 3.0 + obi_align * 0.4 + self.calibration_params.platt_offset) / temp).clamp(-4.0, 4.0);
-                    let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.05f64, 0.98f64);
+                    let confidence = compute_calibrated_confidence(
+                        direction_magnitude,
+                        snr_score,
+                        vol,
+                        obi,
+                        direction,
+                        temp,
+                        scale,
+                        offset,
+                    );
                     return (direction, confidence);
                 }
             }
         }
         (0.0, 0.0)
     }
+}
+
+/// Dual-Regime Information-Theoretic Volatility Scaling:
+/// 1. High-Volatility Turbulence Filter: softens confidence during chaotic market spikes / toxic order flow.
+/// 2. Low-Volatility Noise-Floor Filter: attenuates false conviction when market is in compressed microstructure chop (< 1.5 bps).
+#[inline(always)]
+pub fn compute_dual_regime_volatility_multiplier(gk_vol: f64) -> f64 {
+    let vol = gk_vol.max(0.0);
+    let psi_high = 1.0 / (1.0 + (vol / 0.0015).clamp(0.0, 3.0));
+    let psi_low = (vol / (vol + 0.00008)).powf(0.35);
+    (psi_high * psi_low).clamp(0.30, 1.00)
+}
+
+/// Decoupled Isotonic Platt-Calibrated Confidence Formulation:
+/// Formulates calibrated continuous logit with dynamic slope beta = 1.75 and bounded dynamic range [0.05, 0.97].
+#[inline(always)]
+pub fn compute_calibrated_confidence(
+    direction_magnitude: f64,
+    snr_score: f64,
+    gk_vol: f64,
+    obi: f64,
+    direction: f64,
+    temp: f64,
+    scale: f64,
+    offset: f64,
+) -> f64 {
+    let psi_vol = compute_dual_regime_volatility_multiplier(gk_vol);
+    let snr_norm = (snr_score / 2.5).clamp(0.60, 1.50);
+    let effective_conviction = direction_magnitude * snr_norm * psi_vol;
+
+    let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
+    let obi_align = obi * direction_sign;
+
+    let calibrated_logit: f64 = ((scale * effective_conviction * 1.75 + obi_align * 0.35 + offset) / temp).clamp(-3.5, 3.5);
+    (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.05f64, 0.98f64)
 }
 
 impl Default for AIEngine {
@@ -880,6 +913,40 @@ mod tests {
         for f in features.iter() {
             assert!(*f >= -1.0 && *f <= 1.0);
         }
+    }
+
+    #[test]
+    fn test_dual_regime_volatility_multiplier_micro_and_macro() {
+        // Micro-volatility (DOGE/DOT ~ 0.00002) should penalize noise chop
+        let psi_micro = compute_dual_regime_volatility_multiplier(0.00002);
+        assert!(psi_micro >= 0.50 && psi_micro <= 0.65, "Expected micro-volatility penalty ~0.57, got {}", psi_micro);
+
+        // Normal volatility (BTC ~ 0.00035) should preserve healthy conviction
+        let psi_normal = compute_dual_regime_volatility_multiplier(0.00035);
+        assert!(psi_normal >= 0.70 && psi_normal <= 0.85, "Expected normal volatility multiplier ~0.75, got {}", psi_normal);
+
+        // Extreme toxic volatility spike (0.00300) should dampen turbulence
+        let psi_extreme = compute_dual_regime_volatility_multiplier(0.00300);
+        assert!(psi_extreme >= 0.30 && psi_extreme <= 0.40, "Expected high volatility damping ~0.33, got {}", psi_extreme);
+    }
+
+    #[test]
+    fn test_calibrated_confidence_dynamic_range_and_anti_ceiling() {
+        // Test 1: Micro-volatility with modest conviction must NOT slam to 98%
+        let conf_micro_modest = compute_calibrated_confidence(0.50, 3.0, 0.00002, 0.20, 0.50, 1.0, 1.5, 0.0);
+        assert!(conf_micro_modest >= 0.65 && conf_micro_modest <= 0.78, "Micro modest conviction expected 65-78%, got {}", conf_micro_modest);
+
+        // Test 2: Micro-volatility with strong conviction spans 80-89%
+        let conf_micro_strong = compute_calibrated_confidence(0.85, 3.25, 0.00003, 0.30, 0.85, 1.0, 1.5, 0.0);
+        assert!(conf_micro_strong >= 0.80 && conf_micro_strong <= 0.89, "Micro strong conviction expected 80-89%, got {}", conf_micro_strong);
+
+        // Test 3: Zero conviction is exactly 50%
+        let conf_zero = compute_calibrated_confidence(0.0, 1.0, 0.00002, 0.0, 0.0, 1.0, 1.5, 0.0);
+        assert!((conf_zero - 0.50).abs() < 1e-5, "Zero conviction expected 0.50, got {}", conf_zero);
+
+        // Test 4: Extreme maximum theoretical input must strictly remain below 98.0% ceiling
+        let conf_max_boundary = compute_calibrated_confidence(1.0, 8.0, 0.0008, 1.0, 1.0, 1.0, 5.0, 1.0);
+        assert!(conf_max_boundary <= 0.975, "Max theoretical confidence must be <= 97.5%, got {}", conf_max_boundary);
     }
 }
 

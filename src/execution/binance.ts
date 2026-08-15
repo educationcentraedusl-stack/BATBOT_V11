@@ -19,6 +19,25 @@ export interface BinanceOrderParams {
   workingType?: "MARKET_PRICE" | "CONTRACT_PRICE";
   recvWindow?: number;
   positionSide?: "LONG" | "SHORT" | "BOTH";
+  clientOrderId?: string;
+}
+
+export interface BinanceUserTrade {
+  id: number;
+  symbol: string;
+  orderId: number;
+  side: "BUY" | "SELL";
+  price: string;
+  qty: string;
+  realizedPnl: string;
+  marginAsset: string;
+  quoteQty: string;
+  commission: string;
+  commissionAsset: string;
+  time: number;
+  positionSide: "LONG" | "SHORT" | "BOTH";
+  buyer: boolean;
+  maker: boolean;
 }
 
 export interface BinanceOrderResponse {
@@ -427,6 +446,9 @@ export class BinanceExecutionClient {
     if (params.workingType !== undefined) payload.workingType = params.workingType;
     if (params.recvWindow !== undefined) payload.recvWindow = params.recvWindow;
     if (params.positionSide !== undefined) payload.positionSide = params.positionSide;
+    if (params.clientOrderId !== undefined && params.clientOrderId.trim().length > 0) {
+      payload.newClientOrderId = params.clientOrderId.trim();
+    }
 
     // Binance API Error -1106: Parameter 'reduceonly' sent when not required.
     // In Hedge Mode (when positionSide is "LONG" or "SHORT"), reduceOnly MUST NOT be sent.
@@ -450,6 +472,10 @@ export class BinanceExecutionClient {
           if (params.stopPrice !== undefined) {
             algoPayload.triggerPrice = SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
             delete algoPayload.stopPrice;
+          }
+          if (params.clientOrderId !== undefined && params.clientOrderId.trim().length > 0) {
+            algoPayload.clientAlgoId = params.clientOrderId.trim();
+            delete algoPayload.newClientOrderId;
           }
           delete algoPayload.reduceOnly;
 
@@ -577,6 +603,9 @@ export class BinanceExecutionClient {
 
       if (params.price !== undefined) orderObj.price = SymbolPrecisionRegistry.formatPrice(params.symbol, params.price);
       if (params.stopPrice !== undefined) orderObj.stopPrice = SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
+      if (params.clientOrderId !== undefined && params.clientOrderId.trim().length > 0) {
+        orderObj.newClientOrderId = params.clientOrderId.trim();
+      }
 
       if (
         params.type !== "MARKET" &&
@@ -800,6 +829,21 @@ export class BinanceExecutionClient {
       { symbol, orderId },
       true
     );
+  }
+
+  public async getUserTrades(symbol: string, limit: number = 5): Promise<BinanceUserTrade[]> {
+    try {
+      const res = await this.request<BinanceUserTrade[]>(
+        "GET",
+        "/fapi/v1/userTrades",
+        { symbol, limit },
+        true
+      );
+      return Array.isArray(res) ? res : [];
+    } catch (err: any) {
+      console.warn(`[BinanceExecutionClient] Notice fetching userTrades for ${symbol}: ${err?.message || String(err)}`);
+      return [];
+    }
   }
 
   public async createListenKey(): Promise<string> {

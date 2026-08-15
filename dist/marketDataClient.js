@@ -85,6 +85,11 @@ class MarketDataClient {
     getBestAskPrice(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 6);
     }
+    getMidPrice(assetIdx = 0) {
+        const bid = this.readAtomicFloat64Asset(assetIdx, 4);
+        const ask = this.readAtomicFloat64Asset(assetIdx, 6);
+        return bid > 0 && ask > 0 ? (bid + ask) / 2 : (bid > 0 ? bid : ask);
+    }
     getBestAskQuantity(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 7);
     }

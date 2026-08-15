@@ -1,6 +1,57 @@
 # BATBOT_V11 System Status Log
 
-- **Date:** 2026-08-15
+- **Date:** 2026-08-16
+- **Feature/Task:** Master Plan Step 3: Double-Entry OMS State Reconciliation & Real-Time Shared Memory PnL Pipeline
+- **Artifacts Created/Modified:** `src/strategy/positionLedger.ts`, `src/strategy/engine.ts`, `src/marketDataClient.ts`, `src/tests/test_double_entry_oms_pnl.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** Eradicated OMS Telemetry Disconnect, Ghost PnL, and Zero-Trade Resets (Anomaly 1) via SOTA Double-Entry State Reconciliation:
+  1. **Harden Ledger Exit Settlement (`positionLedger.ts`):**
+     - Added `clearSlots()` dedicated purely to cold-start / bootstrap initialization, preventing uninitialized position resets from logging fake trades.
+     - Updated `releaseCoreLong` and `releaseShortSlot` with resilient fallback pricing (`exitPrice` -> `fallbackMarkPrice` -> `peakPrice`/`troughPrice` -> `entryPrice`), guaranteeing `recordRealizedExit()` is executed deterministically without dropping closed trade telemetry.
+     - Wired fallback pricing into `deductCoreLongQuantity` and `deductShortSlotQuantity` for partial fills and residual micro-lots.
+  2. **Double-Entry State Reconciliation (`engine.ts`):**
+     - Upgraded `handleWsAccountPositionUpdate` so that when exchange position becomes flat (`absQty === 0`), the engine queries live mark price from `MarketDataClient`, settles the active long/short slot with exact net realized PnL and fee accounting, and invokes `syncSabPositionState()`.
+     - Upgraded 5000ms periodic state sync (`syncExchangeStateWithData`) to reconcile desynced flat slots through double-entry settlement before setting state to flat.
+  3. **Zero-Allocation Mid-Price Reader (`marketDataClient.ts`):**
+     - Added `getMidPrice(assetIdx)` reading atomic best bid/ask slots from SharedArrayBuffer with zero GC allocations.
+  4. **Verification & Proof:**
+     - Verified with `npm run build:ts` (0 errors), `cargo test --lib` (39/39 passed), and `node dist/tests/test_double_entry_oms_pnl.js` (16/16 assertions passed 100%).
+     - Tested full regression matrix (`test_hd_client_order_id.js`, `test_sota_dynamic_exit_integration.js`, `test_sota_ai_loss_recovery.js`, `test_hedge_mode_split.js`, `test_local_ai_and_tui_integration.js`).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-16
+- **Feature/Task:** Master Plan Step 2: Hierarchical Deterministic (HD) 36-char ClientOrderId Protocol & Symbol-Scoped Logging Engine
+- **Artifacts Created/Modified:** `src/execution/clientOrderIdGenerator.ts`, `src/execution/binance.ts`, `src/strategy/positionLedger.ts`, `src/strategy/engine.ts`, `src/tests/test_hd_client_order_id.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** Eradicated ambiguous order tagging, cross-asset collision risks, and un-scoped logging (Anomaly 2) via SOTA Hierarchical Deterministic (HD) ClientOrderId Protocol:
+  1. **Zero-GC HD 36-Char ClientOrderId Generator (`ClientOrderIdGenerator`):**
+     - Structured format: `BB11_{SYM}_{SLOT}_{TYPE}_{HEX_TS}_{NONCE}` (strictly $\le 36$ characters and valid alphanumeric + underscore).
+     - Compact symbol encoding (`BTC`, `ETH`, `SOL`, `XRP`, `DOGE`, etc.), slot mapping (`L0`, `S0`..`S2`), and order type tagging (`EN`, `TP1`..`TP5`, `SL`, `TS`, `EM`).
+     - Monotonic 12-bit rolling nonce (`0..4095`) and sub-millisecond timestamp preventing ID collisions across high-frequency bursts.
+     - Instantaneous $O(1)$ deserialization (`ClientOrderIdGenerator.parse`) reconstructing symbol, slot, order type, timestamp, and nonce.
+  2. **Exchange Execution Layer Wiring (`binance.ts`):**
+     - Added `clientOrderId?: string` to `BinanceOrderParams`.
+     - Wired `payload.newClientOrderId` into standard REST orders (`/fapi/v1/order`), `algoPayload.clientAlgoId` into conditional algo orders (`/fapi/v1/algoOrder`), and `orderObj.newClientOrderId` into batch orders (`/fapi/v1/batchOrders`).
+     - Added `getUserTrades` REST method to `BinanceExecutionClient` for fill synchronization.
+  3. **Strategy Engine & Ledger Scoped Tagging (`positionLedger.ts` & `engine.ts`):**
+     - Attached HD ClientOrderIds across all entry orders, batch TP limit orders, resting stop loss orders, and dynamic market emergency exits.
+     - Upgraded `handleWsOrderUpdate` to use `ClientOrderIdGenerator.parse` for instantaneous, zero-search slot and order type matching.
+     - Scoped 100% of strategy logs with `[${this.config.symbol}:${slotId}]`, eradicating ambiguous logging across all 10 concurrent asset slots.
+  4. **Verification & Proof:** 100% verified via `npm run build:ts` (0 errors), `node dist/tests/test_hd_client_order_id.js` (100% pass across all 5 test stages including 280-symbol matrix and 4096-burst zero-collision tests), and full regression test suites (`test_sota_dynamic_exit_integration.js`, `test_sota_ai_loss_recovery.js`, `test_hedge_mode_split.js`).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-16
+- **Feature/Task:** Master Plan Step 1: Rust AI Dual-Regime Volatility Scaling & Decoupled Platt Calibration
+- **Artifacts Created/Modified:** `src/ai/engine.rs`, `src/ai/weights.rs`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** Eradicated the 98.0% pinned logit clamp relapse (Anomaly 3) via mathematically rigorous Dual-Regime Volatility Scaling and Decoupled Platt Calibration:
+  1. **Dual-Regime Volatility Scaling (`compute_dual_regime_volatility_multiplier`):** Separated market volatility into two continuous information-theoretic filters:
+     - $\Psi_{\text{high}} = \frac{1.0}{1.0 + (\sigma_{\text{GK}} / 0.0015)}$ (Turbulence & toxic order flow dampener)
+     - $\Psi_{\text{low}} = \left(\frac{\sigma_{\text{GK}}}{\sigma_{\text{GK}} + 0.00008}\right)^{0.35}$ (Micro-noise floor penalty for compressed chop $< 1.5\text{ bps}$)
+     - Multiplier $\Psi_{\text{vol}} = (\Psi_{\text{high}} \times \Psi_{\text{low}}).\text{clamp}(0.30, 1.00)$.
+  2. **Decoupled Platt Calibration (`compute_calibrated_confidence`):** Eradicated arbitrary compound $6.0\times$ scalar multiplication. Calibrated continuous logit with dynamic slope $\beta = 1.75$ and bounded logit range $[-3.5, 3.5]$ ($\sigma(z) \in [0.05, 0.97]$), eliminating all ceiling pinning at 98.0% while ensuring zero-direction predictions map to exactly $50.0\%$.
+  3. **Unified Single-Source AI Output:** Centralized confidence calculations across `run_inference_asset`, `run_inference_with_telemetry`, and `evaluate_features` through pure, zero-allocation inline helper functions.
+  4. **Verification & Proof:** 100% verified via `cargo test --lib` (39/39 passed with 2 new unit tests for dual-regime volatility and anti-ceiling boundaries), `npx napi build --platform --release` (native N-API binary compiled with 0 errors), and `npm run build:ts` (`tsc`, 0 errors).
+- **Status:** ✅ Completed & QA Verified
+
+
 - **Feature/Task:** Critical Memory Alignment, IC Corruption & Safety Guard Emergency Remediation
 - **Artifacts Created/Modified:** `src/ai/engine.rs`, `src/ai/ic_tracker.rs`, `src/strategy/engine.ts`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Applied 100% deterministic, physical fixes across all 3 identified critical telemetry and safety defects:

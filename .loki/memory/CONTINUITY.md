@@ -75,13 +75,40 @@
   - Injected `setMarketDataClient` and `broadcastDriftState` into `AutoRecalibrationManager` to assert `is_drifted = 1.0` in SAB slot 102 during active training and forced `aiConfidence = 0.0` in `StrategyEngine`.
   - Bound live IC and drift state to SAB slot 101/102 for active and global asset 0. Passed all 36 Rust unit tests (`cargo test --lib`).
 
-* 2026-08-16 - Eradication of Phantom Boot Training Trigger & TypeScript Warm-Up Hard Gating:
-  - Remediated rogue cold-start scheduler trigger in `src/ai/recalibrationWorker.ts` where uninitialized `lastTkanTrainingTimestamp === 0` caused `checkAndRunScheduledTkan()` to immediately launch `runTkanTrainingPipeline()` at tick 1000 (~10s into runtime / Seq #77).
-  - Enforced `lastTkanTrainingTimestamp = Date.now()` on startup when `.tkan_last_train` is absent.
-  - Hardcoded physical `isRustWarmupComplete()` gate (`sample_count >= 1000` from N-API `getIcStatus()`) in `src/ai/recalibrationWorker.ts`: blocking `checkAndRunScheduledTkan()`, `runTkanTrainingPipeline()`, `runRecalibrationPipeline()`, `evaluateTickDrift()`, `evaluateShadowTick()`, and `broadcastDriftState()` from triggering or writing `is_drifted = 1.0` to SAB Slot 102 while `sample_count < 1000`.
-  - Enforced warm-up clamping in `src/telemetry/multiAssetDashboard.ts` and `src/scripts/run_tui_dashboard.ts` so `isDrifted` is clamped to `false` and UI renders `[HEALTHY - CALIBRATED]` / `[STANDBY]`.
-  - 100% verified via `npm run build:ts` (0 errors) and `node dist/tests/test_local_ai_and_tui_integration.js` (4/4 tests passed).
+* 2026-08-16 - SOTA Master Plan Step 1: Rust AI Dual-Regime Volatility Scaling & Decoupled Platt Calibration Completed & QA Verified:
+  - Eradicated 98.0% pinned logit clamp relapse (Anomaly 3) across micro-volatility assets (e.g. DOGE/DOT $\sigma_{\text{GK}} \approx 0.00002$).
+  - Implemented Dual-Regime Volatility Scaling in `src/ai/engine.rs` (`compute_dual_regime_volatility_multiplier`):
+    - $\Psi_{\text{high}} = \frac{1.0}{1.0 + (\sigma_{\text{GK}} / 0.0015)}$ (Extreme volatility / toxic spike dampening)
+    - $\Psi_{\text{low}} = \left(\frac{\sigma_{\text{GK}}}{\sigma_{\text{GK}} + 0.00008}\right)^{0.35}$ (Micro-noise floor penalty for compressed chop $< 1.5\text{ bps}$)
+    - Composite $\Psi_{\text{vol}} = (\Psi_{\text{high}} \times \Psi_{\text{low}}).\text{clamp}(0.30, 1.00)$
+  - Implemented Decoupled Platt Calibration (`compute_calibrated_confidence`) with dynamic slope $\beta = 1.75$, temperature $T = 1.0$, and logit bounds $[-3.5, 3.5]$ ($\sigma(z) \in [0.05, 0.97]$), eliminating compound $6.0\times$ scalar gain.
+  - Centralized single-source calculation across `run_inference_asset`, `run_inference_with_telemetry`, and `evaluate_features`.
+  - Calibrated default `CalibrationParams` in `src/ai/weights.rs` (`platt_scale = 1.5`, `temperature = 1.0`, `platt_offset = 0.0`).
+  - 100% verified via `cargo test --lib` (39/39 passed), `npx napi build --platform --release` (0 errors), and `npm run build:ts` (0 errors).
+
+* 2026-08-16 - SOTA Master Plan Step 2: Hierarchical Deterministic (HD) 36-char ClientOrderId Protocol & Symbol-Scoped Logging Engine Completed & QA Verified:
+  - Eradicated ambiguous order tagging, cross-asset collision risks, and un-scoped logging (Anomaly 2).
+  - Implemented zero-GC `ClientOrderIdGenerator` (`src/execution/clientOrderIdGenerator.ts`):
+    - Format: `BB11_{SYM}_{SLOT}_{TYPE}_{HEX_TS}_{NONCE}` (max 36 alphanumeric characters, Binance compliant).
+    - Features compact symbol codes (`BTC`, `ETH`, `SOL`, `XRP`, `DOGE`, etc.), slot mapping (`L0`, `S0`..`S2`), and order type tagging (`EN`, `TP1`..`TP5`, `SL`, `TS`, `EM`).
+    - 12-bit monotonic rolling counter (`0..4095`) and sub-millisecond hex timestamp preventing collisions during microburst execution.
+    - Instantaneous $O(1)$ deserialization `ClientOrderIdGenerator.parse()`.
+  - Updated `src/execution/binance.ts`: Added `clientOrderId?: string` to `BinanceOrderParams`, passed `newClientOrderId` to `/fapi/v1/order`, `clientAlgoId` to `/fapi/v1/algoOrder`, and `newClientOrderId` to `/fapi/v1/batchOrders`. Added `getUserTrades` method.
+  - Updated `src/strategy/positionLedger.ts` & `src/strategy/engine.ts`: Injected deterministic ClientOrderIds across entry orders, batch TP limit orders, resting stop loss orders, and dynamic market emergency exits. Scoped 100% of logs with `[SYMBOL:SLOT]`.
+  - 100% verified via `npm run build:ts` (0 errors), `node dist/tests/test_hd_client_order_id.js` (5/5 tests passed including 280-matrix and 4096-burst tests), and full regression suites (`test_sota_dynamic_exit_integration.js`, `test_sota_ai_loss_recovery.js`, `test_hedge_mode_split.js`).
+* 2026-08-16 - SOTA Master Plan Step 3: Double-Entry OMS State Reconciliation & Real-Time Shared Memory PnL Pipeline Completed & QA Verified:
+  - Eradicated OMS Telemetry Disconnect, Ghost PnL, and Zero-Trade Resets (Anomaly 1) across Binance WebSocket account updates and REST state reconciliation.
+  - Hardened `HedgePositionLedger` (`src/strategy/positionLedger.ts`):
+    - Added `clearSlots()` dedicated purely to cold-start / bootstrap initialization, preventing uninitialized position resets from logging fake trades.
+    - Updated `releaseCoreLong` and `releaseShortSlot` with resilient fallback pricing (`exitPrice` -> `fallbackMarkPrice` -> `peakPrice`/`troughPrice` -> `entryPrice`), guaranteeing `recordRealizedExit()` is executed deterministically without dropping closed trade telemetry.
+    - Wired fallback pricing into `deductCoreLongQuantity` and `deductShortSlotQuantity` for partial fills and residual micro-lots.
+  - Implemented Double-Entry State Reconciliation in `StrategyEngine` (`src/strategy/engine.ts`):
+    - Upgraded `handleWsAccountPositionUpdate` so that when exchange position becomes flat (`absQty === 0`), the engine queries live mark price from `MarketDataClient`, settles the active long/short slot with exact net realized PnL and fee accounting, and invokes `syncSabPositionState()`.
+    - Upgraded 5000ms periodic state sync (`syncExchangeStateWithData`) to reconcile desynced flat slots through double-entry settlement before setting state to flat.
+  - Zero-Allocation Mid-Price Reader in `MarketDataClient` (`src/marketDataClient.ts`):
+    - Added `getMidPrice(assetIdx)` reading atomic best bid/ask slots from SharedArrayBuffer with zero GC allocations.
+  - 100% verified via `npm run build:ts` (0 errors), `cargo test --lib` (39/39 passed), `node dist/tests/test_double_entry_oms_pnl.js` (16/16 assertions passed 100%), and full regression test matrix (`test_hd_client_order_id.js`, `test_sota_dynamic_exit_integration.js`, `test_sota_ai_loss_recovery.js`, `test_hedge_mode_split.js`, `test_local_ai_and_tui_integration.js`).
 
 ## Next Actions
-1. Deploy and launch live multi-asset TUI command center (`npm run start:live` / `npm start`).
-2. Monitor real-time tick-to-trade execution throughput and Binance fill confirmation streams.
+1. Launch and monitor live multi-asset TUI command center (`npm start` or `npm run start:live`).
+2. Verify live telemetry display of Realized PnL, Total Trades, Win Rate, and HD ClientOrderId order lifecycle in live market trading.

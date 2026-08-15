@@ -308,6 +308,9 @@ class BinanceExecutionClient {
             payload.recvWindow = params.recvWindow;
         if (params.positionSide !== undefined)
             payload.positionSide = params.positionSide;
+        if (params.clientOrderId !== undefined && params.clientOrderId.trim().length > 0) {
+            payload.newClientOrderId = params.clientOrderId.trim();
+        }
         // Binance API Error -1106: Parameter 'reduceonly' sent when not required.
         // In Hedge Mode (when positionSide is "LONG" or "SHORT"), reduceOnly MUST NOT be sent.
         if (params.reduceOnly !== undefined &&
@@ -328,6 +331,10 @@ class BinanceExecutionClient {
                     if (params.stopPrice !== undefined) {
                         algoPayload.triggerPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
                         delete algoPayload.stopPrice;
+                    }
+                    if (params.clientOrderId !== undefined && params.clientOrderId.trim().length > 0) {
+                        algoPayload.clientAlgoId = params.clientOrderId.trim();
+                        delete algoPayload.newClientOrderId;
                     }
                     delete algoPayload.reduceOnly;
                     const algoRes = await this.request("POST", "/fapi/v1/algoOrder", algoPayload, true);
@@ -452,6 +459,9 @@ class BinanceExecutionClient {
                 orderObj.price = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, params.price);
             if (params.stopPrice !== undefined)
                 orderObj.stopPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
+            if (params.clientOrderId !== undefined && params.clientOrderId.trim().length > 0) {
+                orderObj.newClientOrderId = params.clientOrderId.trim();
+            }
             if (params.type !== "MARKET" &&
                 params.type !== "STOP_MARKET" &&
                 params.type !== "TAKE_PROFIT_MARKET" &&
@@ -644,6 +654,16 @@ class BinanceExecutionClient {
     }
     async getOrder(symbol, orderId) {
         return this.request("GET", "/fapi/v1/order", { symbol, orderId }, true);
+    }
+    async getUserTrades(symbol, limit = 5) {
+        try {
+            const res = await this.request("GET", "/fapi/v1/userTrades", { symbol, limit }, true);
+            return Array.isArray(res) ? res : [];
+        }
+        catch (err) {
+            console.warn(`[BinanceExecutionClient] Notice fetching userTrades for ${symbol}: ${err?.message || String(err)}`);
+            return [];
+        }
     }
     async createListenKey() {
         const res = await this.request("POST", "/fapi/v1/listenKey", {}, true);

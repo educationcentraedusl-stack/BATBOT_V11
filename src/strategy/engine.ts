@@ -1,6 +1,7 @@
 import { MarketDataClient } from "../marketDataClient";
 import { RiskGuard, MultiAssetRiskGuard, OrderIntent, RiskCheckResult } from "./risk";
 import { BinanceExecutionClient, BinanceOrderResponse, BinanceOrderParams, BinancePositionRisk } from "../execution/binance";
+import { ClientOrderIdGenerator } from "../execution/clientOrderIdGenerator";
 import { PositionLedger, HedgePositionLedger, MultiAssetPositionLedger, PositionSlot, SlotExitTrigger, ActiveTradeSlot } from "./positionLedger";
 import { DynamicRiskEngine, DynamicMicrostructureMetrics, DynamicRiskProfile } from "./dynamicRiskEngine";
 import { MicrostructureHazardEngine } from "./microstructureHazardEngine";
@@ -453,15 +454,18 @@ export class StrategyEngine {
     const absQty = Math.abs(amt);
 
     if (absQty === 0) {
+      const markPrice = this.client.getMidPrice(this.assetIndex);
+      const takerFeeRate = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
+
       if ((posUpdate.positionSide === "LONG" || posUpdate.positionSide === "BOTH") && summary.longQuantity > 1e-6) {
-        console.log(`[BinanceExecution][WS_ACCOUNT_UPDATE] Exchange LONG position FLAT for ${this.config.symbol}. Clearing local coreLong slot.`);
-        this.hedgeLedger.releaseCoreLong();
+        console.log(`[BinanceExecution][WS_ACCOUNT_UPDATE] [${this.config.symbol}:CORE_LONG] Exchange LONG position FLAT. Reconciling and settling exit.`);
+        this.hedgeLedger.releaseCoreLong(markPrice > 0 ? markPrice : undefined, takerFeeRate, "EXCHANGE_WS_ACCOUNT_EXIT", markPrice);
         this.syncSabPositionState(0);
       }
       if ((posUpdate.positionSide === "SHORT" || posUpdate.positionSide === "BOTH") && summary.shortQuantity > 1e-6) {
-        console.log(`[BinanceExecution][WS_ACCOUNT_UPDATE] Exchange SHORT position FLAT for ${this.config.symbol}. Clearing local shortSlots.`);
+        console.log(`[BinanceExecution][WS_ACCOUNT_UPDATE] [${this.config.symbol}:SHORT_SLOTS] Exchange SHORT position FLAT. Reconciling and settling exits.`);
         for (let i = 0; i < this.config.maxShortSlots; i++) {
-          this.hedgeLedger.releaseShortSlot(i);
+          this.hedgeLedger.releaseShortSlot(i, markPrice > 0 ? markPrice : undefined, takerFeeRate, "EXCHANGE_WS_ACCOUNT_EXIT", markPrice);
         }
         this.syncSabPositionState(0);
       }
@@ -495,6 +499,7 @@ export class StrategyEngine {
     const { order } = update;
     if (order.symbol !== this.config.symbol) return; // Strict asset symbol filter for zero cross-asset state pollution
     const orderId = order.orderId;
+    const parsedCid = ClientOrderIdGenerator.parse(order.clientOrderId);
 
     if (order.orderStatus === "FILLED" || order.orderStatus === "PARTIALLY_FILLED") {
       // 1. Check if this is a pending ENTRY order confirmation from Binance
@@ -503,13 +508,13 @@ export class StrategyEngine {
         const execPx = order.lastFilledPrice > 0 ? order.lastFilledPrice : (order.averagePrice > 0 ? order.averagePrice : pending.targetPrice);
         const execQty = order.cumulativeFilledQuantity > 0 ? order.cumulativeFilledQuantity : (order.lastFilledQuantity > 0 ? order.lastFilledQuantity : pending.qty);
 
-        console.log(`[BinanceExecution][WS_ENTRY_FILL_CONFIRMED] OrderId #${orderId} FILLED on Binance! Occupying local slot ${pending.slotId}. Qty: ${execQty} @ $${execPx}`);
+        console.log(`[BinanceExecution][WS_ENTRY_FILL_CONFIRMED] [${this.config.symbol}:${pending.slotId}] OrderId #${orderId} (ClId: ${order.clientOrderId || "N/A"}) FILLED on Binance! Occupying local slot. Qty: ${execQty} @ $${execPx}`);
         this.handleConfirmedEntryFill(orderId, pending.slotId, pending.posSide, pending.slotIndex, execQty, execPx);
         return;
       }
 
       // 2. Check if this is a TP limit order fill or exit order fill
-      if (order.orderType === "LIMIT" || order.isMaker) {
+      if (order.orderType === "LIMIT" || order.isMaker || (parsedCid && parsedCid.orderType.startsWith("TP"))) {
         const coreLong = this.hedgeLedger.getCoreLong();
         const shortSlots = this.hedgeLedger.getShortSlots();
 
@@ -517,7 +522,17 @@ export class StrategyEngine {
         let posSide: "LONG" | "SHORT" = "LONG";
         let entryPx = 0;
 
-        if (coreLong.isOccupied && coreLong.activeTpOrderIds?.includes(order.orderId)) {
+        if (parsedCid && parsedCid.orderType.startsWith("TP")) {
+          targetSlotId = parsedCid.slotId;
+          if (targetSlotId === "CORE_LONG") {
+            posSide = "LONG";
+            entryPx = coreLong.entryPrice;
+          } else {
+            posSide = "SHORT";
+            const s = shortSlots.find((sl) => sl.slotId === targetSlotId);
+            if (s) entryPx = s.entryPrice;
+          }
+        } else if (coreLong.isOccupied && coreLong.activeTpOrderIds?.includes(order.orderId)) {
           targetSlotId = "CORE_LONG";
           posSide = "LONG";
           entryPx = coreLong.entryPrice;
@@ -533,21 +548,21 @@ export class StrategyEngine {
         }
 
         if (targetSlotId) {
-          console.log(`[MAKER_TP_ENGINE][WS_FILL_NOTIFIED] OrderId #${order.orderId} filled as ${order.isMaker ? "MAKER" : "TAKER"}. Qty: ${order.lastFilledQuantity} @ $${order.lastFilledPrice}`);
+          console.log(`[MAKER_TP_ENGINE][WS_FILL_NOTIFIED] [${this.config.symbol}:${targetSlotId}] OrderId #${order.orderId} (ClId: ${order.clientOrderId || "N/A"}) filled as ${order.isMaker ? "MAKER" : "TAKER"}. Qty: ${order.lastFilledQuantity} @ $${order.lastFilledPrice}`);
           const res = this.hedgeLedger.processTpLimitFill(targetSlotId, order.orderId, order.lastFilledQuantity, order.lastFilledPrice, order.isMaker);
-          console.log(`[MAKER_TP_ENGINE][RECONCILED] Slot ${targetSlotId} updated. Closed: ${res.isPositionClosed}, RemQty: ${res.remainingQuantity}, NewSL: $${res.newStopLossPrice}`);
+          console.log(`[MAKER_TP_ENGINE][RECONCILED] [${this.config.symbol}:${targetSlotId}] Slot updated. Closed: ${res.isPositionClosed}, RemQty: ${res.remainingQuantity}, NewSL: $${res.newStopLossPrice}`);
 
           if (res.isPositionClosed) {
             const slId = this.hedgeLedger.getActiveStopLossOrderId(targetSlotId);
             if (slId) {
               this.executionClient.cancelOrder(this.config.symbol, slId).catch((err) => {
-                console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] Unable to cancel resting SL on position close #${slId}: ${err.message}`);
+                console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] [${this.config.symbol}:${targetSlotId}] Unable to cancel resting SL on position close #${slId}: ${err.message}`);
               });
               this.hedgeLedger.registerActiveStopLossOrderId(targetSlotId, 0);
             }
           } else if (res.remainingQuantity > 0 && res.newStopLossPrice > 0) {
             this.syncExchangeStopLossOrder(targetSlotId, res.remainingQuantity, posSide, res.newStopLossPrice).catch((err) => {
-              console.error(`[EXCHANGE_SL_ENGINE][RATCHET_ERR] ${err?.message || String(err)}`);
+              console.error(`[EXCHANGE_SL_ENGINE][RATCHET_ERR] [${this.config.symbol}:${targetSlotId}] ${err?.message || String(err)}`);
             });
           }
 
@@ -642,7 +657,7 @@ export class StrategyEngine {
 
       if (execPx > 0 && execQty > 0) {
         if (isEntrySide) {
-          console.log(`[BinanceExecution][UNTRACKED_ENTRY_FILL] OrderId #${orderId} filled for ${this.config.symbol} ${targetPosSide}! Occupying/accumulating slot. Qty: ${execQty} @ $${execPx}`);
+          console.log(`[BinanceExecution][UNTRACKED_ENTRY_FILL] [${this.config.symbol}:${targetPosSide}] OrderId #${orderId} (ClId: ${order.clientOrderId || "N/A"}) filled for ${this.config.symbol} ${targetPosSide}! Occupying/accumulating slot. Qty: ${execQty} @ $${execPx}`);
 
           const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
           const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
@@ -655,10 +670,10 @@ export class StrategyEngine {
             this.hedgeLedger.occupyCoreLong(execQty, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
             const slot = this.hedgeLedger.getCoreLong();
             this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch((err) => {
-              console.error(`[BinanceExecution][UNTRACKED_TP_DISPATCH_ERROR] ${err?.message || String(err)}`);
+              console.error(`[BinanceExecution][UNTRACKED_TP_DISPATCH_ERROR] [${this.config.symbol}:CORE_LONG] ${err?.message || String(err)}`);
             });
             this.dispatchExchangeStopLossOrder("CORE_LONG", execPx, execQty, "LONG", slot.stopLossPrice).catch((err) => {
-              console.error(`[BinanceExecution][UNTRACKED_SL_DISPATCH_ERROR] ${err?.message || String(err)}`);
+              console.error(`[BinanceExecution][UNTRACKED_SL_DISPATCH_ERROR] [${this.config.symbol}:CORE_LONG] ${err?.message || String(err)}`);
             });
           } else {
             const slotIdx = this.hedgeLedger.getAvailableShortSlotIndex();
@@ -667,11 +682,11 @@ export class StrategyEngine {
             this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
             const slot = this.hedgeLedger.getShortSlots()[targetIdx];
             this.dispatchBatchPostOnlyTpOrders(slotId, execPx, execQty, "SHORT").catch((err) => {
-              console.error(`[BinanceExecution][UNTRACKED_TP_DISPATCH_ERROR] ${err?.message || String(err)}`);
+              console.error(`[BinanceExecution][UNTRACKED_TP_DISPATCH_ERROR] [${this.config.symbol}:${slotId}] ${err?.message || String(err)}`);
             });
             if (slot) {
               this.dispatchExchangeStopLossOrder(slotId, execPx, execQty, "SHORT", slot.stopLossPrice).catch((err) => {
-                console.error(`[BinanceExecution][UNTRACKED_SL_DISPATCH_ERROR] ${err?.message || String(err)}`);
+                console.error(`[BinanceExecution][UNTRACKED_SL_DISPATCH_ERROR] [${this.config.symbol}:${slotId}] ${err?.message || String(err)}`);
               });
             }
           }
@@ -688,7 +703,7 @@ export class StrategyEngine {
           });
           this.syncSabPositionState();
         } else if (isExitSide) {
-          console.log(`[BinanceExecution][UNTRACKED_EXIT_FILL] OrderId #${orderId} filled for ${this.config.symbol} ${targetPosSide}! Deducting/releasing slot. Qty: ${execQty} @ $${execPx}`);
+          console.log(`[BinanceExecution][UNTRACKED_EXIT_FILL] [${this.config.symbol}:${targetPosSide}] OrderId #${orderId} (ClId: ${order.clientOrderId || "N/A"}) filled for ${this.config.symbol} ${targetPosSide}! Deducting/releasing slot. Qty: ${execQty} @ $${execPx}`);
           if (targetPosSide === "LONG") {
             this.hedgeLedger.deductCoreLongQuantity(execQty, execPx, this.hedgeLedger.getSizingCalculator().getTakerFeeRate(), "EXTERNAL_EXIT");
           } else {
@@ -721,7 +736,7 @@ export class StrategyEngine {
       if (this.pendingEntryOrders.has(orderId)) {
         const pending = this.pendingEntryOrders.get(orderId);
         if (pending?.timeoutTimer) clearTimeout(pending.timeoutTimer);
-        console.warn(`[BinanceExecution][WS_ENTRY_CANCELLED] Pending entry OrderId #${orderId} was ${order.orderStatus} on Binance. Local slot remains FLAT.`);
+        console.warn(`[BinanceExecution][WS_ENTRY_CANCELLED] [${this.config.symbol}] Pending entry OrderId #${orderId} (ClId: ${order.clientOrderId || "N/A"}) was ${order.orderStatus} on Binance. Local slot remains FLAT.`);
         this.pendingEntryOrders.delete(orderId);
       }
     }
@@ -738,7 +753,7 @@ export class StrategyEngine {
       intents = this.hedgeLedger.generateBatchTpOrderIntents(slotId, entryPrice, quantity, side);
       if (intents.length === 0) return;
 
-      console.log(`[MAKER_TP_ENGINE][DISPATCHING] Submitting ${intents.length} POST_ONLY limit TP orders for ${slotId} via batchOrders...`);
+      console.log(`[MAKER_TP_ENGINE][DISPATCHING] [${this.config.symbol}:${slotId}] Submitting ${intents.length} POST_ONLY limit TP orders via batchOrders...`);
       const resList = await this.executionClient.placeBatchOrders(intents);
       if (Array.isArray(resList) && resList.length > 0) {
         const validOrderIds: any[] = [];
@@ -754,7 +769,7 @@ export class StrategyEngine {
 
         if (validOrderIds.length > 0) {
           this.hedgeLedger.registerActiveTpOrderIds(slotId, validOrderIds as any[]);
-          console.log(`[MAKER_TP_ENGINE][SUCCESS] Registered ${validOrderIds.length} POST_ONLY TP limit order IDs on Binance orderbook: [${validOrderIds.join(", ")}]`);
+          console.log(`[MAKER_TP_ENGINE][SUCCESS] [${this.config.symbol}:${slotId}] Registered ${validOrderIds.length} POST_ONLY TP limit order IDs on Binance orderbook: [${validOrderIds.join(", ")}]`);
         }
 
         // Retry any individual -5022 rejections within the batch response with 1-tick price shift
@@ -765,7 +780,7 @@ export class StrategyEngine {
             const adjustedPx = rej.intent.side === "BUY" ? currentPx - tickSize : currentPx + tickSize;
             const newPrice = SymbolPrecisionRegistry.formatPrice(rej.intent.symbol, adjustedPx);
 
-            console.warn(`[MAKER_TP_ENGINE][-5022 ITEM RETRY] Retrying rejected TP order 1 tick away @ ${newPrice}...`);
+            console.warn(`[MAKER_TP_ENGINE][-5022 ITEM RETRY] [${this.config.symbol}:${slotId}] Retrying rejected TP order 1 tick away @ ${newPrice}...`);
             const retryRes = await this.executionClient.placeOrder({
               ...rej.intent,
               price: newPrice,
@@ -774,13 +789,13 @@ export class StrategyEngine {
               this.hedgeLedger.registerActiveTpOrderIds(slotId, [retryRes.orderId as any]);
             }
           } catch (retryErr: any) {
-            console.error(`[MAKER_TP_ENGINE][-5022 ITEM RETRY FAILED] ${retryErr.message}`);
+            console.error(`[MAKER_TP_ENGINE][-5022 ITEM RETRY FAILED] [${this.config.symbol}:${slotId}] ${retryErr.message}`);
           }
         }
       }
     } catch (err: any) {
       if (err.message && (err.message.includes("-5022") || err.message.includes("5022"))) {
-        console.warn(`[MAKER_TP_ENGINE][-5022 BATCH REJECTION] Entire TP batch rejected with -5022. Retrying target orders individually with 1-tick price shift...`);
+        console.warn(`[MAKER_TP_ENGINE][-5022 BATCH REJECTION] [${this.config.symbol}:${slotId}] Entire TP batch rejected with -5022. Retrying target orders individually with 1-tick price shift...`);
         for (const intent of intents) {
           try {
             const tickSize = SymbolPrecisionRegistry.getTickSize(intent.symbol);
@@ -796,11 +811,11 @@ export class StrategyEngine {
               this.hedgeLedger.registerActiveTpOrderIds(slotId, [retryRes.orderId as any]);
             }
           } catch (retryErr: any) {
-            console.error(`[MAKER_TP_ENGINE][-5022 INDIVIDUAL RETRY FAILED] ${retryErr.message}`);
+            console.error(`[MAKER_TP_ENGINE][-5022 INDIVIDUAL RETRY FAILED] [${this.config.symbol}:${slotId}] ${retryErr.message}`);
           }
         }
       } else {
-        console.error(`[MAKER_TP_ENGINE][ERROR] Failed to submit batch POST_ONLY TP orders: ${err.message}`);
+        console.error(`[MAKER_TP_ENGINE][ERROR] [${this.config.symbol}:${slotId}] Failed to submit batch POST_ONLY TP orders: ${err.message}`);
       }
     }
   }
@@ -819,9 +834,10 @@ export class StrategyEngine {
 
     if (formattedQty <= 0) return undefined;
 
+    const clientOrderId = ClientOrderIdGenerator.generate(this.config.symbol, slotId, "SL");
     try {
       console.log(
-        `[EXCHANGE_SL_ENGINE][DISPATCHING] Submitting resting STOP_MARKET order on Binance for ${slotId}: ${exitSide} ${formattedQty} @ stopPrice $${formattedSlPx}...`
+        `[EXCHANGE_SL_ENGINE][DISPATCHING] [${this.config.symbol}:${slotId}] Submitting resting STOP_MARKET order on Binance: ${exitSide} ${formattedQty} @ stopPrice $${formattedSlPx} (ClId: ${clientOrderId})...`
       );
       const res = await this.executionClient.placeOrder({
         symbol: this.config.symbol,
@@ -830,15 +846,16 @@ export class StrategyEngine {
         quantity: formattedQty,
         stopPrice: formattedSlPx,
         positionSide: side,
+        clientOrderId,
       });
 
       if (res && res.orderId) {
         this.hedgeLedger.registerActiveStopLossOrderId(slotId, res.orderId);
-        console.log(`[EXCHANGE_SL_ENGINE][SUCCESS] Registered resting Exchange STOP_MARKET OrderId #${res.orderId} for ${slotId}`);
+        console.log(`[EXCHANGE_SL_ENGINE][SUCCESS] [${this.config.symbol}:${slotId}] Registered resting Exchange STOP_MARKET OrderId #${res.orderId} (ClId: ${res.clientOrderId || clientOrderId})`);
         return res.orderId;
       }
     } catch (err: any) {
-      console.error(`[EXCHANGE_SL_ENGINE][ERROR] Failed to dispatch exchange STOP_MARKET order: ${err.message}`);
+      console.error(`[EXCHANGE_SL_ENGINE][ERROR] [${this.config.symbol}:${slotId}] Failed to dispatch exchange STOP_MARKET order: ${err.message}`);
     }
     return undefined;
   }
@@ -851,7 +868,7 @@ export class StrategyEngine {
   ): Promise<void> {
     if (this.slSyncLocks.has(slotId)) {
       this.pendingSlSyncTargets.set(slotId, { quantity, side, price: newStopLossPrice });
-      console.log(`[EXCHANGE_SL_ENGINE][LOCKED] Sync for ${slotId} is already in-flight. Queued latest target SL $${newStopLossPrice}.`);
+      console.log(`[EXCHANGE_SL_ENGINE][LOCKED] [${this.config.symbol}:${slotId}] Sync is already in-flight. Queued latest target SL $${newStopLossPrice}.`);
       return;
     }
     this.slSyncLocks.add(slotId);
@@ -866,7 +883,7 @@ export class StrategyEngine {
 
         const slot = slotId === "CORE_LONG" ? this.hedgeLedger.getCoreLong() : this.hedgeLedger.getShortSlots().find((s) => s.slotId === slotId);
         if (!slot || !slot.isOccupied || slot.quantity <= 0) {
-          console.log(`[EXCHANGE_SL_ENGINE][SKIP] Slot ${slotId} is not occupied. Skipping SL placement.`);
+          console.log(`[EXCHANGE_SL_ENGINE][SKIP] [${this.config.symbol}:${slotId}] Slot is not occupied. Skipping SL placement.`);
           return;
         }
 
@@ -874,16 +891,16 @@ export class StrategyEngine {
         if (existingSlId) {
           this.hedgeLedger.registerActiveStopLossOrderId(slotId, 0);
           try {
-            console.log(`[EXCHANGE_SL_ENGINE][RATCHET_CANCEL] Cancelling previous resting Exchange STOP_MARKET OrderId #${existingSlId} for ${slotId}...`);
+            console.log(`[EXCHANGE_SL_ENGINE][RATCHET_CANCEL] [${this.config.symbol}:${slotId}] Cancelling previous resting Exchange STOP_MARKET OrderId #${existingSlId}...`);
             await this.executionClient.cancelOrder(this.config.symbol, existingSlId);
           } catch (err: any) {
-            console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] Unable to cancel previous SL order #${existingSlId}: ${err.message}`);
+            console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] [${this.config.symbol}:${slotId}] Unable to cancel previous SL order #${existingSlId}: ${err.message}`);
           }
         }
 
         // Re-verify slot is still occupied after awaiting order cancellation
         if (!slot.isOccupied || slot.quantity <= 0) {
-          console.log(`[EXCHANGE_SL_ENGINE][SKIP] Slot ${slotId} closed during cancellation. Skipping new SL order.`);
+          console.log(`[EXCHANGE_SL_ENGINE][SKIP] [${this.config.symbol}:${slotId}] Slot closed during cancellation. Skipping new SL order.`);
           return;
         }
 
@@ -971,19 +988,23 @@ export class StrategyEngine {
         : [];
 
       if (activePositions.length === 0) {
+        const summary = this.hedgeLedger.getSummary();
+        const markPrice = this.client.getMidPrice(this.assetIndex);
+        const takerFeeRate = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
+
+        if (summary.longQuantity > 1e-6) {
+          console.log(`[StrategyEngine][StateSync] [${this.config.symbol}:CORE_LONG] Reconciling closed position via exchange state sync.`);
+          this.hedgeLedger.releaseCoreLong(markPrice > 0 ? markPrice : undefined, takerFeeRate, "EXCHANGE_SYNC_EXIT", markPrice);
+        }
+        if (summary.shortQuantity > 1e-6) {
+          console.log(`[StrategyEngine][StateSync] [${this.config.symbol}:SHORT_SLOTS] Reconciling closed short positions via exchange state sync.`);
+          for (let i = 0; i < this.config.maxShortSlots; i++) {
+            this.hedgeLedger.releaseShortSlot(i, markPrice > 0 ? markPrice : undefined, takerFeeRate, "EXCHANGE_SYNC_EXIT", markPrice);
+          }
+        }
+
         console.log(`[StrategyEngine][StateSync] Binance position state: FLAT (0.0000) for ${this.config.symbol} (Leverage: ${this.config.leverageMultiplier}x).`);
-        this.hedgeLedger.syncStartupPositions(
-          [],
-          this.config.longTakeProfitPercent,
-          this.config.longStopLossPercent,
-          this.config.shortTakeProfitPercent,
-          this.config.shortStopLossPercent,
-          this.config.leverageMultiplier
-        );
-        this.client.setOmsPositionQty(0, this.assetIndex);
-        this.client.setOmsPositionSide(0, this.assetIndex);
-        this.client.setOmsAvgEntryPrice(0, this.assetIndex);
-        this.client.setOmsLeverage(this.config.leverageMultiplier, this.assetIndex);
+        this.syncSabPositionState(0);
         return;
       }
 
@@ -1387,6 +1408,7 @@ export class StrategyEngine {
                 }
               }
 
+              const exitCid = ClientOrderIdGenerator.generate(this.config.symbol, trigger.slotId, "EM");
               return this.executionClient
                 .placeOrder({
                   symbol: this.config.symbol,
@@ -1394,6 +1416,7 @@ export class StrategyEngine {
                   type: "MARKET",
                   quantity: trigger.quantity,
                   positionSide: trigger.side,
+                  clientOrderId: exitCid,
                 })
                 .then((res) => {
                   if (res) {
@@ -1831,7 +1854,9 @@ export class StrategyEngine {
           this.client.setLastLongFillPrice(this.reusableOrderIntent.price, this.assetIndex);
         }
 
-        console.log(`[BinanceExecution][DISPATCHING] Submitting ${orderType} ${this.reusableOrderIntent.side} order for ${this.reusableOrderIntent.quantity} ${this.reusableOrderIntent.symbol} to Binance Futures...`);
+        const entrySlotId = targetPosSide === "LONG" ? "CORE_LONG" : `SHORT_SLOT_${targetSlotIndex !== undefined ? targetSlotIndex : 0}`;
+        const entryCid = ClientOrderIdGenerator.generate(this.config.symbol, entrySlotId, "EN");
+        console.log(`[BinanceExecution][DISPATCHING] [${this.config.symbol}:${entrySlotId}] Submitting ${orderType} ${this.reusableOrderIntent.side} order for ${this.reusableOrderIntent.quantity} ${this.reusableOrderIntent.symbol} (ClId: ${entryCid}) to Binance Futures...`);
 
         const orderParams: BinanceOrderParams = {
           symbol: this.reusableOrderIntent.symbol,
@@ -1839,6 +1864,7 @@ export class StrategyEngine {
           type: orderType,
           quantity: this.reusableOrderIntent.quantity,
           positionSide: targetPosSide,
+          clientOrderId: entryCid,
         };
 
         if (orderType === "LIMIT") {
@@ -1855,7 +1881,7 @@ export class StrategyEngine {
               const isFilled = res.status === "FILLED" || executedQty > 0;
               const isPending = res.status === "NEW";
 
-              console.log(`[BinanceExecution][RESPONSE] OrderId: ${res.orderId}, Status: ${res.status}, ExecQty: ${executedQty}, Price: ${execPx}`);
+              console.log(`[BinanceExecution][RESPONSE] [${this.config.symbol}:${entrySlotId}] OrderId: ${res.orderId}, ClId: ${res.clientOrderId || entryCid}, Status: ${res.status}, ExecQty: ${executedQty}, Price: ${execPx}`);
 
               if (isFilled) {
                 // Confirmed Fill on REST Response! Occupy slot immediately

@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.MultiAssetPositionLedger = exports.HedgePositionLedger = exports.PositionLedger = void 0;
 exports.calculatePartialExitChunk = calculatePartialExitChunk;
 const dynamicSizing_1 = require("./dynamicSizing");
+const clientOrderIdGenerator_1 = require("../execution/clientOrderIdGenerator");
 const symbolPrecision_1 = require("../config/symbolPrecision");
 const DEFAULT_MAX_LOTS = 1024;
 class PositionLedger {
@@ -596,6 +597,7 @@ class HedgePositionLedger {
                 continue;
             tpStagePrices.push(targetPrice);
             tpStageQuantities.push(formattedQty);
+            const tpCid = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(this.symbol, slotId, `TP${i + 1}`);
             orderParamsList.push({
                 symbol: this.symbol,
                 side: exitSide,
@@ -604,6 +606,7 @@ class HedgePositionLedger {
                 price: targetPrice,
                 timeInForce: "GTX", // Post-Only guarantee
                 positionSide: side,
+                clientOrderId: tpCid,
             });
         }
         slot.tpStagePrices = tpStagePrices;
@@ -840,14 +843,43 @@ class HedgePositionLedger {
         ];
         this.legacyLedger.syncActivePosition("LONG", quantity, entryPrice);
     }
+    /**
+     * Resets internal slot allocations without triggering trade exit accounting.
+     * Reserved strictly for cold-start / startup position reconstruction.
+     */
+    clearSlots() {
+        this.coreLong.isOccupied = false;
+        this.coreLong.quantity = 0;
+        this.coreLong.initialQuantity = 0;
+        this.coreLong.entryPrice = 0;
+        this.coreLong.openTime = 0;
+        this.coreLong.takeProfitPrice = 0;
+        this.coreLong.stopLossPrice = 0;
+        this.coreLong.tpStageReached = 0;
+        this.coreLong.breakEvenLocked = false;
+        this.coreLong.breakEvenPrice = 0;
+        this.coreLong.tpPrices = [];
+        for (let i = 0; i < this.maxShortSlots; i++) {
+            const slot = this.shortSlots[i];
+            slot.isOccupied = false;
+            slot.quantity = 0;
+            slot.initialQuantity = 0;
+            slot.entryPrice = 0;
+            slot.openTime = 0;
+            slot.takeProfitPrice = 0;
+            slot.stopLossPrice = 0;
+            slot.tpStageReached = 0;
+            slot.breakEvenLocked = false;
+            slot.breakEvenPrice = 0;
+            slot.tpPrices = [];
+        }
+        this.legacyLedger.reset();
+    }
     syncStartupPositions(recoveredPositions, longTpPct, longSlPct, shortTpPct, shortSlPct, liveLeverage) {
         if (liveLeverage !== undefined && liveLeverage > 0) {
             this.setLeverage(liveLeverage);
         }
-        this.releaseCoreLong();
-        for (let i = 0; i < this.maxShortSlots; i++) {
-            this.releaseShortSlot(i);
-        }
+        this.clearSlots();
         let hasLong = false;
         let hasShort = false;
         let longQty = 0;
@@ -908,9 +940,17 @@ class HedgePositionLedger {
             this.legacyLedger.syncActivePosition("SHORT", shortQty, avgPx);
         }
     }
-    releaseCoreLong(exitPrice, feeRate, exitReason = "SIGNAL_EXIT") {
-        if (this.coreLong.isOccupied && this.coreLong.quantity > 0 && exitPrice !== undefined && exitPrice > 0) {
-            this.recordRealizedExit("LONG", this.coreLong.entryPrice, exitPrice, this.coreLong.quantity, feeRate, exitReason);
+    releaseCoreLong(exitPrice, feeRate, exitReason = "SIGNAL_EXIT", fallbackMarkPrice) {
+        if (this.coreLong.isOccupied && this.coreLong.quantity > 0) {
+            let resolvedExitPrice = (exitPrice && exitPrice > 0) ? exitPrice : ((fallbackMarkPrice && fallbackMarkPrice > 0) ? fallbackMarkPrice : 0);
+            if (resolvedExitPrice <= 0) {
+                const peak = this.coreLong.peakPrice;
+                resolvedExitPrice = (peak !== undefined && peak > 0) ? peak : this.coreLong.entryPrice;
+            }
+            if (resolvedExitPrice > 0) {
+                const resolvedFeeRate = feeRate !== undefined ? feeRate : this.sizingCalc.getTakerFeeRate();
+                this.recordRealizedExit("LONG", this.coreLong.entryPrice, resolvedExitPrice, this.coreLong.quantity, resolvedFeeRate, exitReason);
+            }
         }
         this.coreLong.isOccupied = false;
         this.coreLong.quantity = 0;
@@ -991,12 +1031,20 @@ class HedgePositionLedger {
         this.legacyLedger.syncActivePosition("SHORT", quantity, entryPrice);
         return true;
     }
-    releaseShortSlot(slotIndex, exitPrice, feeRate, exitReason = "SIGNAL_EXIT") {
+    releaseShortSlot(slotIndex, exitPrice, feeRate, exitReason = "SIGNAL_EXIT", fallbackMarkPrice) {
         if (slotIndex < 0 || slotIndex >= this.maxShortSlots)
             return;
         const slot = this.shortSlots[slotIndex];
-        if (slot.isOccupied && slot.quantity > 0 && exitPrice !== undefined && exitPrice > 0) {
-            this.recordRealizedExit("SHORT", slot.entryPrice, exitPrice, slot.quantity, feeRate, exitReason);
+        if (slot.isOccupied && slot.quantity > 0) {
+            let resolvedExitPrice = (exitPrice && exitPrice > 0) ? exitPrice : ((fallbackMarkPrice && fallbackMarkPrice > 0) ? fallbackMarkPrice : 0);
+            if (resolvedExitPrice <= 0) {
+                const trough = slot.troughPrice;
+                resolvedExitPrice = (trough !== undefined && trough > 0) ? trough : slot.entryPrice;
+            }
+            if (resolvedExitPrice > 0) {
+                const resolvedFeeRate = feeRate !== undefined ? feeRate : this.sizingCalc.getTakerFeeRate();
+                this.recordRealizedExit("SHORT", slot.entryPrice, resolvedExitPrice, slot.quantity, resolvedFeeRate, exitReason);
+            }
         }
         slot.isOccupied = false;
         slot.quantity = 0;
@@ -1018,7 +1066,7 @@ class HedgePositionLedger {
             }
             this.coreLong.quantity = Math.max(0, Number((this.coreLong.quantity - closedQty).toFixed(6)));
             if (this.coreLong.quantity <= 1e-6) {
-                this.releaseCoreLong();
+                this.releaseCoreLong(undefined, feeRate, exitReason, exitPrice);
             }
         }
     }
@@ -1032,7 +1080,7 @@ class HedgePositionLedger {
                 }
                 slot.quantity = Math.max(0, Number((slot.quantity - closedQty).toFixed(6)));
                 if (slot.quantity <= 1e-6) {
-                    this.releaseShortSlot(slotIndex);
+                    this.releaseShortSlot(slotIndex, undefined, feeRate, exitReason, exitPrice);
                 }
             }
         }
