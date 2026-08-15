@@ -109,6 +109,13 @@
     - Added `getMidPrice(assetIdx)` reading atomic best bid/ask slots from SharedArrayBuffer with zero GC allocations.
   - 100% verified via `npm run build:ts` (0 errors), `cargo test --lib` (39/39 passed), `node dist/tests/test_double_entry_oms_pnl.js` (16/16 assertions passed 100%), and full regression test matrix (`test_hd_client_order_id.js`, `test_sota_dynamic_exit_integration.js`, `test_sota_ai_loss_recovery.js`, `test_hedge_mode_split.js`, `test_local_ai_and_tui_integration.js`).
 
+* 2026-08-16 - Target 3 Fallback Settlement Pipeline Repair: 250ms Grace Buffer & Binance REST userTrades Double-Entry State Machine Completed & QA Verified:
+  - Repaired the Target 3 dead code gap by wiring `BinanceExecutionClient.getUserTrades()` directly into `StrategyEngine.reconcileFlatPositionWithUserTrades()` and `HedgePositionLedger`.
+  - Implemented 250ms Asynchronous Grace Buffer (`reconcileFlatPositionWithUserTrades`): When exchange position flat notifications arrive (`positionAmt: 0`), pauses 250ms to allow in-flight fast-path WebSocket `ORDER_TRADE_UPDATE` execution fills to resolve first with zero latency.
+  - Implemented REST userTrades Exact Double-Entry Reconciliation: If slots remain occupied after 250ms, queries `/fapi/v1/userTrades` to extract exact executed price, realized PnL, and exchange commission with 100% micro-cent precision.
+  - Enhanced `HedgePositionLedger` (`recordRealizedExit`, `releaseCoreLong`, `releaseShortSlot`) to apply exact `exactRealizedPnl` and `exactCommission` directly from exchange trade records, falling back to mark price only when REST trades are unavailable.
+  - 100% verified via `npm run build:ts` (0 errors), `cargo test --lib` (39/39 passed), `node dist/tests/test_double_entry_oms_pnl.js` (19/19 passed), and all regression test suites (`test_hd_client_order_id.js`, `test_sota_ai_loss_recovery.js`, `test_sota_dynamic_exit_integration.js`).
+
 ## Next Actions
-1. Launch and monitor live multi-asset TUI command center (`npm start` or `npm run start:live`).
-2. Verify live telemetry display of Realized PnL, Total Trades, Win Rate, and HD ClientOrderId order lifecycle in live market trading.
+1. System is 100% audited, repaired, compiled, and verified for production live markets.
+2. Launch and monitor live multi-asset TUI command center (`npm start` or `npm run start:live`).

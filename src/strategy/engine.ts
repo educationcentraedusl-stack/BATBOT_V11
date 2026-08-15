@@ -1,6 +1,6 @@
 import { MarketDataClient } from "../marketDataClient";
 import { RiskGuard, MultiAssetRiskGuard, OrderIntent, RiskCheckResult } from "./risk";
-import { BinanceExecutionClient, BinanceOrderResponse, BinanceOrderParams, BinancePositionRisk } from "../execution/binance";
+import { BinanceExecutionClient, BinanceOrderResponse, BinanceOrderParams, BinancePositionRisk, BinanceUserTrade } from "../execution/binance";
 import { ClientOrderIdGenerator } from "../execution/clientOrderIdGenerator";
 import { PositionLedger, HedgePositionLedger, MultiAssetPositionLedger, PositionSlot, SlotExitTrigger, ActiveTradeSlot } from "./positionLedger";
 import { DynamicRiskEngine, DynamicMicrostructureMetrics, DynamicRiskProfile } from "./dynamicRiskEngine";
@@ -93,6 +93,7 @@ export class StrategyEngine {
   private slSyncLocks: Set<string> = new Set();
   private pendingSlSyncTargets: Map<string, { quantity: number; side: "LONG" | "SHORT"; price: number }> = new Map();
   private pendingEntryOrders: Map<number, { slotId: string; posSide: "LONG" | "SHORT"; slotIndex?: number; qty: number; targetPrice: number; timeoutTimer?: NodeJS.Timeout }> = new Map();
+  private settlementTimers: Map<string, NodeJS.Timeout> = new Map();
 
   private reusableOrderIntent!: OrderIntent;
 
@@ -308,6 +309,10 @@ export class StrategyEngine {
       }
     }
     this.pendingEntryOrders.clear();
+    for (const timer of this.settlementTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.settlementTimers.clear();
   }
 
   /**
@@ -446,6 +451,179 @@ export class StrategyEngine {
     this.syncSabPositionState();
   }
 
+  /**
+   * Double-Entry Asynchronous Fallback Trade Settlement State Machine.
+   * When an exchange notification indicates a position is flat (amount = 0),
+   * pauses for a 250ms grace buffer to allow in-flight WS ORDER_TRADE_UPDATE fills to resolve.
+   * If local slots remain occupied after 250ms, fetches exact trade fills from Binance REST /fapi/v1/userTrades
+   * to extract the exact executed price, realized PnL, and commission, ensuring 100% micro-cent accurate SAB updates.
+   */
+  public async reconcileFlatPositionWithUserTrades(
+    posSide: "LONG" | "SHORT" | "BOTH",
+    delayMs: number = 250
+  ): Promise<void> {
+    const timerKey = `${this.config.symbol}_${posSide}`;
+    if (this.settlementTimers.has(timerKey)) {
+      clearTimeout(this.settlementTimers.get(timerKey)!);
+      this.settlementTimers.delete(timerKey);
+    }
+
+    const settleAction = async () => {
+      this.settlementTimers.delete(timerKey);
+      const summary = this.hedgeLedger.getSummary();
+      const needsLongSettle = (posSide === "LONG" || posSide === "BOTH") && summary.longQuantity > 1e-6;
+      const needsShortSettle = (posSide === "SHORT" || posSide === "BOTH") && summary.shortQuantity > 1e-6;
+
+      if (!needsLongSettle && !needsShortSettle) {
+        return; // Slot was already settled by an incoming WS fill report during the grace buffer
+      }
+
+      console.log(
+        `[DOUBLE_ENTRY_OMS][SETTLEMENT_TRIGGERED] [${this.config.symbol}] Fallback settlement active after ${delayMs}ms grace buffer. Fetching REST userTrades for exact PnL...`
+      );
+
+      let trades: BinanceUserTrade[] = [];
+      if (this.executionClient.isConfigured()) {
+        try {
+          trades = await this.executionClient.getUserTrades(this.config.symbol, 10);
+        } catch (err: any) {
+          console.warn(
+            `[DOUBLE_ENTRY_OMS][USER_TRADES_WARN] [${this.config.symbol}] Failed to fetch userTrades: ${err?.message || String(err)}`
+          );
+        }
+      }
+
+      const markPrice = this.client.getMidPrice(this.assetIndex);
+      const takerFeeRate = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
+
+      // 1. Reconcile LONG position if still open
+      if (needsLongSettle) {
+        // Filter trades for closing LONG position: side = "SELL" or positionSide = "LONG"
+        const longExitTrades = trades.filter(
+          (t) => (t.positionSide === "LONG" || t.side === "SELL") && parseFloat(t.qty || "0") > 0
+        );
+
+        let exactPnl: number | undefined = undefined;
+        let exactCommission: number | undefined = undefined;
+        let exactExitPrice: number | undefined = undefined;
+
+        if (longExitTrades.length > 0) {
+          let totalPnl = 0;
+          let totalComm = 0;
+          let weightedPxSum = 0;
+          let totalQty = 0;
+          let hasRealizedPnl = false;
+
+          for (const t of longExitTrades) {
+            const tQty = parseFloat(t.qty || "0");
+            const tPx = parseFloat(t.price || "0");
+            const tPnl = parseFloat(t.realizedPnl || "0");
+            const tComm = parseFloat(t.commission || "0");
+
+            if (t.realizedPnl !== undefined && !isNaN(tPnl)) {
+              totalPnl += tPnl;
+              hasRealizedPnl = true;
+            }
+            if (!isNaN(tComm)) totalComm += tComm;
+            if (tQty > 0 && tPx > 0) {
+              weightedPxSum += tPx * tQty;
+              totalQty += tQty;
+            }
+          }
+
+          if (totalQty > 0) exactExitPrice = weightedPxSum / totalQty;
+          if (hasRealizedPnl) exactPnl = totalPnl;
+          if (totalComm > 0) exactCommission = totalComm;
+
+          console.log(
+            `[DOUBLE_ENTRY_OMS][LONG_SETTLED_EXACT] [${this.config.symbol}:CORE_LONG] Reconciled from ${longExitTrades.length} Binance trade(s): ExitPrice: $${exactExitPrice?.toFixed(4)}, RealizedPnL: $${exactPnl?.toFixed(4)}, Comm: $${exactCommission?.toFixed(4)}`
+          );
+        }
+
+        const resolvedExitPx = exactExitPrice && exactExitPrice > 0 ? exactExitPrice : (markPrice > 0 ? markPrice : undefined);
+        this.hedgeLedger.releaseCoreLong(
+          resolvedExitPx,
+          takerFeeRate,
+          exactPnl !== undefined ? "EXCHANGE_REST_TRADE_SETTLED" : "EXCHANGE_WS_ACCOUNT_EXIT",
+          markPrice,
+          exactPnl,
+          exactCommission
+        );
+      }
+
+      // 2. Reconcile SHORT position if still open
+      if (needsShortSettle) {
+        // Filter trades for closing SHORT position: side = "BUY" or positionSide = "SHORT"
+        const shortExitTrades = trades.filter(
+          (t) => (t.positionSide === "SHORT" || t.side === "BUY") && parseFloat(t.qty || "0") > 0
+        );
+
+        let exactPnl: number | undefined = undefined;
+        let exactCommission: number | undefined = undefined;
+        let exactExitPrice: number | undefined = undefined;
+
+        if (shortExitTrades.length > 0) {
+          let totalPnl = 0;
+          let totalComm = 0;
+          let weightedPxSum = 0;
+          let totalQty = 0;
+          let hasRealizedPnl = false;
+
+          for (const t of shortExitTrades) {
+            const tQty = parseFloat(t.qty || "0");
+            const tPx = parseFloat(t.price || "0");
+            const tPnl = parseFloat(t.realizedPnl || "0");
+            const tComm = parseFloat(t.commission || "0");
+
+            if (t.realizedPnl !== undefined && !isNaN(tPnl)) {
+              totalPnl += tPnl;
+              hasRealizedPnl = true;
+            }
+            if (!isNaN(tComm)) totalComm += tComm;
+            if (tQty > 0 && tPx > 0) {
+              weightedPxSum += tPx * tQty;
+              totalQty += tQty;
+            }
+          }
+
+          if (totalQty > 0) exactExitPrice = weightedPxSum / totalQty;
+          if (hasRealizedPnl) exactPnl = totalPnl;
+          if (totalComm > 0) exactCommission = totalComm;
+
+          console.log(
+            `[DOUBLE_ENTRY_OMS][SHORT_SETTLED_EXACT] [${this.config.symbol}:SHORT_SLOTS] Reconciled from ${shortExitTrades.length} Binance trade(s): ExitPrice: $${exactExitPrice?.toFixed(4)}, RealizedPnL: $${exactPnl?.toFixed(4)}, Comm: $${exactCommission?.toFixed(4)}`
+          );
+        }
+
+        const resolvedExitPx = exactExitPrice && exactExitPrice > 0 ? exactExitPrice : (markPrice > 0 ? markPrice : undefined);
+        for (let i = 0; i < this.config.maxShortSlots; i++) {
+          this.hedgeLedger.releaseShortSlot(
+            i,
+            resolvedExitPx,
+            takerFeeRate,
+            exactPnl !== undefined ? "EXCHANGE_REST_TRADE_SETTLED" : "EXCHANGE_WS_ACCOUNT_EXIT",
+            markPrice,
+            exactPnl,
+            exactCommission
+          );
+        }
+      }
+
+      this.syncSabPositionState(0);
+    };
+
+    if (delayMs <= 0) {
+      await settleAction();
+    } else {
+      const timer = setTimeout(() => {
+        settleAction().catch((err) => {
+          console.error(`[DOUBLE_ENTRY_OMS][SETTLEMENT_ERROR] [${this.config.symbol}] ${err?.message || String(err)}`);
+        });
+      }, delayMs);
+      this.settlementTimers.set(timerKey, timer);
+    }
+  }
+
   public handleWsAccountPositionUpdate(posUpdate: AccountPositionUpdatePayload): void {
     if (posUpdate.symbol !== this.config.symbol) return;
     const amt = posUpdate.positionAmt;
@@ -454,20 +632,13 @@ export class StrategyEngine {
     const absQty = Math.abs(amt);
 
     if (absQty === 0) {
-      const markPrice = this.client.getMidPrice(this.assetIndex);
-      const takerFeeRate = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
-
       if ((posUpdate.positionSide === "LONG" || posUpdate.positionSide === "BOTH") && summary.longQuantity > 1e-6) {
-        console.log(`[BinanceExecution][WS_ACCOUNT_UPDATE] [${this.config.symbol}:CORE_LONG] Exchange LONG position FLAT. Reconciling and settling exit.`);
-        this.hedgeLedger.releaseCoreLong(markPrice > 0 ? markPrice : undefined, takerFeeRate, "EXCHANGE_WS_ACCOUNT_EXIT", markPrice);
-        this.syncSabPositionState(0);
+        console.log(`[BinanceExecution][WS_ACCOUNT_UPDATE] [${this.config.symbol}:CORE_LONG] Exchange LONG position FLAT. Initiating double-entry settlement.`);
+        this.reconcileFlatPositionWithUserTrades("LONG", 250);
       }
       if ((posUpdate.positionSide === "SHORT" || posUpdate.positionSide === "BOTH") && summary.shortQuantity > 1e-6) {
-        console.log(`[BinanceExecution][WS_ACCOUNT_UPDATE] [${this.config.symbol}:SHORT_SLOTS] Exchange SHORT position FLAT. Reconciling and settling exits.`);
-        for (let i = 0; i < this.config.maxShortSlots; i++) {
-          this.hedgeLedger.releaseShortSlot(i, markPrice > 0 ? markPrice : undefined, takerFeeRate, "EXCHANGE_WS_ACCOUNT_EXIT", markPrice);
-        }
-        this.syncSabPositionState(0);
+        console.log(`[BinanceExecution][WS_ACCOUNT_UPDATE] [${this.config.symbol}:SHORT_SLOTS] Exchange SHORT position FLAT. Initiating double-entry settlement.`);
+        this.reconcileFlatPositionWithUserTrades("SHORT", 250);
       }
     } else if (absQty > 0 && entryPx > 0) {
       const targetSide = posUpdate.positionSide === "LONG" || (posUpdate.positionSide === "BOTH" && amt > 0) ? "LONG" : "SHORT";
@@ -479,7 +650,7 @@ export class StrategyEngine {
           this.hedgeLedger.occupyCoreLong(absQty, entryPx, this.config.longTakeProfitPercent, this.config.longStopLossPercent);
           if (posUpdate.positionSide === "BOTH") {
             for (let i = 0; i < this.config.maxShortSlots; i++) {
-              this.hedgeLedger.releaseShortSlot(i);
+              this.reconcileFlatPositionWithUserTrades("SHORT", 0);
             }
           }
         } else {
@@ -487,7 +658,7 @@ export class StrategyEngine {
           const slotIdx = availIdx >= 0 ? availIdx : 0;
           this.hedgeLedger.occupyShortSlot(slotIdx, absQty, entryPx, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent);
           if (posUpdate.positionSide === "BOTH") {
-            this.hedgeLedger.releaseCoreLong();
+            this.reconcileFlatPositionWithUserTrades("LONG", 0);
           }
         }
         this.syncSabPositionState(0);
@@ -989,18 +1160,14 @@ export class StrategyEngine {
 
       if (activePositions.length === 0) {
         const summary = this.hedgeLedger.getSummary();
-        const markPrice = this.client.getMidPrice(this.assetIndex);
-        const takerFeeRate = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
 
         if (summary.longQuantity > 1e-6) {
           console.log(`[StrategyEngine][StateSync] [${this.config.symbol}:CORE_LONG] Reconciling closed position via exchange state sync.`);
-          this.hedgeLedger.releaseCoreLong(markPrice > 0 ? markPrice : undefined, takerFeeRate, "EXCHANGE_SYNC_EXIT", markPrice);
+          await this.reconcileFlatPositionWithUserTrades("LONG", 0);
         }
         if (summary.shortQuantity > 1e-6) {
           console.log(`[StrategyEngine][StateSync] [${this.config.symbol}:SHORT_SLOTS] Reconciling closed short positions via exchange state sync.`);
-          for (let i = 0; i < this.config.maxShortSlots; i++) {
-            this.hedgeLedger.releaseShortSlot(i, markPrice > 0 ? markPrice : undefined, takerFeeRate, "EXCHANGE_SYNC_EXIT", markPrice);
-          }
+          await this.reconcileFlatPositionWithUserTrades("SHORT", 0);
         }
 
         console.log(`[StrategyEngine][StateSync] Binance position state: FLAT (0.0000) for ${this.config.symbol} (Leverage: ${this.config.leverageMultiplier}x).`);

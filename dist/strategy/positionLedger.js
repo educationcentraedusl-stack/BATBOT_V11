@@ -454,8 +454,10 @@ class HedgePositionLedger {
     /**
      * Centralized Zero-GC Trade Exit & Realized PnL Accounting Record.
      * Computes gross PnL, fee drag, updates win/loss tallies, and accumulates cumulative realized metrics.
+     * When exactRealizedPnl and/or exactCommission are provided (from Binance REST userTrades),
+     * applies exact micro-cent exchange reconciliation.
      */
-    recordRealizedExit(slotSide, entryPrice, exitPrice, closedQty, exitFeeRate, exitReason = "SIGNAL_EXIT") {
+    recordRealizedExit(slotSide, entryPrice, exitPrice, closedQty, exitFeeRate, exitReason = "SIGNAL_EXIT", exactRealizedPnl, exactCommission) {
         if (closedQty <= 0 || entryPrice <= 0 || exitPrice <= 0)
             return;
         const takerFee = this.sizingCalc.getTakerFeeRate();
@@ -465,8 +467,13 @@ class HedgePositionLedger {
             : (entryPrice - exitPrice) * closedQty;
         const entryFeeUsdt = entryPrice * closedQty * takerFee;
         const exitFeeUsdt = exitPrice * closedQty * feeRate;
-        const totalFee = entryFeeUsdt + exitFeeUsdt;
-        const netTradePnl = grossPnl - totalFee;
+        const computedFee = entryFeeUsdt + exitFeeUsdt;
+        const totalFee = (exactCommission !== undefined && Number.isFinite(exactCommission) && exactCommission >= 0)
+            ? exactCommission
+            : computedFee;
+        const netTradePnl = (exactRealizedPnl !== undefined && Number.isFinite(exactRealizedPnl))
+            ? exactRealizedPnl
+            : (grossPnl - totalFee);
         this.cumulativeRealizedPnl += netTradePnl;
         this.cumulativeFees += totalFee;
         this.totalTrades++;
@@ -940,7 +947,7 @@ class HedgePositionLedger {
             this.legacyLedger.syncActivePosition("SHORT", shortQty, avgPx);
         }
     }
-    releaseCoreLong(exitPrice, feeRate, exitReason = "SIGNAL_EXIT", fallbackMarkPrice) {
+    releaseCoreLong(exitPrice, feeRate, exitReason = "SIGNAL_EXIT", fallbackMarkPrice, exactRealizedPnl, exactCommission) {
         if (this.coreLong.isOccupied && this.coreLong.quantity > 0) {
             let resolvedExitPrice = (exitPrice && exitPrice > 0) ? exitPrice : ((fallbackMarkPrice && fallbackMarkPrice > 0) ? fallbackMarkPrice : 0);
             if (resolvedExitPrice <= 0) {
@@ -949,7 +956,7 @@ class HedgePositionLedger {
             }
             if (resolvedExitPrice > 0) {
                 const resolvedFeeRate = feeRate !== undefined ? feeRate : this.sizingCalc.getTakerFeeRate();
-                this.recordRealizedExit("LONG", this.coreLong.entryPrice, resolvedExitPrice, this.coreLong.quantity, resolvedFeeRate, exitReason);
+                this.recordRealizedExit("LONG", this.coreLong.entryPrice, resolvedExitPrice, this.coreLong.quantity, resolvedFeeRate, exitReason, exactRealizedPnl, exactCommission);
             }
         }
         this.coreLong.isOccupied = false;
@@ -1031,7 +1038,7 @@ class HedgePositionLedger {
         this.legacyLedger.syncActivePosition("SHORT", quantity, entryPrice);
         return true;
     }
-    releaseShortSlot(slotIndex, exitPrice, feeRate, exitReason = "SIGNAL_EXIT", fallbackMarkPrice) {
+    releaseShortSlot(slotIndex, exitPrice, feeRate, exitReason = "SIGNAL_EXIT", fallbackMarkPrice, exactRealizedPnl, exactCommission) {
         if (slotIndex < 0 || slotIndex >= this.maxShortSlots)
             return;
         const slot = this.shortSlots[slotIndex];
@@ -1043,7 +1050,7 @@ class HedgePositionLedger {
             }
             if (resolvedExitPrice > 0) {
                 const resolvedFeeRate = feeRate !== undefined ? feeRate : this.sizingCalc.getTakerFeeRate();
-                this.recordRealizedExit("SHORT", slot.entryPrice, resolvedExitPrice, slot.quantity, resolvedFeeRate, exitReason);
+                this.recordRealizedExit("SHORT", slot.entryPrice, resolvedExitPrice, slot.quantity, resolvedFeeRate, exitReason, exactRealizedPnl, exactCommission);
             }
         }
         slot.isOccupied = false;
