@@ -141,6 +141,12 @@ async function runSotaDynamicExitIntegrationTestSuite() {
 
   const iterations = 100000;
   const nowMs = Date.now();
+
+  // V8 JIT Warmup Loop
+  for (let w = 0; w < 10000; w++) {
+    ledger.evaluateSotaDynamicExits(60000 + (w % 20), hazardMetrics1, hjbEngine, volMetrics1, nowMs);
+  }
+
   const startHrTime = process.hrtime.bigint();
 
   for (let i = 0; i < iterations; i++) {

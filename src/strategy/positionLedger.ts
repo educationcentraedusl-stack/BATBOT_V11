@@ -1331,15 +1331,19 @@ export class HedgePositionLedger {
 
   public evaluateHedgeDynamicTpSl(
     markPrice: number,
-    aiDirection: number = 0,
+    aiDirectionOrNowMs: number = 0,
     aiConfidence: number = 0,
     vpin: number = 0,
     hawkes: number = 0,
     garmanKlass: number = 0,
-    ofi: number = 0
+    ofi: number = 0,
+    nowMs: number = Date.now()
   ): SlotExitTrigger[] {
     const triggers: SlotExitTrigger[] = [];
     if (markPrice <= 0) return triggers;
+
+    const actualNowMs = aiDirectionOrNowMs > 1e11 ? aiDirectionOrNowMs : (nowMs > 1e11 ? nowMs : Date.now());
+    const aiDirection = aiDirectionOrNowMs > 1e11 ? 0 : aiDirectionOrNowMs;
 
     const evalSlot = (slot: PositionSlot) => {
       if (!slot.isOccupied || slot.entryPrice <= 0 || slot.quantity <= 0) return;
@@ -1353,7 +1357,12 @@ export class HedgePositionLedger {
 
       const makerFee = this.sizingCalc.getMakerFeeRate();
       const takerFee = this.sizingCalc.getTakerFeeRate();
+      const minNetAlpha = this.sizingCalc.getMinNetAlpha();
       const feeBuffer = (makerFee + takerFee) * 2.5;
+
+      const openTime = slot.openTime && slot.openTime > 0 ? slot.openTime : actualNowMs;
+      const durationMs = Math.max(0, actualNowMs - openTime);
+      const durationSec = durationMs / 1000;
 
       const buildCancelOrderIds = (): number[] => {
         const ids: number[] = [];
@@ -1366,7 +1375,64 @@ export class HedgePositionLedger {
         return ids;
       };
 
-      // 0A. AI Conviction Hard-Reversal Exit Signal (100% Dynamic - Zero Timers)
+      // 0A. CAD-DTLM Time-Decay Tier Escalation (30s Breakeven, 180s Micro-Profit, 600s Profit Lock, 1800s Hard Kill)
+      if (durationSec >= 30.0) {
+        if (!slot.timeDecayTier || slot.timeDecayTier < 1) {
+          slot.timeDecayTier = 1;
+          slot.breakEvenLocked = true;
+          const beOffset = feeBuffer + 0.0002;
+          const targetBeSl = this.formatPriceFast(
+            isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset)
+          );
+          slot.breakEvenPrice = targetBeSl;
+          slot.stopLossPrice = isLong
+            ? Math.max(slot.stopLossPrice, targetBeSl)
+            : (slot.stopLossPrice === 0 ? targetBeSl : Math.min(slot.stopLossPrice, targetBeSl));
+        }
+      }
+
+      if (durationSec >= 180.0) {
+        if (!slot.timeDecayTier || slot.timeDecayTier < 2) {
+          slot.timeDecayTier = 2;
+          const profitOffset = feeBuffer + minNetAlpha;
+          const targetTier2Sl = this.formatPriceFast(
+            isLong ? slot.entryPrice * (1.0 + profitOffset) : slot.entryPrice * (1.0 - profitOffset)
+          );
+          slot.stopLossPrice = isLong
+            ? Math.max(slot.stopLossPrice, targetTier2Sl)
+            : Math.min(slot.stopLossPrice, targetTier2Sl);
+        }
+      }
+
+      if (durationSec >= 600.0) {
+        if (!slot.timeDecayTier || slot.timeDecayTier < 3) {
+          slot.timeDecayTier = 3;
+          const lockedOffset = feeBuffer + minNetAlpha * 2.0;
+          const targetTier3Sl = this.formatPriceFast(
+            isLong ? slot.entryPrice * (1.0 + lockedOffset) : slot.entryPrice * (1.0 - lockedOffset)
+          );
+          slot.stopLossPrice = isLong
+            ? Math.max(slot.stopLossPrice, targetTier3Sl)
+            : Math.min(slot.stopLossPrice, targetTier3Sl);
+        }
+      }
+
+      if (durationSec >= 1800.0) {
+        slot.timeDecayTier = 4;
+        triggers.push({
+          slotId: slot.slotId,
+          side: slot.side,
+          reason: "LONG_HOLD_PROFIT_HARVEST",
+          quantity: slot.quantity,
+          entryPrice: slot.entryPrice,
+          markPrice,
+          isPartialClose: false,
+          cancelOrderIds: buildCancelOrderIds(),
+        });
+        return;
+      }
+
+      // 0B. AI Conviction Hard-Reversal Exit Signal (100% Dynamic - Zero Timers)
       const isAiHardReversal = isLong
         ? (aiDirection <= -0.15 && aiConfidence >= 0.70)
         : (aiDirection >= 0.15 && aiConfidence >= 0.70);
@@ -1385,7 +1451,7 @@ export class HedgePositionLedger {
         return;
       }
 
-      // 0B. VPIN Toxicity & Hawkes Microstructure Breakeven Ratchet (100% Dynamic - Zero Timers)
+      // 0C. VPIN Toxicity & Hawkes Microstructure Breakeven Ratchet (100% Dynamic - Zero Timers)
       const isToxicFlow = vpin >= 0.80 || (isLong ? ofi < -0.3 : ofi > 0.3);
       const isHawkesBurst = hawkes > 2.5;
 
@@ -1580,23 +1646,111 @@ export class HedgePositionLedger {
   }
 
   /**
-   * SOTA August 2026 Continuous Microstructure & Volatility Dynamic Exit Evaluator.
-   * Evaluates Cox Hazard Rate Flushes, HJB Reservation Liquidation Boundaries, and MVA-TS Trailing Stops.
-   * Maintains strict Fee-Adjusted Zero-Loss ($0.00 Net Loss) floor as an absolute lower bound fallback.
-   * Zero-GC pre-allocated implementation guaranteeing sub-1.5 microsecond execution latency.
+   * SOTA August 2026 MS-SOPC & CAD-DTLM Continuous Microstructure Dynamic Exit Evaluator.
+   * 
+   * Mathematical Frameworks:
+   * 1. MS-SOPC (Microstructure-Informed Stochastic Optimal Profit Collaring):
+   *    - True Stoikov Micro-Price: P_micro = P_mid + (OBI / 2) * Spread
+   *    - Stochastic Collar Distance: Delta_collar = sigma_GK * exp(1.5 * (VPIN - 0.50)) * (2.0 - H_micro)
+   *    - Asymmetric Peak/Trough Tracking anchored to P_micro.
+   * 
+   * 2. CAD-DTLM (Continuous Alpha Decay & Dynamic Time-in-Market Management):
+   *    - OU Half-Life Decay: alpha(tau) = alpha_0 * exp(-ln(2) * tau / t_half)
+   *    - 4-Stage Liquidation Schedule:
+   *      * Phase 1: Prime Alpha (tau < t_half)
+   *      * Phase 2: Break-Even Ratchet (t_half <= tau < 2*t_half) -> Tier 1 Lock
+   *      * Phase 3: Passive Maker Unwind (2*t_half <= tau < 4*t_half) -> Tier 2 Lock
+   *      * Phase 4: Terminal Horizon Hard Kill (tau >= T_max) -> Force Liquidation
    */
   public evaluateSotaDynamicExits(
-    markPrice: number,
-    hazardMetrics: MicrostructureMetrics,
-    hjbEngine: HJBReservationEngine,
-    volMetrics: VolatilitySurfaceMetrics,
-    nowMs: number = Date.now()
+    bestBidOrMark: number,
+    bestAskOrHazard: number | MicrostructureMetrics,
+    hazardOrHjb?: MicrostructureMetrics | HJBReservationEngine,
+    hjbOrVol?: HJBReservationEngine | VolatilitySurfaceMetrics,
+    volMetricsOrNowMs?: VolatilitySurfaceMetrics | number,
+    nowMs: number = Date.now(),
+    hurstExponent: number = 0.50
   ): SlotExitTrigger[] {
     this.sotaTriggers.length = 0;
 
-    this.evalSingleSlotSota(this.coreLong, markPrice, hazardMetrics, hjbEngine, volMetrics, nowMs);
+    let bestBid = 0;
+    let bestAsk = 0;
+    let hazardMetrics: MicrostructureMetrics;
+    let hjbEngine: HJBReservationEngine;
+    let volSurfMetrics: VolatilitySurfaceMetrics;
+    let effectiveNowMs = nowMs;
+
+    if (typeof bestAskOrHazard === "number") {
+      bestBid = bestBidOrMark;
+      bestAsk = bestAskOrHazard;
+      hazardMetrics = hazardOrHjb as MicrostructureMetrics;
+      hjbEngine = hjbOrVol as HJBReservationEngine;
+      volSurfMetrics = volMetricsOrNowMs as VolatilitySurfaceMetrics;
+    } else {
+      // Single price fallback: evaluateSotaDynamicExits(markPx, hazardMetrics, hjbEngine, volMetrics, nowMs)
+      const mark = bestBidOrMark;
+      bestBid = mark * 0.99995;
+      bestAsk = mark * 1.00005;
+      hazardMetrics = bestAskOrHazard as MicrostructureMetrics;
+      hjbEngine = hazardOrHjb as HJBReservationEngine;
+      volSurfMetrics = hjbOrVol as VolatilitySurfaceMetrics;
+      if (typeof volMetricsOrNowMs === "number") {
+        effectiveNowMs = volMetricsOrNowMs;
+      }
+    }
+
+    const midPrice = (bestBid > 0 && bestAsk > 0) ? (bestBid + bestAsk) / 2.0 : Math.max(bestBid, bestAsk);
+    const spread = (bestBid > 0 && bestAsk > 0 && bestAsk >= bestBid) ? bestAsk - bestBid : 0;
+
+    // True Stoikov Micro-Price Formulation: P_micro = P_mid + (OBI / 2) * Spread
+    const obi = hazardMetrics ? hazardMetrics.ofi : 0;
+    const stoikovMicroPrice = midPrice > 0 ? midPrice + (obi / 2.0) * spread : midPrice;
+
+    // Pre-calculate per-tick invariant fee, decay and MS-SOPC constants once
+    const makerFee = this.sizingCalc.getMakerFeeRate();
+    const takerFee = this.sizingCalc.getTakerFeeRate();
+    const minNetAlpha = this.sizingCalc.getMinNetAlpha();
+    const roundTripFeeBuffer = (makerFee + takerFee) * 2.5;
+
+    const safeHurst = Math.max(0.05, Math.min(0.95, hurstExponent));
+    const halfLifeSec = Math.max(10.0, Math.min(120.0, 60.0 * safeHurst));
+
+    const safeGkVol = volSurfMetrics ? Math.max(0.001, volSurfMetrics.garmanKlass1s) : 0.002;
+    const vpinVal = hazardMetrics ? Math.max(0.0, Math.min(1.0, hazardMetrics.vpin)) : 0.5;
+    const vpinPenalty = vpinVal === 0.5 ? 1.0 : Math.exp(1.5 * (vpinVal - 0.50));
+    const hurstMultiplier = Math.max(0.5, 2.0 - safeHurst);
+    const volMultiplier = volSurfMetrics ? volSurfMetrics.volatilityMultiplier : 1.0;
+    const rawCollarDistancePct = safeGkVol * vpinPenalty * hurstMultiplier * volMultiplier;
+    const collarDistancePct = Math.max(0.0015, Math.min(0.05, rawCollarDistancePct));
+
+    this.evalSingleSlotSota(
+      this.coreLong,
+      midPrice,
+      stoikovMicroPrice,
+      hazardMetrics,
+      hjbEngine,
+      volSurfMetrics,
+      effectiveNowMs,
+      halfLifeSec,
+      roundTripFeeBuffer,
+      minNetAlpha,
+      collarDistancePct
+    );
+
     for (let i = 0; i < this.maxShortSlots; i++) {
-      this.evalSingleSlotSota(this.shortSlots[i], markPrice, hazardMetrics, hjbEngine, volMetrics, nowMs);
+      this.evalSingleSlotSota(
+        this.shortSlots[i],
+        midPrice,
+        stoikovMicroPrice,
+        hazardMetrics,
+        hjbEngine,
+        volSurfMetrics,
+        effectiveNowMs,
+        halfLifeSec,
+        roundTripFeeBuffer,
+        minNetAlpha,
+        collarDistancePct
+      );
     }
 
     return this.sotaTriggers;
@@ -1605,18 +1759,91 @@ export class HedgePositionLedger {
   private evalSingleSlotSota(
     slot: PositionSlot,
     markPrice: number,
+    stoikovMicroPrice: number,
     hazardMetrics: MicrostructureMetrics,
     hjbEngine: HJBReservationEngine,
     volMetrics: VolatilitySurfaceMetrics,
-    nowMs: number
+    nowMs: number,
+    halfLifeSec: number,
+    roundTripFeeBuffer: number,
+    minNetAlpha: number,
+    collarDistancePct: number
   ): void {
     if (!slot.isOccupied || slot.quantity <= 0 || slot.entryPrice <= 0) return;
 
     const isLong = slot.side === "LONG";
-    const durationMs = Math.max(0, nowMs - (slot.openTime || nowMs));
+    const openTime = slot.openTime && slot.openTime > 0 ? slot.openTime : nowMs;
+    const durationMs = Math.max(0, nowMs - openTime);
+    const durationSec = durationMs / 1000;
 
-    // 1. Cox Proportional Hazard Rate Survival Exit
-    if (hazardMetrics.isHazardExitTriggered) {
+    // -------------------------------------------------------------------------
+    // 1. CAD-DTLM (Continuous Alpha Decay & 4-Stage Time-in-Market Management)
+    // -------------------------------------------------------------------------
+    // Phase 2: Break-Even Ratchet & Half-Life Decay (duration >= 30s or duration >= halfLifeSec)
+    if (durationSec >= Math.min(30.0, halfLifeSec)) {
+      if (!slot.timeDecayTier || slot.timeDecayTier < 1) {
+        slot.timeDecayTier = 1;
+        slot.breakEvenLocked = true;
+        const beOffset = roundTripFeeBuffer + 0.0002;
+        const targetBeSl = this.formatPriceFast(
+          isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset)
+        );
+        slot.breakEvenPrice = targetBeSl;
+        slot.stopLossPrice = isLong
+          ? Math.max(slot.stopLossPrice, targetBeSl)
+          : (slot.stopLossPrice === 0 ? targetBeSl : Math.min(slot.stopLossPrice, targetBeSl));
+      }
+    }
+
+    // Phase 3: Micro-Profit Guard & Accelerated Decay (duration >= 180s or duration >= 2 * halfLifeSec)
+    if (durationSec >= Math.min(180.0, halfLifeSec * 2.0)) {
+      if (!slot.timeDecayTier || slot.timeDecayTier < 2) {
+        slot.timeDecayTier = 2;
+        const profitOffset = roundTripFeeBuffer + minNetAlpha;
+        const targetTier2Sl = this.formatPriceFast(
+          isLong ? slot.entryPrice * (1.0 + profitOffset) : slot.entryPrice * (1.0 - profitOffset)
+        );
+        slot.stopLossPrice = isLong
+          ? Math.max(slot.stopLossPrice, targetTier2Sl)
+          : Math.min(slot.stopLossPrice, targetTier2Sl);
+      }
+    }
+
+    // Phase 4A: Guaranteed Profit Harvest (duration >= 600s or duration >= 4 * halfLifeSec)
+    if (durationSec >= Math.min(600.0, halfLifeSec * 4.0)) {
+      if (!slot.timeDecayTier || slot.timeDecayTier < 3) {
+        slot.timeDecayTier = 3;
+        const lockedOffset = roundTripFeeBuffer + minNetAlpha * 2.0;
+        const targetTier3Sl = this.formatPriceFast(
+          isLong ? slot.entryPrice * (1.0 + lockedOffset) : slot.entryPrice * (1.0 - lockedOffset)
+        );
+        slot.stopLossPrice = isLong
+          ? Math.max(slot.stopLossPrice, targetTier3Sl)
+          : Math.min(slot.stopLossPrice, targetTier3Sl);
+      }
+    }
+
+    // Phase 4B: Hard Terminal Horizon Timeout (duration >= 1800s / 30 Minutes Max Lifespan)
+    if (durationSec >= 1800.0) {
+      slot.timeDecayTier = 4;
+      this.pushSotaTrigger(
+        slot.slotId,
+        slot.side,
+        "LONG_HOLD_PROFIT_HARVEST",
+        slot.quantity,
+        slot.entryPrice,
+        markPrice,
+        false,
+        slot.activeTpOrderIds,
+        slot.activeStopLossOrderId
+      );
+      return;
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. Cox Proportional Hazard Rate Survival Exit
+    // -------------------------------------------------------------------------
+    if (hazardMetrics && hazardMetrics.isHazardExitTriggered) {
       this.pushSotaTrigger(
         slot.slotId,
         slot.side,
@@ -1631,82 +1858,83 @@ export class HedgePositionLedger {
       return;
     }
 
-    // 2. Avellaneda-Stoikov HJB Optimal Stopping Liquidation Boundary
-    const hjbEval = hjbEngine.getOptimalExitBoundary(
-      slot.side,
-      slot.entryPrice,
-      markPrice,
-      slot.quantity,
-      durationMs,
-      volMetrics.garmanKlass1s
-    );
-
-    if (hjbEval.isLiquidationTriggered) {
-      this.pushSotaTrigger(
-        slot.slotId,
+    // -------------------------------------------------------------------------
+    // 3. Avellaneda-Stoikov HJB Optimal Stopping Liquidation Boundary
+    // -------------------------------------------------------------------------
+    if (hjbEngine && volMetrics) {
+      const hjbEval = hjbEngine.getOptimalExitBoundary(
         slot.side,
-        hjbEval.exitReason,
-        slot.quantity,
         slot.entryPrice,
-        markPrice,
-        false,
-        slot.activeTpOrderIds,
-        slot.activeStopLossOrderId
+        stoikovMicroPrice,
+        slot.quantity,
+        durationMs,
+        volMetrics.garmanKlass1s
       );
-      return;
+
+      if (hjbEval.isLiquidationTriggered) {
+        this.pushSotaTrigger(
+          slot.slotId,
+          slot.side,
+          hjbEval.exitReason,
+          slot.quantity,
+          slot.entryPrice,
+          markPrice,
+          false,
+          slot.activeTpOrderIds,
+          slot.activeStopLossOrderId
+        );
+        return;
+      }
     }
 
-    // 3. MVA-TS (Microstructure-Aware Volatility Adaptive Trailing Stop)
-    // Under adverse toxic flow (ofi < 0 for Longs, ofi > 0 for Shorts), trailing stop distance MUST TIGHTEN
-    // Peak/Trough Tracking: LONG tracks peakPrice, SHORT tracks troughPrice to ratchet stop loss
-    const baseDistPct = Math.max(0.005, volMetrics.garmanKlass1s * 2.0 * volMetrics.volatilityMultiplier);
-    let adaptedDistPct = baseDistPct;
-
+    // -------------------------------------------------------------------------
+    // 4. MS-SOPC (Microstructure-Informed Stochastic Optimal Profit Collaring)
+    // -------------------------------------------------------------------------
     if (isLong) {
-      adaptedDistPct = hazardMetrics.ofi < 0
-        ? baseDistPct * (1.0 - 0.5 * Math.abs(hazardMetrics.ofi))
-        : baseDistPct * (1.0 + 0.25 * hazardMetrics.ofi);
-    } else {
-      adaptedDistPct = hazardMetrics.ofi > 0
-        ? baseDistPct * (1.0 - 0.5 * hazardMetrics.ofi)
-        : baseDistPct * (1.0 + 0.25 * Math.abs(hazardMetrics.ofi));
-    }
-    adaptedDistPct = Math.max(0.002, Math.min(0.05, adaptedDistPct));
-
-    let mvaStopPrice = 0;
-    if (isLong) {
-      slot.peakPrice = Math.max(slot.peakPrice || slot.entryPrice, markPrice);
-      const offsetUsdt = slot.peakPrice * adaptedDistPct;
-      mvaStopPrice = this.formatPriceFast(slot.peakPrice - offsetUsdt);
-      // Ratchet up only
-      if (mvaStopPrice > slot.stopLossPrice) {
-        slot.stopLossPrice = mvaStopPrice;
+      const prevPeak = slot.peakPrice || slot.entryPrice;
+      if (stoikovMicroPrice > prevPeak || slot.stopLossPrice <= 0) {
+        slot.peakPrice = Math.max(prevPeak, stoikovMicroPrice);
+        const collarOffsetUsdt = slot.peakPrice * collarDistancePct;
+        const msSopcStopPrice = this.formatPriceFast(slot.peakPrice - collarOffsetUsdt);
+        if (msSopcStopPrice > slot.stopLossPrice) {
+          slot.stopLossPrice = msSopcStopPrice;
+        }
       }
     } else {
-      slot.troughPrice = (slot.troughPrice && slot.troughPrice > 0)
-        ? Math.min(slot.troughPrice, markPrice)
-        : markPrice;
-      const offsetUsdt = slot.troughPrice * adaptedDistPct;
-      mvaStopPrice = this.formatPriceFast(slot.troughPrice + offsetUsdt);
-      // Ratchet down only
-      if (slot.stopLossPrice === 0 || mvaStopPrice < slot.stopLossPrice) {
-        slot.stopLossPrice = mvaStopPrice;
+      const prevTrough = (slot.troughPrice && slot.troughPrice > 0) ? slot.troughPrice : stoikovMicroPrice;
+      if (stoikovMicroPrice < prevTrough || slot.stopLossPrice <= 0) {
+        slot.troughPrice = Math.min(prevTrough, stoikovMicroPrice);
+        const collarOffsetUsdt = slot.troughPrice * collarDistancePct;
+        const msSopcStopPrice = this.formatPriceFast(slot.troughPrice + collarOffsetUsdt);
+        if (slot.stopLossPrice === 0 || msSopcStopPrice < slot.stopLossPrice) {
+          slot.stopLossPrice = msSopcStopPrice;
+        }
       }
     }
 
     // Absolute Fee-Adjusted Zero-Loss Guarantee Floor
     if (slot.breakEvenLocked && slot.breakEvenPrice && slot.breakEvenPrice > 0) {
-      mvaStopPrice = isLong
-        ? Math.max(mvaStopPrice, slot.breakEvenPrice)
-        : Math.min(mvaStopPrice, slot.breakEvenPrice);
+      if (isLong && slot.stopLossPrice < slot.breakEvenPrice) {
+        slot.stopLossPrice = slot.breakEvenPrice;
+      } else if (!isLong && slot.stopLossPrice > slot.breakEvenPrice) {
+        slot.stopLossPrice = slot.breakEvenPrice;
+      }
     }
 
-    const isMvaTriggered = isLong ? markPrice <= mvaStopPrice : markPrice >= mvaStopPrice;
-    if (isMvaTriggered) {
+    // Check Trigger
+    const isStopTriggered = isLong
+      ? markPrice <= slot.stopLossPrice
+      : markPrice >= slot.stopLossPrice;
+
+    if (isStopTriggered) {
+      const exitReason = slot.timeDecayTier && slot.timeDecayTier >= 1
+        ? "BREAK_EVEN_STOP_LOSS"
+        : `MVA_TRAILING_STOP_${slot.side}`;
+
       this.pushSotaTrigger(
         slot.slotId,
         slot.side,
-        `MVA_TRAILING_STOP_${slot.side}`,
+        exitReason,
         slot.quantity,
         slot.entryPrice,
         markPrice,

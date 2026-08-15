@@ -1027,12 +1027,16 @@ class StrategyEngine {
                 this.syncSabPositionState(markPrice);
             }
             if (markPrice > 0) {
-                // Priority 1: Evaluate SOTA Dynamic Exits (Cox Hazard Survival Flush, HJB Liquidation Boundary, MVA-TS)
+                const hurstExponent = this.client.getHurstExponent(this.assetIndex);
+                // Priority 1: Evaluate SOTA Dynamic Exits (MS-SOPC, CAD-DTLM, Cox Hazard Survival Flush, HJB Liquidation Boundary)
                 const sotaTriggers = hasActivePos
-                    ? this.hedgeLedger.evaluateSotaDynamicExits(markPrice, hazardMetrics, this.hjbEngine, volMetrics)
+                    ? this.hedgeLedger.evaluateSotaDynamicExits(bidPrice, askPrice, hazardMetrics, this.hjbEngine, volMetrics, Date.now(), hurstExponent)
                     : [];
-                // Priority 2: Evaluate Hedge Slot Dynamic TP/SL (Fixed/Trailing TP/SL, Profit Lock)
-                const hedgeTriggers = this.hedgeLedger.evaluateHedgeDynamicTpSl(markPrice, aiDirection, aiConfidence, hazardMetrics.vpin, 0, volMetrics.garmanKlass1s, hazardMetrics.ofi);
+                // Priority 2: Evaluate Hedge Slot Dynamic TP/SL Fallback (Fixed/Trailing TP/SL, Profit Lock)
+                const hawkesIntensity = this.client.getHawkesIntensity(this.assetIndex);
+                const hedgeTriggers = (hasActivePos && sotaTriggers.length === 0)
+                    ? this.hedgeLedger.evaluateHedgeDynamicTpSl(markPrice, aiDirection, aiConfidence, hazardMetrics.vpin, hawkesIntensity, volMetrics.garmanKlass1s, hazardMetrics.ofi, Date.now())
+                    : [];
                 const activeTriggers = sotaTriggers.length > 0 ? sotaTriggers : hedgeTriggers;
                 // Check for Stop-Loss Ratchet Shifts that require Exchange-Native STOP_MARKET cancel-replace sync
                 if (activeTriggers.length === 0) {
@@ -1059,10 +1063,12 @@ class StrategyEngine {
                     const exitSide = trigger.side === "LONG" ? "SELL" : "BUY";
                     const isHardStopTrigger = trigger.reason.includes("HAZARD") ||
                         trigger.reason.includes("HJB") ||
+                        trigger.reason.includes("MS_SOPC") ||
                         trigger.reason.includes("MVA_TS") ||
                         trigger.reason === "STOP_LOSS" ||
                         trigger.reason === "BREAK_EVEN_STOP_LOSS" ||
                         trigger.reason === "LONG_HOLD_PROFIT_HARVEST" ||
+                        trigger.reason === "CAD_TERMINAL_HORIZON_KILL" ||
                         trigger.reason === "TIME_DECAY_PROFIT_LOCK";
                     console.log(`[HEDGE_DYNAMIC_MONITORING] Slot ${trigger.slotId} ${trigger.reason} TRIGGERED! Side: ${trigger.side}, Entry: $${trigger.entryPrice.toFixed(2)}, Mark: $${markPrice.toFixed(2)}. Dispatching MARKET close with positionSide: ${trigger.side}.${isHardStopTrigger ? " [RUTHLESS HARD STOP OVERRIDE ACTIVE]" : ""}`);
                     this.prepareOrderIntent(exitSide, trigger.quantity, markPrice, trigger.side, true, isHardStopTrigger);
