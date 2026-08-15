@@ -36,7 +36,7 @@ function runTest() {
     console.log(`  [PASS] NAPI resetIcTracker result: ${resetSuccess}`);
     // 3. Test StrategyEngine EngineState FSM & Safety Clamp Lock
     console.log("[Test 3/5] Testing StrategyEngine TRAINING_LOCK FSM & Safety Clamp...");
-    const sab = new SharedArrayBuffer(2048);
+    const sab = new SharedArrayBuffer(20480);
     const client = new marketDataClient_1.MarketDataClient(sab);
     const riskGuard = new risk_1.RiskGuard();
     const execClient = new binance_1.BinanceExecutionClient();
@@ -44,6 +44,10 @@ function runTest() {
     if (engine.getEngineState() !== "LIVE_ACTIVE") {
         throw new Error(`Expected initial state LIVE_ACTIVE, got ${engine.getEngineState()}`);
     }
+    // Write valid market prices
+    client.writeAtomicFloat64Asset(0, 4, 63000.0); // Best bid
+    client.writeAtomicFloat64Asset(0, 6, 63001.0); // Best ask
+    client.writeAtomicFloat64Asset(0, 1, 0.5); // OBI
     engine.setEngineState("TRAINING_LOCK");
     if (engine.getEngineState() !== "TRAINING_LOCK") {
         throw new Error("Failed to transition engine state to TRAINING_LOCK");

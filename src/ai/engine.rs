@@ -377,14 +377,14 @@ impl AssetTelemetryTracker {
 pub struct AIEngine {
     pub tkan: TKANLayer,
     pub cell: Option<CfCCell>,
-    pub hidden_state: Mutex<Tensor>,
+    pub hidden_states: RwLock<Vec<Mutex<Tensor>>>,
     pub status: AiEngineStatus,
     pub calibration_params: crate::ai::weights::CalibrationParams,
     pub last_inference_ns: AtomicU64,
     pub inference_seq: AtomicU64,
     pub ic_tracker: Mutex<ICTracker>,
     pub asset_trackers: RwLock<Vec<AssetTelemetryTracker>>,
-    pub feature_pipeline: Mutex<StreamingFeaturePipeline>,
+    pub feature_pipelines: RwLock<Vec<Mutex<StreamingFeaturePipeline>>>,
 }
 
 impl AIEngine {
@@ -395,12 +395,10 @@ impl AIEngine {
     pub fn load_from_paths(cfc_path: &str, tkan_path: &str) -> Self {
         let device = Device::Cpu;
         let tkan = TKANLayer::load_from_binary_or_default(tkan_path);
-        let hidden_state = Tensor::zeros((1, 32), DType::F32, &device)
-            .unwrap_or_else(|_| Tensor::zeros((1, 32), DType::F32, &Device::Cpu).unwrap());
 
         let weights_engine = AiEngine::load_from_file(cfc_path);
 
-        // Dynamically provision asset tracking memory strictly based on .env configuration
+        // Dynamically provision asset tracking, feature pipelines, and hidden states based on .env configuration
         let num_assets = if let Ok(symbols_str) = std::env::var("TRADING_SYMBOLS") {
             symbols_str.split(',').filter(|s| !s.trim().is_empty()).count().max(1)
         } else if let Ok(max_assets_str) = std::env::var("MAX_CONCURRENT_ASSETS") {
@@ -410,21 +408,28 @@ impl AIEngine {
         };
 
         let mut asset_trackers = Vec::with_capacity(num_assets);
+        let mut feature_pipelines = Vec::with_capacity(num_assets);
+        let mut hidden_states = Vec::with_capacity(num_assets);
+
         for _ in 0..num_assets {
             asset_trackers.push(AssetTelemetryTracker::new());
+            feature_pipelines.push(Mutex::new(StreamingFeaturePipeline::new()));
+            let hs = Tensor::zeros((1, 32), DType::F32, &device)
+                .unwrap_or_else(|_| Tensor::zeros((1, 32), DType::F32, &Device::Cpu).unwrap());
+            hidden_states.push(Mutex::new(hs));
         }
 
         Self {
             tkan,
             cell: weights_engine.cell,
-            hidden_state: Mutex::new(hidden_state),
+            hidden_states: RwLock::new(hidden_states),
             status: weights_engine.status,
             calibration_params: weights_engine.calibration_params,
             last_inference_ns: AtomicU64::new(0),
             inference_seq: AtomicU64::new(0),
             ic_tracker: Mutex::new(ICTracker::default_1000()),
             asset_trackers: RwLock::new(asset_trackers),
-            feature_pipeline: Mutex::new(StreamingFeaturePipeline::new()),
+            feature_pipelines: RwLock::new(feature_pipelines),
         }
     }
 
@@ -439,9 +444,18 @@ impl AIEngine {
         self.cell = new_engine.cell;
         self.status = new_engine.status;
         self.calibration_params = new_engine.calibration_params;
-        if let Ok(new_hs) = new_engine.hidden_state.into_inner() {
-            if let Ok(mut hs) = self.hidden_state.lock() {
-                *hs = new_hs;
+        if let Ok(new_hs_vec) = new_engine.hidden_states.into_inner() {
+            if let Ok(mut hs_vec) = self.hidden_states.write() {
+                while hs_vec.len() < new_hs_vec.len() {
+                    hs_vec.push(Mutex::new(Tensor::zeros((1, 32), DType::F32, &Device::Cpu).unwrap()));
+                }
+                for (i, new_hs_mutex) in new_hs_vec.into_iter().enumerate() {
+                    if let Ok(new_hs) = new_hs_mutex.into_inner() {
+                        if let Ok(mut hs) = hs_vec[i].lock() {
+                            *hs = new_hs;
+                        }
+                    }
+                }
             }
         }
         calibrated
@@ -479,8 +493,22 @@ impl AIEngine {
         let current_mid = (best_bid + best_ask) / 2.0;
 
         let lat_us_val = sab.load_f64_asset(asset_idx, 98) * 1000.0;
+
+        // Auto-expand feature pipelines dynamically if asset_idx exceeds current capacity
+        {
+            let pipelines = self.feature_pipelines.read().unwrap_or_else(|e| e.into_inner());
+            if asset_idx >= pipelines.len() {
+                drop(pipelines);
+                let mut pipelines_mut = self.feature_pipelines.write().unwrap_or_else(|e| e.into_inner());
+                while pipelines_mut.len() <= asset_idx {
+                    pipelines_mut.push(Mutex::new(StreamingFeaturePipeline::new()));
+                }
+            }
+        }
+
         let (lob_features, snr_score) = {
-            let mut pipeline = self.feature_pipeline.lock().unwrap_or_else(|e| e.into_inner());
+            let pipelines = self.feature_pipelines.read().unwrap_or_else(|e| e.into_inner());
+            let mut pipeline = pipelines[asset_idx].lock().unwrap_or_else(|e| e.into_inner());
             pipeline.update_and_normalize_with_snr_asset(sab, lat_us_val, asset_idx)?
         };
 
@@ -514,7 +542,20 @@ impl AIEngine {
             ((start_ns.saturating_sub(prev_ns) as f64) / 1e9).max(0.0001)
         };
 
-        let mut hidden_guard = self.hidden_state.lock().unwrap_or_else(|e| e.into_inner());
+        // Auto-expand hidden states dynamically if asset_idx exceeds current capacity
+        {
+            let hs_read = self.hidden_states.read().unwrap_or_else(|e| e.into_inner());
+            if asset_idx >= hs_read.len() {
+                drop(hs_read);
+                let mut hs_write = self.hidden_states.write().unwrap_or_else(|e| e.into_inner());
+                while hs_write.len() <= asset_idx {
+                    hs_write.push(Mutex::new(Tensor::zeros((1, 32), DType::F32, &Device::Cpu).unwrap()));
+                }
+            }
+        }
+
+        let hs_holder = self.hidden_states.read().unwrap_or_else(|e| e.into_inner());
+        let mut hidden_guard = hs_holder[asset_idx].lock().unwrap_or_else(|e| e.into_inner());
         let (output_tensor, next_hidden) = if let Some(cell) = &self.cell {
             cell.forward(&tkan_tensor, &*hidden_guard, delta_t)?
         } else {
@@ -536,8 +577,6 @@ impl AIEngine {
         let z_score = direction_magnitude / gk_vol.max(0.0001);
 
         // Temperature Scaling (T) & Genuine Platt Calibration Formula:
-        // SNR scales prediction magnitude (z_score), eliminating artificial additive terms (+ beta * snr_score).
-        // Logit is unconstrained on the lower bound, allowing negative logits when conviction is weak (confidence < 50%).
         let sab_temp = sab.load_f64_asset(asset_idx, 127);
         let sab_scale = sab.load_f64_asset(asset_idx, 128);
         let sab_offset = sab.load_f64_asset(asset_idx, 129);
@@ -600,9 +639,16 @@ impl AIEngine {
     }
 
     pub fn inherit_hidden_state(&self, other: &AIEngine) {
-        if let Ok(other_hs) = other.hidden_state.lock() {
-            if let Ok(mut self_hs) = self.hidden_state.lock() {
-                *self_hs = other_hs.clone();
+        let other_guard = other.hidden_states.read().unwrap_or_else(|e| e.into_inner());
+        let mut self_guard = self.hidden_states.write().unwrap_or_else(|e| e.into_inner());
+        while self_guard.len() < other_guard.len() {
+            self_guard.push(Mutex::new(Tensor::zeros((1, 32), DType::F32, &Device::Cpu).unwrap()));
+        }
+        for (i, other_mutex) in other_guard.iter().enumerate() {
+            if let Ok(other_hs) = other_mutex.lock() {
+                if let Ok(mut self_hs) = self_guard[i].lock() {
+                    *self_hs = other_hs.clone();
+                }
             }
         }
     }
@@ -628,7 +674,8 @@ impl AIEngine {
 
         let lat_us_val = sab.load_f64(98) * 1000.0;
         let (lob_features, snr_score) = {
-            let mut pipeline = self.feature_pipeline.lock().unwrap_or_else(|e| e.into_inner());
+            let pipelines = self.feature_pipelines.read().unwrap_or_else(|e| e.into_inner());
+            let mut pipeline = pipelines[0].lock().unwrap_or_else(|e| e.into_inner());
             pipeline.update_and_normalize_with_snr_asset(sab, lat_us_val, 0)?
         };
 
@@ -643,7 +690,8 @@ impl AIEngine {
             ((start_ns.saturating_sub(prev_ns) as f64) / 1e9).max(0.0001)
         };
 
-        let mut hidden_guard = self.hidden_state.lock().unwrap_or_else(|e| e.into_inner());
+        let hs_holder = self.hidden_states.read().unwrap_or_else(|e| e.into_inner());
+        let mut hidden_guard = hs_holder[0].lock().unwrap_or_else(|e| e.into_inner());
         let (output_tensor, next_hidden) = if let Some(cell) = &self.cell {
             cell.forward(&tkan_tensor, &*hidden_guard, delta_t)?
         } else {
@@ -710,34 +758,49 @@ impl AIEngine {
         let tkan_out = self.tkan.forward(features);
         let tkan_f32: [f32; 16] = std::array::from_fn(|i| tkan_out[i] as f32);
         if let Ok(tkan_tensor) = Tensor::from_slice(&tkan_f32, (1, 16), &Device::Cpu) {
-            if let Ok(mut hidden_guard) = self.hidden_state.lock() {
-                if let Some(cell) = &self.cell {
-                    if let Ok((output_tensor, next_hidden)) = cell.forward(&tkan_tensor, &*hidden_guard, 0.001) {
-                        *hidden_guard = next_hidden;
-                        if let Ok(flat_out) = output_tensor.flatten_all() {
-                            let num_elems = flat_out.elem_count();
-                            let raw_direction = if num_elems > 0 { flat_out.get(0).ok().and_then(|t| t.to_scalar::<f32>().ok()).unwrap_or(0.0) as f64 } else { 0.0 };
-                            let direction = raw_direction.tanh();
-                            let direction_magnitude = direction.abs();
-
-                            let vol = features[35].max(0.0001);
-                            let z_score = direction_magnitude / vol;
-                            let obi = features[8];
-                            let obi_z = obi.abs();
-                            let cvd_z = features[21].abs();
-                            let vel_z = features[24].abs();
-                            let micro_z = features[2].abs();
-                            let snr_score = 1.0 + 0.6 * (obi_z + 0.8 * cvd_z + 0.5 * vel_z + 0.5 * micro_z).min(8.0);
-                            let alpha = self.calibration_params.platt_scale.max(1.0);
-                            let beta = 0.8;
-                            let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
-                            let obi_align = obi * direction_sign;
-
-                            let calibrated_logit: f64 = ((alpha * z_score + beta * snr_score + obi_align * 0.5 + self.calibration_params.platt_offset) / self.calibration_params.temperature.max(0.05)).clamp(0.0, 4.6);
-                            let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.99f64);
-                            return (direction, confidence);
-                        }
+            let hs_holder = self.hidden_states.read().unwrap_or_else(|e| e.into_inner());
+            let (output_tensor_opt, next_hidden_opt) = if let Some(hs_mutex) = hs_holder.get(0) {
+                if let Ok(hidden_guard) = hs_mutex.lock() {
+                    if let Some(cell) = &self.cell {
+                        cell.forward(&tkan_tensor, &*hidden_guard, 0.001).ok().map(|(out, next_h)| (Some(out), Some(next_h))).unwrap_or((None, None))
+                    } else {
+                        (None, None)
                     }
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+
+            if let (Some(output_tensor), Some(next_hidden)) = (output_tensor_opt, next_hidden_opt) {
+                if let Some(hs_mutex) = hs_holder.get(0) {
+                    if let Ok(mut hidden_guard) = hs_mutex.lock() {
+                        *hidden_guard = next_hidden;
+                    }
+                }
+                if let Ok(flat_out) = output_tensor.flatten_all() {
+                    let num_elems = flat_out.elem_count();
+                    let raw_direction = if num_elems > 0 { flat_out.get(0).ok().and_then(|t| t.to_scalar::<f32>().ok()).unwrap_or(0.0) as f64 } else { 0.0 };
+                    let direction = raw_direction.tanh();
+                    let direction_magnitude = direction.abs();
+
+                    let vol = features[35].max(0.0001);
+                    let z_score = direction_magnitude / vol;
+                    let obi = features[8];
+                    let obi_z = obi.abs();
+                    let cvd_z = features[21].abs();
+                    let vel_z = features[24].abs();
+                    let micro_z = features[2].abs();
+                    let snr_score = 1.0 + 0.6 * (obi_z + 0.8 * cvd_z + 0.5 * vel_z + 0.5 * micro_z).min(8.0);
+                    let alpha = self.calibration_params.platt_scale.max(1.0);
+                    let beta = 0.8;
+                    let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
+                    let obi_align = obi * direction_sign;
+
+                    let calibrated_logit: f64 = ((alpha * z_score + beta * snr_score + obi_align * 0.5 + self.calibration_params.platt_offset) / self.calibration_params.temperature.max(0.05)).clamp(0.0, 4.6);
+                    let confidence: f64 = (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.50f64, 0.99f64);
+                    return (direction, confidence);
                 }
             }
         }

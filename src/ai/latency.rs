@@ -41,17 +41,20 @@ impl LatencyMonitor {
                     // latency_penalty_coefficient = max(0.5, 1.0 - (rtt - 50) / 200) clamped to max 1.0
                     let penalty_coeff = (1.0 - (rtt_ms - 50.0) / 200.0).clamp(0.5, 1.0);
 
-                    // Slot 98: Measured RTT (ms)
-                    self.bridge.store_f64(98, rtt_ms);
-                    // Slot 99: Latency Penalty Coefficient
-                    self.bridge.store_f64(99, penalty_coeff);
+                    // Store latency metrics across all active asset slots (Slots 98 & 99)
+                    for asset_idx in 0..self.bridge.max_assets() {
+                        self.bridge.store_f64_asset(asset_idx, 98, rtt_ms);
+                        self.bridge.store_f64_asset(asset_idx, 99, penalty_coeff);
+                    }
                 }
                 Err(_) => {
-                    // Log error softly and maintain fallback values (e.g. 50ms default if slot was empty)
-                    let current_rtt = self.bridge.load_f64(98);
-                    if current_rtt == 0.0 {
-                        self.bridge.store_f64(98, 50.0);
-                        self.bridge.store_f64(99, 1.0);
+                    // Log error softly and maintain fallback values across all active assets
+                    for asset_idx in 0..self.bridge.max_assets() {
+                        let current_rtt = self.bridge.load_f64_asset(asset_idx, 98);
+                        if current_rtt == 0.0 {
+                            self.bridge.store_f64_asset(asset_idx, 98, 50.0);
+                            self.bridge.store_f64_asset(asset_idx, 99, 1.0);
+                        }
                     }
                 }
             }

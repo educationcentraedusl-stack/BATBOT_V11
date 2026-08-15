@@ -64,7 +64,7 @@ export class MarketDataClient {
    * Reads a 64-bit float slot atomically using a memory barrier via Atomics.load on BigInt64Array
    * and bitcasting the BigInt to a Float64 number using static conversion views (zero allocation).
    */
-  private readAtomicFloat64Asset(assetIdx: number, slot: number): number {
+  public readAtomicFloat64Asset(assetIdx: number, slot: number): number {
     const globalSlot = this.getGlobalSlot(assetIdx, slot);
     const rawBits = Atomics.load(this.bigIntView, globalSlot);
     BITCAST_BIGINT[0] = rawBits;
@@ -74,7 +74,7 @@ export class MarketDataClient {
   /**
    * Writes a 64-bit float slot atomically using Atomics.store and static conversion views.
    */
-  private writeAtomicFloat64Asset(assetIdx: number, slot: number, value: number): void {
+  public writeAtomicFloat64Asset(assetIdx: number, slot: number, value: number): void {
     const globalSlot = this.getGlobalSlot(assetIdx, slot);
     BITCAST_FLOAT[0] = value;
     Atomics.store(this.bigIntView, globalSlot, BITCAST_BIGINT[0]);
@@ -165,24 +165,7 @@ export class MarketDataClient {
   }
 
   public getAIPredictionConfidence(assetIdx: number = 0): number {
-    const rawConf = this.readAtomicFloat64Asset(assetIdx, 94);
-    // Eradicate fake AI 0.99 confidence: If raw confidence is uncalibrated mock (>= 0.98), calculate strict Microstructure Model Gatekeeper conviction
-    if (rawConf >= 0.98 || rawConf === 0) {
-      const obi = this.getOBI(assetIdx);
-      const cvd = this.getCVD(assetIdx);
-      const hawkes = this.getHawkesIntensity(assetIdx);
-      const absObi = Math.abs(obi);
-
-      // Gatekeeper: Require strong OFI imbalance (|OFI| >= 0.35) aligned with CVD directional pressure
-      if (absObi >= 0.35 && ((obi > 0 && cvd >= 0) || (obi < 0 && cvd <= 0))) {
-        const hawkesBonus = Math.min(0.15, hawkes * 0.015);
-        const dynamicConfidence = Math.min(0.95, 0.50 + 0.35 * absObi + hawkesBonus);
-        return dynamicConfidence;
-      }
-      // Rejects noise / weak market conditions with zero confidence (0.0)
-      return 0.0;
-    }
-    return rawConf;
+    return this.readAtomicFloat64Asset(assetIdx, 94);
   }
 
   public getAIPredictionHorizonMs(assetIdx: number = 0): number {

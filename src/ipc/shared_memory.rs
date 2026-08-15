@@ -6,43 +6,39 @@ pub const DEFAULT_SAB_SLOTS_PER_ASSET: usize = 256;
 pub const SHARED_MEMORY_SLOTS: usize = DEFAULT_SAB_SLOTS_PER_ASSET;
 pub const SHARED_MEMORY_BYTES: usize = SHARED_MEMORY_SLOTS * 8; // 2048 bytes for single-asset baseline
 
-const MAX_ASSETS_TRACKER: usize = 32;
 const HAWKES_BUF_CAP: usize = 64;
 
-struct MicroburstMetricsTracker {
-    timestamps: [[u64; HAWKES_BUF_CAP]; MAX_ASSETS_TRACKER],
-    mid_prices: [[f64; HAWKES_BUF_CAP]; MAX_ASSETS_TRACKER],
-    head: [usize; MAX_ASSETS_TRACKER],
-    count: [usize; MAX_ASSETS_TRACKER],
+#[derive(Clone)]
+struct SingleAssetMetricsTracker {
+    timestamps: [u64; HAWKES_BUF_CAP],
+    mid_prices: [f64; HAWKES_BUF_CAP],
+    head: usize,
+    count: usize,
 }
 
-impl MicroburstMetricsTracker {
+impl SingleAssetMetricsTracker {
     const fn new() -> Self {
         Self {
-            timestamps: [[0; HAWKES_BUF_CAP]; MAX_ASSETS_TRACKER],
-            mid_prices: [[0.0; HAWKES_BUF_CAP]; MAX_ASSETS_TRACKER],
-            head: [0; MAX_ASSETS_TRACKER],
-            count: [0; MAX_ASSETS_TRACKER],
+            timestamps: [0; HAWKES_BUF_CAP],
+            mid_prices: [0.0; HAWKES_BUF_CAP],
+            head: 0,
+            count: 0,
         }
     }
 
-    fn push(&mut self, asset_idx: usize, timestamp_ns: u64, mid_price: f64) {
-        let idx = asset_idx % MAX_ASSETS_TRACKER;
-        let h = self.head[idx];
-        self.timestamps[idx][h] = timestamp_ns;
-        self.mid_prices[idx][h] = mid_price;
-        self.head[idx] = (h + 1) % HAWKES_BUF_CAP;
-        if self.count[idx] < HAWKES_BUF_CAP {
-            self.count[idx] += 1;
+    fn push(&mut self, timestamp_ns: u64, mid_price: f64) {
+        let h = self.head;
+        self.timestamps[h] = timestamp_ns;
+        self.mid_prices[h] = mid_price;
+        self.head = (h + 1) % HAWKES_BUF_CAP;
+        if self.count < HAWKES_BUF_CAP {
+            self.count += 1;
         }
     }
 
-    /// Computes true Hawkes Process Intensity λ(t) = μ + ∑_{t_i < t} α * exp(-β * (t - t_i))
-    /// with μ = 1.0 baseline, α = 0.75 jump size, β = 2.5 sec⁻¹ decay rate.
-    fn compute_hawkes_intensity(&self, asset_idx: usize, current_ts_ns: u64, abs_vel: f64, abs_obi: f64) -> f64 {
-        let idx = asset_idx % MAX_ASSETS_TRACKER;
+    fn compute_hawkes_intensity(&self, current_ts_ns: u64, abs_vel: f64, abs_obi: f64) -> f64 {
         let baseline = 1.0 + (abs_vel * 10.0) + (abs_obi - 0.4).max(0.0) * 5.0;
-        if self.count[idx] == 0 || current_ts_ns == 0 {
+        if self.count == 0 || current_ts_ns == 0 {
             return baseline.min(20.0);
         }
 
@@ -51,8 +47,8 @@ impl MicroburstMetricsTracker {
         let mut decay_sum = 0.0;
 
         let mut i = 0;
-        while i < self.count[idx] {
-            let ts = self.timestamps[idx][i];
+        while i < self.count {
+            let ts = self.timestamps[i];
             if ts > 0 && ts <= current_ts_ns {
                 let delta_sec = (current_ts_ns - ts) as f64 / 1_000_000_000.0;
                 if delta_sec >= 0.0 && delta_sec <= 10.0 {
@@ -65,25 +61,23 @@ impl MicroburstMetricsTracker {
         (baseline + decay_sum).min(20.0)
     }
 
-    /// Computes true Realized Volatility using rolling logarithmic returns σ = √( 1/N * ∑ (ln(P_t / P_{t-1}))² )
-    fn compute_realized_volatility(&self, asset_idx: usize, fallback_vel: f64) -> f64 {
-        let idx = asset_idx % MAX_ASSETS_TRACKER;
-        if self.count[idx] < 2 {
+    fn compute_realized_volatility(&self, fallback_vel: f64) -> f64 {
+        if self.count < 2 {
             return (fallback_vel * 0.05 + 0.001).min(0.1);
         }
 
         let mut sum_sq_log_returns = 0.0;
         let mut valid_returns = 0usize;
 
-        let start_idx = if self.count[idx] < HAWKES_BUF_CAP { 0 } else { self.head[idx] };
-        let n = self.count[idx];
+        let start_idx = if self.count < HAWKES_BUF_CAP { 0 } else { self.head };
+        let n = self.count;
 
         let mut i = 0;
         while i < n - 1 {
             let idx_prev = (start_idx + i) % HAWKES_BUF_CAP;
             let idx_curr = (start_idx + i + 1) % HAWKES_BUF_CAP;
-            let p_prev = self.mid_prices[idx][idx_prev];
-            let p_curr = self.mid_prices[idx][idx_curr];
+            let p_prev = self.mid_prices[idx_prev];
+            let p_curr = self.mid_prices[idx_curr];
 
             if p_prev > 0.0 && p_curr > 0.0 {
                 let log_ret = (p_curr / p_prev).ln();
@@ -99,6 +93,48 @@ impl MicroburstMetricsTracker {
 
         let variance = sum_sq_log_returns / (valid_returns as f64);
         variance.sqrt().max(0.0001).min(0.1)
+    }
+}
+
+struct MicroburstMetricsTracker {
+    trackers: Vec<SingleAssetMetricsTracker>,
+}
+
+impl MicroburstMetricsTracker {
+    fn new() -> Self {
+        let num_assets = if let Ok(symbols_str) = std::env::var("TRADING_SYMBOLS") {
+            symbols_str.split(',').filter(|s| !s.trim().is_empty()).count().max(1)
+        } else if let Ok(max_assets_str) = std::env::var("MAX_CONCURRENT_ASSETS") {
+            max_assets_str.trim().parse::<usize>().unwrap_or(10).max(1)
+        } else {
+            10
+        };
+        let mut trackers = Vec::with_capacity(num_assets);
+        for _ in 0..num_assets {
+            trackers.push(SingleAssetMetricsTracker::new());
+        }
+        Self { trackers }
+    }
+
+    fn ensure_capacity(&mut self, asset_idx: usize) {
+        while self.trackers.len() <= asset_idx {
+            self.trackers.push(SingleAssetMetricsTracker::new());
+        }
+    }
+
+    fn push(&mut self, asset_idx: usize, timestamp_ns: u64, mid_price: f64) {
+        self.ensure_capacity(asset_idx);
+        self.trackers[asset_idx].push(timestamp_ns, mid_price);
+    }
+
+    fn compute_hawkes_intensity(&mut self, asset_idx: usize, current_ts_ns: u64, abs_vel: f64, abs_obi: f64) -> f64 {
+        self.ensure_capacity(asset_idx);
+        self.trackers[asset_idx].compute_hawkes_intensity(current_ts_ns, abs_vel, abs_obi)
+    }
+
+    fn compute_realized_volatility(&mut self, asset_idx: usize, fallback_vel: f64) -> f64 {
+        self.ensure_capacity(asset_idx);
+        self.trackers[asset_idx].compute_realized_volatility(fallback_vel)
     }
 }
 

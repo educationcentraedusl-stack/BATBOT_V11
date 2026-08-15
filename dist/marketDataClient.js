@@ -132,23 +132,7 @@ class MarketDataClient {
         return this.readAtomicFloat64Asset(assetIdx, 93);
     }
     getAIPredictionConfidence(assetIdx = 0) {
-        const rawConf = this.readAtomicFloat64Asset(assetIdx, 94);
-        // Eradicate fake AI 0.99 confidence: If raw confidence is uncalibrated mock (>= 0.98), calculate strict Microstructure Model Gatekeeper conviction
-        if (rawConf >= 0.98 || rawConf === 0) {
-            const obi = this.getOBI(assetIdx);
-            const cvd = this.getCVD(assetIdx);
-            const hawkes = this.getHawkesIntensity(assetIdx);
-            const absObi = Math.abs(obi);
-            // Gatekeeper: Require strong OFI imbalance (|OFI| >= 0.35) aligned with CVD directional pressure
-            if (absObi >= 0.35 && ((obi > 0 && cvd >= 0) || (obi < 0 && cvd <= 0))) {
-                const hawkesBonus = Math.min(0.15, hawkes * 0.015);
-                const dynamicConfidence = Math.min(0.95, 0.50 + 0.35 * absObi + hawkesBonus);
-                return dynamicConfidence;
-            }
-            // Rejects noise / weak market conditions with zero confidence (0.0)
-            return 0.0;
-        }
-        return rawConf;
+        return this.readAtomicFloat64Asset(assetIdx, 94);
     }
     getAIPredictionHorizonMs(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 95);
