@@ -1104,7 +1104,7 @@ export class StrategyEngine {
       this.setLeverageMultiplier(liveLev);
     }
 
-    const recovered: { side: "LONG" | "SHORT"; quantity: number; entryPrice: number }[] = [];
+    const recovered: { side: "LONG" | "SHORT"; quantity: number; entryPrice: number; originalOpenTime?: number }[] = [];
 
     for (const pos of rawPositions) {
       if (pos.symbol !== this.config.symbol) continue;
@@ -1115,10 +1115,16 @@ export class StrategyEngine {
 
       const side: "LONG" | "SHORT" =
         pos.positionSide === "LONG" || (pos.positionSide === "BOTH" && amt > 0) ? "LONG" : "SHORT";
+
+      // Binance REST /fapi/v2/positionRisk returns `updateTime` (Unix ms) — the last time this position
+      // was opened or modified. Used to restore CAD-DTLM position age across restarts.
+      const originalOpenTime = pos.updateTime && pos.updateTime > 0 ? pos.updateTime : 0;
+
       recovered.push({
         side,
         quantity: Math.abs(amt),
         entryPrice: entryPx,
+        originalOpenTime,
       });
     }
 
@@ -1385,54 +1391,32 @@ export class StrategyEngine {
                   if (res) {
                     const execPx = parseFloat(res.price || res.avgPrice || "0") || markPrice;
                     const takerFeeRate = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
-                    let realizedPnl = 0;
+
+                    // Ledger Delta Pattern (Defect #10 Fix):
+                    // Capture ledger PnL BEFORE deduct/release. The deduct/release calls trigger
+                    // recordRealizedExit() internally, which is the single source of truth for PnL.
+                    // We derive realizedPnl as the ledger delta — zero redundant arithmetic,
+                    // zero fee formula divergence between RiskGuard and HedgePositionLedger.
+                    const pnlBefore = this.hedgeLedger.getCumulativeRealizedPnl();
 
                     if (trigger.isPartialClose && trigger.quantity > 0) {
                       if (trigger.side === "LONG") {
-                        const entryPx = this.hedgeLedger.getCoreLong().entryPrice;
-                        const closedQty = Math.min(this.hedgeLedger.getCoreLong().quantity, trigger.quantity);
-                        if (entryPx > 0) {
-                          const grossPnl = (execPx - entryPx) * closedQty;
-                          const fees = (entryPx * closedQty + execPx * closedQty) * takerFeeRate;
-                          realizedPnl = grossPnl - fees;
-                        }
                         this.hedgeLedger.deductCoreLongQuantity(trigger.quantity, execPx, takerFeeRate, trigger.reason);
                       } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
                         const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
-                        const slot = this.hedgeLedger.getShortSlots().find((s) => s.slotId === trigger.slotId);
-                        if (slot && slot.entryPrice > 0) {
-                          const entryPx = slot.entryPrice;
-                          const closedQty = Math.min(slot.quantity, trigger.quantity);
-                          const grossPnl = (entryPx - execPx) * closedQty;
-                          const fees = (entryPx * closedQty + execPx * closedQty) * takerFeeRate;
-                          realizedPnl = grossPnl - fees;
-                        }
                         this.hedgeLedger.deductShortSlotQuantity(sIdx, trigger.quantity, execPx, takerFeeRate, trigger.reason);
                       }
                     } else if (!trigger.isPartialClose) {
                       if (trigger.side === "LONG") {
-                        const coreLong = this.hedgeLedger.getCoreLong();
-                        if (coreLong.isOccupied && coreLong.entryPrice > 0) {
-                          const entryPx = coreLong.entryPrice;
-                          const qty = coreLong.quantity;
-                          const grossPnl = (execPx - entryPx) * qty;
-                          const fees = (entryPx * qty + execPx * qty) * takerFeeRate;
-                          realizedPnl = grossPnl - fees;
-                        }
                         this.hedgeLedger.releaseCoreLong(execPx, takerFeeRate, trigger.reason);
                       } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
                         const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
-                        const slot = this.hedgeLedger.getShortSlots().find((s) => s.slotId === trigger.slotId);
-                        if (slot && slot.isOccupied && slot.entryPrice > 0) {
-                          const entryPx = slot.entryPrice;
-                          const qty = slot.quantity;
-                          const grossPnl = (entryPx - execPx) * qty;
-                          const fees = (entryPx * qty + execPx * qty) * takerFeeRate;
-                          realizedPnl = grossPnl - fees;
-                        }
                         this.hedgeLedger.releaseShortSlot(sIdx, execPx, takerFeeRate, trigger.reason);
                       }
                     }
+
+                    // Delta = exactly what recordRealizedExit recorded \u2014 single source of truth for RiskGuard
+                    const realizedPnl = this.hedgeLedger.getCumulativeRealizedPnl() - pnlBefore;
 
                     // Dual-tier cooldown & risk sync for dynamic MARKET exit executions
                     this.onExecutionCompleted({
@@ -1446,6 +1430,7 @@ export class StrategyEngine {
                       realizedPnl,
                       fillTimestampMs: Date.now(),
                     });
+
                   }
                   return res;
                 })

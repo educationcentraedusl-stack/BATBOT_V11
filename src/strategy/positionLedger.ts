@@ -410,6 +410,7 @@ export interface PositionSlot {
   initialQuantity?: number;
   entryPrice: number;
   openTime: number;
+  originalOpenTime?: number;  // Binance REST position updateTime (ms) — persists across restarts for CAD-DTLM clock continuity
   takeProfitPrice: number;
   stopLossPrice: number;
   takeProfitPercent: number;
@@ -1110,7 +1111,7 @@ export class HedgePositionLedger {
   }
 
   public syncStartupPositions(
-    recoveredPositions: { side: "LONG" | "SHORT"; quantity: number; entryPrice: number }[],
+    recoveredPositions: { side: "LONG" | "SHORT"; quantity: number; entryPrice: number; originalOpenTime?: number }[],
     longTpPct: number,
     longSlPct: number,
     shortTpPct: number,
@@ -1137,25 +1138,35 @@ export class HedgePositionLedger {
 
       if (pos.side === "LONG") {
         this.occupyCoreLong(pos.quantity, pos.entryPrice, longTpPct, longSlPct);
+        // Restore original open timestamp for CAD-DTLM clock continuity across restarts
+        if (pos.originalOpenTime && pos.originalOpenTime > 0) {
+          this.coreLong.originalOpenTime = pos.originalOpenTime;
+          this.coreLong.openTime = pos.originalOpenTime;
+        }
         hasLong = true;
         longQty += pos.quantity;
         longPxSum += pos.entryPrice * pos.quantity;
         console.log(
           `[HedgePositionLedger] Recovered Core Long Position: ${pos.quantity} @ $${pos.entryPrice.toFixed(
             2
-          )} (TP: $${this.coreLong.takeProfitPrice.toFixed(2)}, SL: $${this.coreLong.stopLossPrice.toFixed(2)})`
+          )} (TP: $${this.coreLong.takeProfitPrice.toFixed(2)}, SL: $${this.coreLong.stopLossPrice.toFixed(2)}) [originalOpenTime: ${pos.originalOpenTime ?? 0}]`
         );
       } else if (pos.side === "SHORT") {
         const slotIdx = this.getAvailableShortSlotIndex();
         if (slotIdx >= 0) {
           this.occupyShortSlot(slotIdx, pos.quantity, pos.entryPrice, shortTpPct, shortSlPct);
+          // Restore original open timestamp for CAD-DTLM clock continuity across restarts
+          if (pos.originalOpenTime && pos.originalOpenTime > 0) {
+            this.shortSlots[slotIdx].originalOpenTime = pos.originalOpenTime;
+            this.shortSlots[slotIdx].openTime = pos.originalOpenTime;
+          }
           hasShort = true;
           shortQty += pos.quantity;
           shortPxSum += pos.entryPrice * pos.quantity;
           console.log(
             `[HedgePositionLedger] Recovered Short Slot #${slotIdx} Position: ${pos.quantity} @ $${pos.entryPrice.toFixed(
               2
-            )} (TP: $${this.shortSlots[slotIdx].takeProfitPrice.toFixed(2)}, SL: $${this.shortSlots[slotIdx].stopLossPrice.toFixed(2)})`
+            )} (TP: $${this.shortSlots[slotIdx].takeProfitPrice.toFixed(2)}, SL: $${this.shortSlots[slotIdx].stopLossPrice.toFixed(2)}) [originalOpenTime: ${pos.originalOpenTime ?? 0}]`
           );
         }
       }
@@ -1646,6 +1657,16 @@ export class HedgePositionLedger {
   }
 
   /**
+   * Returns the current cumulative realized PnL (USDT) for this ledger.
+   * Used by engine.ts to compute PnL deltas via the Ledger Delta Pattern,
+   * eliminating redundant fee arithmetic and enforcing single-source-of-truth
+   * for RiskGuard daily limit tracking (Defect #10 fix).
+   */
+  public getCumulativeRealizedPnl(): number {
+    return this.cumulativeRealizedPnl;
+  }
+
+  /**
    * SOTA August 2026 MS-SOPC & CAD-DTLM Continuous Microstructure Dynamic Exit Evaluator.
    * 
    * Mathematical Frameworks:
@@ -1687,10 +1708,16 @@ export class HedgePositionLedger {
       hjbEngine = hjbOrVol as HJBReservationEngine;
       volSurfMetrics = volMetricsOrNowMs as VolatilitySurfaceMetrics;
     } else {
-      // Single price fallback: evaluateSotaDynamicExits(markPx, hazardMetrics, hjbEngine, volMetrics, nowMs)
+      // Single-price overload: evaluateSotaDynamicExits(markPx, hazardMetrics, hjbEngine, volMetrics, nowMs)
+      // Degenerate Stoikov case: spread = 0, OBI term = 0, stoikovMicroPrice = midPrice exactly.
+      // This is mathematically correct and avoids synthetic spread injection.
       const mark = bestBidOrMark;
-      bestBid = mark * 0.99995;
-      bestAsk = mark * 1.00005;
+      if (mark <= 0) {
+        console.error("[MS-SOPC][GUARD] evaluateSotaDynamicExits: invalid mark price. Aborting.");
+        return this.sotaTriggers;
+      }
+      bestBid = mark;  // spread = 0 → OBI term = 0 → micro-price = mid (correct neutral Stoikov)
+      bestAsk = mark;
       hazardMetrics = bestAskOrHazard as MicrostructureMetrics;
       hjbEngine = hazardOrHjb as HJBReservationEngine;
       volSurfMetrics = hjbOrVol as VolatilitySurfaceMetrics;
@@ -1702,9 +1729,16 @@ export class HedgePositionLedger {
     const midPrice = (bestBid > 0 && bestAsk > 0) ? (bestBid + bestAsk) / 2.0 : Math.max(bestBid, bestAsk);
     const spread = (bestBid > 0 && bestAsk > 0 && bestAsk >= bestBid) ? bestAsk - bestBid : 0;
 
-    // True Stoikov Micro-Price Formulation: P_micro = P_mid + (OBI / 2) * Spread
-    const obi = hazardMetrics ? hazardMetrics.ofi : 0;
-    const stoikovMicroPrice = midPrice > 0 ? midPrice + (obi / 2.0) * spread : midPrice;
+    // True Stoikov Micro-Price: P_micro = P_mid + (OBI / 2) * Spread
+    // Uses hazardMetrics.obi (instantaneous L1 depth ratio) — NOT hazardMetrics.ofi (rolling OFI).
+    // OBI = (Q_bid - Q_ask) / (Q_bid + Q_ask): correct static inventory pressure at the quote.
+    // When spread=0 (single-price path), obi term = 0 and stoikovMicroPrice = midPrice.
+    const obiVal = (hazardMetrics && Number.isFinite(hazardMetrics.obi))
+      ? Math.max(-1.0, Math.min(1.0, hazardMetrics.obi))
+      : 0;
+    const stoikovMicroPrice = (midPrice > 0 && spread > 0)
+      ? midPrice + (obiVal / 2.0) * spread
+      : midPrice;
 
     // Pre-calculate per-tick invariant fee, decay and MS-SOPC constants once
     const makerFee = this.sizingCalc.getMakerFeeRate();
@@ -1713,14 +1747,44 @@ export class HedgePositionLedger {
     const roundTripFeeBuffer = (makerFee + takerFee) * 2.5;
 
     const safeHurst = Math.max(0.05, Math.min(0.95, hurstExponent));
-    const halfLifeSec = Math.max(10.0, Math.min(120.0, 60.0 * safeHurst));
 
-    const safeGkVol = volSurfMetrics ? Math.max(0.001, volSurfMetrics.garmanKlass1s) : 0.002;
+    // Ornstein-Uhlenbeck half-life calibration (August 2026 SOTA):
+    // t_half = -Δt × ln(2) / (2 × ln(H + 0.5)), Δt = 0.1s (100ms tick)
+    // Hybrid: mean-reverting (H < 0.5) uses OU formula; trending (H ≥ 0.5) uses linear scaling.
+    // Linear scaling: H=0.50 → 30s, H=0.75 → 315s, H=0.95 → 543s (captures alpha persistence gradient)
+    // OU floor: 30s (sufficient to reach TP1); OU ceiling: 600s (10-min practical alpha persistence limit)
+    let halfLifeSec: number;
+    if (safeHurst < 0.5) {
+      // Mean-reverting regime: OU formula, clamped to [30, 600]s
+      const hurstShifted = safeHurst + 0.5; // maps [0.05, 0.50) → [0.55, 1.00)
+      const lnHurstSafe = Math.max(Math.abs(Math.log(hurstShifted)), 0.001);
+      const ouHalfLifeRaw = (0.1 * Math.LN2) / (2.0 * lnHurstSafe);
+      halfLifeSec = Math.max(30.0, Math.min(600.0, ouHalfLifeRaw));
+    } else {
+      // Trending regime: linear interpolation 30s (H=0.50) → 600s (H=1.00)
+      // Captures alpha signal persistence: more trending → longer edge half-life
+      halfLifeSec = Math.max(30.0, Math.min(600.0, 30.0 + (safeHurst - 0.5) * 1140.0));
+    }
+
+    // Garman-Klass Volatility Warm-Up Gate (Defect #3 Fix):
+    // GK variance requires >= 2 complete OHLC bars for statistical validity.
+    // If not ready, volSurfMetrics.garmanKlass1s = 0.0 (VolatilitySurfaceEngine returns 0 for N < 2).
+    // Silently using 0.002 hardcode corrupts the collar distance calculation.
+    // Solution: detect unready state and short-circuit to CAD-DTLM only.
+    const isVolReady = volSurfMetrics !== null && volSurfMetrics !== undefined
+      && Number.isFinite(volSurfMetrics.garmanKlass1s)
+      && volSurfMetrics.garmanKlass1s > 0;
+
+    // Compute safeGkVol only when ready; used in collar distance below.
+    const safeGkVol = isVolReady ? Math.max(0.001, volSurfMetrics.garmanKlass1s) : 0;
     const vpinVal = hazardMetrics ? Math.max(0.0, Math.min(1.0, hazardMetrics.vpin)) : 0.5;
     const vpinPenalty = vpinVal === 0.5 ? 1.0 : Math.exp(1.5 * (vpinVal - 0.50));
     const hurstMultiplier = Math.max(0.5, 2.0 - safeHurst);
-    const volMultiplier = volSurfMetrics ? volSurfMetrics.volatilityMultiplier : 1.0;
+    const volMultiplier = (isVolReady && Number.isFinite(volSurfMetrics.volatilityMultiplier) && volSurfMetrics.volatilityMultiplier > 0)
+      ? volSurfMetrics.volatilityMultiplier
+      : 1.0;
     const rawCollarDistancePct = safeGkVol * vpinPenalty * hurstMultiplier * volMultiplier;
+    // When !isVolReady: rawCollarDistancePct = 0 → collarDistancePct = 0.0015 (floor, no-op collar)
     const collarDistancePct = Math.max(0.0015, Math.min(0.05, rawCollarDistancePct));
 
     this.evalSingleSlotSota(
@@ -1772,7 +1836,14 @@ export class HedgePositionLedger {
     if (!slot.isOccupied || slot.quantity <= 0 || slot.entryPrice <= 0) return;
 
     const isLong = slot.side === "LONG";
-    const openTime = slot.openTime && slot.openTime > 0 ? slot.openTime : nowMs;
+    // Priority: originalOpenTime (survives restart) > openTime (set on entry) > conservative fallback
+    // Conservative fallback: back-date by min(30s, halfLifeSec) + 1ms to trigger Tier 1 immediately
+    // on the next tick for any position whose original open time was not persisted.
+    const openTime = (slot.originalOpenTime && slot.originalOpenTime > 0)
+      ? slot.originalOpenTime
+      : (slot.openTime && slot.openTime > 0)
+        ? slot.openTime
+        : (nowMs - (Math.min(30.0, halfLifeSec) * 1000 + 1));
     const durationMs = Math.max(0, nowMs - openTime);
     const durationSec = durationMs / 1000;
 
@@ -1824,19 +1895,22 @@ export class HedgePositionLedger {
     }
 
     // Phase 4B: Hard Terminal Horizon Timeout (duration >= 1800s / 30 Minutes Max Lifespan)
+    // Idempotency guard: timeDecayTier < 4 prevents multi-tick trigger floods after 30 minutes.
     if (durationSec >= 1800.0) {
-      slot.timeDecayTier = 4;
-      this.pushSotaTrigger(
-        slot.slotId,
-        slot.side,
-        "LONG_HOLD_PROFIT_HARVEST",
-        slot.quantity,
-        slot.entryPrice,
-        markPrice,
-        false,
-        slot.activeTpOrderIds,
-        slot.activeStopLossOrderId
-      );
+      if (!slot.timeDecayTier || slot.timeDecayTier < 4) {
+        slot.timeDecayTier = 4;
+        this.pushSotaTrigger(
+          slot.slotId,
+          slot.side,
+          "LONG_HOLD_PROFIT_HARVEST",
+          slot.quantity,
+          slot.entryPrice,
+          markPrice,
+          false,
+          slot.activeTpOrderIds,
+          slot.activeStopLossOrderId
+        );
+      }
       return;
     }
 
@@ -1891,9 +1965,20 @@ export class HedgePositionLedger {
     // 4. MS-SOPC (Microstructure-Informed Stochastic Optimal Profit Collaring)
     // -------------------------------------------------------------------------
     if (isLong) {
-      const prevPeak = slot.peakPrice || slot.entryPrice;
-      if (stoikovMicroPrice > prevPeak || slot.stopLossPrice <= 0) {
-        slot.peakPrice = Math.max(prevPeak, stoikovMicroPrice);
+      // Tick-0 Initialization Protocol (Defect #4 Fix):
+      // If peakPrice is unset, anchor at entryPrice — NEVER at stoikovMicroPrice (may be below entry on Tick 0).
+      // This guarantees the initial collar floor is always at the fee-adjusted breakeven, enforcing zero-loss.
+      if (!slot.peakPrice || slot.peakPrice <= 0) {
+        slot.peakPrice = slot.entryPrice;
+        // Set initial collar stop at fee-adjusted breakeven floor
+        const initialCollarStop = this.formatPriceFast(slot.entryPrice * (1.0 - roundTripFeeBuffer));
+        if (slot.stopLossPrice <= 0 || initialCollarStop > slot.stopLossPrice) {
+          slot.stopLossPrice = initialCollarStop;
+        }
+      }
+      // Advance peak only when stoikovMicroPrice is valid and exceeds current peak
+      if (stoikovMicroPrice > 0 && stoikovMicroPrice > slot.peakPrice) {
+        slot.peakPrice = stoikovMicroPrice;
         const collarOffsetUsdt = slot.peakPrice * collarDistancePct;
         const msSopcStopPrice = this.formatPriceFast(slot.peakPrice - collarOffsetUsdt);
         if (msSopcStopPrice > slot.stopLossPrice) {
@@ -1901,9 +1986,22 @@ export class HedgePositionLedger {
         }
       }
     } else {
-      const prevTrough = (slot.troughPrice && slot.troughPrice > 0) ? slot.troughPrice : stoikovMicroPrice;
-      if (stoikovMicroPrice < prevTrough || slot.stopLossPrice <= 0) {
-        slot.troughPrice = Math.min(prevTrough, stoikovMicroPrice);
+      // Tick-0 Initialization Protocol (Defect #5 Fix):
+      // If troughPrice is unset, anchor at entryPrice — NEVER at stoikovMicroPrice (may be above entry on Tick 0).
+      // This guarantees the initial collar ceiling is always at the fee-adjusted breakeven, enforcing zero-loss.
+      if (!slot.troughPrice || slot.troughPrice <= 0) {
+        slot.troughPrice = slot.entryPrice;
+        // Set initial collar stop at fee-adjusted breakeven ceiling
+        const initialCollarStop = this.formatPriceFast(slot.entryPrice * (1.0 + roundTripFeeBuffer));
+        if (slot.stopLossPrice <= 0) {
+          slot.stopLossPrice = initialCollarStop;
+        } else {
+          slot.stopLossPrice = Math.min(slot.stopLossPrice, initialCollarStop);
+        }
+      }
+      // Advance trough only when stoikovMicroPrice is valid and undercuts current trough
+      if (stoikovMicroPrice > 0 && stoikovMicroPrice < slot.troughPrice) {
+        slot.troughPrice = stoikovMicroPrice;
         const collarOffsetUsdt = slot.troughPrice * collarDistancePct;
         const msSopcStopPrice = this.formatPriceFast(slot.troughPrice + collarOffsetUsdt);
         if (slot.stopLossPrice === 0 || msSopcStopPrice < slot.stopLossPrice) {

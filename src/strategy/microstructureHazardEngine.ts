@@ -8,10 +8,11 @@
  */
 
 export interface MicrostructureMetrics {
-  ofi: number;               // Normalized [-1.0, 1.0]
-  tfi: number;               // Normalized [-1.0, 1.0]
-  vpin: number;              // Scaled [0.0, 1.0]
-  hazardScore: number;       // Scaled [0.0, 1.0]
+  ofi: number;               // Cont-Kukanov-Stoikov rolling depth-normalized OFI [-1.0, 1.0]
+  obi: number;               // Instantaneous L1 Order Book Imbalance: (Qbid-Qask)/(Qbid+Qask) [-1.0, 1.0]
+  tfi: number;               // Trade Flow Imbalance [-1.0, 1.0]
+  vpin: number;              // Volume-Synchronized Probability of Informed Trading [0.0, 1.0]
+  hazardScore: number;       // Cox composite hazard score [0.0, 1.0]
   coxHazardRate: number;     // Continuous Cox Proportional Hazard Rate h(t)
   survivalProbability: number; // Position survival probability S(t) in [0.0, 1.0]
   isHazardExitTriggered: boolean;
@@ -56,6 +57,7 @@ export class MicrostructureHazardEngine {
   // Zero-GC Pre-allocated Cached Metrics Payload Ring Buffer
   private readonly cachedMetricsRing: MicrostructureMetrics[] = Array.from({ length: 8 }, () => ({
     ofi: 0,
+    obi: 0,
     tfi: 0,
     vpin: 0,
     hazardScore: 0,
@@ -252,6 +254,16 @@ export class MicrostructureHazardEngine {
     const tfi = this.getTFI();
     const vpin = this.getVPIN();
 
+    // Instantaneous L1 Order Book Imbalance (OBI): (Q_bid - Q_ask) / (Q_bid + Q_ask)
+    // Uses current live resting depth at the best bid/ask — the correct Stoikov Micro-Price input.
+    // Distinct from rolling OFI which measures order flow pressure over time.
+    const bidDepth = this.prevBidQty;
+    const askDepth = this.prevAskQty;
+    const totalDepth = bidDepth + askDepth;
+    const obi = totalDepth > 0
+      ? Math.max(-1.0, Math.min(1.0, (bidDepth - askDepth) / totalDepth))
+      : 0;
+
     let adverseOFI = 0;
     let adverseTFI = 0;
 
@@ -265,7 +277,7 @@ export class MicrostructureHazardEngine {
 
     const confidenceDecay = currentLogitConfidence < 0.50 ? (0.50 - currentLogitConfidence) * 2.0 : 0;
 
-    // Composite Linear Risk Score
+    // Composite Linear Risk Score (uses OFI for dynamic flow pressure — correct for Cox hazard)
     const hazardScore = Math.min(
       1.0,
       0.35 * adverseOFI + 0.35 * adverseTFI + 0.20 * vpin + 0.10 * confidenceDecay
@@ -293,6 +305,7 @@ export class MicrostructureHazardEngine {
     this.metricsRingIdx = (this.metricsRingIdx + 1) % 8;
 
     res.ofi = ofi;
+    res.obi = obi;
     res.tfi = tfi;
     res.vpin = vpin;
     res.hazardScore = hazardScore;

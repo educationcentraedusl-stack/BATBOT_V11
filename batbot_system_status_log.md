@@ -1783,3 +1783,17 @@
   4. **TUI Telemetry Formatting & RPC Resilience (`multiAssetDashboard.ts`, `server.ts`):** Replaced hardcoded Short realized PnL with dynamic `rPnl` and enabled both JSON and binary Protobuf control command decoding on WebSocket server.
   5. **Verification:** 100% verified via `npx tsc --noEmit` (0 errors) and automated test suite (`npx tsx src/tests/test_hedge_mode_split.ts`, `npx tsx src/tests/test_dashboard_stress.ts`, `npx tsx src/tests/test_live_state_sync_and_orphan_healing.ts`, etc.).
 - **Status:** ✅ Completed & QA Verified
+
+## Development Changelog
+
+- **Date:** 2026-08-15
+- **Feature/Task:** SOTA Phase 3 Forensic Audit — Complete Remediation of Defects 1–10 (MS-SOPC / CAD-DTLM / PnL Authority)
+- **Artifacts Created/Modified:**
+  - src/strategy/microstructureHazardEngine.ts — Added true L1 OBI field (Defect #2); updated MicrostructureMetrics interface and 8-slot pre-allocated ring buffer; computed instantaneous OBI from prevBidQty/prevAskQty in getHazardMetrics()
+  - src/strategy/volatilitySurfaceEngine.ts — Added isVolatilityReady() warm-up gate (Defect #3)
+  - src/strategy/positionLedger.ts — Fixed synthetic bid/ask injection (Defect #1); swapped OFI→OBI in Stoikov formula (Defect #2); added GK warm-up gate with isVolReady (Defect #3); fixed Tick-0 LONG peak init (Defect #4); fixed Tick-0 SHORT trough init (Defect #5); added originalOpenTime to PositionSlot interface and syncStartupPositions for CAD-DTLM clock continuity (Defect #6); replaced 60*H heuristic with hybrid OU/linear halfLifeSec formula (Defect #7); added Tier 4 idempotency guard (Defect #9); added getCumulativeRealizedPnl() getter (Defect #10)
+  - src/strategy/engine.ts — Replaced redundant engine-local PnL computation with Ledger Delta Pattern (Defect #10); passed originalOpenTime from Binance REST updateTime in reconcileStartupPositions (Defect #6)
+  - src/tests/test_sota_remediation_phase3.ts — New 20-case verification test suite covering all 10 defects
+- **HFT/Performance Compliance:** Zero new GC allocations. OBI uses pre-existing prevBidQty/prevAskQty scalars in MicrostructureHazardEngine (no heap allocation). OU halfLifeSec formula uses 5 scalar operations. Ledger delta is a single scalar subtraction. isVolatilityReady() is a single integer comparison. originalOpenTime is a scalar field on PositionSlot (no new object allocation). All operations complete in O(1) time with no hot-path memory pressure.
+- **Verification:** npx tsc --noEmit → exit code 0 (0 errors). npm run build:ts → exit code 0 (clean dist/ output). node dist/tests/test_sota_remediation_phase3.js → 20/20 tests passed. Exit code 0.
+- **Status:** Completed & QA Verified

@@ -41,6 +41,7 @@ class MicrostructureHazardEngine {
     // Zero-GC Pre-allocated Cached Metrics Payload Ring Buffer
     cachedMetricsRing = Array.from({ length: 8 }, () => ({
         ofi: 0,
+        obi: 0,
         tfi: 0,
         vpin: 0,
         hazardScore: 0,
@@ -204,6 +205,15 @@ class MicrostructureHazardEngine {
         const ofi = this.getNormalizedOFI();
         const tfi = this.getTFI();
         const vpin = this.getVPIN();
+        // Instantaneous L1 Order Book Imbalance (OBI): (Q_bid - Q_ask) / (Q_bid + Q_ask)
+        // Uses current live resting depth at the best bid/ask — the correct Stoikov Micro-Price input.
+        // Distinct from rolling OFI which measures order flow pressure over time.
+        const bidDepth = this.prevBidQty;
+        const askDepth = this.prevAskQty;
+        const totalDepth = bidDepth + askDepth;
+        const obi = totalDepth > 0
+            ? Math.max(-1.0, Math.min(1.0, (bidDepth - askDepth) / totalDepth))
+            : 0;
         let adverseOFI = 0;
         let adverseTFI = 0;
         if (positionSide === "LONG") {
@@ -219,7 +229,7 @@ class MicrostructureHazardEngine {
                 adverseTFI = tfi;
         }
         const confidenceDecay = currentLogitConfidence < 0.50 ? (0.50 - currentLogitConfidence) * 2.0 : 0;
-        // Composite Linear Risk Score
+        // Composite Linear Risk Score (uses OFI for dynamic flow pressure — correct for Cox hazard)
         const hazardScore = Math.min(1.0, 0.35 * adverseOFI + 0.35 * adverseTFI + 0.20 * vpin + 0.10 * confidenceDecay);
         // Fixed Weibull Baseline Hazard h0(t): prevents artificial time-decay panic flushes
         const tSec = Math.max(0.1, durationMs * 0.001);
@@ -237,6 +247,7 @@ class MicrostructureHazardEngine {
         const res = this.cachedMetricsRing[this.metricsRingIdx];
         this.metricsRingIdx = (this.metricsRingIdx + 1) % 8;
         res.ofi = ofi;
+        res.obi = obi;
         res.tfi = tfi;
         res.vpin = vpin;
         res.hazardScore = hazardScore;

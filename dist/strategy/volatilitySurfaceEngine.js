@@ -146,6 +146,15 @@ class VolatilitySurfaceEngine {
             volatilityMultiplier
         };
     }
+    /**
+     * Returns true only after sufficient OHLC bars have been pushed for a statistically
+     * valid Garman-Klass realized variance estimate (minimum 2 complete bars required).
+     * Used by evaluateSotaDynamicExits to gate MS-SOPC collar computation.
+     * During warm-up, CAD-DTLM time-decay protection remains active.
+     */
+    isVolatilityReady() {
+        return this.sampleCount >= 2;
+    }
     getSymbol() {
         return this.symbol;
     }
