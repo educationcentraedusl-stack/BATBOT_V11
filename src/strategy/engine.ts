@@ -1553,9 +1553,9 @@ export class StrategyEngine {
       // SOTA Alpha-to-Friction Barrier Model (August 2026)
       // E[alpha] = |aiDirection| * volEstimate * sqrt(horizon_s) * hawkesMultiplier
       // Total Friction = 2 * MakerFee + HalfSpread + SlippageEst
-      const horizonSec = 0.1; // 100ms prediction horizon
-      const expectedAlpha = aiDirectionMag * volEstimate * Math.sqrt(horizonSec) * hawkesMultiplier;
-      const estimatedSlippage = (spreadVelocity > 0 ? Math.min(0.0005, (spreadVelocity / 50.0) * 0.0002) : 0.0);
+      const horizonSec = 5.0;
+      const expectedAlpha = aiDirectionMag * volEstimate * Math.sqrt(horizonSec / 60.0) * hawkesMultiplier;
+      const estimatedSlippage = (spreadVelocity > 0 ? Math.min(0.0002, (spreadVelocity / 50.0) * 0.0001) : 0.0);
       const totalFrictionBarrier = (2.0 * makerFeeRate) + halfSpreadBps + estimatedSlippage;
       const expectedNetAlpha = expectedAlpha - totalFrictionBarrier;
 
@@ -1757,7 +1757,8 @@ export class StrategyEngine {
         targetPrice,
         targetPosSide === "LONG" ? "LONG" : "SHORT",
         microMetrics,
-        Math.abs(askPrice - bidPrice)
+        Math.abs(askPrice - bidPrice),
+        isDrawdown
       );
       riskProfile.isHighConfidenceAi = isHighConfidenceAi;
       riskProfile.aiConfidence = aiConfidence;

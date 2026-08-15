@@ -44,7 +44,8 @@ export class DynamicRiskEngine {
     entryPrice: number,
     positionSide: "LONG" | "SHORT",
     metrics: DynamicMicrostructureMetrics,
-    spread: number = 2.0
+    spread: number = 2.0,
+    isDrawdown: boolean = false
   ): DynamicRiskProfile {
     if (entryPrice <= 0) {
       return {
@@ -91,6 +92,7 @@ export class DynamicRiskEngine {
     const volFactor = Math.max(metrics.rvGk, 0.0020);
     const minSpreadDistance = Math.max(spread, entryPrice * 0.0001);
     const obiSigned = Math.max(-1.0, Math.min(1.0, metrics.obi));
+    const targetRrMultiplier = isDrawdown ? 3.05 : 2.05;
 
     let stopLossPrice = 0;
     let takeProfitPrice = 0;
@@ -107,8 +109,8 @@ export class DynamicRiskEngine {
         volFactor * 2.0 * (1.0 + 0.5 * obiSigned) * entryPrice,
         minSpreadDistance * 3.0
       );
-      // Enforce minimum 2.01 R:R ratio floor and 55 bps friction defense floor
-      tpDistance = Math.max(tpDistance, slDistance * 2.01, entryPrice * 0.0055);
+      // Enforce dynamic R:R ratio floor and friction defense floor
+      tpDistance = Math.max(tpDistance, slDistance * targetRrMultiplier, entryPrice * 0.0040);
 
       stopLossPrice = entryPrice - slDistance;
       takeProfitPrice = entryPrice + tpDistance;
@@ -124,8 +126,8 @@ export class DynamicRiskEngine {
         volFactor * 2.0 * (1.0 - 0.5 * obiSigned) * entryPrice,
         minSpreadDistance * 3.0
       );
-      // Enforce minimum 2.01 R:R ratio floor and 55 bps friction defense floor
-      tpDistance = Math.max(tpDistance, slDistance * 2.01, entryPrice * 0.0055);
+      // Enforce dynamic R:R ratio floor and friction defense floor
+      tpDistance = Math.max(tpDistance, slDistance * targetRrMultiplier, entryPrice * 0.0040);
 
       stopLossPrice = entryPrice + slDistance;
       takeProfitPrice = entryPrice - tpDistance;

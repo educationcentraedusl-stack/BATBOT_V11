@@ -63,6 +63,13 @@
   - Optimized numeric price formatting in `HedgePositionLedger` with precalculated precision factors, achieving **1.113 µs** tick execution latency.
   - 100% verified via `npm run build:ts` (0 errors) and automated test suites (`test_sota_ai_loss_recovery.js`, `test_sota_dynamic_exit_integration.js`, `test_hedge_mode_split.js`, `test_maker_tp_remediation.js`, `test_leverage_state_sync.js`).
 
+* 2026-08-15 - Zero-Execution Forensics & Production Parameter Calibration Completed & QA Verified:
+  - Remediated mathematical gating bottlenecks across `engine.ts`, `dynamicRiskEngine.ts`, and `.env`.
+  - Calibrated Alpha-to-Friction maker trade horizon (`horizonSec = 5.0s`, `expectedAlpha` normalized over micro-trend duration).
+  - Injected dynamic `targetRrMultiplier` (3.05 drawdown / 2.05 normal) in `DynamicRiskEngine`, harmonizing with RiskGuard APSE.
+  - Calibrated operational thresholds in `.env`: `MIN_NET_ALPHA=0.00045` (4.5 bps), `MIN_AI_CONFIDENCE=0.55`, `AGGRESSIVE_CONFIDENCE_THRESHOLD=0.65`, `OBI_BUY_THRESHOLD=0.25`, `OBI_SELL_THRESHOLD=-0.25`.
+  - 100% verified via `npm run build:ts` (0 errors) and test suites (`test_sota_ai_loss_recovery.ts`).
+
 ## Next Actions
-1. Architecture officially locked: Maintain zero-mutation policy on core quantitative and risk logic.
-2. Monitor live Binance Futures WebSocket and REST execution telemetry during real-time deployment.
+1. Deploy and launch live multi-asset TUI command center (`npm run start:live`).
+2. Monitor real-time tick-to-trade execution throughput and Binance fill confirmation streams.

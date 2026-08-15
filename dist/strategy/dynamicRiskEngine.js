@@ -15,7 +15,7 @@ class DynamicRiskEngine {
      * and trap detection flags for an order intent.
      * Zero GC allocations in hot-path execution.
      */
-    evaluateDynamicRisk(entryPrice, positionSide, metrics, spread = 2.0) {
+    evaluateDynamicRisk(entryPrice, positionSide, metrics, spread = 2.0, isDrawdown = false) {
         if (entryPrice <= 0) {
             return {
                 stopLossPrice: 0,
@@ -62,6 +62,7 @@ class DynamicRiskEngine {
         const volFactor = Math.max(metrics.rvGk, 0.0020);
         const minSpreadDistance = Math.max(spread, entryPrice * 0.0001);
         const obiSigned = Math.max(-1.0, Math.min(1.0, metrics.obi));
+        const targetRrMultiplier = isDrawdown ? 3.05 : 2.05;
         let stopLossPrice = 0;
         let takeProfitPrice = 0;
         if (positionSide === "LONG") {
@@ -70,8 +71,8 @@ class DynamicRiskEngine {
             // Positive OBI -> expands TP distance to capture trend runaway.
             const slDistance = Math.max(volFactor * 1.5 * (1.0 - 0.4 * obiSigned) * entryPrice, minSpreadDistance * 2.0);
             let tpDistance = Math.max(volFactor * 2.0 * (1.0 + 0.5 * obiSigned) * entryPrice, minSpreadDistance * 3.0);
-            // Enforce minimum 2.01 R:R ratio floor and 55 bps friction defense floor
-            tpDistance = Math.max(tpDistance, slDistance * 2.01, entryPrice * 0.0055);
+            // Enforce dynamic R:R ratio floor and friction defense floor
+            tpDistance = Math.max(tpDistance, slDistance * targetRrMultiplier, entryPrice * 0.0040);
             stopLossPrice = entryPrice - slDistance;
             takeProfitPrice = entryPrice + tpDistance;
         }
@@ -81,8 +82,8 @@ class DynamicRiskEngine {
             // Negative OBI -> expands TP distance.
             const slDistance = Math.max(volFactor * 1.5 * (1.0 + 0.4 * obiSigned) * entryPrice, minSpreadDistance * 2.0);
             let tpDistance = Math.max(volFactor * 2.0 * (1.0 - 0.5 * obiSigned) * entryPrice, minSpreadDistance * 3.0);
-            // Enforce minimum 2.01 R:R ratio floor and 55 bps friction defense floor
-            tpDistance = Math.max(tpDistance, slDistance * 2.01, entryPrice * 0.0055);
+            // Enforce dynamic R:R ratio floor and friction defense floor
+            tpDistance = Math.max(tpDistance, slDistance * targetRrMultiplier, entryPrice * 0.0040);
             stopLossPrice = entryPrice + slDistance;
             takeProfitPrice = entryPrice - tpDistance;
         }
