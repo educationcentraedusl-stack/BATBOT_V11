@@ -177,8 +177,18 @@ def fit_platt_temperature_calibration(model: nn.Module, val_loader: DataLoader, 
     return final_scale, final_offset, final_temp
 
 
+def write_progress(pct: int):
+    try:
+        progress_path = os.path.join(os.getcwd(), ".training_progress")
+        with open(progress_path, "w") as f:
+            f.write(f"{pct}\n")
+    except Exception:
+        pass
+
+
 def train_local_cfc():
     start_time = time.time()
+    write_progress(5)
 
     project_root = os.getcwd()
     dataset_path = os.path.join(project_root, "data", "cfc_features.safetensors")
@@ -316,6 +326,9 @@ def train_local_cfc():
         if epoch % 2 == 0 or epoch == epochs:
             print(f"[BATBOT Epoch {epoch:02d}/{epochs}] Loss: {last_loss:.6f} | Best Val IC: {best_val_ic:+.4f}")
 
+        # Update real-time training progress for TUI dashboard
+        write_progress(int((epoch / epochs) * 100))
+
     duration = time.time() - start_time
     print(f"[BATBOT_V11][LOCAL-TRAINER] Recalibration completed in {duration:.3f}s | Final Best Val IC: {best_val_ic:+.4f}")
 
@@ -346,6 +359,7 @@ def train_local_cfc():
     shutil.copyfile(weights_path, weights_updated_path)
 
     weights_size = os.path.getsize(weights_path)
+    write_progress(100)
     print(f"[BATBOT_V11][LOCAL-TRAINER SUCCESS] SafeTensors weights saved ({weights_size} bytes) to '{weights_path}'!")
 
 if __name__ == "__main__":

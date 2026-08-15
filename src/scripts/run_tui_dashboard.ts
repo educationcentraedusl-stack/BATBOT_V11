@@ -178,8 +178,10 @@ export async function runProductionTuiLauncher(): Promise<void> {
   });
 
   // Active High-Frequency 10ms Vectorized Multi-Asset Strategy Engine Tick Loop
+  let tickCounter = 0;
   const strategyInterval = setInterval(() => {
     try {
+      tickCounter++;
       const batch = multiEngine.evaluateAllTicks();
 
       // Active Model Drift Evaluation & Self-Healing Trigger (SAB Slot 101 & 102)
@@ -194,17 +196,19 @@ export async function runProductionTuiLauncher(): Promise<void> {
         recalibrationManager.evaluateTickDrift(rollingIc, isDrifted);
       }
 
-      // Check scheduled offline T-KAN initialization (interval from .env TKAN_TRAINING_INTERVAL_DAYS)
-      recalibrationManager.checkAndRunScheduledTkan()
-        .then((executed) => {
-          if (executed) {
-            dashboard.pushNotification("✅ [T-KAN_SCHEDULER] Periodic T-KAN spatial initialization completed & hot-swapped.");
-          }
-        })
-        .catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          dashboard.pushNotification(`⚠️ [T-KAN_SCHEDULER_ERROR] ${msg}`);
-        });
+      // Check scheduled offline T-KAN initialization (throttled to once every 1000 ticks / ~10s to eliminate hot-path GC allocations)
+      if (tickCounter % 1000 === 0) {
+        recalibrationManager.checkAndRunScheduledTkan()
+          .then((executed) => {
+            if (executed) {
+              dashboard.pushNotification("✅ [T-KAN_SCHEDULER] Periodic T-KAN spatial initialization completed & hot-swapped.");
+            }
+          })
+          .catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            dashboard.pushNotification(`⚠️ [T-KAN_SCHEDULER_ERROR] ${msg}`);
+          });
+      }
 
       for (const [symbol, result] of batch.results.entries()) {
         if (result.signalType !== "NONE") {

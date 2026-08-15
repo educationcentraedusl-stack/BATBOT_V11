@@ -139,7 +139,17 @@ class HuberICLoss(nn.Module):
         loss = h_loss + self.ic_weight * (1.0 - ic)
         return loss, h_loss, ic
 
+def write_progress(pct: int):
+    try:
+        progress_path = os.path.join(os.getcwd(), ".training_progress")
+        with open(progress_path, "w") as f:
+            f.write(f"{pct}\n")
+    except Exception:
+        pass
+
+
 def train_tkan():
+    write_progress(5)
     print("=" * 75)
     print("BATBOT_V11 SOTA T-KAN MODEL TRAINING PIPELINE")
     print("=" * 75)
@@ -224,6 +234,9 @@ def train_tkan():
         if epoch % 5 == 0 or epoch == epochs:
             print(f"Epoch {epoch:02d}/{epochs} | Train Loss: {train_loss:.6f} | Train IC: {train_ic:+.4f} | Val Loss: {val_loss:.6f} | Val IC: {val_ic:+.4f}")
 
+        # Update real-time training progress for TUI dashboard
+        write_progress(int((epoch / epochs) * 100))
+
     print(f"[Training] Completed in {time.time() - start_time:.2f}s | Best Val IC: {best_val_ic:+.4f}")
 
     # Binary LUT Exporter
@@ -238,6 +251,7 @@ def train_tkan():
     print(f"         Exported Binary LUTs: '{TKAN_LUT_PATH}' ({file_bytes} bytes)")
     assert file_bytes == 24 + (640 * 4096 * 8), f"Error: Invalid LUT binary file size {file_bytes}!"
 
+    write_progress(100)
     print("=" * 75)
     print("T-KAN TRAINING & LUT EXPORT COMPLETED SUCCESSFULLY [SUCCESS]")
     print("=" * 75)

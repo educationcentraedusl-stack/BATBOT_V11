@@ -1,3 +1,4 @@
+import "dotenv/config";
 import * as fs from "fs";
 import * as path from "path";
 import { execFile, execSync } from "child_process";
