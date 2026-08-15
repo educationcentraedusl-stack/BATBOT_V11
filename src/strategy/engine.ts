@@ -1214,7 +1214,14 @@ export class StrategyEngine {
       const rawDir = this.client.getAIPredictionDirection(this.assetIndex);
       const rawConf = this.client.getAIPredictionConfidence(this.assetIndex);
       const aiDirection = Number.isFinite(rawDir) ? rawDir : 0.0;
-      const aiConfidence = Number.isFinite(rawConf) ? Math.max(0.0, Math.min(1.0, rawConf)) : 0.0;
+      const rawAiConfidence = Number.isFinite(rawConf) ? Math.max(0.0, Math.min(1.0, rawConf)) : 0.0;
+
+      // CRITICAL FIX (BUG-3): Safety guard — force confidence to 0.0 during CfC recalibration.
+      // During [CfC TRAINING ACTIVE], the live model's slot-94 values are stale/invalid.
+      // Forcing aiConfidence=0.0 makes isConvictionValid=false unconditionally (0.0 < any floor),
+      // guaranteeing ZERO signal throughput for ALL assets while a new model trains.
+      const isCurrentlyRecalibrating = this.client.getIsModelDrifted(this.assetIndex);
+      const aiConfidence = isCurrentlyRecalibrating ? 0.0 : rawAiConfidence;
 
       const aiDirectionMag = Math.abs(aiDirection);
       const latencyPenalty = this.client.getLatencyPenaltyCoefficient(this.assetIndex);

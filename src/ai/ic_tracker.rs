@@ -44,6 +44,20 @@ impl ICTracker {
         realized_return: f64,
         sab: Option<&AtomicSharedMemoryBridge>,
     ) -> f64 {
+        self.add_observation_asset(prediction, realized_return, sab, 0)
+    }
+
+    /// Add an observation and write IC to the correct per-asset SAB slot.
+    /// For the global (asset_idx=0) tracker, slot 101/102 is written.
+    /// For per-asset trackers (asset_idx>0), the same relative slot 101/102 is written
+    /// into that asset's SAB region via store_f64_asset.
+    pub fn add_observation_asset(
+        &mut self,
+        prediction: f64,
+        realized_return: f64,
+        sab: Option<&AtomicSharedMemoryBridge>,
+        asset_idx: usize,
+    ) -> f64 {
         if self.pairs.len() >= self.window_size {
             self.pairs.pop_front();
         }
@@ -84,9 +98,12 @@ impl ICTracker {
             self.is_drifted = false;
         }
 
+        // CRITICAL FIX (BUG-2b): Use per-asset store_f64_asset so multi-asset inference
+        // for asset_idx > 0 does NOT corrupt asset-0's SAB slots 101/102.
+        // The global IC displayed in the telemetry reads from asset_idx=0, slot 101.
         if let Some(bridge) = sab {
-            bridge.store_f64(101, ic);
-            bridge.store_f64(102, if self.is_drifted { 1.0 } else { 0.0 });
+            bridge.store_f64_asset(asset_idx, 101, ic);
+            bridge.store_f64_asset(asset_idx, 102, if self.is_drifted { 1.0 } else { 0.0 });
         }
 
         ic
