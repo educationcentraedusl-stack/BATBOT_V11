@@ -1,6 +1,18 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-16
+- **Feature/Task:** SOTA Quantitative Trading Strategy Recovery & Loss-Eradication Architecture (Phases 1-5)
+- **Artifacts Created/Modified:** `src/strategy/positionLedger.ts`, `src/strategy/engine.ts`, `src/strategy/hjbReservationEngine.ts`, `.env`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** Eradicated the 6 quantitative strategy traps and mathematical flaws causing the 6.3% win rate:
+  1. **Phase 1 (Tick-1 Collar Overwrite Eradication):** Removed suicidal `initialCollarStop = entryPrice * (1.0 - roundTripFeeBuffer)` in `positionLedger.ts` which was overwriting the 1.5% SL with a microscopic 15.75 bps collar on Tick 1. Initial SL is now strictly anchored to the true dynamic volatility collar ($\ge 1.20\%$).
+  2. **Phase 2 (CAD-DTLM Time-Decay Inversion Fix):** Profit-gated all break-even ratchets so stop loss is NEVER moved above market price unless the position is in true verified profit exceeding total round-trip fees + alpha hurdle ($+30\text{ bps}$). Extended OU half-life to $[60\text{s}, 900\text{s}]$, giving multi-minute crypto trends room to develop.
+  3. **Phase 3 (Maker-Dominant Exits & Volatility SL Floor):** Enforced calibrated stop loss percentages as absolute floors across `engine.ts` entry fill routines, eliminating market order taker fee and spread drag.
+  4. **Phase 4 (HJB Unit Normalization):** Normalized token quantities in `hjbReservationEngine.ts` against standard slot notional ($60 USDT) with a bounded $[0.1, 5.0]$ scale, preventing boundary distortion on sub-$1 tokens.
+  5. **Phase 5 (Parameter Recalibration):** Calibrated operational parameters in `.env` (`LONG_TAKE_PROFIT_PERCENT=0.80`, `LONG_STOP_LOSS_PERCENT=1.20`, `SHORT_TAKE_PROFIT_PERCENT=0.80`, `SHORT_STOP_LOSS_PERCENT=1.20`, `MIN_AI_CONFIDENCE=0.700`, `AGGRESSIVE_CONFIDENCE_THRESHOLD=0.800`, `MIN_NET_ALPHA=0.0012`).
+  6. **Verification & Proof:** 100% verified via `npm run build:ts` (0 errors), `cargo test --lib` (39/39 passed), `npx tsx src/tests/test_sota_dynamic_exit_integration.ts` (5/5 passed, 0.844 µs latency), `npx tsx src/test_multi_tp_zero_loss.ts` (4/4 passed), `npx tsx src/tests/test_long_hold_profit_guarantee.ts` (5/5 passed), `npx tsx src/tests/test_hd_client_order_id.ts` (5/5 passed), and `npx tsx src/tests/test_double_entry_oms_pnl.ts` (19/19 passed).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-16
 - **Feature/Task:** Target 3 Fallback Settlement Pipeline Repair: 250ms Grace Buffer & Binance REST userTrades Double-Entry State Machine
 - **Artifacts Created/Modified:** `src/strategy/positionLedger.ts`, `src/strategy/engine.ts`, `src/tests/test_double_entry_oms_pnl.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
 - **HFT/Performance Compliance:** Sealed the Target 3 dead code gap by integrating `executionClient.getUserTrades()` and a 250ms asynchronous settlement state machine:

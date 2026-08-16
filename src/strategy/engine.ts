@@ -411,8 +411,8 @@ export class StrategyEngine {
 
     const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
     const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
-    const dynamicSlPct = Math.max(0.005, volEstimate * 2.0);
-    const dynamicSlPercent = dynamicSlPct * 100;
+    const baseSlPercent = posSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
+    const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.0, volEstimate * 2.0 * 100));
 
     if (posSide === "LONG") {
       this.hedgeLedger.occupyCoreLong(execQty, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
@@ -2065,8 +2065,8 @@ export class StrategyEngine {
 
                 const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
                 const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
-                const dynamicSlPct = Math.max(0.005, volEstimate * 2.0);
-                const dynamicSlPercent = dynamicSlPct * 100;
+                const baseSlPercent = targetPosSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
+                const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.0, volEstimate * 2.0 * 100));
 
                 if (targetPosSide === "LONG") {
                   this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);

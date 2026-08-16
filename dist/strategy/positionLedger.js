@@ -1430,20 +1430,20 @@ class HedgePositionLedger {
         // Ornstein-Uhlenbeck half-life calibration (August 2026 SOTA):
         // t_half = -Δt × ln(2) / (2 × ln(H + 0.5)), Δt = 0.1s (100ms tick)
         // Hybrid: mean-reverting (H < 0.5) uses OU formula; trending (H ≥ 0.5) uses linear scaling.
-        // Linear scaling: H=0.50 → 30s, H=0.75 → 315s, H=0.95 → 543s (captures alpha persistence gradient)
-        // OU floor: 30s (sufficient to reach TP1); OU ceiling: 600s (10-min practical alpha persistence limit)
+        // Linear scaling: H=0.50 → 90s, H=0.75 → 495s, H=0.95 → 819s (captures alpha persistence gradient)
+        // OU floor: 60s (sufficient for micro-trend to develop); OU ceiling: 900s (15-min alpha limit)
         let halfLifeSec;
         if (safeHurst < 0.5) {
-            // Mean-reverting regime: OU formula, clamped to [30, 600]s
+            // Mean-reverting regime: OU formula, clamped to [60, 600]s
             const hurstShifted = safeHurst + 0.5; // maps [0.05, 0.50) → [0.55, 1.00)
             const lnHurstSafe = Math.max(Math.abs(Math.log(hurstShifted)), 0.001);
             const ouHalfLifeRaw = (0.1 * Math.LN2) / (2.0 * lnHurstSafe);
-            halfLifeSec = Math.max(30.0, Math.min(600.0, ouHalfLifeRaw));
+            halfLifeSec = Math.max(60.0, Math.min(600.0, ouHalfLifeRaw));
         }
         else {
-            // Trending regime: linear interpolation 30s (H=0.50) → 600s (H=1.00)
+            // Trending regime: linear interpolation 90s (H=0.50) → 900s (H=1.00)
             // Captures alpha signal persistence: more trending → longer edge half-life
-            halfLifeSec = Math.max(30.0, Math.min(600.0, 30.0 + (safeHurst - 0.5) * 1140.0));
+            halfLifeSec = Math.max(90.0, Math.min(900.0, 90.0 + (safeHurst - 0.5) * 1620.0));
         }
         // Garman-Klass Volatility Warm-Up Gate (Defect #3 Fix):
         // GK variance requires >= 2 complete OHLC bars for statistical validity.
@@ -1475,51 +1475,65 @@ class HedgePositionLedger {
             return;
         const isLong = slot.side === "LONG";
         // Priority: originalOpenTime (survives restart) > openTime (set on entry) > conservative fallback
-        // Conservative fallback: back-date by min(30s, halfLifeSec) + 1ms to trigger Tier 1 immediately
+        // Conservative fallback: back-date by min(60s, halfLifeSec) + 1ms to trigger Tier 1 immediately
         // on the next tick for any position whose original open time was not persisted.
         const openTime = (slot.originalOpenTime && slot.originalOpenTime > 0)
             ? slot.originalOpenTime
             : (slot.openTime && slot.openTime > 0)
                 ? slot.openTime
-                : (nowMs - (Math.min(30.0, halfLifeSec) * 1000 + 1));
+                : (nowMs - (Math.min(60.0, halfLifeSec) * 1000 + 1));
         const durationMs = Math.max(0, nowMs - openTime);
         const durationSec = durationMs / 1000;
         // -------------------------------------------------------------------------
         // 1. CAD-DTLM (Continuous Alpha Decay & 4-Stage Time-in-Market Management)
         // -------------------------------------------------------------------------
-        // Phase 2: Break-Even Ratchet & Half-Life Decay (duration >= 30s or duration >= halfLifeSec)
-        if (durationSec >= Math.min(30.0, halfLifeSec)) {
-            if (!slot.timeDecayTier || slot.timeDecayTier < 1) {
-                slot.timeDecayTier = 1;
-                slot.breakEvenLocked = true;
-                const beOffset = roundTripFeeBuffer + 0.0002;
-                const targetBeSl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset));
-                slot.breakEvenPrice = targetBeSl;
-                slot.stopLossPrice = isLong
-                    ? Math.max(slot.stopLossPrice, targetBeSl)
-                    : (slot.stopLossPrice === 0 ? targetBeSl : Math.min(slot.stopLossPrice, targetBeSl));
+        // Phase 2: Profit-Gated Break-Even Ratchet & Half-Life Decay (duration >= 60s or duration >= halfLifeSec)
+        // CRITICAL PROFIT-GATE FIX: Only lock break-even if current price is actually in profit beyond the break-even target!
+        if (durationSec >= Math.min(60.0, halfLifeSec)) {
+            const beOffset = roundTripFeeBuffer + 0.0002;
+            const targetBeSl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset));
+            const isEligibleForBe = isLong ? markPrice >= targetBeSl : markPrice <= targetBeSl;
+            if (isEligibleForBe) {
+                if (!slot.timeDecayTier || slot.timeDecayTier < 1) {
+                    slot.timeDecayTier = 1;
+                    slot.breakEvenLocked = true;
+                    slot.breakEvenPrice = targetBeSl;
+                    slot.stopLossPrice = isLong
+                        ? Math.max(slot.stopLossPrice, targetBeSl)
+                        : (slot.stopLossPrice === 0 ? targetBeSl : Math.min(slot.stopLossPrice, targetBeSl));
+                }
             }
         }
         // Phase 3: Micro-Profit Guard & Accelerated Decay (duration >= 180s or duration >= 2 * halfLifeSec)
         if (durationSec >= Math.min(180.0, halfLifeSec * 2.0)) {
-            if (!slot.timeDecayTier || slot.timeDecayTier < 2) {
-                slot.timeDecayTier = 2;
-                const profitOffset = roundTripFeeBuffer + minNetAlpha;
-                const targetTier2Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + profitOffset) : slot.entryPrice * (1.0 - profitOffset));
-                slot.stopLossPrice = isLong
-                    ? Math.max(slot.stopLossPrice, targetTier2Sl)
-                    : Math.min(slot.stopLossPrice, targetTier2Sl);
+            const profitOffset = roundTripFeeBuffer + minNetAlpha;
+            const targetTier2Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + profitOffset) : slot.entryPrice * (1.0 - profitOffset));
+            const isEligibleForTier2 = isLong ? markPrice >= targetTier2Sl : markPrice <= targetTier2Sl;
+            if (isEligibleForTier2) {
+                if (!slot.timeDecayTier || slot.timeDecayTier < 2) {
+                    slot.timeDecayTier = 2;
+                    slot.breakEvenLocked = true;
+                    slot.breakEvenPrice = targetTier2Sl;
+                    slot.stopLossPrice = isLong
+                        ? Math.max(slot.stopLossPrice, targetTier2Sl)
+                        : Math.min(slot.stopLossPrice, targetTier2Sl);
+                }
             }
         }
         // Phase 4A: Guaranteed Profit Harvest (duration >= 600s or duration >= 4 * halfLifeSec)
         if (durationSec >= Math.min(600.0, halfLifeSec * 4.0)) {
-            if (!slot.timeDecayTier || slot.timeDecayTier < 3) {
-                slot.timeDecayTier = 3;
-                const lockedOffset = roundTripFeeBuffer + minNetAlpha * 2.0;
-                const targetTier3Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + lockedOffset) : slot.entryPrice * (1.0 - lockedOffset));
-                slot.stopLossPrice = isLong
-                    ? Math.max(slot.stopLossPrice, targetTier3Sl)
-                    : Math.min(slot.stopLossPrice, targetTier3Sl);
+            const lockedOffset = roundTripFeeBuffer + minNetAlpha * 2.0;
+            const targetTier3Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + lockedOffset) : slot.entryPrice * (1.0 - lockedOffset));
+            const isEligibleForTier3 = isLong ? markPrice >= targetTier3Sl : markPrice <= targetTier3Sl;
+            if (isEligibleForTier3) {
+                if (!slot.timeDecayTier || slot.timeDecayTier < 3) {
+                    slot.timeDecayTier = 3;
+                    slot.breakEvenLocked = true;
+                    slot.breakEvenPrice = targetTier3Sl;
+                    slot.stopLossPrice = isLong
+                        ? Math.max(slot.stopLossPrice, targetTier3Sl)
+                        : Math.min(slot.stopLossPrice, targetTier3Sl);
+                }
             }
         }
         // Phase 4B: Hard Terminal Horizon Timeout (duration >= 1800s / 30 Minutes Max Lifespan)
@@ -1552,53 +1566,42 @@ class HedgePositionLedger {
         // 4. MS-SOPC (Microstructure-Informed Stochastic Optimal Profit Collaring)
         // -------------------------------------------------------------------------
         if (isLong) {
-            // Tick-0 Initialization Protocol (Defect #4 Fix):
-            // If peakPrice is unset, anchor at entryPrice — NEVER at stoikovMicroPrice (may be below entry on Tick 0).
-            // This guarantees the initial collar floor is always at the fee-adjusted breakeven, enforcing zero-loss.
+            // Tick-0 Initialization Protocol: anchor peakPrice at entryPrice
             if (!slot.peakPrice || slot.peakPrice <= 0) {
                 slot.peakPrice = slot.entryPrice;
-                // Set initial collar stop at fee-adjusted breakeven floor
-                const initialCollarStop = this.formatPriceFast(slot.entryPrice * (1.0 - roundTripFeeBuffer));
-                if (slot.stopLossPrice <= 0 || initialCollarStop > slot.stopLossPrice) {
-                    slot.stopLossPrice = initialCollarStop;
-                }
             }
-            // Advance peak only when stoikovMicroPrice is valid and exceeds current peak
+            // Advance peak and ratchet collar stop only when in true profit (above entry + fee buffer + minNetAlpha)
+            const minProfitFloorLong = slot.entryPrice * (1.0 + roundTripFeeBuffer + minNetAlpha);
             if (stoikovMicroPrice > 0 && stoikovMicroPrice > slot.peakPrice) {
                 slot.peakPrice = stoikovMicroPrice;
-                const collarOffsetUsdt = slot.peakPrice * collarDistancePct;
-                const msSopcStopPrice = this.formatPriceFast(slot.peakPrice - collarOffsetUsdt);
-                if (msSopcStopPrice > slot.stopLossPrice) {
-                    slot.stopLossPrice = msSopcStopPrice;
+                if (slot.peakPrice >= minProfitFloorLong) {
+                    const collarOffsetUsdt = slot.peakPrice * collarDistancePct;
+                    const msSopcStopPrice = this.formatPriceFast(slot.peakPrice - collarOffsetUsdt);
+                    if (msSopcStopPrice > slot.stopLossPrice) {
+                        slot.stopLossPrice = msSopcStopPrice;
+                    }
                 }
             }
         }
         else {
-            // Tick-0 Initialization Protocol (Defect #5 Fix):
-            // If troughPrice is unset, anchor at entryPrice — NEVER at stoikovMicroPrice (may be above entry on Tick 0).
-            // This guarantees the initial collar ceiling is always at the fee-adjusted breakeven, enforcing zero-loss.
+            // Tick-0 Initialization Protocol: anchor troughPrice at entryPrice
             if (!slot.troughPrice || slot.troughPrice <= 0) {
                 slot.troughPrice = slot.entryPrice;
-                // Set initial collar stop at fee-adjusted breakeven ceiling
-                const initialCollarStop = this.formatPriceFast(slot.entryPrice * (1.0 + roundTripFeeBuffer));
-                if (slot.stopLossPrice <= 0) {
-                    slot.stopLossPrice = initialCollarStop;
-                }
-                else {
-                    slot.stopLossPrice = Math.min(slot.stopLossPrice, initialCollarStop);
-                }
             }
-            // Advance trough only when stoikovMicroPrice is valid and undercuts current trough
+            // Advance trough and ratchet collar stop only when in true profit (below entry - fee buffer - minNetAlpha)
+            const minProfitFloorShort = slot.entryPrice * (1.0 - roundTripFeeBuffer - minNetAlpha);
             if (stoikovMicroPrice > 0 && stoikovMicroPrice < slot.troughPrice) {
                 slot.troughPrice = stoikovMicroPrice;
-                const collarOffsetUsdt = slot.troughPrice * collarDistancePct;
-                const msSopcStopPrice = this.formatPriceFast(slot.troughPrice + collarOffsetUsdt);
-                if (slot.stopLossPrice === 0 || msSopcStopPrice < slot.stopLossPrice) {
-                    slot.stopLossPrice = msSopcStopPrice;
+                if (slot.troughPrice <= minProfitFloorShort) {
+                    const collarOffsetUsdt = slot.troughPrice * collarDistancePct;
+                    const msSopcStopPrice = this.formatPriceFast(slot.troughPrice + collarOffsetUsdt);
+                    if (slot.stopLossPrice === 0 || msSopcStopPrice < slot.stopLossPrice) {
+                        slot.stopLossPrice = msSopcStopPrice;
+                    }
                 }
             }
         }
-        // Absolute Fee-Adjusted Zero-Loss Guarantee Floor
+        // Absolute Fee-Adjusted Zero-Loss Guarantee Floor (only active after breakEvenLocked is verified)
         if (slot.breakEvenLocked && slot.breakEvenPrice && slot.breakEvenPrice > 0) {
             if (isLong && slot.stopLossPrice < slot.breakEvenPrice) {
                 slot.stopLossPrice = slot.breakEvenPrice;

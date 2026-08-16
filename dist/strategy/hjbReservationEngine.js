@@ -37,20 +37,29 @@ class HJBReservationEngine {
     }
     /**
      * Calculates Avellaneda-Stoikov Reservation Price R(s, q, t) = s - q * gamma * sigma^2 * (T - t)
+     * Inventory q is notional-normalized against standard slot trade size ($60.0 USDT) to maintain
+     * price-scale invariance across all cryptocurrency assets (BTC to DOGE).
      */
-    calculateReservationPrice(basePrice, inventory, durationMs, garmanKlassVol) {
+    calculateReservationPrice(basePrice, inventory, durationMs, garmanKlassVol, referenceNotionalUsdt = 60.0) {
         if (basePrice <= 0)
             return 0;
         const remainingHorizon = Math.max(0.001, this.targetHorizonSeconds - durationMs * 0.001);
         const variance = garmanKlassVol * garmanKlassVol;
-        // Inventory Penalty Delta = q * gamma * sigma^2 * (T - t) * S0
-        const inventoryPenalty = inventory * this.riskAversionGamma * variance * remainingHorizon * basePrice;
+        // Notional-normalized inventory: if inventory is already unitless [-5, 5], use directly; otherwise normalize
+        let qNorm = inventory;
+        if (Math.abs(inventory) > 5.0) {
+            const notional = Math.abs(inventory) * basePrice;
+            const refNotional = referenceNotionalUsdt > 0 ? referenceNotionalUsdt : 60.0;
+            qNorm = Math.sign(inventory) * Math.max(0.1, Math.min(5.0, notional / refNotional));
+        }
+        // Inventory Penalty Delta = q_norm * gamma * sigma^2 * (T - t) * S0
+        const inventoryPenalty = qNorm * this.riskAversionGamma * variance * remainingHorizon * basePrice;
         return basePrice - inventoryPenalty;
     }
     /**
      * Evaluates continuous HJB optimal stopping liquidation boundary relative to position entry price using zero-GC cached payload ring.
      */
-    getOptimalExitBoundary(side, entryPrice, currentPrice, inventory, durationMs, garmanKlassVol) {
+    getOptimalExitBoundary(side, entryPrice, currentPrice, inventory, durationMs, garmanKlassVol, referenceNotionalUsdt = 60.0) {
         const res = this.cachedExitEvalRing[this.evalRingIdx];
         this.evalRingIdx = (this.evalRingIdx + 1) % 8;
         if (currentPrice <= 0 || entryPrice <= 0) {
@@ -62,14 +71,18 @@ class HJBReservationEngine {
             return res;
         }
         const safeVol = Math.max(0.001, garmanKlassVol);
-        const signedInventory = side === "LONG" ? Math.abs(inventory) : -Math.abs(inventory);
-        const reservationPrice = this.calculateReservationPrice(entryPrice, signedInventory, durationMs, safeVol);
+        const refNotional = referenceNotionalUsdt > 0 ? referenceNotionalUsdt : 60.0;
         const absQty = Math.abs(inventory);
+        const notional = absQty * entryPrice;
+        const slotUnits = notional > 0 ? notional / refNotional : 1.0;
+        const normalizedQty = Math.max(0.1, Math.min(5.0, slotUnits));
+        const signedNormInventory = side === "LONG" ? normalizedQty : -normalizedQty;
+        const reservationPrice = this.calculateReservationPrice(entryPrice, signedNormInventory, durationMs, safeVol, refNotional);
         // Fast Volatility-Scaled Avellaneda-Stoikov Optimal Spread Offset:
         // term1 = safeVol * precalcLogTerm
-        // term2 = (2*|q|+1)/2 * safeVol * precalcSqrtCoeff
+        // term2 = (normalizedQty + 0.5) * safeVol * this.precalcSqrtCoeff
         const term1 = safeVol * this.precalcLogTerm;
-        const term2 = (absQty + 0.5) * safeVol * this.precalcSqrtCoeff;
+        const term2 = (normalizedQty + 0.5) * safeVol * this.precalcSqrtCoeff;
         const halfSpreadOffsetPct = Math.max(0.001, term1 + term2);
         const offsetUsdt = entryPrice * halfSpreadOffsetPct;
         let liquidationBoundary = 0;
