@@ -320,16 +320,21 @@ export class MultiAssetStrategyEngine {
       let isApproved = false;
       let rejectReason: string | undefined = undefined;
 
+      const engine = this.engines.get(symbol);
+      const minConfidence = engine ? engine.getConfig().minAiConfidence : parseFloat(process.env.MIN_AI_CONFIDENCE || "0.700");
+      const obiBuyThresh = engine ? engine.getConfig().obiBuyThreshold : parseFloat(process.env.OBI_BUY_THRESHOLD || "0.30");
+      const obiSellThresh = engine ? engine.getConfig().obiSellThreshold : parseFloat(process.env.OBI_SELL_THRESHOLD || "-0.30");
+
       if (vpin > 0.75) {
         rejectReason = "REJECTED_TOXIC_FLOW";
       } else if (hurst < 0.45) {
         rejectReason = "REJECTED_COUNTER_TREND_REGIME";
-      } else if (confidence < 0.75) {
+      } else if (confidence < minConfidence) {
         rejectReason = "REJECTED_LOW_CONFIDENCE";
-      } else if (obi >= 0.35 && cvd >= 0.0 && hawkes >= 0.5 && confidence >= 0.75) {
+      } else if (obi >= obiBuyThresh && cvd >= 0.0 && hawkes >= 0.5 && confidence >= minConfidence) {
         signalType = "BUY";
         isApproved = true;
-      } else if (obi <= -0.35 && cvd <= 0.0 && hawkes >= 0.5 && confidence >= 0.75) {
+      } else if (obi <= obiSellThresh && cvd <= 0.0 && hawkes >= 0.5 && confidence >= minConfidence) {
         signalType = "SELL";
         isApproved = true;
       }

@@ -45,13 +45,13 @@ class HJBReservationEngine {
             return 0;
         const remainingHorizon = Math.max(0.001, this.targetHorizonSeconds - durationMs * 0.001);
         const variance = garmanKlassVol * garmanKlassVol;
-        // Notional-normalized inventory: if inventory is already unitless [-5, 5], use directly; otherwise normalize
-        let qNorm = inventory;
-        if (Math.abs(inventory) > 5.0) {
-            const notional = Math.abs(inventory) * basePrice;
-            const refNotional = referenceNotionalUsdt > 0 ? referenceNotionalUsdt : 60.0;
-            qNorm = Math.sign(inventory) * Math.max(0.1, Math.min(5.0, notional / refNotional));
-        }
+        // Notional-normalized inventory across all cryptocurrency assets (0.001 BTC to 1000 DOGE):
+        // Maps raw token quantity against standard slot size (refNotional, default $60 USDT).
+        const refNotional = referenceNotionalUsdt > 0 ? referenceNotionalUsdt : 60.0;
+        const absQty = Math.abs(inventory);
+        const notional = absQty * basePrice;
+        const slotUnits = notional > 0 ? notional / refNotional : 1.0;
+        const qNorm = Math.sign(inventory) * Math.max(0.1, Math.min(5.0, slotUnits));
         // Inventory Penalty Delta = q_norm * gamma * sigma^2 * (T - t) * S0
         const inventoryPenalty = qNorm * this.riskAversionGamma * variance * remainingHorizon * basePrice;
         return basePrice - inventoryPenalty;
@@ -76,8 +76,8 @@ class HJBReservationEngine {
         const notional = absQty * entryPrice;
         const slotUnits = notional > 0 ? notional / refNotional : 1.0;
         const normalizedQty = Math.max(0.1, Math.min(5.0, slotUnits));
-        const signedNormInventory = side === "LONG" ? normalizedQty : -normalizedQty;
-        const reservationPrice = this.calculateReservationPrice(entryPrice, signedNormInventory, durationMs, safeVol, refNotional);
+        const signedInventory = side === "LONG" ? absQty : -absQty;
+        const reservationPrice = this.calculateReservationPrice(entryPrice, signedInventory, durationMs, safeVol, refNotional);
         // Fast Volatility-Scaled Avellaneda-Stoikov Optimal Spread Offset:
         // term1 = safeVol * precalcLogTerm
         // term2 = (normalizedQty + 0.5) * safeVol * this.precalcSqrtCoeff

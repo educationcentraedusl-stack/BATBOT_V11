@@ -8,6 +8,7 @@ export interface RiskConfig {
   dailyProfitLockTargetUsdt: number;
   minRiskRewardRatio: number;
   minNetAlpha: number;
+  minAiConfidence?: number;
   makerFeeRate?: number;
   takerFeeRate?: number;
 }
@@ -102,6 +103,7 @@ export class RiskGuard {
     const envMinNetAlpha = process.env.MIN_NET_ALPHA ? parseFloat(process.env.MIN_NET_ALPHA) : NaN;
     const envMakerFee = process.env.MAKER_FEE_RATE ? parseFloat(process.env.MAKER_FEE_RATE) : NaN;
     const envTakerFee = process.env.TAKER_FEE_RATE ? parseFloat(process.env.TAKER_FEE_RATE) : NaN;
+    const envMinAiConfidence = process.env.MIN_AI_CONFIDENCE ? parseFloat(process.env.MIN_AI_CONFIDENCE) : NaN;
 
     this.config = {
       maxPositionSizeUsdt: config?.maxPositionSizeUsdt ?? defaultMaxPosition,
@@ -111,6 +113,7 @@ export class RiskGuard {
       dailyProfitLockTargetUsdt: config?.dailyProfitLockTargetUsdt ?? defaultProfitLock,
       minRiskRewardRatio: config?.minRiskRewardRatio ?? defaultMinRrRatio,
       minNetAlpha: config?.minNetAlpha ?? (!isNaN(envMinNetAlpha) ? envMinNetAlpha : 0.0015),
+      minAiConfidence: config?.minAiConfidence ?? (!isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.700),
       makerFeeRate: config?.makerFeeRate ?? (!isNaN(envMakerFee) ? envMakerFee : 0.00018),
       takerFeeRate: config?.takerFeeRate ?? (!isNaN(envTakerFee) ? envTakerFee : 0.00045),
     };
@@ -181,10 +184,11 @@ export class RiskGuard {
     }
 
     // 3. Dynamic Microstructure Trap & Toxic Flow Enforcement
-    // High-confidence AI signals (>= 65% confidence) bypass VPIN toxic flow traps
+    // High-confidence AI signals (>= minAiConfidence floor) bypass VPIN toxic flow traps
+    const minConfidenceFloor = this.config.minAiConfidence ?? 0.700;
     const isAiHighConfidence = intent.riskProfile && (
       intent.riskProfile.isHighConfidenceAi === true ||
-      (intent.riskProfile.aiConfidence !== undefined && intent.riskProfile.aiConfidence >= 0.65)
+      (intent.riskProfile.aiConfidence !== undefined && intent.riskProfile.aiConfidence >= minConfidenceFloor)
     );
     if (intent.riskProfile && !intent.isCloseOrder && !isAiHighConfidence) {
       if (intent.riskProfile.isTrapDetected) {

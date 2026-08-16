@@ -41,9 +41,9 @@ async function testLongHoldProfitGuaranteeQA() {
     }
     console.log("  ✅ TEST 1 PASSED: Risk/Reward ratio floor (2.0) mathematically enforced!\n");
     // -------------------------------------------------------------------------
-    // TEST 2: 30s Breakeven Lock (Tier 1 Time-Decay Escalation)
+    // TEST 2: Profit-Gated Breakeven Lock (Tier 1 CAD-DTLM Escalation)
     // -------------------------------------------------------------------------
-    console.log("[TEST 2] Testing 30s Breakeven Lock...");
+    console.log("[TEST 2] Testing Profit-Gated Breakeven Lock...");
     const hedgeLedger = new positionLedger_1.HedgePositionLedger("ETHUSDT", 3);
     const entryPrice = 1900.00;
     const initialOpenTime = Date.now();
@@ -51,32 +51,35 @@ async function testLongHoldProfitGuaranteeQA() {
     const coreLongSlot = hedgeLedger.getCoreLong();
     const initialSl = coreLongSlot.stopLossPrice;
     console.log(`  Initial Position: Entry = $${entryPrice.toFixed(2)}, Initial SL = $${initialSl.toFixed(2)}`);
-    // Evaluate at 10s (below 30s threshold) -> SL must remain initial SL
-    hedgeLedger.evaluateHedgeDynamicTpSl(entryPrice, initialOpenTime + 10000);
-    if (coreLongSlot.stopLossPrice !== initialSl) {
-        throw new Error(`FAIL: SL changed before 30s threshold! Expected $${initialSl}, got $${coreLongSlot.stopLossPrice}`);
-    }
-    // Evaluate at 35s (past 30s threshold) -> SL must ratchet to fee-covered breakeven (> entryPrice)
+    // Evaluate at 35s when NOT in profit -> SL must remain initial SL (No 30s suicide stop)
     hedgeLedger.evaluateHedgeDynamicTpSl(entryPrice, initialOpenTime + 35000);
+    if (coreLongSlot.stopLossPrice !== initialSl) {
+        throw new Error(`FAIL: SL prematurely changed at 35s while not in profit! Expected $${initialSl}, got $${coreLongSlot.stopLossPrice}`);
+    }
+    console.log(`  - At 35s (Not In Profit): SL safely remained initial SL ($${coreLongSlot.stopLossPrice.toFixed(2)})`);
+    // Evaluate at 65s when price moves into verified profit ($1905.00) -> must lock profit-gated Breakeven SL
+    const profitPrice = 1905.00;
+    hedgeLedger.evaluateHedgeDynamicTpSl(profitPrice, initialOpenTime + 65000);
     const tier1Sl = coreLongSlot.stopLossPrice;
-    console.log(`  At 35s Elapsed: Breakeven Locked SL = $${tier1Sl.toFixed(2)}`);
+    console.log(`  At 65s Elapsed (in profit $${profitPrice}): Breakeven Locked SL = $${tier1Sl.toFixed(2)}`);
     if (tier1Sl <= entryPrice || coreLongSlot.timeDecayTier !== 1) {
-        throw new Error(`FAIL: 30s Breakeven lock failed! Tier1 SL ($${tier1Sl}) must be > Entry ($${entryPrice})`);
+        throw new Error(`FAIL: 60s Profit-gated Breakeven lock failed! Tier1 SL ($${tier1Sl}) must be > Entry ($${entryPrice})`);
     }
-    // Drop mark price to entry price ($1900.00) -> must trigger BREAK_EVEN_STOP_LOSS exit with profit/zero loss
-    const triggers35s = hedgeLedger.evaluateHedgeDynamicTpSl(entryPrice, initialOpenTime + 36000);
-    if (triggers35s.length === 0 || triggers35s[0].reason !== "BREAK_EVEN_STOP_LOSS") {
-        throw new Error(`FAIL: Expected BREAK_EVEN_STOP_LOSS trigger when price dropped to entry after 30s lock.`);
+    // Drop mark price below Breakeven SL -> must trigger BREAK_EVEN_STOP_LOSS exit with profit/zero loss
+    const triggersAfterLock = hedgeLedger.evaluateHedgeDynamicTpSl(tier1Sl - 0.50, initialOpenTime + 70000);
+    if (triggersAfterLock.length === 0 || triggersAfterLock[0].reason !== "BREAK_EVEN_STOP_LOSS") {
+        throw new Error(`FAIL: Expected BREAK_EVEN_STOP_LOSS trigger when price dropped below breakeven lock.`);
     }
-    console.log(`  Triggered Exit Reason: ${triggers35s[0].reason} @ Mark: $${triggers35s[0].markPrice}`);
-    console.log("  ✅ TEST 2 PASSED: 30s Breakeven Lock prevents any trade loss after 30 seconds!\n");
+    console.log(`  Triggered Exit Reason: ${triggersAfterLock[0].reason} @ Mark: $${triggersAfterLock[0].markPrice}`);
+    console.log("  ✅ TEST 2 PASSED: Profit-Gated Breakeven Lock verified without premature 30s stop trap!\n");
     // -------------------------------------------------------------------------
     // TEST 3: 180s Micro-Profit Guard (Tier 2 Time-Decay Escalation)
     // -------------------------------------------------------------------------
     console.log("[TEST 3] Testing 180s Micro-Profit Guard...");
     hedgeLedger.releaseCoreLong();
     hedgeLedger.occupyCoreLong(0.05, entryPrice, 0.45, 0.15);
-    hedgeLedger.evaluateHedgeDynamicTpSl(entryPrice, initialOpenTime + 200000); // 200s elapsed
+    const tier2MarkPrice = 1910.00;
+    hedgeLedger.evaluateHedgeDynamicTpSl(tier2MarkPrice, initialOpenTime + 200000); // 200s elapsed in profit
     const tier2Sl = hedgeLedger.getCoreLong().stopLossPrice;
     console.log(`  At 200s (3.3 min) Elapsed: Micro-Profit Locked SL = $${tier2Sl.toFixed(2)}`);
     if (tier2Sl <= tier1Sl || hedgeLedger.getCoreLong().timeDecayTier !== 2) {
@@ -87,7 +90,8 @@ async function testLongHoldProfitGuaranteeQA() {
     // TEST 4: 600s Guaranteed Profit Lock (Tier 3 Time-Decay Escalation)
     // -------------------------------------------------------------------------
     console.log("[TEST 4] Testing 600s (10 Min) Guaranteed Profit Lock...");
-    hedgeLedger.evaluateHedgeDynamicTpSl(entryPrice, initialOpenTime + 650000); // 650s elapsed
+    const tier3MarkPrice = 1915.00;
+    hedgeLedger.evaluateHedgeDynamicTpSl(tier3MarkPrice, initialOpenTime + 650000); // 650s elapsed in profit
     const tier3Sl = hedgeLedger.getCoreLong().stopLossPrice;
     console.log(`  At 650s (10.8 min) Elapsed: Guaranteed Profit Locked SL = $${tier3Sl.toFixed(2)}`);
     if (tier3Sl <= tier2Sl || hedgeLedger.getCoreLong().timeDecayTier !== 3) {

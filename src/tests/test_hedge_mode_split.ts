@@ -182,6 +182,7 @@ async function runHedgeModeSplitProof(): Promise<void> {
   };
 
   btcEngine.handleWsAccountPositionUpdate(mockLongCloseWsUpdate);
+  await btcEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
 
   const afterCloseSummary = btcEngine.getHedgeLedger().getSummary(62700.00);
   const afterCloseCoreLong = btcEngine.getHedgeLedger().getCoreLong();

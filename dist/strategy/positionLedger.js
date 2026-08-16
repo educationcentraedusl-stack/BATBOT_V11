@@ -1123,13 +1123,15 @@ class HedgePositionLedger {
                 }
                 return ids;
             };
-            // 0A. CAD-DTLM Time-Decay Tier Escalation (30s Breakeven, 180s Micro-Profit, 600s Profit Lock, 1800s Hard Kill)
-            if (durationSec >= 30.0) {
+            // 0A. CAD-DTLM Time-Decay Tier Escalation (60s Breakeven, 180s Micro-Profit, 600s Profit Lock, 1800s Hard Kill)
+            // Strictly profit-gated: only locks break-even / profit if current price is actually in verified profit
+            const beOffset = feeBuffer + 0.0002;
+            const targetBeSl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset));
+            const isEligibleForBe = isLong ? markPrice >= targetBeSl : markPrice <= targetBeSl;
+            if (durationSec >= 60.0 && isEligibleForBe) {
                 if (!slot.timeDecayTier || slot.timeDecayTier < 1) {
                     slot.timeDecayTier = 1;
                     slot.breakEvenLocked = true;
-                    const beOffset = feeBuffer + 0.0002;
-                    const targetBeSl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset));
                     slot.breakEvenPrice = targetBeSl;
                     slot.stopLossPrice = isLong
                         ? Math.max(slot.stopLossPrice, targetBeSl)
@@ -1137,38 +1139,50 @@ class HedgePositionLedger {
                 }
             }
             if (durationSec >= 180.0) {
-                if (!slot.timeDecayTier || slot.timeDecayTier < 2) {
-                    slot.timeDecayTier = 2;
-                    const profitOffset = feeBuffer + minNetAlpha;
-                    const targetTier2Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + profitOffset) : slot.entryPrice * (1.0 - profitOffset));
-                    slot.stopLossPrice = isLong
-                        ? Math.max(slot.stopLossPrice, targetTier2Sl)
-                        : Math.min(slot.stopLossPrice, targetTier2Sl);
+                const profitOffset = feeBuffer + minNetAlpha;
+                const targetTier2Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + profitOffset) : slot.entryPrice * (1.0 - profitOffset));
+                const isEligibleForTier2 = isLong ? markPrice >= targetTier2Sl : markPrice <= targetTier2Sl;
+                if (isEligibleForTier2) {
+                    if (!slot.timeDecayTier || slot.timeDecayTier < 2) {
+                        slot.timeDecayTier = 2;
+                        slot.breakEvenLocked = true;
+                        slot.breakEvenPrice = targetTier2Sl;
+                        slot.stopLossPrice = isLong
+                            ? Math.max(slot.stopLossPrice, targetTier2Sl)
+                            : Math.min(slot.stopLossPrice, targetTier2Sl);
+                    }
                 }
             }
             if (durationSec >= 600.0) {
-                if (!slot.timeDecayTier || slot.timeDecayTier < 3) {
-                    slot.timeDecayTier = 3;
-                    const lockedOffset = feeBuffer + minNetAlpha * 2.0;
-                    const targetTier3Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + lockedOffset) : slot.entryPrice * (1.0 - lockedOffset));
-                    slot.stopLossPrice = isLong
-                        ? Math.max(slot.stopLossPrice, targetTier3Sl)
-                        : Math.min(slot.stopLossPrice, targetTier3Sl);
+                const lockedOffset = feeBuffer + minNetAlpha * 2.0;
+                const targetTier3Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + lockedOffset) : slot.entryPrice * (1.0 - lockedOffset));
+                const isEligibleForTier3 = isLong ? markPrice >= targetTier3Sl : markPrice <= targetTier3Sl;
+                if (isEligibleForTier3) {
+                    if (!slot.timeDecayTier || slot.timeDecayTier < 3) {
+                        slot.timeDecayTier = 3;
+                        slot.breakEvenLocked = true;
+                        slot.breakEvenPrice = targetTier3Sl;
+                        slot.stopLossPrice = isLong
+                            ? Math.max(slot.stopLossPrice, targetTier3Sl)
+                            : Math.min(slot.stopLossPrice, targetTier3Sl);
+                    }
                 }
             }
             if (durationSec >= 1800.0) {
-                slot.timeDecayTier = 4;
-                triggers.push({
-                    slotId: slot.slotId,
-                    side: slot.side,
-                    reason: "LONG_HOLD_PROFIT_HARVEST",
-                    quantity: slot.quantity,
-                    entryPrice: slot.entryPrice,
-                    markPrice,
-                    isPartialClose: false,
-                    cancelOrderIds: buildCancelOrderIds(),
-                });
-                return;
+                if (!slot.timeDecayTier || slot.timeDecayTier < 4) {
+                    slot.timeDecayTier = 4;
+                    triggers.push({
+                        slotId: slot.slotId,
+                        side: slot.side,
+                        reason: "LONG_HOLD_PROFIT_HARVEST",
+                        quantity: slot.quantity,
+                        entryPrice: slot.entryPrice,
+                        markPrice,
+                        isPartialClose: false,
+                        cancelOrderIds: buildCancelOrderIds(),
+                    });
+                    return;
+                }
             }
             // 0B. AI Conviction Hard-Reversal Exit Signal (100% Dynamic - Zero Timers)
             const isAiHardReversal = isLong

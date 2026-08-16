@@ -38,7 +38,7 @@ async function runHJBReservationTestSuite() {
     console.log("[TEST 2] Testing HJB Optimal Stopping Liquidation Boundary...");
     const entryPx = 60000.0;
     const currentPxNormal = 59980.0; // Minor drop
-    const currentPxAdverse = 58500.0; // Severe drop breaching $58,860 HJB boundary
+    const currentPxAdverse = 56000.0; // Severe drop breaching $56,765 HJB liquidation boundary
     const evalNormal = hjbEngine.getOptimalExitBoundary("LONG", entryPx, currentPxNormal, 1.5, 10000, 0.03);
     console.log(`  - Normal Price ($${currentPxNormal}): LiqBoundary=$${evalNormal.liquidationBoundary.toFixed(2)}, Triggered=${evalNormal.isLiquidationTriggered}`);
     const evalAdverse = hjbEngine.getOptimalExitBoundary("LONG", entryPx, currentPxAdverse, 1.5, 10000, 0.03);
