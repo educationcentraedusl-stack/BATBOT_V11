@@ -15,6 +15,14 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-08-17 - Phase 3 (Aggressive Profit-Locking Step-Collar Risk Engine & Order Execution Pipeline Wiring) Completed & 100% QA Verified:
+  - Implemented `StepCollarRiskEngine` in `src/execution/risk.ts` enforcing Multi-Tier Step-Collar logic:
+    - Tier 1 (Break-Even Lock): When unrealized net profit reaches +$0.50 (after round-trip fees), Stop Loss locks at the break-even entry price.
+    - Tier 2 (Partial Profit Lock): When net profit reaches +$1.50, Stop Loss locks at +$0.50 net profit level.
+    - Tier 3 (Aggressive Trail): When net profit reaches +$2.00, Stop Loss locks at +$1.50 and trails tick-by-tick with a tight $0.50 margin behind peak profit until the $5.00 Take Profit barrier is hit.
+    - Monotonic Ratchet Guarantee: Stop Loss moves strictly in the profit direction and never retreats on price pullbacks.
+  - Implemented `OrderManager` in `src/execution/orderManager.ts` wiring dynamic Stop Loss and Take Profit updates from the Risk Engine directly to the Binance execution pipeline. Maintained sub-millisecond execution latency with in-flight queue locking, cancel-replace debouncing, and HD ClientOrderId tagging.
+  - 100% verified via `npx tsx src/tests/test_phase3_step_collar_risk.ts` (100% pass across all 4 test stages: Long Multi-Tier, Short Symmetry, 100k Latency Benchmark, and OrderManager Pipeline), `npm run build:ts` (0 errors), and `npx tsx src/tests/test_hd_client_order_id.ts` (100% pass).
 * 2026-08-17 - Phase 2 (Python Mid-Frequency Scalping & Meta-Labeling Trainer) & Emergency Remediation of Defect P2-01 Completed & 100% QA Verified:
   - Remediated Defect P2-01 in `training/local_async_trainer.py`: Added dynamic target dimensionality check in `DualStageFocalLoss.forward()` and `fit_platt_temperature_calibration()` to synthesize pseudo-targets ($y_{\text{meta}} = (|y_{\text{dir}}| > 0.5)$, $y_{\text{horiz}} = 300.0 / 60.0$) when training on $<3$-target datasets, completely eradicating cold-start `IndexError` crashes.
   - Implemented Volatility-Adjusted Triple-Barrier Labeling ($P_{\text{TP}} = P_0 (1 + \max(0.0150, 3.50\sigma))$, $P_{\text{SL}} = P_0 (1 - \max(0.0100, 1.75\sigma))$, $T_{\text{max}} = 1800\text{s}$) capturing macro $2.00 to $5.00+ net expansions in `training/prepare_data.py`.
