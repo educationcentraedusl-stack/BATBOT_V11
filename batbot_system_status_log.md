@@ -1,6 +1,15 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-17
+- **Feature/Task:** Master Plan Phase 3 & Phase 4: Consecutive-Loss Circuit Breaker, Exponential Pacing & Microstructure Chop & LOB Entropy Regime Filter
+- **Artifacts Created/Modified:** `src/strategy/risk.ts`, `src/strategy/dynamicRiskEngine.ts`, `src/strategy/engine.ts`, `src/tests/test_phase3_phase4_consecutive_loss_and_chop.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** 
+  1. **Phase 3 (Consecutive-Loss Circuit Breaker & Exponential Pacing):** Tracked per-symbol consecutive losses and enforced non-blocking exponential cooldowns upon position exits in `onExecutionCompleted` (1 loss -> 15s, 2 losses -> 60s, 3 losses -> 180s, 5 losses -> 900s / 15m hard symbol circuit breaker halt). Reset consecutive losses to 0 on verified winning exits (> +0.20% Net ROE). Synchronized cooldowns atomically to SAB slots 119/120 and software `RiskGuard` / `MultiAssetRiskGuard`.
+  2. **Phase 4 (Microstructure Chop & LOB Entropy Regime Filter):** Ingested Hurst Exponent (H) and LOB Shannon Entropy ($S_{\text{LOB}}$) from SAB slots 123 and 124 in `StrategyEngine.evaluateTick()`. Filtered out directional momentum signals (rejected with `REJECTED_CHOP_REGIME`) when $H < 0.45$ and $S_{\text{LOB}} > 0.85$ (Mean-Reverting Noise Chop). Restricted high-frequency directional entries strictly to verified trend regimes ($H \ge 0.55$, $S_{\text{LOB}} \le 0.75$, $\text{Hawkes} \le 2.0$).
+  3. **Verification & Zero-GC Compliance:** 100% verified via `npx tsx src/tests/test_phase3_phase4_consecutive_loss_and_chop.ts` (7/7 test stages passed), `npm run test` (`tsc --noEmit`, 0 errors), `npm run build:ts` (0 errors), `cargo test --lib` (36/36 passed), and all regression test suites.
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-17
 - **Feature/Task:** Master Plan Phase 1 & 2: Payoff Skew Realignment, Dynamic Volatility Stops & Live Tick-by-Tick Step-Collar Wiring
 - **Artifacts Created/Modified:** `.env`, `src/strategy/engine.ts`, `src/strategy/positionLedger.ts`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** 

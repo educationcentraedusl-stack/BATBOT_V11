@@ -34,6 +34,8 @@ class RiskGuard {
     isProfitLocked = false;
     currentPositionNotionalUsdt = 0;
     symbolExecutionHistory = new Map();
+    consecutiveLosses = new Map();
+    symbolCooldownExpiries = new Map();
     constructor(config) {
         const envDailyProfitLock = process.env.DAILY_PROFIT_LOCK_USDT ? parseFloat(process.env.DAILY_PROFIT_LOCK_USDT) : NaN;
         const defaultProfitLock = !isNaN(envDailyProfitLock) ? envDailyProfitLock : 10.0;
@@ -61,6 +63,73 @@ class RiskGuard {
     getConfig() {
         return this.config;
     }
+    /**
+     * Calculates exponential backoff cooldown duration (in ms) based on consecutive loss count.
+     * 1 loss -> 15s pause (15,000ms)
+     * 2 losses -> 60s pause (60,000ms)
+     * 3 losses -> 180s pause (180,000ms)
+     * 5+ losses -> 900s (15 min / 900,000ms) hard symbol circuit breaker halt
+     */
+    static calculateExponentialLossCooldownMs(consecutiveLosses) {
+        if (consecutiveLosses >= 5) {
+            return 900_000; // 900s (15 min) hard symbol circuit breaker halt
+        }
+        else if (consecutiveLosses >= 3) {
+            return 180_000; // 3 losses -> 180s pause (also applies to 4 losses)
+        }
+        else if (consecutiveLosses === 2) {
+            return 60_000; // 2 losses -> 60s pause
+        }
+        else if (consecutiveLosses === 1) {
+            return 15_000; // 1 loss -> 15s pause
+        }
+        return 0;
+    }
+    /**
+     * Tracks consecutive realized losses per symbol and calculates exponential cooldown pacing.
+     * Resets consecutive loss counter to 0 upon any realized winning exit (> +0.20% Net ROE).
+     * Returns the updated consecutive loss count.
+     */
+    recordTradeOutcome(symbol, realizedPnl, netRoePercent) {
+        const sym = symbol || "DEFAULT";
+        const currentLosses = this.consecutiveLosses.get(sym) ?? 0;
+        // A true winning trade (> +0.20% Net ROE) resets the consecutive loss counter to 0
+        const isWinningExit = realizedPnl > 0 && (netRoePercent !== undefined ? netRoePercent > 0.20 : true);
+        if (isWinningExit) {
+            this.consecutiveLosses.set(sym, 0);
+            return 0;
+        }
+        else if (realizedPnl < 0 || (realizedPnl >= 0 && (netRoePercent !== undefined && netRoePercent <= 0.20))) {
+            // Realized loss or scratch trade not clearing +0.20% Net ROE threshold
+            const newLosses = realizedPnl < 0 ? currentLosses + 1 : (realizedPnl === 0 ? currentLosses + 1 : currentLosses);
+            this.consecutiveLosses.set(sym, newLosses);
+            return newLosses;
+        }
+        return currentLosses;
+    }
+    getConsecutiveLosses(symbol) {
+        const sym = symbol || "DEFAULT";
+        return this.consecutiveLosses.get(sym) ?? 0;
+    }
+    resetConsecutiveLosses(symbol) {
+        if (symbol) {
+            this.consecutiveLosses.set(symbol, 0);
+        }
+        else {
+            this.consecutiveLosses.clear();
+        }
+    }
+    getSymbolCooldownExpiry(symbol) {
+        return this.symbolCooldownExpiries.get(symbol) ?? 0;
+    }
+    setSymbolCooldownExpiry(symbol, expiryMs) {
+        this.symbolCooldownExpiries.set(symbol, expiryMs);
+    }
+    isCircuitBreakerActive(symbol, nowMs = Date.now()) {
+        const losses = this.getConsecutiveLosses(symbol);
+        const expiry = this.getSymbolCooldownExpiry(symbol);
+        return losses >= 5 && expiry > nowMs;
+    }
     validateOrder(intent, isClientConfigured, currentPositionSide = "FLAT") {
         if (!isClientConfigured) {
             return exports.RISK_REJECTED_UNCONFIGURED;
@@ -71,7 +140,21 @@ class RiskGuard {
             return exports.RISK_PASSED;
         }
         const now = Date.now();
-        // 1. Cooldown Enforcement
+        // 1. Cooldown & Consecutive-Loss Circuit Breaker Enforcement
+        if (intent.symbol) {
+            const expiry = this.getSymbolCooldownExpiry(intent.symbol);
+            if (expiry > now) {
+                const isCircuitBreaker = this.getConsecutiveLosses(intent.symbol) >= 5;
+                const remainingSec = Math.ceil((expiry - now) / 1000);
+                return {
+                    passed: false,
+                    reasonCode: isCircuitBreaker ? "CIRCUIT_BREAKER_ACTIVE" : "COOLDOWN_ACTIVE",
+                    message: isCircuitBreaker
+                        ? `Order rejected: Hard symbol circuit breaker active for ${intent.symbol} (${remainingSec}s remaining after ${this.getConsecutiveLosses(intent.symbol)} consecutive losses).`
+                        : `Order rejected: Exponential loss cooldown active for ${intent.symbol} (${remainingSec}s remaining).`,
+                };
+            }
+        }
         if (now - this.lastExecutionTimestampMs < this.config.minCooldownMs) {
             return exports.RISK_REJECTED_COOLDOWN;
         }
@@ -128,6 +211,13 @@ class RiskGuard {
                     return {
                         passed: false,
                         reasonCode: "REJECTED_TOXIC_FLOW",
+                        message: `Order rejected: ${reason}`,
+                    };
+                }
+                else if (reason.includes("CHOP")) {
+                    return {
+                        passed: false,
+                        reasonCode: "REJECTED_CHOP_REGIME",
                         message: `Order rejected: ${reason}`,
                     };
                 }
@@ -240,11 +330,18 @@ class RiskGuard {
             this.symbolExecutionHistory.set(symbol, updated);
         }
     }
-    recordExitExecution(notionalUsdt, realizedPnl = 0, side = "BUY", symbol) {
+    recordExitExecution(notionalUsdt, realizedPnl = 0, side = "BUY", symbol, netRoePercent) {
         this.recordExecutionSuccess(notionalUsdt, side, symbol, true);
         if (realizedPnl !== 0) {
             this.recordRealizedPnl(realizedPnl);
         }
+        const sym = symbol || "DEFAULT";
+        const losses = this.recordTradeOutcome(sym, realizedPnl, netRoePercent);
+        const cooldownMs = RiskGuard.calculateExponentialLossCooldownMs(losses);
+        if (cooldownMs > 0) {
+            this.setSymbolCooldownExpiry(sym, Date.now() + cooldownMs);
+        }
+        return losses;
     }
     getLastExecutionTimestampMs() {
         return this.lastExecutionTimestampMs;
@@ -330,8 +427,11 @@ class MultiAssetRiskGuard extends RiskGuard {
         return this.getGrossPortfolioNotional() / this.accountBalanceUsdt;
     }
     validateOrder(intent, isClientConfigured, currentPositionSide = "FLAT") {
+        if (intent.isCloseOrder === true || intent.isHardStop === true) {
+            return exports.RISK_PASSED;
+        }
         // Isolated Per-Asset Cooldown Enforcement
-        if (intent.symbol && !(intent.isCloseOrder === true || intent.isHardStop === true)) {
+        if (intent.symbol) {
             const lastExec = this.symbolExecutionTimestamps.get(intent.symbol);
             if (lastExec !== undefined) {
                 const now = Date.now();

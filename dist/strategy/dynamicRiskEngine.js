@@ -30,10 +30,12 @@ class DynamicRiskEngine {
         }
         // 1. Regime Classification
         let regimeState = "MEAN_REVERTING";
-        if (metrics.vpin > this.vpinThreshold || metrics.isSweepDetected) {
+        const isChopRegime = metrics.hurst < 0.45 && metrics.lobEntropy > 0.85;
+        const isTrendRegime = metrics.hurst >= 0.55 && metrics.lobEntropy <= 0.75;
+        if (metrics.vpin > this.vpinThreshold || metrics.isSweepDetected || isChopRegime) {
             regimeState = "TOXIC_CHOP_TRAP";
         }
-        else if (metrics.hurst > this.minHurstTrend) {
+        else if (isTrendRegime) {
             regimeState = "DIRECTIONAL_TREND";
         }
         else if (metrics.hurst < this.maxHurstMeanReversion) {
@@ -52,6 +54,10 @@ class DynamicRiskEngine {
         else if (metrics.vpin > this.vpinThreshold) {
             isTrapDetected = true;
             trapReason = "HIGH_VPIN_TOXIC_FLOW";
+        }
+        else if (isChopRegime) {
+            isTrapDetected = true;
+            trapReason = "NOISY_CHOP_REGIME (H < 0.45 & S_LOB > 0.85)";
         }
         else if (regimeState === "TOXIC_CHOP_TRAP") {
             isTrapDetected = true;

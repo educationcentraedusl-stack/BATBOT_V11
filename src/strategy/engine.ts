@@ -336,9 +336,15 @@ export class StrategyEngine {
   }
 
   /**
-   * Centralized fill lifecycle observer for both ENTRY and EXIT executions.
+   * Centralized fill lifecycle observer for both ENTRY and EXIT executions.  /**
    * Enforces dual-tier cooldown synchronization across RiskGuard (software state)
    * and SharedArrayBuffer (zero-copy shared memory state).
+   * Phase 3: Consecutive-Loss Circuit Breaker & Exponential Pacing:
+   * 1 loss -> 15s pause
+   * 2 losses -> 60s pause
+   * 3 losses -> 180s pause
+   * 5+ losses -> 900s (15 min) hard symbol circuit breaker halt
+   * Realized winning exit (> +0.20% Net ROE) resets consecutive loss counter to 0.
    */
   private onExecutionCompleted(params: {
     symbol: string;
@@ -350,12 +356,33 @@ export class StrategyEngine {
     executedPrice: number;
     realizedPnl?: number;
     fillTimestampMs?: number;
+    netRoe?: number;
   }): void {
     const fillTime = params.fillTimestampMs ?? Date.now();
     const notionalUsdt = params.executedQty * params.executedPrice;
-    const cooldownExpiry = fillTime + this.config.cooldownMs;
+    let cooldownDurationMs = this.config.cooldownMs;
 
-    // 1. Tier 1: RiskGuard Software State & Realized PnL Synchronization
+    // 1. Tier 1: RiskGuard Software State & Realized PnL / Consecutive Loss Synchronization
+    if (params.isCloseOrder) {
+      const realizedPnl = params.realizedPnl ?? 0;
+      let netRoePercent = params.netRoe;
+      if (netRoePercent === undefined && notionalUsdt > 0) {
+        const leverage = this.config.leverageMultiplier || 10;
+        const initialMargin = notionalUsdt / leverage;
+        netRoePercent = initialMargin > 0 ? (realizedPnl / initialMargin) * 100 : (realizedPnl / notionalUsdt) * 100;
+      }
+
+      const consecutiveLosses = this.riskGuard.recordTradeOutcome(
+        params.symbol,
+        realizedPnl,
+        netRoePercent
+      );
+
+      const lossCooldownMs = RiskGuard.calculateExponentialLossCooldownMs(consecutiveLosses);
+      cooldownDurationMs = Math.max(cooldownDurationMs, lossCooldownMs);
+      this.riskGuard.setSymbolCooldownExpiry(params.symbol, fillTime + cooldownDurationMs);
+    }
+
     if (this.riskGuard instanceof MultiAssetRiskGuard) {
       (this.riskGuard as MultiAssetRiskGuard).recordExecutionSuccess(
         notionalUsdt,
@@ -376,6 +403,8 @@ export class StrategyEngine {
       this.riskGuard.recordRealizedPnl(params.realizedPnl);
     }
 
+    const cooldownExpiry = fillTime + cooldownDurationMs;
+
     // 2. Tier 2: Atomic SharedArrayBuffer Cooldown Synchronization
     // Enforce post-trade execution cooldown per asset and side on SAB for both entries and exits
     if (params.positionSide === "LONG") {
@@ -389,10 +418,11 @@ export class StrategyEngine {
     // 3. Tier 3: Immediate Zero-Latency SAB Position State Sync
     this.syncSabPositionState(0);
 
+    const isCircuitBreaker = params.isCloseOrder && (this.riskGuard.getConsecutiveLosses(params.symbol) >= 5);
     console.log(
-      `[COOLDOWN_SYNC][${params.isCloseOrder ? "EXIT" : "ENTRY"}] Completed ${params.positionSide} ${params.side} on ${params.symbol}. Qty: ${params.executedQty} @ $${params.executedPrice.toFixed(
+      `[COOLDOWN_SYNC][${params.isCloseOrder ? (isCircuitBreaker ? "CIRCUIT_BREAKER_HALT" : "EXIT_BACKOFF") : "ENTRY"}] Completed ${params.positionSide} ${params.side} on ${params.symbol}. Qty: ${params.executedQty} @ $${params.executedPrice.toFixed(
         2
-      )}. Cooldown active for ${this.config.cooldownMs}ms (until ${cooldownExpiry}). PnL: $${(params.realizedPnl ?? 0).toFixed(2)}`
+      )}. Cooldown: ${cooldownDurationMs}ms (until ${cooldownExpiry}). PnL: $${(params.realizedPnl ?? 0).toFixed(2)}${params.isCloseOrder ? ` (Consecutive Losses: ${this.riskGuard.getConsecutiveLosses(params.symbol)})` : ""}`
     );
   }
 
@@ -1747,18 +1777,19 @@ export class StrategyEngine {
         }
       }
 
-      // Read Hawkes & Microburst Metrics from SAB
+      // Read Hawkes & Microburst & Microstructure Metrics from SAB (Slots 112, 114, 119, 120, 121, 123, 124)
       const hawkesIntensity = this.client.getHawkesIntensity(this.assetIndex);
       const realizedVol = this.client.getRealizedVolatility(this.assetIndex);
       const rawShortCooldownLock = this.client.getShortCooldownLock(this.assetIndex);
       const rawLongCooldownLock = this.client.getLongCooldownLock(this.assetIndex);
       const hurstExponent = this.client.getHurstExponent(this.assetIndex);
+      const lobEntropy = this.client.getLOBEntropy(this.assetIndex);
       const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
 
       const nowMs = Date.now();
-      // Defensive ceiling guard: if cooldown lock is set to a future timestamp > 60s, reset lock to 0
-      const longCooldownLock = rawLongCooldownLock > nowMs + 60000 ? 0 : rawLongCooldownLock;
-      const shortCooldownLock = rawShortCooldownLock > nowMs + 60000 ? 0 : rawShortCooldownLock;
+      // Defensive ceiling guard: allow up to 30 min (1,800,000ms) for consecutive loss circuit breaker halts
+      const longCooldownLock = rawLongCooldownLock > nowMs + 1800000 ? 0 : rawLongCooldownLock;
+      const shortCooldownLock = rawShortCooldownLock > nowMs + 1800000 ? 0 : rawShortCooldownLock;
 
       let targetSizeDecayCoeff = 1.0;
 
@@ -1869,6 +1900,31 @@ export class StrategyEngine {
           `Conf: ${confPct}% ${confOp} Floor: ${floorPct}% [${aiConfidence >= effectiveMinConfidence ? "PASS" : "FAIL"}], ` +
           `Z: ${zScore.toFixed(2)} ${zOp} ${minZScoreThreshold.toFixed(1)} [${zScore >= minZScoreThreshold ? "PASS" : "FAIL"}]) -> Signals Filtered`
         );
+      }
+
+      // SOTA Phase 4: Microstructure Chop & LOB Entropy Regime Filter
+      // Mean-Reverting Noise Chop: H < 0.45 and S_LOB > 0.85
+      const isChopRegime = hurstExponent < 0.45 && lobEntropy > 0.85;
+
+      // Restrict high-frequency directional entries to verified trend regimes ONLY (H >= 0.55, S_LOB <= 0.75, Hawkes <= 2.0)
+      const isVerifiedTrendRegime = hurstExponent >= 0.55 && lobEntropy <= 0.75 && safeHawkes <= 2.0;
+
+      if (isChopRegime) {
+        if (seq % 1000n === 0n || (isBuySignal || isSellSignal)) {
+          console.log(
+            `[StrategyEngine][${this.config.symbol}][REJECTED_CHOP_REGIME] Seq #${seq} | Directional signal filtered: Mean-Reverting Noise Chop (H: ${hurstExponent.toFixed(3)} < 0.45, S_LOB: ${lobEntropy.toFixed(3)} > 0.85).`
+          );
+        }
+        isBuySignal = false;
+        isSellSignal = false;
+      } else if (!isVerifiedTrendRegime) {
+        if (seq % 1000n === 0n && (isBuySignal || isSellSignal)) {
+          console.log(
+            `[StrategyEngine][${this.config.symbol}][TREND_REGIME_GATE] Seq #${seq} | Directional entry restricted: Not a verified trend regime (H: ${hurstExponent.toFixed(3)} [req >= 0.55], S_LOB: ${lobEntropy.toFixed(3)} [req <= 0.75], Hawkes: ${safeHawkes.toFixed(3)} [req <= 2.0]).`
+          );
+        }
+        isBuySignal = false;
+        isSellSignal = false;
       }
 
       // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
@@ -1994,8 +2050,8 @@ export class StrategyEngine {
         cvd,
         rvGk: this.client.getGarmanKlassRV(this.assetIndex),
         vpin: this.client.getVPIN(this.assetIndex),
-        hurst: this.client.getHurstExponent(this.assetIndex),
-        lobEntropy: this.client.getLOBEntropy(this.assetIndex),
+        hurst: hurstExponent,
+        lobEntropy: lobEntropy,
         regime: this.client.getRegimeStateCode(this.assetIndex),
         isSweepDetected: this.client.getIsSweepDetected(this.assetIndex),
       };
