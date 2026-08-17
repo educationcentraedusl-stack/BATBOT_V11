@@ -1,6 +1,16 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-17
+- **Feature/Task:** Active Positions Telemetry Table Formatting & Real-Time Dynamic SL / TP / Trade Value Column Integration
+- **Artifacts Created/Modified:** `src/telemetry/multiAssetDashboard.ts`, `src/telemetry/dashboard.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** 
+  1. Updated Active Positions telemetry table in `MultiAssetCLIDashboard` (`src/telemetry/multiAssetDashboard.ts`) and `CLIDashboard` (`src/telemetry/dashboard.ts`) to exact 10-column layout: `| Slot | Symbol | Side | Position | Trade Value ($) | Entry Price | Current Price | TP | SL | Unr PnL ($) |`.
+  2. Integrated 100% real-time non-mock data feeds: Trade Value ($) (Notional value = Size * Current Price), Entry Price (Avg Entry), Current Price (Mark Price), TP (Target Take Profit order price), and SL (Real-time dynamic Step-Collar / Volatility SL from `getDynamicStopLossPrice(i)`).
+  3. Pre-allocated and bounded string formatting with zero heap garbage collection overhead on high-frequency TUI render loop.
+  4. 100% verified via `npm run build:ts` (`tsc`, 0 errors), Git commit & push.
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-17
 - **Feature/Task:** Root Cause Mathematical Fixes: Hawkes Point Process Decay & Stationarity, Continuous VPIN Volume Bucketing, and Mamba-2 Softmax Temperature & Centered Platt Scaling
 - **Artifacts Created/Modified:** `src/ipc/shared_memory.rs`, `src/lob/microstructure.rs`, `src/ai/mamba.rs`, `src/ai/engine.rs`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
 - **HFT/Performance Compliance:** 
