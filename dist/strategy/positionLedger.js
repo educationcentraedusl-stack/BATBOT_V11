@@ -1246,274 +1246,287 @@ class HedgePositionLedger {
             return triggers;
         const actualNowMs = aiDirectionOrNowMs > 1e11 ? aiDirectionOrNowMs : (nowMs > 1e11 ? nowMs : Date.now());
         const aiDirection = aiDirectionOrNowMs > 1e11 ? 0 : aiDirectionOrNowMs;
-        const evalSlot = (slot) => {
-            if (!slot.isOccupied || slot.entryPrice <= 0 || slot.quantity <= 0)
-                return;
-            const initialQty = slot.initialQuantity && slot.initialQuantity > 0 ? slot.initialQuantity : slot.quantity;
-            const stage = slot.tpStageReached || 0;
-            const isLong = slot.side === "LONG";
-            const tpPrices = slot.tpPrices && slot.tpPrices.length === 5 ? slot.tpPrices : [];
-            const hasActiveLimitOrders = slot.activeTpOrderIds && slot.activeTpOrderIds.length > 0;
-            const makerFee = this.sizingCalc.getMakerFeeRate();
-            const takerFee = this.sizingCalc.getTakerFeeRate();
-            const minNetAlpha = this.sizingCalc.getMinNetAlpha();
-            const feeBuffer = (makerFee + takerFee) * 2.5;
-            const openTime = slot.openTime && slot.openTime > 0 ? slot.openTime : actualNowMs;
-            const durationMs = Math.max(0, actualNowMs - openTime);
-            const durationSec = durationMs / 1000;
-            const buildCancelOrderIds = () => {
-                const ids = [];
-                if (slot.activeTpOrderIds && slot.activeTpOrderIds.length > 0) {
-                    ids.push(...slot.activeTpOrderIds);
-                }
-                if (slot.activeStopLossOrderId && slot.activeStopLossOrderId > 0) {
-                    ids.push(slot.activeStopLossOrderId);
-                }
-                return ids;
-            };
-            // 0A. SOTA 3-Tier ROE Step-Collar Dynamic Profit Lock (Zero Time Delays)
-            const effectiveLev = this.leverage > 0 ? this.leverage : 20.0;
-            const rawRoePct = isLong
-                ? ((markPrice - slot.entryPrice) / slot.entryPrice) * effectiveLev * 100.0
-                : ((slot.entryPrice - markPrice) / slot.entryPrice) * effectiveLev * 100.0;
-            if (rawRoePct > (slot.peakRoe ?? 0)) {
-                slot.peakRoe = rawRoePct;
-            }
-            // Tier 1: +8.0% Net ROE -> Lock Entry + Round-Trip Fees
-            if (rawRoePct >= 8.0) {
-                const beOffset = feeBuffer + 0.0002;
-                const targetBeSl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset));
-                if (!slot.stepCollarTier || slot.stepCollarTier < 1) {
-                    slot.stepCollarTier = 1;
-                    slot.breakEvenLocked = true;
-                    slot.breakEvenPrice = targetBeSl;
-                }
-                slot.stopLossPrice = isLong
-                    ? Math.max(slot.stopLossPrice, targetBeSl)
-                    : (slot.stopLossPrice === 0 ? targetBeSl : Math.min(slot.stopLossPrice, targetBeSl));
-            }
-            // Tier 2: +15.0% Net ROE -> Lock +10.0% ROE
-            if (rawRoePct >= 15.0) {
-                const lockOffset = (10.0 / 100.0) / effectiveLev;
-                const targetTier2Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset));
-                if (!slot.stepCollarTier || slot.stepCollarTier < 2) {
-                    slot.stepCollarTier = 2;
-                    slot.breakEvenLocked = true;
-                }
-                slot.stopLossPrice = isLong
-                    ? Math.max(slot.stopLossPrice, targetTier2Sl)
-                    : Math.min(slot.stopLossPrice, targetTier2Sl);
-            }
-            // Tier 3: >= +25.0% Net ROE -> Aggressive 70% Trailing Profit Collar
-            if (rawRoePct >= 25.0 || (slot.peakRoe && slot.peakRoe >= 25.0)) {
-                const currentPeakRoe = slot.peakRoe ?? rawRoePct;
-                const trailRoe = currentPeakRoe * 0.70;
-                const trailOffset = (trailRoe / 100.0) / effectiveLev;
-                const targetTier3Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + trailOffset) : slot.entryPrice * (1.0 - trailOffset));
-                if (!slot.stepCollarTier || slot.stepCollarTier < 3) {
-                    slot.stepCollarTier = 3;
-                    slot.breakEvenLocked = true;
-                }
-                slot.stopLossPrice = isLong
-                    ? Math.max(slot.stopLossPrice, targetTier3Sl)
-                    : Math.min(slot.stopLossPrice, targetTier3Sl);
-            }
-            // Terminal Lifespan Harvest (30 Minutes Max Horizon)
-            if (durationSec >= 1800.0) {
-                if (!slot.timeDecayTier || slot.timeDecayTier < 4) {
-                    slot.timeDecayTier = 4;
-                    triggers.push({
-                        slotId: slot.slotId,
-                        side: slot.side,
-                        reason: "LONG_HOLD_PROFIT_HARVEST",
-                        quantity: slot.quantity,
-                        entryPrice: slot.entryPrice,
-                        markPrice,
-                        isPartialClose: false,
-                        cancelOrderIds: buildCancelOrderIds(),
-                    });
-                    return;
-                }
-            }
-            // 0B. AI Conviction Hard-Reversal Exit Signal (100% Dynamic - Zero Timers)
-            const isAiHardReversal = isLong
-                ? (aiDirection <= -0.15 && aiConfidence >= 0.70)
-                : (aiDirection >= 0.15 && aiConfidence >= 0.70);
-            if (isAiHardReversal) {
-                triggers.push({
-                    slotId: slot.slotId,
-                    side: slot.side,
-                    reason: `AI_REVERSAL_EXIT_${slot.side}`,
-                    quantity: slot.quantity,
-                    entryPrice: slot.entryPrice,
-                    markPrice,
-                    isPartialClose: false,
-                    cancelOrderIds: buildCancelOrderIds(),
-                });
-                return;
-            }
-            // 0C. VPIN Toxicity & Hawkes Microstructure Breakeven Ratchet (100% Dynamic - Zero Timers)
-            const isToxicFlow = vpin >= 0.80 || (isLong ? ofi < -0.3 : ofi > 0.3);
-            const isHawkesBurst = hawkes > 2.5;
-            if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
-                slot.breakEvenPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + feeBuffer) : slot.entryPrice * (1.0 - feeBuffer));
-            }
-            const isCrossedIntoProfit = isLong ? markPrice >= slot.breakEvenPrice : markPrice <= slot.breakEvenPrice;
-            if (isCrossedIntoProfit) {
-                slot.breakEvenLocked = true;
-            }
-            if (slot.breakEvenLocked && slot.breakEvenPrice > 0) {
-                let targetSl = slot.breakEvenPrice;
-                if (isToxicFlow) {
-                    // Ratchet SL to Breakeven + 0.05% offset to lock profit under toxicity
-                    const offset = feeBuffer + 0.0005;
-                    targetSl = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset));
-                }
-                else if (isHawkesBurst) {
-                    // Ratchet SL under order arrival velocity spike
-                    const offset = feeBuffer + 0.0010;
-                    targetSl = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset));
-                }
-                slot.stopLossPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? Math.max(slot.stopLossPrice, targetSl) : Math.min(slot.stopLossPrice, targetSl));
-            }
-            // 1. Symmetrical Immediate Take-Profit Evaluation (Zero Holding Time Hysteresis - Symmetrical to SL)
-            if (!hasActiveLimitOrders && tpPrices.length === 5) {
-                // TP1 (+20% ROI Target)
-                if (stage < 1 && ((isLong && markPrice >= tpPrices[0]) || (!isLong && markPrice <= tpPrices[0]))) {
-                    slot.tpStageReached = 1;
-                    slot.breakEvenLocked = true;
-                    if (slot.breakEvenPrice && slot.breakEvenPrice > 0) {
-                        slot.stopLossPrice = slot.breakEvenPrice;
-                    }
-                    const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
-                    if (chunk > 0) {
-                        triggers.push({
-                            slotId: slot.slotId,
-                            side: slot.side,
-                            reason: "TAKE_PROFIT_TP1",
-                            quantity: chunk,
-                            entryPrice: slot.entryPrice,
-                            markPrice,
-                            isPartialClose: chunk < slot.quantity,
-                            tpStage: 1,
-                        });
-                        return;
-                    }
-                }
-                // TP2 (+30% ROI Target) -> Trail SL to TP1 price
-                if (stage < 2 && ((isLong && markPrice >= tpPrices[1]) || (!isLong && markPrice <= tpPrices[1]))) {
-                    slot.tpStageReached = 2;
-                    slot.stopLossPrice = tpPrices[0]; // Trail SL to TP1 level
-                    const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
-                    if (chunk > 0) {
-                        triggers.push({
-                            slotId: slot.slotId,
-                            side: slot.side,
-                            reason: "TAKE_PROFIT_TP2",
-                            quantity: chunk,
-                            entryPrice: slot.entryPrice,
-                            markPrice,
-                            isPartialClose: chunk < slot.quantity,
-                            tpStage: 2,
-                        });
-                        return;
-                    }
-                }
-                // TP3 (+50% ROI Target) -> Trail SL to TP2 price
-                if (stage < 3 && ((isLong && markPrice >= tpPrices[2]) || (!isLong && markPrice <= tpPrices[2]))) {
-                    slot.tpStageReached = 3;
-                    slot.stopLossPrice = tpPrices[1]; // Trail SL to TP2 level
-                    const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
-                    if (chunk > 0) {
-                        triggers.push({
-                            slotId: slot.slotId,
-                            side: slot.side,
-                            reason: "TAKE_PROFIT_TP3",
-                            quantity: chunk,
-                            entryPrice: slot.entryPrice,
-                            markPrice,
-                            isPartialClose: chunk < slot.quantity,
-                            tpStage: 3,
-                        });
-                        return;
-                    }
-                }
-                // TP4 (+80% ROI Target) -> Trail SL to TP3 price
-                if (stage < 4 && ((isLong && markPrice >= tpPrices[3]) || (!isLong && markPrice <= tpPrices[3]))) {
-                    slot.tpStageReached = 4;
-                    slot.stopLossPrice = tpPrices[2]; // Trail SL to TP3 level
-                    const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
-                    if (chunk > 0) {
-                        triggers.push({
-                            slotId: slot.slotId,
-                            side: slot.side,
-                            reason: "TAKE_PROFIT_TP4",
-                            quantity: chunk,
-                            entryPrice: slot.entryPrice,
-                            markPrice,
-                            isPartialClose: chunk < slot.quantity,
-                            tpStage: 4,
-                        });
-                        return;
-                    }
-                }
-                // TP5 (+120%+ ROI Target) -> Close remaining position
-                if (stage < 5 && ((isLong && markPrice >= tpPrices[4]) || (!isLong && markPrice <= tpPrices[4]))) {
-                    slot.tpStageReached = 5;
-                    triggers.push({
-                        slotId: slot.slotId,
-                        side: slot.side,
-                        reason: "TAKE_PROFIT_TP5",
-                        quantity: slot.quantity,
-                        entryPrice: slot.entryPrice,
-                        markPrice,
-                        isPartialClose: false,
-                        tpStage: 5,
-                    });
-                    return;
-                }
-            }
-            // 2. Evaluate Stop Loss / Fee-Adjusted Break-Even SL (ALWAYS ACTIVE)
-            const isSlTriggered = isLong
-                ? markPrice <= slot.stopLossPrice
-                : markPrice >= slot.stopLossPrice;
-            if (isSlTriggered) {
-                const reason = slot.breakEvenLocked ? "BREAK_EVEN_STOP_LOSS" : "STOP_LOSS";
-                triggers.push({
-                    slotId: slot.slotId,
-                    side: slot.side,
-                    reason,
-                    quantity: slot.quantity,
-                    entryPrice: slot.entryPrice,
-                    markPrice,
-                    isPartialClose: false,
-                    cancelOrderIds: buildCancelOrderIds(),
-                });
-                return;
-            }
-            // 3. Fallback Standard TP Percent Check (Symmetrical Immediate Exit - Zero Time Barrier)
-            if (!hasActiveLimitOrders) {
-                const pnlPct = isLong
-                    ? ((markPrice - slot.entryPrice) / slot.entryPrice) * 100
-                    : ((slot.entryPrice - markPrice) / slot.entryPrice) * 100;
-                if (pnlPct >= slot.takeProfitPercent) {
-                    triggers.push({
-                        slotId: slot.slotId,
-                        side: slot.side,
-                        reason: "TAKE_PROFIT",
-                        quantity: slot.quantity,
-                        entryPrice: slot.entryPrice,
-                        markPrice,
-                        isPartialClose: false,
-                    });
-                }
-            }
-        };
-        evalSlot(this.coreLong);
+        const makerFee = this.sizingCalc.getMakerFeeRate();
+        const takerFee = this.sizingCalc.getTakerFeeRate();
+        const feeBuffer = (makerFee + takerFee) * 2.5;
+        const effectiveLev = this.leverage > 0 ? this.leverage : 20.0;
+        if (this.coreLong.isOccupied && this.coreLong.entryPrice > 0 && this.coreLong.quantity > 0) {
+            this.evalHedgeSlot(this.coreLong, markPrice, actualNowMs, aiDirection, aiConfidence, vpin, hawkes, garmanKlass, ofi, feeBuffer, effectiveLev, triggers);
+        }
         for (let i = 0; i < this.maxShortSlots; i++) {
-            evalSlot(this.shortSlots[i]);
+            const slot = this.shortSlots[i];
+            if (slot.isOccupied && slot.entryPrice > 0 && slot.quantity > 0) {
+                this.evalHedgeSlot(slot, markPrice, actualNowMs, aiDirection, aiConfidence, vpin, hawkes, garmanKlass, ofi, feeBuffer, effectiveLev, triggers);
+            }
         }
         return triggers;
+    }
+    evalHedgeSlot(slot, markPrice, actualNowMs, aiDirection, aiConfidence, vpin, hawkes, garmanKlass, ofi, feeBuffer, effectiveLev, triggers) {
+        const initialQty = slot.initialQuantity && slot.initialQuantity > 0 ? slot.initialQuantity : slot.quantity;
+        const stage = slot.tpStageReached || 0;
+        const isLong = slot.side === "LONG";
+        const tpPrices = slot.tpPrices && slot.tpPrices.length === 5 ? slot.tpPrices : [];
+        const hasActiveLimitOrders = slot.activeTpOrderIds && slot.activeTpOrderIds.length > 0;
+        const openTime = slot.openTime && slot.openTime > 0 ? slot.openTime : actualNowMs;
+        const durationMs = Math.max(0, actualNowMs - openTime);
+        const durationSec = durationMs / 1000;
+        // 0A. SOTA 3-Tier ROE Step-Collar Dynamic Profit Lock (Zero Time Delays)
+        const rawRoePct = isLong
+            ? ((markPrice - slot.entryPrice) / slot.entryPrice) * effectiveLev * 100.0
+            : ((slot.entryPrice - markPrice) / slot.entryPrice) * effectiveLev * 100.0;
+        if (rawRoePct > (slot.peakRoe ?? 0)) {
+            slot.peakRoe = rawRoePct;
+        }
+        // Tier 1: +8.0% Net ROE -> Lock Entry + Round-Trip Fees
+        if (rawRoePct >= 8.0) {
+            const beOffset = feeBuffer + 0.0002;
+            const targetBeSl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset));
+            if (!slot.stepCollarTier || slot.stepCollarTier < 1) {
+                slot.stepCollarTier = 1;
+                slot.breakEvenLocked = true;
+                slot.breakEvenPrice = targetBeSl;
+            }
+            slot.stopLossPrice = isLong
+                ? Math.max(slot.stopLossPrice, targetBeSl)
+                : (slot.stopLossPrice === 0 ? targetBeSl : Math.min(slot.stopLossPrice, targetBeSl));
+        }
+        // Tier 2: +15.0% Net ROE -> Lock +10.0% ROE
+        if (rawRoePct >= 15.0) {
+            const lockOffset = (10.0 / 100.0) / effectiveLev;
+            const targetTier2Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset));
+            if (!slot.stepCollarTier || slot.stepCollarTier < 2) {
+                slot.stepCollarTier = 2;
+                slot.breakEvenLocked = true;
+            }
+            slot.stopLossPrice = isLong
+                ? Math.max(slot.stopLossPrice, targetTier2Sl)
+                : Math.min(slot.stopLossPrice, targetTier2Sl);
+        }
+        // Tier 3: >= +25.0% Net ROE -> Aggressive 70% Trailing Profit Collar
+        if (rawRoePct >= 25.0 || (slot.peakRoe && slot.peakRoe >= 25.0)) {
+            const currentPeakRoe = slot.peakRoe ?? rawRoePct;
+            const trailRoe = currentPeakRoe * 0.70;
+            const trailOffset = (trailRoe / 100.0) / effectiveLev;
+            const targetTier3Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + trailOffset) : slot.entryPrice * (1.0 - trailOffset));
+            if (!slot.stepCollarTier || slot.stepCollarTier < 3) {
+                slot.stepCollarTier = 3;
+                slot.breakEvenLocked = true;
+            }
+            slot.stopLossPrice = isLong
+                ? Math.max(slot.stopLossPrice, targetTier3Sl)
+                : Math.min(slot.stopLossPrice, targetTier3Sl);
+        }
+        // Terminal Lifespan Harvest (30 Minutes Max Horizon)
+        if (durationSec >= 1800.0) {
+            if (!slot.timeDecayTier || slot.timeDecayTier < 4) {
+                slot.timeDecayTier = 4;
+                triggers.push({
+                    slotId: slot.slotId,
+                    side: slot.side,
+                    reason: "LONG_HOLD_PROFIT_HARVEST",
+                    quantity: slot.quantity,
+                    entryPrice: slot.entryPrice,
+                    markPrice,
+                    isPartialClose: false,
+                    cancelOrderIds: this.extractCancelOrderIds(slot),
+                });
+                return;
+            }
+        }
+        // 0B. AI Conviction Hard-Reversal Exit Signal (100% Dynamic - Zero Timers)
+        const isAiHardReversal = isLong
+            ? (aiDirection <= -0.15 && aiConfidence >= 0.70)
+            : (aiDirection >= 0.15 && aiConfidence >= 0.70);
+        if (isAiHardReversal) {
+            triggers.push({
+                slotId: slot.slotId,
+                side: slot.side,
+                reason: `AI_REVERSAL_EXIT_${slot.side}`,
+                quantity: slot.quantity,
+                entryPrice: slot.entryPrice,
+                markPrice,
+                isPartialClose: false,
+                cancelOrderIds: this.extractCancelOrderIds(slot),
+            });
+            return;
+        }
+        // 0C. VPIN Toxicity & Hawkes Microstructure Breakeven Ratchet (100% Dynamic - Zero Timers)
+        const isToxicFlow = vpin >= 0.80 || (isLong ? ofi < -0.3 : ofi > 0.3);
+        const isHawkesBurst = hawkes > 2.5;
+        if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
+            slot.breakEvenPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + feeBuffer) : slot.entryPrice * (1.0 - feeBuffer));
+        }
+        const isCrossedIntoProfit = isLong ? markPrice >= slot.breakEvenPrice : markPrice <= slot.breakEvenPrice;
+        if (isCrossedIntoProfit) {
+            slot.breakEvenLocked = true;
+        }
+        if (slot.breakEvenLocked && slot.breakEvenPrice > 0) {
+            let targetSl = slot.breakEvenPrice;
+            if (isToxicFlow) {
+                // Ratchet SL to Breakeven + 0.05% offset to lock profit under toxicity
+                const offset = feeBuffer + 0.0005;
+                targetSl = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset));
+            }
+            else if (isHawkesBurst) {
+                // Ratchet SL under order arrival velocity spike
+                const offset = feeBuffer + 0.0010;
+                targetSl = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset));
+            }
+            slot.stopLossPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? Math.max(slot.stopLossPrice, targetSl) : Math.min(slot.stopLossPrice, targetSl));
+        }
+        // 1. Symmetrical Immediate Take-Profit Evaluation (Zero Holding Time Hysteresis - Symmetrical to SL)
+        if (!hasActiveLimitOrders && tpPrices.length === 5) {
+            // TP1 (+20% ROI Target)
+            if (stage < 1 && ((isLong && markPrice >= tpPrices[0]) || (!isLong && markPrice <= tpPrices[0]))) {
+                slot.tpStageReached = 1;
+                slot.breakEvenLocked = true;
+                if (slot.breakEvenPrice && slot.breakEvenPrice > 0) {
+                    slot.stopLossPrice = isLong
+                        ? Math.max(slot.stopLossPrice, slot.breakEvenPrice)
+                        : (slot.stopLossPrice === 0 ? slot.breakEvenPrice : Math.min(slot.stopLossPrice, slot.breakEvenPrice));
+                }
+                const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
+                if (chunk > 0) {
+                    triggers.push({
+                        slotId: slot.slotId,
+                        side: slot.side,
+                        reason: "TAKE_PROFIT_TP1",
+                        quantity: chunk,
+                        entryPrice: slot.entryPrice,
+                        markPrice,
+                        isPartialClose: chunk < slot.quantity,
+                        tpStage: 1,
+                    });
+                    return;
+                }
+            }
+            // TP2 (+30% ROI Target) -> Trail SL to TP1 price
+            if (stage < 2 && ((isLong && markPrice >= tpPrices[1]) || (!isLong && markPrice <= tpPrices[1]))) {
+                slot.tpStageReached = 2;
+                slot.stopLossPrice = isLong
+                    ? Math.max(slot.stopLossPrice, tpPrices[0])
+                    : (slot.stopLossPrice === 0 ? tpPrices[0] : Math.min(slot.stopLossPrice, tpPrices[0]));
+                const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
+                if (chunk > 0) {
+                    triggers.push({
+                        slotId: slot.slotId,
+                        side: slot.side,
+                        reason: "TAKE_PROFIT_TP2",
+                        quantity: chunk,
+                        entryPrice: slot.entryPrice,
+                        markPrice,
+                        isPartialClose: chunk < slot.quantity,
+                        tpStage: 2,
+                    });
+                    return;
+                }
+            }
+            // TP3 (+50% ROI Target) -> Trail SL to TP2 price
+            if (stage < 3 && ((isLong && markPrice >= tpPrices[2]) || (!isLong && markPrice <= tpPrices[2]))) {
+                slot.tpStageReached = 3;
+                slot.stopLossPrice = isLong
+                    ? Math.max(slot.stopLossPrice, tpPrices[1])
+                    : (slot.stopLossPrice === 0 ? tpPrices[1] : Math.min(slot.stopLossPrice, tpPrices[1]));
+                const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
+                if (chunk > 0) {
+                    triggers.push({
+                        slotId: slot.slotId,
+                        side: slot.side,
+                        reason: "TAKE_PROFIT_TP3",
+                        quantity: chunk,
+                        entryPrice: slot.entryPrice,
+                        markPrice,
+                        isPartialClose: chunk < slot.quantity,
+                        tpStage: 3,
+                    });
+                    return;
+                }
+            }
+            // TP4 (+80% ROI Target) -> Trail SL to TP3 price
+            if (stage < 4 && ((isLong && markPrice >= tpPrices[3]) || (!isLong && markPrice <= tpPrices[3]))) {
+                slot.tpStageReached = 4;
+                slot.stopLossPrice = isLong
+                    ? Math.max(slot.stopLossPrice, tpPrices[2])
+                    : (slot.stopLossPrice === 0 ? tpPrices[2] : Math.min(slot.stopLossPrice, tpPrices[2]));
+                const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
+                if (chunk > 0) {
+                    triggers.push({
+                        slotId: slot.slotId,
+                        side: slot.side,
+                        reason: "TAKE_PROFIT_TP4",
+                        quantity: chunk,
+                        entryPrice: slot.entryPrice,
+                        markPrice,
+                        isPartialClose: chunk < slot.quantity,
+                        tpStage: 4,
+                    });
+                    return;
+                }
+            }
+            // TP5 (+120%+ ROI Target) -> Close remaining position
+            if (stage < 5 && ((isLong && markPrice >= tpPrices[4]) || (!isLong && markPrice <= tpPrices[4]))) {
+                slot.tpStageReached = 5;
+                triggers.push({
+                    slotId: slot.slotId,
+                    side: slot.side,
+                    reason: "TAKE_PROFIT_TP5",
+                    quantity: slot.quantity,
+                    entryPrice: slot.entryPrice,
+                    markPrice,
+                    isPartialClose: false,
+                    tpStage: 5,
+                });
+                return;
+            }
+        }
+        // 2. Evaluate Stop Loss / Fee-Adjusted Break-Even SL (ALWAYS ACTIVE)
+        const isSlTriggered = isLong
+            ? markPrice <= slot.stopLossPrice
+            : markPrice >= slot.stopLossPrice;
+        if (isSlTriggered) {
+            const reason = slot.breakEvenLocked ? "BREAK_EVEN_STOP_LOSS" : "STOP_LOSS";
+            triggers.push({
+                slotId: slot.slotId,
+                side: slot.side,
+                reason,
+                quantity: slot.quantity,
+                entryPrice: slot.entryPrice,
+                markPrice,
+                isPartialClose: false,
+                cancelOrderIds: this.extractCancelOrderIds(slot),
+            });
+            return;
+        }
+        // 3. Fallback Standard TP Percent Check (Symmetrical Immediate Exit - Zero Time Barrier)
+        if (!hasActiveLimitOrders) {
+            const pnlPct = isLong
+                ? ((markPrice - slot.entryPrice) / slot.entryPrice) * 100
+                : ((slot.entryPrice - markPrice) / slot.entryPrice) * 100;
+            if (pnlPct >= slot.takeProfitPercent) {
+                triggers.push({
+                    slotId: slot.slotId,
+                    side: slot.side,
+                    reason: "TAKE_PROFIT",
+                    quantity: slot.quantity,
+                    entryPrice: slot.entryPrice,
+                    markPrice,
+                    isPartialClose: false,
+                });
+            }
+        }
+    }
+    extractCancelOrderIds(slot) {
+        if (!slot.activeTpOrderIds?.length && !slot.activeStopLossOrderId) {
+            return undefined;
+        }
+        const ids = [];
+        if (slot.activeTpOrderIds && slot.activeTpOrderIds.length > 0) {
+            ids.push(...slot.activeTpOrderIds);
+        }
+        if (slot.activeStopLossOrderId && slot.activeStopLossOrderId > 0) {
+            ids.push(slot.activeStopLossOrderId);
+        }
+        return ids;
     }
     /**
      * Returns the current cumulative realized PnL (USDT) for this ledger.
