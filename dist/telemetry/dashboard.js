@@ -131,47 +131,42 @@ class CLIDashboard {
         output += ` Logged Signals: ${frame.stats.totalSignalsLogged}  |  Executions Logged: ${frame.stats.totalExecutionsLogged}${clearLine}\n`;
         output += subDivider;
         output += `${bold}--- ACTIVE TRADES MONITOR (SLOTS, TP, SL & STEP-COLLAR) ---${reset}${clearLine}\n`;
-        output += tableDivider;
-        output += `| ${bold}Symbol${reset}    | ${bold}Side${reset}        | ${bold}Size${reset}     | ${bold}Entry Price${reset}  | ${bold}Current Price${reset}  | ${bold}TP${reset}         | ${bold}SL${reset}         | ${bold}Leverage${reset}  | ${bold}Unrealized PnL ($)${reset}  | ${bold}ROE (%)${reset}   | ${bold}SC Tier${reset}   | ${bold}Duration${reset}  |${clearLine}\n`;
-        output += tableDivider;
+        const tradeTableDivider = `+--------+------------+----------+--------------+-------------------+----------------+----------------+----------------+----------------+--------------------------+${clearLine}\n`;
+        output += tradeTableDivider;
+        output += `| ${bold}Slot${reset}   | ${bold}Symbol${reset}     | ${bold}Side${reset}     | ${bold}Position${reset}     | ${bold}Trade Value ($)${reset}    | ${bold}Entry Price${reset}    | ${bold}Current Price${reset}    | ${bold}TP${reset}             | ${bold}SL${reset}             | ${bold}Unr PnL ($)${reset}               |${clearLine}\n`;
+        output += tradeTableDivider;
         const activeTrades = frame.activeTrades ?? [];
         if (activeTrades.length === 0) {
             output += `| ${yellow}NO ACTIVE OPEN POSITIONS (ALL TRADE SLOTS FLAT)${reset}`.padEnd(166) + `|${clearLine}\n`;
         }
         else {
+            let slotIdx = 0;
             for (const trade of activeTrades) {
-                const symStr = trade.symbol.padEnd(9);
-                const rawSide = trade.side.startsWith("BUY") || trade.side === "LONG" ? "BUY/LONG" : "SELL/SHORT";
-                const sideColor = rawSide === "BUY/LONG" ? green : red;
-                const sidePadded = rawSide.padEnd(11);
-                const sizeStr = trade.size.toFixed(4).padEnd(8);
-                const entryStr = `$${trade.entryPrice.toFixed(2)}`.padEnd(12);
-                const currStr = `$${trade.currentPrice.toFixed(2)}`.padEnd(14);
-                const tpStr = `$${trade.tpPrice.toFixed(2)}`.padEnd(10);
-                const slStr = `$${trade.slPrice.toFixed(2)}`.padEnd(10);
-                const levStr = `${trade.leverage}x`.padEnd(9);
+                const rawSide = trade.side.startsWith("BUY") || trade.side === "LONG" ? "LONG" : "SHORT";
+                const sideColor = rawSide === "LONG" ? green : red;
+                const slotStr = `#${slotIdx}-${rawSide}`.padEnd(6);
+                const symStr = trade.symbol.padEnd(10);
+                const sidePadded = rawSide.padEnd(8);
+                const sizeStr = trade.size.toFixed(4).padStart(12);
+                const effectivePx = trade.currentPrice > 0 ? trade.currentPrice : trade.entryPrice;
+                const tradeVal = trade.size * effectivePx;
+                const tradeValStr = `$${tradeVal.toFixed(2)}`.padStart(17);
+                const entryStr = `$${trade.entryPrice.toFixed(2)}`.padStart(14);
+                const currStr = `$${trade.currentPrice.toFixed(2)}`.padStart(14);
+                const tpStr = `$${trade.tpPrice.toFixed(2)}`.padStart(14);
+                const slStr = `$${trade.slPrice.toFixed(2)}`.padStart(14);
                 const pnl = trade.unrealizedPnl;
                 const pnlSign = pnl >= 0 ? "+" : "";
                 const pnlColor = pnl >= 0 ? green : red;
-                const pnlRawStr = `${pnlSign}$${pnl.toFixed(2)}`;
-                const pnlPadded = pnlRawStr.padEnd(19);
                 const roe = trade.roePercent !== undefined ? trade.roePercent : (trade.entryPrice > 0 && trade.currentPrice > 0 ? (((trade.side.startsWith("BUY") || trade.side === "LONG" ? (trade.currentPrice - trade.entryPrice) : (trade.entryPrice - trade.currentPrice)) / trade.entryPrice) * trade.leverage * 100) : 0);
                 const roeSign = roe >= 0 ? "+" : "";
-                const roeColor = roe >= 0 ? green : red;
-                const roeStr = `${roeSign}${roe.toFixed(2)}%`.padEnd(9);
-                let tierStr = "NONE";
-                if (trade.stepCollarTier === "TIER_1_BREAK_EVEN" || trade.stepCollarTier === 1 || trade.stepCollarTier === "1")
-                    tierStr = "T1:BE";
-                else if (trade.stepCollarTier === "TIER_2_PARTIAL_PROFIT" || trade.stepCollarTier === 2 || trade.stepCollarTier === "2")
-                    tierStr = "T2:LOCK";
-                else if (trade.stepCollarTier === "TIER_3_AGGRESSIVE_TRAIL" || trade.stepCollarTier === 3 || trade.stepCollarTier === "3")
-                    tierStr = "T3:TRAIL";
-                const tierPadded = tierStr.padEnd(9);
-                const durStr = this.formatDuration(trade.durationMs).padEnd(9);
-                output += `| ${symStr} | ${sideColor}${bold}${sidePadded}${reset} | ${sizeStr} | ${entryStr} | ${currStr} | ${tpStr} | ${slStr} | ${levStr} | ${pnlColor}${bold}${pnlPadded}${reset} | ${roeColor}${bold}${roeStr}${reset} | ${yellow}${tierPadded}${reset} | ${durStr} |${clearLine}\n`;
+                const pnlRawStr = `${pnlSign}$${pnl.toFixed(2)} (${roeSign}${roe.toFixed(1)}% ROE)`;
+                const pnlPadded = pnlRawStr.padEnd(24);
+                output += `| ${slotStr} | ${symStr} | ${sideColor}${bold}${sidePadded}${reset} | ${sizeStr} | ${tradeValStr} | ${entryStr} | ${currStr} | ${tpStr} | ${slStr} | ${pnlColor}${bold}${pnlPadded}${reset} |${clearLine}\n`;
+                slotIdx++;
             }
         }
-        output += tableDivider;
+        output += tradeTableDivider;
         const recBalance = frame.reconciledWalletBalance !== undefined && frame.reconciledWalletBalance > 0 ? frame.reconciledWalletBalance : frame.usdtBalance;
         const fundingVal = frame.cumulativeFundingFees ?? 0;
         const fundingColor = fundingVal >= 0 ? green : red;

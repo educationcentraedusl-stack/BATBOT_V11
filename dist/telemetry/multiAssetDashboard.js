@@ -91,7 +91,7 @@ class MultiAssetCLIDashboard {
     static BORDER = "\x1b[36m\x1b[1m====================================================================================================================================================\x1b[0m\x1b[K\n";
     static SUB_DIVIDER = "\x1b[90m----------------------------------------------------------------------------------------------------------------------------------------------------\x1b[0m\x1b[K\n";
     static TABLE_DIVIDER = "\x1b[90m+------+----------+------------+------------+------------+---------+--------------+------------+----------+--------------+-------+--------+--------+\x1b[0m\x1b[K\n";
-    static TRADES_DIVIDER = "\x1b[90m+------+----------+----------+------------+-------------+-------------+----------+-------------+----------------------------------------------------------+\x1b[0m\x1b[K\n";
+    static TRADES_DIVIDER = "\x1b[90m+--------+------------+----------+--------------+-------------------+----------------+----------------+----------------+----------------+--------------------------+\x1b[0m\x1b[K\n";
     constructor(client, enabled = true, customSymbols = (0, tradingSymbols_1.getTradingSymbols)()) {
         this.client = client;
         this.enabled = enabled;
@@ -361,8 +361,12 @@ class MultiAssetCLIDashboard {
         out += MultiAssetCLIDashboard.SUB_DIVIDER;
         out += `${bold}--- MULTI-ASSET ACTIVE POSITIONS (${this.client.maxAssets} OMS SLOTS) ---${reset}${clearLine}\n`;
         out += MultiAssetCLIDashboard.TRADES_DIVIDER;
-        out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Side${reset}     | ${bold}Position${reset}   | ${bold}Avg Entry${reset}    | ${bold}Mark Price${reset}   | ${bold}Leverage${reset} | ${bold}Realized${reset}    | ${bold}Unrealized PnL ($)${reset}                                 |${clearLine}\n`;
+        out += `| ${bold}Slot${reset}   | ${bold}Symbol${reset}     | ${bold}Side${reset}     | ${bold}Position${reset}     | ${bold}Trade Value ($)${reset}    | ${bold}Entry Price${reset}    | ${bold}Current Price${reset}    | ${bold}TP${reset}             | ${bold}SL${reset}             | ${bold}Unr PnL ($)${reset}               |${clearLine}\n`;
         out += MultiAssetCLIDashboard.TRADES_DIVIDER;
+        const envLongTp = process.env.LONG_TAKE_PROFIT_PERCENT ? parseFloat(process.env.LONG_TAKE_PROFIT_PERCENT) : 0.80;
+        const envLongSl = process.env.LONG_STOP_LOSS_PERCENT ? parseFloat(process.env.LONG_STOP_LOSS_PERCENT) : 1.20;
+        const envShortTp = process.env.SHORT_TAKE_PROFIT_PERCENT ? parseFloat(process.env.SHORT_TAKE_PROFIT_PERCENT) : 0.80;
+        const envShortSl = process.env.SHORT_STOP_LOSS_PERCENT ? parseFloat(process.env.SHORT_STOP_LOSS_PERCENT) : 1.20;
         let hasActivePosition = false;
         for (let i = 0; i < this.client.maxAssets; i++) {
             const qty = this.client.getOmsPositionQty(i);
@@ -377,10 +381,8 @@ class MultiAssetCLIDashboard {
             const symName = this.assetSymbols[i] || `ASSET_${i}`;
             const posPrecisionRule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(symName);
             const posDec = posPrecisionRule.priceDecimals;
-            const sym = this.formatCell(symName, 8, false);
-            const levText = `${this.client.getOmsLeverage(i).toFixed(0)}x`;
-            const levFormatted = this.formatCell(levText, 8);
-            const rPnl = this.client.getOmsRealizedPnl(i);
+            const sym = this.formatCell(symName, 10, false);
+            const dynamicSl = this.client.getDynamicStopLossPrice(i);
             const hasLong = longQty > 1e-6;
             const hasShort = shortQty > 1e-6;
             if (hasLong && hasShort) {
@@ -389,48 +391,64 @@ class MultiAssetCLIDashboard {
                 const longSlotStr = this.formatCell(`#${i}-LONG`, 6, false);
                 const longSide = `${green}${this.formatCell("LONG", 8, false)}${reset}`;
                 const longEntryPx = longEntry > 0 ? longEntry : this.client.getOmsAvgEntryPrice(i);
+                const longEffectivePx = mark > 0 ? mark : longEntryPx;
+                const longTradeVal = longQty * longEffectivePx;
+                const longTpPx = longEntryPx > 0 ? longEntryPx * (1 + (envLongTp > 0 ? envLongTp : 0.80) / 100) : 0;
+                const longSlPx = dynamicSl > 0 ? dynamicSl : (longEntryPx > 0 ? longEntryPx * (1 - (envLongSl > 0 ? envLongSl : 1.20) / 100) : 0);
                 const longUPnl = mark > 0 && longEntryPx > 0 ? (mark - longEntryPx) * longQty : this.client.getOmsLongUnrealizedPnl(i);
                 const longRoe = mark > 0 && longEntryPx > 0 ? ((mark - longEntryPx) / longEntryPx) * this.client.getOmsLeverage(i) * 100 : 0;
                 const longUPnlColor = longUPnl >= 0 ? green : red;
                 const longUPnlStr = `${longUPnl >= 0 ? "+" : ""}$${longUPnl.toFixed(2)} (${longRoe >= 0 ? "+" : ""}${longRoe.toFixed(1)}% ROE)`;
-                const longUPnlFormatted = this.formatCell(longUPnlStr, 56, false);
-                out += `| ${longSlotStr} | ${sym} | ${longSide} | ${this.formatCell(longQty.toFixed(4), 10)} | $${this.formatCell(longEntryPx.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${longUPnlColor}${bold}${longUPnlFormatted}${reset} |${clearLine}\n`;
+                const longUPnlFormatted = this.formatCell(longUPnlStr, 24, false);
+                out += `| ${longSlotStr} | ${sym} | ${longSide} | ${this.formatCell(longQty.toFixed(4), 12)} | $${this.formatCell(longTradeVal.toFixed(2), 16)} | $${this.formatCell(longEntryPx.toFixed(posDec), 13)} | $${this.formatCell(mark.toFixed(posDec), 13)} | $${this.formatCell(longTpPx.toFixed(posDec), 13)} | $${this.formatCell(longSlPx.toFixed(posDec), 13)} | ${longUPnlColor}${bold}${longUPnlFormatted}${reset} |${clearLine}\n`;
                 // 2. Render #i-SHORT slot
                 const shortSlotStr = this.formatCell(`#${i}-SHORT`, 6, false);
                 const shortSide = `${red}${this.formatCell("SHORT", 8, false)}${reset}`;
                 const shortEntryPx = shortEntry > 0 ? shortEntry : this.client.getOmsAvgEntryPrice(i);
+                const shortEffectivePx = mark > 0 ? mark : shortEntryPx;
+                const shortTradeVal = shortQty * shortEffectivePx;
+                const shortTpPx = shortEntryPx > 0 ? shortEntryPx * (1 - (envShortTp > 0 ? envShortTp : 0.80) / 100) : 0;
+                const shortSlPx = dynamicSl > 0 ? dynamicSl : (shortEntryPx > 0 ? shortEntryPx * (1 + (envShortSl > 0 ? envShortSl : 1.20) / 100) : 0);
                 const shortUPnl = mark > 0 && shortEntryPx > 0 ? (shortEntryPx - mark) * shortQty : this.client.getOmsShortUnrealizedPnl(i);
                 const shortRoe = mark > 0 && shortEntryPx > 0 ? ((shortEntryPx - mark) / shortEntryPx) * this.client.getOmsLeverage(i) * 100 : 0;
                 const shortUPnlColor = shortUPnl >= 0 ? green : red;
                 const shortUPnlStr = `${shortUPnl >= 0 ? "+" : ""}$${shortUPnl.toFixed(2)} (${shortRoe >= 0 ? "+" : ""}${shortRoe.toFixed(1)}% ROE)`;
-                const shortUPnlFormatted = this.formatCell(shortUPnlStr, 56, false);
-                out += `| ${shortSlotStr} | ${sym} | ${shortSide} | ${this.formatCell(shortQty.toFixed(4), 10)} | $${this.formatCell(shortEntryPx.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${shortUPnlColor}${bold}${shortUPnlFormatted}${reset} |${clearLine}\n`;
+                const shortUPnlFormatted = this.formatCell(shortUPnlStr, 24, false);
+                out += `| ${shortSlotStr} | ${sym} | ${shortSide} | ${this.formatCell(shortQty.toFixed(4), 12)} | $${this.formatCell(shortTradeVal.toFixed(2), 16)} | $${this.formatCell(shortEntryPx.toFixed(posDec), 13)} | $${this.formatCell(mark.toFixed(posDec), 13)} | $${this.formatCell(shortTpPx.toFixed(posDec), 13)} | $${this.formatCell(shortSlPx.toFixed(posDec), 13)} | ${shortUPnlColor}${bold}${shortUPnlFormatted}${reset} |${clearLine}\n`;
             }
             else if (hasLong || (sideCode === 1.0 && Math.abs(qty) > 1e-6)) {
                 hasActivePosition = true;
                 const displayQty = hasLong ? longQty : Math.abs(qty);
                 const entry = longEntry > 0 ? longEntry : this.client.getOmsAvgEntryPrice(i);
+                const effectivePx = mark > 0 ? mark : entry;
+                const tradeVal = displayQty * effectivePx;
+                const tpPx = entry > 0 ? entry * (1 + (envLongTp > 0 ? envLongTp : 0.80) / 100) : 0;
+                const slPx = dynamicSl > 0 ? dynamicSl : (entry > 0 ? entry * (1 - (envLongSl > 0 ? envLongSl : 1.20) / 100) : 0);
                 const slotStr = this.formatCell(`#${i}-LONG`, 6, false);
                 const side = `${green}${this.formatCell("LONG", 8, false)}${reset}`;
                 const uPnl = mark > 0 && entry > 0 ? (mark - entry) * displayQty : this.client.getOmsUnrealizedPnl(i);
                 const roe = mark > 0 && entry > 0 ? ((mark - entry) / entry) * this.client.getOmsLeverage(i) * 100 : 0;
                 const uPnlColor = uPnl >= 0 ? green : red;
                 const uPnlStr = `${uPnl >= 0 ? "+" : ""}$${uPnl.toFixed(2)} (${roe >= 0 ? "+" : ""}${roe.toFixed(1)}% ROE)`;
-                const uPnlFormatted = this.formatCell(uPnlStr, 56, false);
-                out += `| ${slotStr} | ${sym} | ${side} | ${this.formatCell(displayQty.toFixed(4), 10)} | $${this.formatCell(entry.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${uPnlColor}${bold}${uPnlFormatted}${reset} |${clearLine}\n`;
+                const uPnlFormatted = this.formatCell(uPnlStr, 24, false);
+                out += `| ${slotStr} | ${sym} | ${side} | ${this.formatCell(displayQty.toFixed(4), 12)} | $${this.formatCell(tradeVal.toFixed(2), 16)} | $${this.formatCell(entry.toFixed(posDec), 13)} | $${this.formatCell(mark.toFixed(posDec), 13)} | $${this.formatCell(tpPx.toFixed(posDec), 13)} | $${this.formatCell(slPx.toFixed(posDec), 13)} | ${uPnlColor}${bold}${uPnlFormatted}${reset} |${clearLine}\n`;
             }
             else if (hasShort || (sideCode === 2.0 && Math.abs(qty) > 1e-6)) {
                 hasActivePosition = true;
                 const displayQty = hasShort ? shortQty : Math.abs(qty);
                 const entry = shortEntry > 0 ? shortEntry : this.client.getOmsAvgEntryPrice(i);
+                const effectivePx = mark > 0 ? mark : entry;
+                const tradeVal = displayQty * effectivePx;
+                const tpPx = entry > 0 ? entry * (1 - (envShortTp > 0 ? envShortTp : 0.80) / 100) : 0;
+                const slPx = dynamicSl > 0 ? dynamicSl : (entry > 0 ? entry * (1 + (envShortSl > 0 ? envShortSl : 1.20) / 100) : 0);
                 const slotStr = this.formatCell(`#${i}-SHORT`, 6, false);
                 const side = `${red}${this.formatCell("SHORT", 8, false)}${reset}`;
                 const uPnl = mark > 0 && entry > 0 ? (entry - mark) * displayQty : this.client.getOmsUnrealizedPnl(i);
                 const roe = mark > 0 && entry > 0 ? ((entry - mark) / entry) * this.client.getOmsLeverage(i) * 100 : 0;
                 const uPnlColor = uPnl >= 0 ? green : red;
                 const uPnlStr = `${uPnl >= 0 ? "+" : ""}$${uPnl.toFixed(2)} (${roe >= 0 ? "+" : ""}${roe.toFixed(1)}% ROE)`;
-                const uPnlFormatted = this.formatCell(uPnlStr, 56, false);
-                out += `| ${slotStr} | ${sym} | ${side} | ${this.formatCell(displayQty.toFixed(4), 10)} | $${this.formatCell(entry.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${uPnlColor}${bold}${uPnlFormatted}${reset} |${clearLine}\n`;
+                const uPnlFormatted = this.formatCell(uPnlStr, 24, false);
+                out += `| ${slotStr} | ${sym} | ${side} | ${this.formatCell(displayQty.toFixed(4), 12)} | $${this.formatCell(tradeVal.toFixed(2), 16)} | $${this.formatCell(entry.toFixed(posDec), 13)} | $${this.formatCell(mark.toFixed(posDec), 13)} | $${this.formatCell(tpPx.toFixed(posDec), 13)} | $${this.formatCell(slPx.toFixed(posDec), 13)} | ${uPnlColor}${bold}${uPnlFormatted}${reset} |${clearLine}\n`;
             }
         }
         if (!hasActivePosition) {
