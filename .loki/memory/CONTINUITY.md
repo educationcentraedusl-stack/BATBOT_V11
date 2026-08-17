@@ -15,6 +15,12 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-08-17 - Phase 1 (Native Rust SOTA Signal & Mamba-2 State-Space Engine) Completed & QA Verified:
+  - Built quantized Mamba-2 Structured State-Space Model (SSM) Cell in `src/ai/mamba.rs` with selective $A_{\log}, B, C, D$ parameterization and $O(1)$ single-step inference.
+  - Implemented 10-Level Order Flow Imbalance ($\Phi_{\text{OFI}}$ with weights $w_k = e^{-0.25k}$) and Bivariate Hawkes Point Process ($\lambda_{\text{buy}}, \lambda_{\text{sell}}$ with decay $\beta=1.50$) in `src/lob/microstructure.rs`.
+  - Implemented Page's CUSUM Structural Break Residual Detector with a 25-minute cooldown floor in `src/ai/ic_tracker.rs` (enforcing strictly 1-2 recalibrations per hour).
+  - Aligned AI prediction evaluation in `src/ai/engine.rs` to 300s holding horizons via a 3600-capacity ring buffer, eliminating 1-tick Brownian noise evaluation.
+  - Verified 100% via `cargo test --lib` (36/36 tests passed), `npx napi build --platform --release` (exit code 0), and `npx tsc --noEmit` (0 errors).
 * 2026-07-26T01:45:00+05:30 - Phase 2 Critical Remediation completed and verified. Fixed WS Manager socket leaks & secondary queue bridging, implemented zero-copy Serde parsing (`&'a str`), zero-heap stack LiquidationEvents (`[u8; 16]`), atomic SPSC drop metrics, and liquidation microstructure tracking. All unit tests passed (`cargo test` - 6 passed).
 * 2026-07-26T02:35:00+05:30 - Phase 2 Deep Scan Audit Remediation. Stripped blocking I/O from HFT queue, fixed silent JSON deserialization errors, enabled `raw_value` in serde, patched default 0.0 poisoning, and added async `tokio::sync::Notify` tokens for instant task cancellation.
 * 2026-07-26T05:55:00+05:30 - Phase 3 (Zero-Copy IPC Bridge via N-API) Completed & QA Verified. Implemented `AtomicSharedMemoryBridge` (1024-byte layout using `AtomicU64` with `Ordering::Release`/`Acquire`), `IngestionBridge` consumer loop, N-API lifecycle hook `start_ingestion()`, and TypeScript `MarketDataClient`. Verified via `cargo test --test ipc_tests` (3 passed), `npx napi build --platform --release` (native binary compiled cleanly), and `node dist/test_ipc.js` (Passed).

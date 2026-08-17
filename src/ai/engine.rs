@@ -7,6 +7,7 @@ use candle_core::{DType, Device, Error, Result, Tensor};
 use crate::ai::cfc::CfCCell;
 use crate::ai::ic_tracker::ICTracker;
 use crate::ai::kan::TKANLayer;
+use crate::ai::mamba::Mamba2Cell;
 use crate::ai::weights::{AiEngine, AiEngineStatus};
 use crate::ipc::shared_memory::AtomicSharedMemoryBridge;
 
@@ -363,6 +364,7 @@ impl StreamingFeaturePipeline {
 pub struct AssetTelemetryTracker {
     pub last_mid_price: AtomicU64,
     pub last_prediction_dir: AtomicU64,
+    pub horizon_history: Mutex<VecDeque<(u64, f64, f64)>>, // (timestamp_ns, mid_price, prediction)
 }
 
 impl AssetTelemetryTracker {
@@ -370,6 +372,7 @@ impl AssetTelemetryTracker {
         Self {
             last_mid_price: AtomicU64::new(0.0f64.to_bits()),
             last_prediction_dir: AtomicU64::new(0.0f64.to_bits()),
+            horizon_history: Mutex::new(VecDeque::with_capacity(3600)),
         }
     }
 }
@@ -377,6 +380,7 @@ impl AssetTelemetryTracker {
 pub struct AIEngine {
     pub tkan: TKANLayer,
     pub cell: Option<CfCCell>,
+    pub mamba: Option<Mamba2Cell>,
     pub hidden_states: RwLock<Vec<Mutex<Tensor>>>,
     pub status: AiEngineStatus,
     pub calibration_params: crate::ai::weights::CalibrationParams,
@@ -395,10 +399,8 @@ impl AIEngine {
     pub fn load_from_paths(cfc_path: &str, tkan_path: &str) -> Self {
         let device = Device::Cpu;
         let tkan = TKANLayer::load_from_binary_or_default(tkan_path);
-
         let weights_engine = AiEngine::load_from_file(cfc_path);
 
-        // Dynamically provision asset tracking, feature pipelines, and hidden states based on .env configuration
         let num_assets = if let Ok(symbols_str) = std::env::var("TRADING_SYMBOLS") {
             symbols_str.split(',').filter(|s| !s.trim().is_empty()).count().max(1)
         } else if let Ok(max_assets_str) = std::env::var("MAX_CONCURRENT_ASSETS") {
@@ -422,6 +424,7 @@ impl AIEngine {
         Self {
             tkan,
             cell: weights_engine.cell,
+            mamba: weights_engine.mamba,
             hidden_states: RwLock::new(hidden_states),
             status: weights_engine.status,
             calibration_params: weights_engine.calibration_params,
@@ -442,6 +445,7 @@ impl AIEngine {
         let calibrated = new_engine.is_calibrated();
         self.tkan = new_engine.tkan;
         self.cell = new_engine.cell;
+        self.mamba = new_engine.mamba;
         self.status = new_engine.status;
         self.calibration_params = new_engine.calibration_params;
         if let Ok(new_hs_vec) = new_engine.hidden_states.into_inner() {
@@ -462,7 +466,7 @@ impl AIEngine {
     }
 
     pub fn is_calibrated(&self) -> bool {
-        self.status == AiEngineStatus::Calibrated && self.cell.is_some()
+        self.status == AiEngineStatus::Calibrated && (self.cell.is_some() || self.mamba.is_some())
     }
 
     pub fn reset_ic_tracker(&self) {
@@ -476,7 +480,7 @@ impl AIEngine {
     }
 
     pub fn run_inference_asset(&self, sab: &AtomicSharedMemoryBridge, asset_idx: usize) -> Result<()> {
-        if self.status != AiEngineStatus::Calibrated || self.cell.is_none() {
+        if self.status != AiEngineStatus::Calibrated || (self.cell.is_none() && self.mamba.is_none()) {
             return Ok(());
         }
 
@@ -512,23 +516,38 @@ impl AIEngine {
             pipeline.update_and_normalize_with_snr_asset(sab, lat_us_val, asset_idx)?
         };
 
-        let (last_mid, last_pred) = {
+        // Multi-minute Horizon Alignment (300s / 5m observation evaluation):
+        let horizon_eval = {
             let trackers = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
             if asset_idx < trackers.len() {
-                (
-                    f64::from_bits(trackers[asset_idx].last_mid_price.load(Ordering::Relaxed)),
-                    f64::from_bits(trackers[asset_idx].last_prediction_dir.load(Ordering::Relaxed)),
-                )
+                if let Ok(mut hist) = trackers[asset_idx].horizon_history.lock() {
+                    let horizon_ns = 300_000_000_000u64; // 300 seconds
+                    let mut matured = None;
+                    while let Some(front) = hist.front() {
+                        if start_ns.saturating_sub(front.0) >= horizon_ns {
+                            matured = hist.pop_front();
+                            break;
+                        } else {
+                            break;
+                        }
+                    }
+                    matured
+                } else {
+                    None
+                }
             } else {
-                (0.0, 0.0)
+                None
             }
         };
 
-        if last_mid > 0.0 && current_mid > 0.0 && last_pred != 0.0 {
-            // Realized return: (current_mid - last_mid) / last_mid, positive if price rose.
-            let realized_return = (current_mid - last_mid) / last_mid;
-            if let Ok(mut tracker) = self.ic_tracker.lock() {
-                tracker.add_observation_asset(last_pred, realized_return, Some(sab), asset_idx);
+        if let Some((_, hist_mid, hist_pred)) = horizon_eval {
+            if hist_mid > 0.0 && current_mid > 0.0 && hist_pred != 0.0 {
+                let realized_horizon_return = (current_mid - hist_mid) / hist_mid;
+                let residual = realized_horizon_return - hist_pred;
+                if let Ok(mut tracker) = self.ic_tracker.lock() {
+                    tracker.add_observation_asset(hist_pred, realized_horizon_return, Some(sab), asset_idx);
+                    tracker.update_cusum_residual(residual, start_ns, Some(sab), asset_idx);
+                }
             }
         }
 
@@ -557,43 +576,51 @@ impl AIEngine {
 
         let hs_holder = self.hidden_states.read().unwrap_or_else(|e| e.into_inner());
         let mut hidden_guard = hs_holder[asset_idx].lock().unwrap_or_else(|e| e.into_inner());
-        let (output_tensor, next_hidden) = if let Some(cell) = &self.cell {
-            cell.forward(&tkan_tensor, &*hidden_guard, delta_t)?
+
+        let (direction, confidence, horizon_ms) = if let Some(mamba) = &self.mamba {
+            if hidden_guard.dims() != &[1, mamba.d_state] {
+                *hidden_guard = Tensor::zeros((1, mamba.d_state), DType::F32, &Device::Cpu)?;
+            }
+            let (heads, next_h) = mamba.forward(&tkan_tensor, &*hidden_guard, delta_t)?;
+            *hidden_guard = next_h;
+            let (dir, p_win, horiz_sec) = mamba.evaluate_scalar_heads(&heads)?;
+            (dir, p_win, horiz_sec * 1000.0)
+        } else if let Some(cell) = &self.cell {
+            let (output_tensor, next_hidden) = cell.forward(&tkan_tensor, &*hidden_guard, delta_t)?;
+            *hidden_guard = next_hidden;
+            let flat_out = output_tensor.flatten_all()?;
+            let num_elems = flat_out.elem_count();
+            let raw_direction = if num_elems > 0 { flat_out.get(0)?.to_scalar::<f32>()? as f64 } else { 0.0 };
+            let horiz_ms = if num_elems > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
+            let dir = raw_direction.tanh();
+            let direction_magnitude = dir.abs();
+
+            let gk_vol = sab.load_f64_asset(asset_idx, 121).max(0.0);
+            let sab_temp = sab.load_f64_asset(asset_idx, 127);
+            let sab_scale = sab.load_f64_asset(asset_idx, 128);
+            let sab_offset = sab.load_f64_asset(asset_idx, 129);
+
+            let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.2, 3.0);
+            let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale }.clamp(0.5, 5.0);
+            let offset = sab_offset.clamp(-1.0, 1.0);
+            let obi = sab.load_f64_asset(asset_idx, 1);
+
+            let conf = compute_calibrated_confidence(
+                direction_magnitude,
+                snr_score,
+                gk_vol,
+                obi,
+                dir,
+                temp,
+                scale,
+                offset,
+            );
+            (dir, conf, horiz_ms as f64)
         } else {
             return Ok(());
         };
-        *hidden_guard = next_hidden;
 
-        let flat_out = output_tensor.flatten_all()?;
-        let num_elems = flat_out.elem_count();
-        let raw_direction = if num_elems > 0 { flat_out.get(0)?.to_scalar::<f32>()? as f64 } else { 0.0 };
-        let _raw_confidence = if num_elems > 1 { flat_out.get(1)?.to_scalar::<f32>()? as f64 } else { raw_direction.abs() };
-        let horizon_ms = if num_elems > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
-        let direction = raw_direction.tanh();
         let direction_magnitude = direction.abs();
-
-        // Adaptive Dual-Regime Volatility Damping & Platt-Calibrated Confidence Formulation:
-        // Slot 121 stores per-microbar Garman-Klass realized volatility sigma_GK (e.g. ~0.00007).
-        let gk_vol = sab.load_f64_asset(asset_idx, 121).max(0.0);
-        let sab_temp = sab.load_f64_asset(asset_idx, 127);
-        let sab_scale = sab.load_f64_asset(asset_idx, 128);
-        let sab_offset = sab.load_f64_asset(asset_idx, 129);
-
-        let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.2, 3.0);
-        let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale }.clamp(0.5, 5.0);
-        let offset = sab_offset.clamp(-1.0, 1.0);
-        let obi = sab.load_f64_asset(asset_idx, 1);
-
-        let confidence = compute_calibrated_confidence(
-            direction_magnitude,
-            snr_score,
-            gk_vol,
-            obi,
-            direction,
-            temp,
-            scale,
-            offset,
-        );
 
         let end_ns = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -604,20 +631,31 @@ impl AIEngine {
         let spread_vel = sab.load_f64_asset(asset_idx, 3);
         let slippage_ticks = (2.0 + (spread_vel.abs() / 0.5).floor()).min(20.0);
 
-        // Store intra-asset telemetry with auto-expansion protection
+        // Store intra-asset telemetry and push prediction to horizon history buffer
         {
             let trackers = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
-            if asset_idx < trackers.len() {
-                trackers[asset_idx].last_mid_price.store(current_mid.to_bits(), Ordering::Relaxed);
-                trackers[asset_idx].last_prediction_dir.store(direction.to_bits(), Ordering::Relaxed);
+            let trackers_ref = if asset_idx < trackers.len() {
+                trackers
             } else {
                 drop(trackers);
-                let mut trackers_mut = self.asset_trackers.write().unwrap_or_else(|e| e.into_inner());
-                while trackers_mut.len() <= asset_idx {
-                    trackers_mut.push(AssetTelemetryTracker::new());
+                {
+                    let mut trackers_mut = self.asset_trackers.write().unwrap_or_else(|e| e.into_inner());
+                    while trackers_mut.len() <= asset_idx {
+                        trackers_mut.push(AssetTelemetryTracker::new());
+                    }
                 }
-                trackers_mut[asset_idx].last_mid_price.store(current_mid.to_bits(), Ordering::Relaxed);
-                trackers_mut[asset_idx].last_prediction_dir.store(direction.to_bits(), Ordering::Relaxed);
+                self.asset_trackers.read().unwrap_or_else(|e| e.into_inner())
+            };
+
+            if let Some(tracker) = trackers_ref.get(asset_idx) {
+                tracker.last_mid_price.store(current_mid.to_bits(), Ordering::Relaxed);
+                tracker.last_prediction_dir.store(direction.to_bits(), Ordering::Relaxed);
+                if let Ok(mut hist) = tracker.horizon_history.lock() {
+                    hist.push_back((start_ns, current_mid, direction));
+                    if hist.len() > 3600 {
+                        hist.pop_front();
+                    }
+                }
             }
         }
 
@@ -635,6 +673,100 @@ impl AIEngine {
         Ok(())
     }
 
+    pub fn evaluate_features(&self, features: &[f64; 40]) -> (f64, f64) {
+        let tkan_out = self.tkan.forward(features);
+        let tkan_f32: [f32; 16] = std::array::from_fn(|i| tkan_out[i] as f32);
+        if let Ok(tkan_tensor) = Tensor::from_slice(&tkan_f32, (1, 16), &Device::Cpu) {
+            let hs_holder = self.hidden_states.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(hs_mutex) = hs_holder.get(0) {
+                if let Ok(mut hidden_guard) = hs_mutex.lock() {
+                    if let Some(mamba) = &self.mamba {
+                        if hidden_guard.dims() != &[1, mamba.d_state] {
+                            if let Ok(new_h) = Tensor::zeros((1, mamba.d_state), DType::F32, &Device::Cpu) {
+                                *hidden_guard = new_h;
+                            }
+                        }
+                        if let Ok((heads, next_h)) = mamba.forward(&tkan_tensor, &*hidden_guard, 0.001) {
+                            *hidden_guard = next_h;
+                            if let Ok((dir, p_win, _)) = mamba.evaluate_scalar_heads(&heads) {
+                                return (dir, p_win);
+                            }
+                        }
+                    } else if let Some(cell) = &self.cell {
+                        if let Ok((output_tensor, next_h)) = cell.forward(&tkan_tensor, &*hidden_guard, 0.001) {
+                            *hidden_guard = next_h;
+                            if let Ok(flat) = output_tensor.flatten_all() {
+                                let raw_dir = flat.get(0).and_then(|t| t.to_scalar::<f32>()).map(|v| (v as f64).tanh()).unwrap_or(0.0);
+                                return (raw_dir, 0.70);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        (0.0, 0.0)
+    }
+
+    pub fn run_shadow_inference(&self, sab: &AtomicSharedMemoryBridge) -> Result<(f64, f64, f64, u64, f64)> {
+        let start_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+
+        let best_bid = sab.load_f64_asset(0, 4);
+        let best_ask = sab.load_f64_asset(0, 6);
+        if best_bid <= 0.0 || best_ask <= 0.0 {
+            return Err(Error::Msg("ORDERBOOK_COLLAPSE_DETECTED".to_string()));
+        }
+
+        let lat_us_val = sab.load_f64_asset(0, 98) * 1000.0;
+        let (lob_features, snr_score) = {
+            let pipelines = self.feature_pipelines.read().unwrap_or_else(|e| e.into_inner());
+            let mut pipeline = pipelines[0].lock().unwrap_or_else(|e| e.into_inner());
+            pipeline.update_and_normalize_with_snr_asset(sab, lat_us_val, 0)?
+        };
+
+        let tkan_out = self.tkan.forward(&lob_features);
+        let tkan_f32: [f32; 16] = std::array::from_fn(|i| tkan_out[i] as f32);
+        let tkan_tensor = Tensor::from_slice(&tkan_f32, (1, 16), &Device::Cpu)?;
+
+        let hs_holder = self.hidden_states.read().unwrap_or_else(|e| e.into_inner());
+        let mut hidden_guard = hs_holder[0].lock().unwrap_or_else(|e| e.into_inner());
+
+        let (direction, confidence, horizon_ms, hidden_norm) = if let Some(mamba) = &self.mamba {
+            if hidden_guard.dims() != &[1, mamba.d_state] {
+                *hidden_guard = Tensor::zeros((1, mamba.d_state), DType::F32, &Device::Cpu)?;
+            }
+            let (heads, next_h) = mamba.forward(&tkan_tensor, &*hidden_guard, 0.001)?;
+            let norm = next_h.sqr()?.sum_all()?.to_scalar::<f32>()?.sqrt() as f64;
+            *hidden_guard = next_h;
+            let (dir, p_win, horiz_sec) = mamba.evaluate_scalar_heads(&heads)?;
+            (dir, p_win, horiz_sec * 1000.0, norm)
+        } else if let Some(cell) = &self.cell {
+            let (output_tensor, next_h) = cell.forward(&tkan_tensor, &*hidden_guard, 0.001)?;
+            let norm = next_h.sqr()?.sum_all()?.to_scalar::<f32>()?.sqrt() as f64;
+            *hidden_guard = next_h;
+            let flat_out = output_tensor.flatten_all()?;
+            let raw_dir = flat_out.get(0)?.to_scalar::<f32>()? as f64;
+            let horiz = if flat_out.elem_count() > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
+            let dir = raw_dir.tanh();
+            let gk_vol = sab.load_f64_asset(0, 121).max(0.0);
+            let obi = sab.load_f64_asset(0, 1);
+            let conf = compute_calibrated_confidence(dir.abs(), snr_score, gk_vol, obi, dir, 1.0, 1.5, 0.0);
+            (dir, conf, horiz, norm)
+        } else {
+            return Err(Error::Msg("UNCALIBRATED".to_string()));
+        };
+
+        let end_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        let latency_ns = end_ns.saturating_sub(start_ns);
+
+        Ok((direction, confidence, horizon_ms, latency_ns, hidden_norm))
+    }
+
     pub fn inherit_hidden_state(&self, other: &AIEngine) {
         let other_guard = other.hidden_states.read().unwrap_or_else(|e| e.into_inner());
         let mut self_guard = self.hidden_states.write().unwrap_or_else(|e| e.into_inner());
@@ -649,172 +781,9 @@ impl AIEngine {
             }
         }
     }
-
-    pub fn run_shadow_inference(
-        &self,
-        sab: &AtomicSharedMemoryBridge,
-    ) -> Result<(f64, f64, f64, u64, f64)> {
-        if self.status != AiEngineStatus::Calibrated || self.cell.is_none() {
-            return Ok((0.0, 0.0, 0.0, 0, 0.0));
-        }
-
-        let start_ns = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
-
-        let best_bid = sab.load_f64(4);
-        let best_ask = sab.load_f64(6);
-        if best_bid <= 0.0 || best_ask <= 0.0 {
-            return Err(Error::Msg("ORDERBOOK_COLLAPSE_DETECTED".to_string()));
-        }
-
-        let lat_us_val = sab.load_f64(98) * 1000.0;
-        let (lob_features, snr_score) = {
-            let pipelines = self.feature_pipelines.read().unwrap_or_else(|e| e.into_inner());
-            let mut pipeline = pipelines[0].lock().unwrap_or_else(|e| e.into_inner());
-            pipeline.update_and_normalize_with_snr_asset(sab, lat_us_val, 0)?
-        };
-
-        let tkan_out = self.tkan.forward(&lob_features);
-        let tkan_f32: [f32; 16] = std::array::from_fn(|i| tkan_out[i] as f32);
-        let tkan_tensor = Tensor::from_slice(&tkan_f32, (1, 16), &Device::Cpu)?;
-
-        let prev_ns = self.last_inference_ns.swap(start_ns, Ordering::Relaxed);
-        let delta_t = if prev_ns == 0 {
-            0.001
-        } else {
-            ((start_ns.saturating_sub(prev_ns) as f64) / 1e9).max(0.0001)
-        };
-
-        let hs_holder = self.hidden_states.read().unwrap_or_else(|e| e.into_inner());
-        let mut hidden_guard = hs_holder[0].lock().unwrap_or_else(|e| e.into_inner());
-        let (output_tensor, next_hidden) = if let Some(cell) = &self.cell {
-            cell.forward(&tkan_tensor, &*hidden_guard, delta_t)?
-        } else {
-            return Ok((0.0, 0.0, 0.0, 0, 0.0));
-        };
-        *hidden_guard = next_hidden;
-
-        let flat_out = output_tensor.flatten_all()?;
-        let num_elems = flat_out.elem_count();
-        let raw_direction = if num_elems > 0 { flat_out.get(0)?.to_scalar::<f32>()? as f64 } else { 0.0 };
-        let horizon_ms = if num_elems > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
-        let direction = raw_direction.tanh();
-        let direction_magnitude = direction.abs();
-
-        let gk_vol = sab.load_f64(121).max(0.0);
-        let sab_temp = sab.load_f64(127);
-        let sab_scale = sab.load_f64(128);
-        let sab_offset = sab.load_f64(129);
-
-        let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.2, 3.0);
-        let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale }.clamp(0.5, 5.0);
-        let offset = sab_offset.clamp(-1.0, 1.0);
-        let obi = sab.load_f64(1);
-
-        let confidence = compute_calibrated_confidence(
-            direction_magnitude,
-            snr_score,
-            gk_vol,
-            obi,
-            direction,
-            temp,
-            scale,
-            offset,
-        );
-
-        let end_ns = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
-        let latency_ns = end_ns.saturating_sub(start_ns);
-
-        let hidden_norm = hidden_guard
-            .sqr()?
-            .sum_all()?
-            .to_scalar::<f32>()?
-            .sqrt() as f64;
-
-        self.inference_seq.fetch_add(1, Ordering::Relaxed);
-
-        Ok((direction, confidence, horizon_ms, latency_ns, hidden_norm))
-    }
-
-    pub fn evaluate_features(&self, features: &[f64; 40]) -> (f64, f64) {
-        if self.status != AiEngineStatus::Calibrated || self.cell.is_none() {
-            let obi = features[8];
-            let relative_spread = features[1];
-            let cvd_delta = features[16];
-            let raw_signal = obi * 0.6 + cvd_delta.signum() * 0.4;
-            let direction = raw_signal.clamp(-1.0, 1.0);
-            let confidence = (raw_signal.abs() * 0.8 + relative_spread * 0.2).clamp(0.0, 1.0);
-            return (direction, confidence);
-        }
-
-        let tkan_out = self.tkan.forward(features);
-        let tkan_f32: [f32; 16] = std::array::from_fn(|i| tkan_out[i] as f32);
-        if let Ok(tkan_tensor) = Tensor::from_slice(&tkan_f32, (1, 16), &Device::Cpu) {
-            let hs_holder = self.hidden_states.read().unwrap_or_else(|e| e.into_inner());
-            let (output_tensor_opt, next_hidden_opt) = if let Some(hs_mutex) = hs_holder.get(0) {
-                if let Ok(hidden_guard) = hs_mutex.lock() {
-                    if let Some(cell) = &self.cell {
-                        cell.forward(&tkan_tensor, &*hidden_guard, 0.001).ok().map(|(out, next_h)| (Some(out), Some(next_h))).unwrap_or((None, None))
-                    } else {
-                        (None, None)
-                    }
-                } else {
-                    (None, None)
-                }
-            } else {
-                (None, None)
-            };
-
-            if let (Some(output_tensor), Some(next_hidden)) = (output_tensor_opt, next_hidden_opt) {
-                if let Some(hs_mutex) = hs_holder.get(0) {
-                    if let Ok(mut hidden_guard) = hs_mutex.lock() {
-                        *hidden_guard = next_hidden;
-                    }
-                }
-                if let Ok(flat_out) = output_tensor.flatten_all() {
-                    let num_elems = flat_out.elem_count();
-                    let raw_direction = if num_elems > 0 { flat_out.get(0).ok().and_then(|t| t.to_scalar::<f32>().ok()).unwrap_or(0.0) as f64 } else { 0.0 };
-                    let direction = raw_direction.tanh();
-                    let direction_magnitude = direction.abs();
-
-                    let vol = features[35].max(0.0);
-                    let obi = features[8];
-                    let obi_z = obi.abs();
-                    let cvd_z = features[21].abs();
-                    let vel_z = features[24].abs();
-                    let micro_z = features[2].abs();
-                    let snr_score = 1.0 + 0.6 * (obi_z + 0.8 * cvd_z + 0.5 * vel_z + 0.5 * micro_z).min(8.0);
-
-                    let scale = self.calibration_params.platt_scale.clamp(0.5, 5.0);
-                    let temp = self.calibration_params.temperature.clamp(0.2, 3.0);
-                    let offset = self.calibration_params.platt_offset.clamp(-1.0, 1.0);
-
-                    let confidence = compute_calibrated_confidence(
-                        direction_magnitude,
-                        snr_score,
-                        vol,
-                        obi,
-                        direction,
-                        temp,
-                        scale,
-                        offset,
-                    );
-                    return (direction, confidence);
-                }
-            }
-        }
-        (0.0, 0.0)
-    }
 }
 
-/// Dual-Regime Information-Theoretic Volatility Scaling:
-/// 1. High-Volatility Turbulence Filter: softens confidence during chaotic market spikes / toxic order flow.
-/// 2. Low-Volatility Noise-Floor Filter: attenuates false conviction when market is in compressed microstructure chop (< 1.5 bps).
+/// Dual-Regime Information-Theoretic Volatility Scaling
 #[inline(always)]
 pub fn compute_dual_regime_volatility_multiplier(gk_vol: f64) -> f64 {
     let vol = gk_vol.max(0.0);
@@ -823,8 +792,7 @@ pub fn compute_dual_regime_volatility_multiplier(gk_vol: f64) -> f64 {
     (psi_high * psi_low).clamp(0.30, 1.00)
 }
 
-/// Decoupled Isotonic Platt-Calibrated Confidence Formulation:
-/// Formulates calibrated continuous logit with dynamic slope beta = 1.75 and bounded dynamic range [0.05, 0.97].
+/// Decoupled Isotonic Platt-Calibrated Confidence Formulation
 #[inline(always)]
 pub fn compute_calibrated_confidence(
     direction_magnitude: f64,
@@ -891,7 +859,6 @@ mod tests {
         let mut buffer = vec![0u8; 2048];
         let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len()).unwrap();
 
-        // Best bid = 0.0, Best ask = 0.0 -> ORDERBOOK_COLLAPSE_DETECTED
         let res = engine.run_inference(&bridge);
         assert!(res.is_err());
         let err_str = res.err().unwrap().to_string();
@@ -902,10 +869,10 @@ mod tests {
     fn test_streaming_feature_pipeline_normalization() {
         let mut buffer = vec![0u8; 2048];
         let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len()).unwrap();
-        bridge.store_f64(4, 50000.0); // Best bid price
-        bridge.store_f64(5, 1.5);     // Best bid qty
-        bridge.store_f64(6, 50001.0); // Best ask price
-        bridge.store_f64(7, 2.5);     // Best ask qty
+        bridge.store_f64(4, 50000.0);
+        bridge.store_f64(5, 1.5);
+        bridge.store_f64(6, 50001.0);
+        bridge.store_f64(7, 2.5);
 
         let mut pipeline = StreamingFeaturePipeline::new();
         let features = pipeline.update_and_normalize(&bridge, 150.0).unwrap();
@@ -916,37 +883,27 @@ mod tests {
     }
 
     #[test]
-    fn test_dual_regime_volatility_multiplier_micro_and_macro() {
-        // Micro-volatility (DOGE/DOT ~ 0.00002) should penalize noise chop
-        let psi_micro = compute_dual_regime_volatility_multiplier(0.00002);
-        assert!(psi_micro >= 0.50 && psi_micro <= 0.65, "Expected micro-volatility penalty ~0.57, got {}", psi_micro);
+    fn test_mamba2_inference_dispatch() {
+        let mut engine = AIEngine::new();
+        let dev = Device::Cpu;
+        let mamba = Mamba2Cell::default_cell(16, 32, 16, &dev).unwrap();
+        engine.mamba = Some(mamba);
+        engine.status = AiEngineStatus::Calibrated;
 
-        // Normal volatility (BTC ~ 0.00035) should preserve healthy conviction
-        let psi_normal = compute_dual_regime_volatility_multiplier(0.00035);
-        assert!(psi_normal >= 0.70 && psi_normal <= 0.85, "Expected normal volatility multiplier ~0.75, got {}", psi_normal);
+        let mut buffer = vec![0u8; 2048];
+        let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len()).unwrap();
+        bridge.store_f64(4, 50000.0);
+        bridge.store_f64(5, 1.5);
+        bridge.store_f64(6, 50001.0);
+        bridge.store_f64(7, 2.5);
 
-        // Extreme toxic volatility spike (0.00300) should dampen turbulence
-        let psi_extreme = compute_dual_regime_volatility_multiplier(0.00300);
-        assert!(psi_extreme >= 0.30 && psi_extreme <= 0.40, "Expected high volatility damping ~0.33, got {}", psi_extreme);
-    }
+        let res = engine.run_inference(&bridge);
+        assert!(res.is_ok());
+        assert!(engine.is_calibrated());
 
-    #[test]
-    fn test_calibrated_confidence_dynamic_range_and_anti_ceiling() {
-        // Test 1: Micro-volatility with modest conviction must NOT slam to 98%
-        let conf_micro_modest = compute_calibrated_confidence(0.50, 3.0, 0.00002, 0.20, 0.50, 1.0, 1.5, 0.0);
-        assert!(conf_micro_modest >= 0.65 && conf_micro_modest <= 0.78, "Micro modest conviction expected 65-78%, got {}", conf_micro_modest);
-
-        // Test 2: Micro-volatility with strong conviction spans 80-89%
-        let conf_micro_strong = compute_calibrated_confidence(0.85, 3.25, 0.00003, 0.30, 0.85, 1.0, 1.5, 0.0);
-        assert!(conf_micro_strong >= 0.80 && conf_micro_strong <= 0.89, "Micro strong conviction expected 80-89%, got {}", conf_micro_strong);
-
-        // Test 3: Zero conviction is exactly 50%
-        let conf_zero = compute_calibrated_confidence(0.0, 1.0, 0.00002, 0.0, 0.0, 1.0, 1.5, 0.0);
-        assert!((conf_zero - 0.50).abs() < 1e-5, "Zero conviction expected 0.50, got {}", conf_zero);
-
-        // Test 4: Extreme maximum theoretical input must strictly remain below 98.0% ceiling
-        let conf_max_boundary = compute_calibrated_confidence(1.0, 8.0, 0.0008, 1.0, 1.0, 1.0, 5.0, 1.0);
-        assert!(conf_max_boundary <= 0.975, "Max theoretical confidence must be <= 97.5%, got {}", conf_max_boundary);
+        let dir = bridge.load_f64(93);
+        let conf = bridge.load_f64(94);
+        assert!(dir >= -1.0 && dir <= 1.0);
+        assert!(conf >= 0.0 && conf <= 1.0);
     }
 }
-

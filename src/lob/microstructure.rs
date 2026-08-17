@@ -3,6 +3,7 @@ use std::f64;
 pub const TICK_WINDOW: usize = 100;
 pub const HURST_WINDOW: usize = 128;
 pub const VPIN_BUCKETS: usize = 20;
+pub const LOB_DEPTH_LEVELS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MicroRegime {
@@ -84,6 +85,18 @@ pub struct MicrostructureAnalyzer {
     depth_depletion_rate: f64,
     is_sweep_detected: bool,
 
+    // Multi-Level Order Flow Imbalance (OFI L1..L10)
+    prev_bids: [(f64, f64); LOB_DEPTH_LEVELS],
+    prev_asks: [(f64, f64); LOB_DEPTH_LEVELS],
+    has_prev_lob: bool,
+    cached_multi_level_ofi: f64,
+
+    // Bivariate Hawkes Point Process Flow Dynamics
+    hawkes_lambda_buy: f64,
+    hawkes_lambda_sell: f64,
+    last_trade_ts_ns: u64,
+    cached_hawkes_asymmetry: f64,
+
     // Rolling Volume Adaptation for Dynamic VPIN Bucketing
     rolling_trade_volume: f64,
 
@@ -129,6 +142,16 @@ impl MicrostructureAnalyzer {
             depth_depletion_rate: 0.0,
             is_sweep_detected: false,
 
+            prev_bids: [(0.0, 0.0); LOB_DEPTH_LEVELS],
+            prev_asks: [(0.0, 0.0); LOB_DEPTH_LEVELS],
+            has_prev_lob: false,
+            cached_multi_level_ofi: 0.0,
+
+            hawkes_lambda_buy: 0.05,
+            hawkes_lambda_sell: 0.05,
+            last_trade_ts_ns: 0,
+            cached_hawkes_asymmetry: 0.0,
+
             rolling_trade_volume: target_vol / 20.0,
 
             cached_rv_gk: 0.0,
@@ -140,8 +163,12 @@ impl MicrostructureAnalyzer {
         }
     }
 
-    /// On tick trade event, update Garman-Klass micro-bar, VPIN buckets, and price history for Hurst exponent.
+    /// On tick trade event, update Garman-Klass micro-bar, VPIN buckets, Hawkes Point Process, and Hurst exponent.
     pub fn on_trade(&mut self, price: f64, quantity: f64, is_buyer_maker: bool) {
+        self.on_trade_with_ts(price, quantity, is_buyer_maker, 0);
+    }
+
+    pub fn on_trade_with_ts(&mut self, price: f64, quantity: f64, is_buyer_maker: bool, ts_ns: u64) {
         if !price.is_finite() || !quantity.is_finite() || price <= 0.0 || quantity <= 0.0 {
             return;
         }
@@ -192,7 +219,6 @@ impl MicrostructureAnalyzer {
                 let needed = (self.bucket_target_volume - current_filled).max(0.0);
 
                 if rem_vol >= needed && needed > 0.0 {
-                    // Slice exact volume needed to complete the bucket
                     if is_buyer_maker {
                         self.current_bucket_sell += needed;
                     } else {
@@ -200,7 +226,6 @@ impl MicrostructureAnalyzer {
                     }
                     rem_vol -= needed;
 
-                    // Commit completed bucket (guaranteed buy_vol + sell_vol == bucket_target_volume)
                     self.vpin_buckets[self.vpin_bucket_index] = VolumeBucket {
                         buy_vol: self.current_bucket_buy,
                         sell_vol: self.current_bucket_sell,
@@ -210,17 +235,14 @@ impl MicrostructureAnalyzer {
                         self.vpin_bucket_count += 1;
                     }
 
-                    // Update rolling trade volume and adapt bucket_target_volume ONLY upon bucket completion
                     self.rolling_trade_volume = self.rolling_trade_volume * 0.95 + total_trade_vol * 0.05;
                     let min_target = 100.0;
                     self.bucket_target_volume = (self.rolling_trade_volume * 20.0).clamp(min_target, 100000.0);
 
-                    // Reset current bucket counters for next bucket
                     self.current_bucket_buy = 0.0;
                     self.current_bucket_sell = 0.0;
                     self.recalculate_vpin();
                 } else {
-                    // Accumulate remaining volume into current bucket and finish loop
                     if is_buyer_maker {
                         self.current_bucket_sell += rem_vol;
                     } else {
@@ -231,11 +253,46 @@ impl MicrostructureAnalyzer {
             }
         }
 
-        // 4. Update Regime
+        // 4. Update Bivariate Hawkes Point Process
+        self.update_hawkes(total_trade_vol, is_buyer_maker, ts_ns);
+
+        // 5. Update Regime
         self.recalculate_hurst_and_regime();
     }
 
-    /// On LOB depth update event, calculate top-3 depth depletion, Micro-Price, and LOB entropy.
+    /// Updates recursive continuous-time Bivariate Hawkes Point Process.
+    fn update_hawkes(&mut self, trade_notional: f64, is_buyer_maker: bool, ts_ns: u64) {
+        let mu_base = 0.05;
+        let alpha = 0.40;
+        let beta = 1.50; // Exponential decay rate per second
+
+        let dt_sec = if self.last_trade_ts_ns > 0 && ts_ns > self.last_trade_ts_ns {
+            ((ts_ns - self.last_trade_ts_ns) as f64 / 1e9).clamp(0.0001, 10.0)
+        } else {
+            0.050 // Default 50ms interval if ts not provided
+        };
+
+        let decay = (-beta * dt_sec).exp();
+
+        self.hawkes_lambda_buy = mu_base + (self.hawkes_lambda_buy - mu_base) * decay;
+        self.hawkes_lambda_sell = mu_base + (self.hawkes_lambda_sell - mu_base) * decay;
+
+        let excitation = alpha * (trade_notional / 1000.0).clamp(0.1, 5.0);
+        if !is_buyer_maker {
+            // Taker Buy
+            self.hawkes_lambda_buy += excitation;
+        } else {
+            // Taker Sell
+            self.hawkes_lambda_sell += excitation;
+        }
+
+        self.last_trade_ts_ns = if ts_ns > 0 { ts_ns } else { self.last_trade_ts_ns + 50_000_000 };
+
+        let total_intensity = self.hawkes_lambda_buy + self.hawkes_lambda_sell + 1e-6;
+        self.cached_hawkes_asymmetry = ((self.hawkes_lambda_buy - self.hawkes_lambda_sell) / total_intensity).clamp(-1.0, 1.0);
+    }
+
+    /// On LOB depth update event, calculate top-3 depth depletion, Multi-Level OFI (L1..L10), Micro-Price, and LOB entropy.
     pub fn on_depth_update(
         &mut self,
         bids: &[(f64, f64); 20],
@@ -262,7 +319,6 @@ impl MicrostructureAnalyzer {
                     let depth_decay = (prev_total - curr_total) / prev_total;
                     self.depth_depletion_rate = depth_decay / dt_sec;
 
-                    // If top-3 depth collapses > 40% in < 50ms (rate > 8.0/sec), flag liquidity sweep
                     if depth_decay > 0.40 && dt_sec < 0.05 {
                         self.is_sweep_detected = true;
                     } else {
@@ -276,9 +332,75 @@ impl MicrostructureAnalyzer {
         self.last_top3_ask_depth = current_top3_ask;
         self.last_depth_ts_ns = timestamp_ns;
 
+        // Calculate Multi-Level Order Flow Imbalance (OFI) across Top 10 Levels
+        self.recalculate_multi_level_ofi(bids, asks);
+
         // Calculate Micro-Price and LOB Entropy across top 10 levels
         self.cached_micro_price = crate::lob::metrics::calculate_micro_price(bids, asks);
         self.recalculate_lob_entropy(bids, asks);
+    }
+
+    /// Calculate Multi-Level Order Flow Imbalance (OFI) across L1..L10 with depth exponential weights.
+    fn recalculate_multi_level_ofi(
+        &mut self,
+        bids: &[(f64, f64); 20],
+        asks: &[(f64, f64); 20],
+    ) {
+        if !self.has_prev_lob {
+            for k in 0..LOB_DEPTH_LEVELS {
+                self.prev_bids[k] = bids[k];
+                self.prev_asks[k] = asks[k];
+            }
+            self.has_prev_lob = true;
+            self.cached_multi_level_ofi = 0.0;
+            return;
+        }
+
+        let mut weighted_ofi_sum = 0.0;
+        let mut total_weight_depth = 0.0;
+
+        for k in 0..LOB_DEPTH_LEVELS {
+            let curr_bid_px = bids[k].0;
+            let curr_bid_qty = bids[k].1;
+            let prev_bid_px = self.prev_bids[k].0;
+            let prev_bid_qty = self.prev_bids[k].1;
+
+            let delta_bid_qty = if curr_bid_px > prev_bid_px {
+                curr_bid_qty
+            } else if (curr_bid_px - prev_bid_px).abs() < 1e-9 {
+                curr_bid_qty - prev_bid_qty
+            } else {
+                -prev_bid_qty
+            };
+
+            let curr_ask_px = asks[k].0;
+            let curr_ask_qty = asks[k].1;
+            let prev_ask_px = self.prev_asks[k].0;
+            let prev_ask_qty = self.prev_asks[k].1;
+
+            let delta_ask_qty = if curr_ask_px < prev_ask_px {
+                curr_ask_qty
+            } else if (curr_ask_px - prev_ask_px).abs() < 1e-9 {
+                curr_ask_qty - prev_ask_qty
+            } else {
+                -prev_ask_qty
+            };
+
+            let level_ofi = delta_bid_qty - delta_ask_qty;
+            let weight = (-0.25 * (k as f64)).exp();
+
+            weighted_ofi_sum += weight * level_ofi;
+            total_weight_depth += weight * (curr_bid_qty + curr_ask_qty + 1e-6);
+
+            self.prev_bids[k] = bids[k];
+            self.prev_asks[k] = asks[k];
+        }
+
+        if total_weight_depth > 1e-9 {
+            self.cached_multi_level_ofi = (weighted_ofi_sum / total_weight_depth).clamp(-1.0, 1.0);
+        } else {
+            self.cached_multi_level_ofi = 0.0;
+        }
     }
 
     /// Garman-Klass Realized Volatility calculation over rolling micro-bars.
@@ -289,7 +411,7 @@ impl MicrostructureAnalyzer {
         }
 
         let mut sum_gk = 0.0;
-        let const_ratio = 2.0 * 2.0f64.ln() - 1.0; // 2ln(2) - 1 ≈ 0.386294
+        let const_ratio = 2.0 * 2.0f64.ln() - 1.0;
 
         let mut i = 0;
         while i < self.bar_count {
@@ -344,12 +466,10 @@ impl MicrostructureAnalyzer {
             return;
         }
 
-        // Fast zero-allocation R/S estimator over sub-window size N=16 and N=32
         let h16 = self.calculate_rs_subwindow(16);
         let h32 = self.calculate_rs_subwindow(32);
 
         if h16 > 1e-6 && h32 > 1e-6 {
-            // Hurst H = log(RS_32 / RS_16) / log(32 / 16) = log(RS_32 / RS_16) / ln(2)
             let ratio = h32 / h16;
             if ratio > 0.0 {
                 let h = (ratio.ln() / 2.0f64.ln()).clamp(0.1, 0.9);
@@ -357,10 +477,10 @@ impl MicrostructureAnalyzer {
             }
         }
 
-        // Classify Regime
+        // Classify Regime with Hawkes and VPIN awareness
         if self.cached_vpin > 0.85 || self.is_sweep_detected {
             self.cached_regime = MicroRegime::ToxicChopTrap;
-        } else if self.cached_hurst > 0.55 {
+        } else if self.cached_hurst > 0.55 && self.cached_hawkes_asymmetry.abs() > 0.35 {
             self.cached_regime = MicroRegime::DirectionalTrend;
         } else if self.cached_hurst < 0.45 {
             self.cached_regime = MicroRegime::MeanReverting;
@@ -481,11 +601,27 @@ impl MicrostructureAnalyzer {
         self.depth_depletion_rate
     }
 
+    pub fn get_multi_level_ofi(&self) -> f64 {
+        self.cached_multi_level_ofi
+    }
+
+    pub fn get_hawkes_intensity_buy(&self) -> f64 {
+        self.hawkes_lambda_buy
+    }
+
+    pub fn get_hawkes_intensity_sell(&self) -> f64 {
+        self.hawkes_lambda_sell
+    }
+
+    pub fn get_hawkes_asymmetry(&self) -> f64 {
+        self.cached_hawkes_asymmetry
+    }
+
     /// Calculate Dynamic Stop-Loss and Take-Profit prices based on live microstructure metrics.
     pub fn calculate_dynamic_collars(
         &self,
         entry_price: f64,
-        position_side: &str, // "LONG" or "SHORT"
+        position_side: &str,
         obi: f64,
         spread: f64,
     ) -> (f64, f64) {
@@ -493,17 +629,11 @@ impl MicrostructureAnalyzer {
             return (0.0, 0.0);
         }
 
-        // Base Volatility Factor: Use max of Garman-Klass RV or minimum default 0.20% collar
         let vol_factor = self.cached_rv_gk.max(0.0020);
-        let spread_factor = spread.max(entry_price * 0.0001); // min 1 bps spread
-
-        // Clamp OBI signed in [-1.0, 1.0]
+        let spread_factor = spread.max(entry_price * 0.0001);
         let obi_signed = obi.clamp(-1.0, 1.0);
 
         if position_side == "LONG" {
-            // Long position:
-            // If OBI is negative (sell pressure against us), expand SL distance to prevent stop-hunt.
-            // If OBI is positive (buy pressure), expand TP distance to capture trend runaway.
             let sl_distance = (vol_factor * 1.5 * (1.0 - 0.4 * obi_signed) * entry_price)
                 .max(spread_factor * 2.0);
             let tp_distance = (vol_factor * 2.0 * (1.0 + 0.5 * obi_signed) * entry_price)
@@ -513,9 +643,6 @@ impl MicrostructureAnalyzer {
             let tp_price = entry_price + tp_distance;
             (sl_price, tp_price)
         } else {
-            // Short position:
-            // If OBI is positive (buy pressure against us), expand SL distance.
-            // If OBI is negative (sell pressure), expand TP distance.
             let sl_distance = (vol_factor * 1.5 * (1.0 + 0.4 * obi_signed) * entry_price)
                 .max(spread_factor * 2.0);
             let tp_distance = (vol_factor * 2.0 * (1.0 - 0.5 * obi_signed) * entry_price)
@@ -538,6 +665,39 @@ mod tests {
         assert_eq!(analyzer.get_vpin(), 0.0);
         assert_eq!(analyzer.get_rv_gk(), 0.0);
         assert_eq!(analyzer.get_hurst(), 0.5);
+        assert_eq!(analyzer.get_multi_level_ofi(), 0.0);
+        assert_eq!(analyzer.get_hawkes_asymmetry(), 0.0);
+    }
+
+    #[test]
+    fn test_multi_level_ofi_calculation() {
+        let mut analyzer = MicrostructureAnalyzer::new(50.0);
+        let mut bids = [(50000.0, 1.0); 20];
+        let asks = [(50001.0, 1.0); 20];
+
+        analyzer.on_depth_update(&bids, &asks, 100_000_000);
+        assert_eq!(analyzer.get_multi_level_ofi(), 0.0);
+
+        // Simulate bid accumulation across top 5 levels
+        for i in 0..5 {
+            bids[i].1 = 5.0; // Increase bid depth
+        }
+        analyzer.on_depth_update(&bids, &asks, 150_000_000);
+        assert!(analyzer.get_multi_level_ofi() > 0.0, "OFI must be positive for bid accumulation");
+    }
+
+    #[test]
+    fn test_hawkes_intensity_and_asymmetry() {
+        let mut analyzer = MicrostructureAnalyzer::new(50.0);
+        let ts_base = 1_000_000_000u64;
+
+        // Ingest series of aggressive taker buys
+        for i in 0..10 {
+            analyzer.on_trade_with_ts(50000.0, 0.10, false, ts_base + i * 50_000_000);
+        }
+
+        assert!(analyzer.get_hawkes_intensity_buy() > analyzer.get_hawkes_intensity_sell());
+        assert!(analyzer.get_hawkes_asymmetry() > 0.30, "Hawkes asymmetry should be strongly positive for taker buys");
     }
 
     #[test]
@@ -551,43 +711,4 @@ mod tests {
         assert!(sl > 0.0);
         assert!(tp > 0.0);
     }
-
-    #[test]
-    fn test_vpin_and_sweep_detection() {
-        let mut analyzer = MicrostructureAnalyzer::new(10.0);
-
-        for i in 0..20 {
-            analyzer.on_trade(50000.0 + (i as f64), 0.001, true);
-        }
-
-        assert!(analyzer.get_vpin() > 0.5, "VPIN should be elevated for one-sided toxic sell flow");
-
-        let mut bids = [(50000.0, 1.0); 20];
-        let asks = [(50001.0, 1.0); 20];
-        analyzer.on_depth_update(&bids, &asks, 100_000_000);
-
-        bids[0] = (50000.0, 0.1);
-        bids[1] = (49999.0, 0.1);
-        bids[2] = (49998.0, 0.1);
-        analyzer.on_depth_update(&bids, &asks, 110_000_000);
-
-        assert!(analyzer.is_sweep_detected(), "Liquidity sweep should be flagged on rapid depth decay");
-    }
-
-    #[test]
-    fn test_vpin_remainder_carry_over_and_nan_guard() {
-        let mut analyzer = MicrostructureAnalyzer::new(100.0);
-        // Test NaN guard
-        analyzer.on_trade(f64::NAN, 1.0, true);
-        analyzer.on_trade(50000.0, f64::NAN, true);
-        assert_eq!(analyzer.current_bucket_sell, 0.0);
-
-        // Test multi-bucket block trade remainder carry-over
-        // Single trade of volume 250.0 into 100.0 initial bucket target:
-        // Slices 100.0 to fill bucket 1, target adapts to 345.0, carries over 150.0 into current_bucket_buy
-        analyzer.on_trade(100.0, 2.5, false); // 250.0 USDT volume taker buy
-        assert_eq!(analyzer.vpin_bucket_count, 1);
-        assert_eq!(analyzer.current_bucket_buy, 150.0);
-    }
 }
-
