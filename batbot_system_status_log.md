@@ -1,6 +1,17 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-17
+- **Feature/Task:** Phase 2: Python Mid-Frequency Scalping & Meta-Labeling Trainer ($2-$5 Net Moves, Volatility-Adjusted Triple-Barrier Labeling, 30-Minute Purge Buffers, Dual-Stage Mamba-2 SSM with Focal Loss & Tuned CUSUM Rate-Limiting)
+- **Artifacts Created/Modified:** `training/prepare_data.py`, `training/local_async_trainer.py`, `training/train_tkan.py`, `src/ai/recalibrationWorker.ts`, `src/tests/test_cusum_recalibration_rate_limit.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** 
+  1. Replaced continuous return regression targets with Volatility-Adjusted Triple-Barrier Labeling ($P_{\text{TP}} = P_0 (1 + \max(0.0150, 3.50\sigma))$, $P_{\text{SL}} = P_0 (1 - \max(0.0100, 1.75\sigma))$, $T_{\text{max}} = 1800\text{s}$) capturing macro $2.00 to $5.00+ net expansions.
+  2. Implemented 30-minute non-overlapping purge buffer preventing lookahead target leakage across chronological train/validation splits.
+  3. Implemented PyTorch Mamba-2 SSM with Dual-Stage Primary Direction + Meta-Labeling Win Probability ($P_{\text{win}}$) Classifier trained via Focal Loss ($\gamma = 2.0, \alpha = 0.65$) + Huber IC Rank Correlation.
+  4. Enforced strictly tuned CUSUM rate-limiting in `AutoRecalibrationManager` with 25-30 minute cooldown floor (guaranteeing max 1-2 recalibrations/hour).
+  5. 100% verified via Python compilation (`py_compile`), native Rust test suite (`cargo test --lib`, 36/36 passed), TypeScript strict build (`npm run build:ts`, 0 errors), and automated CUSUM rate-limiting test (`npx tsx src/tests/test_cusum_recalibration_rate_limit.ts`, 100% pass).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-17
 - **Feature/Task:** Final Phase 1 Memory Collision Remediation (SharedArrayBuffer Slot 138/149 Alignment & Hawkes Asymmetry Telemetry)
 - **Artifacts Created/Modified:** `src/ipc/shared_memory.rs`, `src/ai/engine.rs`, `src/marketDataClient.ts`, `src/ipc/sabSchema.ts`
 - **HFT/Performance Compliance:** Re-allocated Multi-Level OFI to Slot 138 and Bivariate Hawkes Asymmetry to Slot 149 across Rust `store_f64_asset` and `load_f64_asset`, eradicating the memory overlap with Interactive Control Flags (Slots 130..133). Updated `MarketDataClient` and `SAB_SLOTS` schema with dedicated zero-allocation getters and setters. 100% verified via `cargo test --lib` (36/36 passed), `npx napi build --platform --release` (0 errors), and `npx tsc --noEmit` (0 errors).

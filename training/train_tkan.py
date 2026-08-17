@@ -199,7 +199,8 @@ def train_tkan():
         for bx, by in train_loader:
             optimizer.zero_grad()
             pred = model(bx)
-            loss, h_loss, ic = criterion(pred, by)
+            target = by[:, 0:1] if by.dim() > 1 and by.shape[1] > 1 else by
+            loss, h_loss, ic = criterion(pred, target)
             loss.backward()
 
             # Gradient Clipping
@@ -221,7 +222,8 @@ def train_tkan():
         with torch.no_grad():
             for bx, by in val_loader:
                 pred = model(bx)
-                loss, h_loss, ic = criterion(pred, by)
+                target = by[:, 0:1] if by.dim() > 1 and by.shape[1] > 1 else by
+                loss, h_loss, ic = criterion(pred, target)
                 val_loss_sum += loss.item() * len(bx)
                 val_ic_sum += ic.item() * len(bx)
 

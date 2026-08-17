@@ -26,7 +26,7 @@ from data_config import (
 )
 
 # Strict Purge Buffer to prevent target horizon leakage across train/val boundary
-PURGE_BUFFER_TICKS = 50
+PURGE_BUFFER_TICKS = 500
 
 def read_ndjson_sanitized(file_path: str, schema_overrides: dict) -> pl.DataFrame:
     """
@@ -119,6 +119,102 @@ def compute_polars_rolling_tanh_df(df: pl.DataFrame, feature_names: list[str], w
 
     df_norm = df.select(exprs)
     return df_norm.to_numpy().astype(np.float32)
+
+
+def compute_volatility_adjusted_triple_barrier_labels(
+    ts_ms: np.ndarray,
+    mid_prices: np.ndarray,
+    vols: np.ndarray,
+    max_horizon_ms: int = 1800000, # 30 minutes (1,800,000 ms)
+    m_tp: float = 3.50,
+    m_sl: float = 1.75,
+    min_tp_pct: float = 0.0150, # +1.50% profit barrier ($2 to $5 net move on standard position)
+    min_sl_pct: float = 0.0100, # -1.00% initial risk barrier
+) -> np.ndarray:
+    """
+    Computes Volatility-Adjusted Triple-Barrier Labels for Mid-Frequency Scalping ($2 to $5 Net Profit).
+    Replaces continuous return regression targets with a Dual-Stage Directional & Meta-Labeling Target Matrix.
+
+    Barriers:
+      - Upper Take-Profit Barrier: P_tp = P_0 * (1 + max(min_tp_pct, m_tp * vol))
+      - Lower Stop-Loss Barrier:   P_sl = P_0 * (1 - max(min_sl_pct, m_sl * vol))
+      - Maximum Time Horizon:      T_max = 1800 seconds (30 minutes)
+
+    Outputs per sample [y_dir, y_meta, y_horiz]:
+      - y_dir in [-1.0, 1.0]: Primary directional hypothesis (+1.0 Long, -1.0 Short, or continuous directional return)
+      - y_meta in {0.0, 1.0}: Meta-classification target (1.0 = Macro $2-$5 Profit Expansion Reached, 0.0 = Loss / Timeout)
+      - y_horiz in [5.0, 1800.0]: Realized duration to barrier touch or timeout in seconds
+    """
+    n = len(mid_prices)
+    targets = np.zeros((n, 3), dtype=np.float32)
+
+    for i in range(n):
+        p0 = mid_prices[i]
+        t0 = ts_ms[i]
+        vol_i = max(0.0005, float(vols[i]))
+
+        tp_pct = max(min_tp_pct, m_tp * vol_i)
+        sl_pct = max(min_sl_pct, m_sl * vol_i)
+
+        p_tp_long = p0 * (1.0 + tp_pct)
+        p_sl_long = p0 * (1.0 - sl_pct)
+        p_tp_short = p0 * (1.0 - tp_pct)
+        p_sl_short = p0 * (1.0 + sl_pct)
+
+        t_limit = t0 + max_horizon_ms if t0 > 0 else 0
+
+        # Forward scan up to max horizon
+        resolved = False
+        long_won = False
+        short_won = False
+        exit_idx = i
+
+        max_lookahead = min(n, i + 3600)
+        for j in range(i + 1, max_lookahead):
+            exit_idx = j
+            pj = mid_prices[j]
+            tj = ts_ms[j]
+
+            # Check time limit
+            if t_limit > 0 and tj > t_limit:
+                break
+
+            long_hit_tp = (pj >= p_tp_long)
+            long_hit_sl = (pj <= p_sl_long)
+
+            short_hit_tp = (pj <= p_tp_short)
+            short_hit_sl = (pj >= p_sl_short)
+
+            if long_hit_tp and not long_hit_sl:
+                long_won = True
+                resolved = True
+                break
+            elif short_hit_tp and not short_hit_sl:
+                short_won = True
+                resolved = True
+                break
+            elif long_hit_sl or short_hit_sl:
+                resolved = True
+                break
+
+        dt_sec = max(5.0, min(1800.0, (ts_ms[exit_idx] - t0) / 1000.0)) if (t0 > 0 and ts_ms[exit_idx] > t0) else max(5.0, float(exit_idx - i) * 0.5)
+
+        if long_won:
+            targets[i, 0] = 1.0
+            targets[i, 1] = 1.0
+            targets[i, 2] = dt_sec
+        elif short_won:
+            targets[i, 0] = -1.0
+            targets[i, 1] = 1.0
+            targets[i, 2] = dt_sec
+        else:
+            p_exit = mid_prices[exit_idx]
+            ret_delta = (p_exit - p0) / (p0 + 1e-8)
+            targets[i, 0] = float(np.tanh(ret_delta / tp_pct))
+            targets[i, 1] = 0.0
+            targets[i, 2] = dt_sec
+
+    return targets
 
 
 def create_cfc_sequences_strided(features: np.ndarray, targets: np.ndarray, seq_len: int = 32):
@@ -274,15 +370,23 @@ def load_and_preprocess_lob_data():
             pl.lit(0.0).alias("execution_latency_ms")
         ])
 
-    # Step 6: Calculate Future Return Target (y = 10-tick and 50-tick forward log returns)
-    df = df.with_columns([
-        (pl.col("mid_price").shift(-10).log() - pl.col("mid_price").log()).fill_null(0.0).fill_nan(0.0).clip(-0.5, 0.5).alias("target_return_10"),
-        (pl.col("mid_price").shift(-50).log() - pl.col("mid_price").log()).fill_null(0.0).fill_nan(0.0).clip(-0.5, 0.5).alias("target_return_50")
-    ])
+    # Step 6: Volatility-Adjusted Triple-Barrier Labeling ($2 to $5 Net Profit Target)
+    print("[Label Engine] Computing Volatility-Adjusted Triple-Barrier Targets (30m Horizon, $2-$5 Target)...")
+    ts_array = df.select("ts").to_numpy().flatten().astype(np.int64)
+    mid_array = df.select("mid_price").to_numpy().flatten().astype(np.float64)
+    vol_array = df.select("vol_realized_50").to_numpy().flatten().astype(np.float64)
 
-    # Extract raw targets
-    y_tkan_raw = df.select(["target_return_10"]).to_numpy().astype(np.float32)
-    y_cfc_raw = df.select(["target_return_50"]).to_numpy().astype(np.float32)
+    y_triple_barrier = compute_volatility_adjusted_triple_barrier_labels(
+        ts_array, mid_array, vol_array,
+        max_horizon_ms=1800000, # 30-minute macro holding horizon
+        m_tp=3.50,
+        m_sl=1.75,
+        min_tp_pct=0.0150,
+        min_sl_pct=0.0100,
+    )
+
+    meta_win_rate = float((y_triple_barrier[:, 1] > 0.5).mean() * 100.0)
+    print(f"[Label Engine] Triple-Barrier Labeling Complete: Meta Win Rate = {meta_win_rate:.2f}%")
 
     # Perform SIMD-Accelerated Rolling Z-Score + Tanh Bounding entirely in Rust/Polars
     print("[Normalization] Executing SIMD Polars Rolling Z-Scores (Rust Welford) + Symmetrical Tanh Bounding...")
@@ -306,23 +410,33 @@ def load_and_preprocess_lob_data():
     assert num_tkan_features == 40, f"Error: T-KAN feature count is {num_tkan_features}, expected 40!"
     assert num_cfc_features == 16, f"Error: CfC feature count is {num_cfc_features}, expected 16!"
 
-    # Split 80/20 Chronologically with Dynamic Purge Buffer
+    # Split 80/20 Chronologically with Dynamic Purge Buffer (covering 30-minute lookahead window)
     split_idx = int(N * TRAIN_SPLIT_RATIO)
-    max_purge = max(0, N - split_idx - 1)
-    purged_count = min(PURGE_BUFFER_TICKS, max(0, int(max_purge / 2)))
-    val_start_idx = min(N - 1, split_idx + purged_count)
+    t_split_end = ts_array[split_idx] if split_idx < len(ts_array) else 0
 
-    print(f"[Dataset Split] Chronological 80/20 Split with Dynamic Purge Buffer:")
+    val_start_idx = split_idx
+    if t_split_end > 0:
+        t_purge_cutoff = t_split_end + 1800000 # 30 minutes in ms
+        while val_start_idx < N - 1 and ts_array[val_start_idx] < t_purge_cutoff:
+            val_start_idx += 1
+
+    # Fallback to minimum purge buffer if timestamps are dense or synthetic
+    min_purge_ticks = min(max(50, int((N - split_idx) * 0.1)), 500)
+    if (val_start_idx - split_idx) < min_purge_ticks and (split_idx + min_purge_ticks) < N:
+        val_start_idx = split_idx + min_purge_ticks
+
+    purged_count = val_start_idx - split_idx
+
+    print(f"[Dataset Split] Chronological 80/20 Split with 30-Minute Non-Overlapping Purge Buffer:")
     print(f"                Train Range: [0 : {split_idx}] ({split_idx} samples)")
     print(f"                Purge Buffer Range: [{split_idx} : {val_start_idx}] ({purged_count} ticks purged)")
     print(f"                Validation Range: [{val_start_idx} : {N}] ({max(0, N - val_start_idx)} samples)")
 
-
     # Prepare T-KAN Tensors
     tkan_train_in = torch.from_numpy(tkan_norm[:split_idx])
-    tkan_train_tgt = torch.from_numpy(y_tkan_raw[:split_idx])
+    tkan_train_tgt = torch.from_numpy(y_triple_barrier[:split_idx])
     tkan_val_in = torch.from_numpy(tkan_norm[val_start_idx:])
-    tkan_val_tgt = torch.from_numpy(y_tkan_raw[val_start_idx:])
+    tkan_val_tgt = torch.from_numpy(y_triple_barrier[val_start_idx:])
 
     tkan_tensors = {
         "train_inputs": tkan_train_in.contiguous(),
@@ -331,11 +445,11 @@ def load_and_preprocess_lob_data():
         "val_targets": tkan_val_tgt.contiguous(),
     }
 
-    # Prepare compact 2D CfC Tensors [N, 16] for sub-second HTTP upload to Modal GPU (unfolded on GPU in 0.0001s)
+    # Prepare compact 2D CfC / Mamba-2 Tensors [N, 16] & Targets [N, 3]
     cfc_train_in = torch.from_numpy(cfc_norm[:split_idx]).contiguous()
-    cfc_train_tgt = torch.from_numpy(y_cfc_raw[:split_idx]).contiguous()
+    cfc_train_tgt = torch.from_numpy(y_triple_barrier[:split_idx]).contiguous()
     cfc_val_in = torch.from_numpy(cfc_norm[val_start_idx:]).contiguous()
-    cfc_val_tgt = torch.from_numpy(y_cfc_raw[val_start_idx:]).contiguous()
+    cfc_val_tgt = torch.from_numpy(y_triple_barrier[val_start_idx:]).contiguous()
 
     cfc_tensors = {
         "train_inputs": cfc_train_in,
@@ -366,7 +480,8 @@ def load_and_preprocess_lob_data():
         "val_records": max(0, N - val_start_idx),
         "welford_window": WELFORD_WINDOW,
         "cfc_sequence_length": CFC_SEQ_LEN,
-        "purge_buffer_ticks": PURGE_BUFFER_TICKS,
+        "purge_buffer_ticks": purged_count,
+        "meta_win_rate_pct": meta_win_rate,
         "tkan_features": {
             "dim": 40,
             "names": TKAN_FEATURE_NAMES,
@@ -399,3 +514,4 @@ def load_and_preprocess_lob_data():
 
 if __name__ == "__main__":
     load_and_preprocess_lob_data()
+

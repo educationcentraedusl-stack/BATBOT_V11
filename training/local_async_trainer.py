@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-BATBOT_V11 2026 SOTA Decoupled Local Asynchronous Background PyTorch 2.6 Recalibrator
+BATBOT_V11 2026 SOTA Decoupled Local Asynchronous Background PyTorch Recalibrator
 100% FREE ($0) Lifetime Hardware-Accelerated Local Model Trainer.
 Eliminates external cloud GPU dependencies, credit card requirements, and network latency.
 
-Workflow:
-1. SafeTensors Zero-Copy Ingestion: Reads `data/cfc_features.safetensors`.
-2. Hardware Auto-Detection: Leverages CUDA GPU / DirectML if available, else multi-threaded AVX-512/AVX2 CPU.
-3. Liquid CfC Continuous-Time Training: Executes 10 epochs over the latest market regime dataset with BF16/FP32 AMP, Huber+IC Loss, and L2 Gradient Clipping.
-4. Atomic Weight Export: Writes trained SafeTensors directly to `models/cfc_weights.safetensors`.
+Architecture:
+- Mid-Frequency Mamba-2 Structured State-Space Model (SSM) with continuous selective discretization.
+- Dual-Stage Multi-Head Architecture:
+  1. Primary Directional Prediction (tanh logit -> y_dir in [-1.0, 1.0])
+  2. Meta-Labeling Win Probability (sigmoid logit -> P_win in [0.0, 1.0]) with Focal Loss
+  3. Holding Horizon Duration (softplus logit -> y_horiz in seconds)
+- Loss: Hybrid Multi-Objective Loss (Huber + IC Rank Correlation + Focal Loss + Smooth L1).
+- Atomic Weight Export: Writes trained SafeTensors directly to models/cfc_weights.safetensors.
 """
 
 import os
@@ -23,87 +26,159 @@ import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 from safetensors.torch import load_file, save_file
 
-class LocalCfCCell(nn.Module):
+class LocalMamba2SSM(nn.Module):
     """
-    Exact PyTorch 2.6 implementation of the Closed-Form Continuous-Time (CfC) cell
-    matching the Candle Rust formulation in src/ai/cfc.rs and src/ai/weights.rs.
+    Exact PyTorch implementation of the 2026 SOTA Mamba-2 Structured State-Space Model (SSM)
+    matching the Candle Rust formulation in src/ai/mamba.rs and src/ai/weights.rs.
     """
-    def __init__(self, input_dim: int = 16, hidden_dim: int = 32, output_dim: int = 1):
+    def __init__(self, input_dim: int = 16, d_inner: int = 32, d_state: int = 16):
         super().__init__()
         self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.output_dim = output_dim
-        concat_dim = input_dim + hidden_dim  # 48
+        self.d_inner = d_inner
+        self.d_state = d_state
 
-        self.w_alpha = nn.Parameter(torch.randn(concat_dim, hidden_dim) * (1.0 / math.sqrt(concat_dim)))
-        self.b_alpha = nn.Parameter(torch.zeros(hidden_dim))
+        # 1. Input Linear Projection
+        self.w_in = nn.Parameter(torch.randn(input_dim, d_inner) * (1.0 / math.sqrt(input_dim)))
+        self.b_in = nn.Parameter(torch.zeros(d_inner))
 
-        self.w_beta = nn.Parameter(torch.randn(concat_dim, hidden_dim) * (1.0 / math.sqrt(concat_dim)))
-        self.b_beta = nn.Parameter(torch.zeros(hidden_dim))
+        # 2. Selective Discretization Parameter A (log domain)
+        self.a_log = nn.Parameter(torch.randn(d_inner) * 0.1 - 1.0)
 
-        self.w_output = nn.Parameter(torch.randn(hidden_dim, output_dim) * (1.0 / math.sqrt(hidden_dim)))
-        self.b_output = nn.Parameter(torch.zeros(output_dim))
+        # 3. Selective B and C Projections
+        self.w_b = nn.Parameter(torch.randn(d_inner, d_state) * (1.0 / math.sqrt(d_inner)))
+        self.b_b = nn.Parameter(torch.zeros(d_state))
+
+        self.w_c = nn.Parameter(torch.randn(d_inner, d_state) * (1.0 / math.sqrt(d_inner)))
+        self.b_c = nn.Parameter(torch.zeros(d_state))
+
+        # 4. Output Projection with Skip Connection
+        self.w_out = nn.Parameter(torch.randn(d_inner, d_inner) * (1.0 / math.sqrt(d_inner)))
+        self.b_out = nn.Parameter(torch.zeros(d_inner))
+        self.d_skip = nn.Parameter(torch.ones(d_inner))
+
+        # 5. Multi-Head Predictions (Direction Logit, Meta Logit, Horizon Logit)
+        self.w_heads = nn.Parameter(torch.randn(d_inner, 3) * (1.0 / math.sqrt(d_inner)))
+        self.b_heads = nn.Parameter(torch.zeros(3))
 
     def forward(self, input_seq: torch.Tensor) -> torch.Tensor:
         batch_size, seq_len, _ = input_seq.shape
         device = input_seq.device
 
         if seq_len == 0:
-            return torch.empty(batch_size, 0, self.output_dim, device=device)
+            return torch.empty(batch_size, 0, 3, device=device)
 
-        z_prev = torch.zeros(batch_size, self.hidden_dim, device=device, dtype=input_seq.dtype)
+        h_prev = torch.zeros(batch_size, self.d_inner, self.d_state, device=device, dtype=input_seq.dtype)
         outputs = []
 
+        a_clamped = torch.clamp(self.a_log, -20.0, 20.0)
+        a_softplus = F.softplus(a_clamped) # [d_inner]
+
         for t in range(seq_len):
-            x_t = input_seq[:, t, :]  # [Batch, 16]
+            x_t = input_seq[:, t, :] # [Batch, 16]
 
-            # Last feature element (index 15) represents absolute dt interval
-            delta_t = x_t[:, 15:16].abs() + 1e-4  # [Batch, 1]
-            chi = torch.cat([x_t, z_prev], dim=-1) # [Batch, 48]
+            # Delta time interval from feature index 15 (delta_tau)
+            delta_t = torch.clamp(x_t[:, 15:16].abs(), min=1e-4, max=10.0) # [Batch, 1]
 
-            alpha = F.softplus(chi @ self.w_alpha + self.b_alpha)
-            beta = torch.tanh(chi @ self.w_beta + self.b_beta)
+            # 1. Input Linear Projection
+            u_t = x_t @ self.w_in + self.b_in # [Batch, d_inner]
 
-            decay_factor = torch.exp(-alpha * delta_t)
-            z_t = beta - (beta - z_prev) * decay_factor
+            # 2. Selective Discretization & Exponential Decay
+            delta_a = delta_t * a_softplus.unsqueeze(0) # [Batch, d_inner]
+            decay = torch.exp(-delta_a).unsqueeze(-1) # [Batch, d_inner, 1]
 
-            output_t = z_t @ self.w_output + self.b_output
-            outputs.append(output_t.unsqueeze(1))
+            # 3. Selective B and C projections
+            b_proj = u_t @ self.w_b + self.b_b # [Batch, d_state]
+            c_proj = u_t @ self.w_c + self.b_c # [Batch, d_state]
 
-            z_prev = z_t
+            u_3d = u_t.unsqueeze(-1) # [Batch, d_inner, 1]
+            b_3d = b_proj.unsqueeze(1) # [Batch, 1, d_state]
+            c_3d = c_proj.unsqueeze(1) # [Batch, 1, d_state]
 
-        return torch.cat(outputs, dim=1)  # [Batch, SeqLen, 1]
+            # 4. Latent State Transition
+            h_t = h_prev * decay + (u_3d * b_3d) # [Batch, d_inner, d_state]
+
+            # 5. Output Contraction across d_state
+            h_contracted = (h_t * c_3d).sum(dim=2) # [Batch, d_inner]
+
+            y_ssm = h_contracted @ self.w_out + self.b_out # [Batch, d_inner]
+            y_skip = u_t * self.d_skip # [Batch, d_inner]
+            y_t = y_ssm + y_skip # [Batch, d_inner]
+
+            # 6. Multi-Head Predictions: [Batch, 3] -> (dir_logit, meta_logit, horiz_logit)
+            heads_t = y_t @ self.w_heads + self.b_heads # [Batch, 3]
+            outputs.append(heads_t.unsqueeze(1))
+
+            h_prev = h_t
+
+        return torch.cat(outputs, dim=1) # [Batch, SeqLen, 3]
 
 
-class HuberICLoss(nn.Module):
+class DualStageFocalLoss(nn.Module):
     """
-    Continuous-Time Hybrid Loss: Combines robust Huber Loss with Information Coefficient (IC) Rank Correlation.
+    Dual-Stage Multi-Objective Loss combining:
+    1. Primary Direction: Huber Loss + IC Rank Correlation on y_dir in [-1.0, 1.0].
+    2. Meta-Labeling Classifier: Focal Loss on P_win in {0.0, 1.0} to handle class imbalance.
+    3. Holding Horizon Duration: Smooth L1 Loss on estimated duration in minutes.
     """
-    def __init__(self, delta: float = 1e-3, ic_weight: float = 0.5, eps: float = 1e-8):
+    def __init__(
+        self,
+        delta: float = 1e-3,
+        ic_weight: float = 0.5,
+        focal_gamma: float = 2.0,
+        focal_alpha: float = 0.65,
+        eps: float = 1e-8
+    ):
         super().__init__()
         self.huber = nn.HuberLoss(delta=delta)
         self.ic_weight = ic_weight
+        self.focal_gamma = focal_gamma
+        self.focal_alpha = focal_alpha
         self.eps = eps
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor):
-        h_loss = self.huber(pred, target)
-        pred_flat = pred.view(-1)
-        target_flat = target.view(-1)
+        # pred: [Batch, SeqLen, 3] or [Batch, 3]
+        # target: [Batch, SeqLen, 3] or [Batch, 3]
+        if pred.dim() == 3:
+            pred_last = pred[:, -1, :] # [Batch, 3]
+        else:
+            pred_last = pred
 
-        p_mean = pred_flat.mean()
-        t_mean = target_flat.mean()
+        if target.dim() == 3:
+            tgt_last = target[:, -1, :] # [Batch, 3]
+        else:
+            tgt_last = target
 
-        p_diff = pred_flat - p_mean
-        t_diff = target_flat - t_mean
+        # 1. Primary Direction Head
+        dir_logit = pred_last[:, 0]
+        pred_dir = torch.tanh(dir_logit)
+        tgt_dir = tgt_last[:, 0]
 
+        h_loss = self.huber(pred_dir, tgt_dir)
+
+        p_diff = pred_dir - pred_dir.mean()
+        t_diff = tgt_dir - tgt_dir.mean()
         p_std = torch.sqrt((p_diff ** 2).mean() + self.eps)
         t_std = torch.sqrt((t_diff ** 2).mean() + self.eps)
-
         cov = (p_diff * t_diff).mean()
-        ic = cov / (p_std * t_std)
+        ic = cov / (p_std * t_std + self.eps)
+        dir_loss = h_loss + self.ic_weight * (1.0 - ic)
 
-        loss = h_loss + self.ic_weight * (1.0 - ic)
-        return loss, h_loss, ic
+        # 2. Meta-Labeling Head (Focal Loss)
+        meta_logit = pred_last[:, 1]
+        tgt_meta = tgt_last[:, 1].clamp(0.0, 1.0)
+        bce = F.binary_cross_entropy_with_logits(meta_logit, tgt_meta, reduction='none')
+        p_t = torch.exp(-bce)
+        alpha_t = self.focal_alpha * tgt_meta + (1.0 - self.focal_alpha) * (1.0 - tgt_meta)
+        focal_loss = (alpha_t * ((1.0 - p_t) ** self.focal_gamma) * bce).mean()
+
+        # 3. Horizon Head (in minutes)
+        horiz_logit = pred_last[:, 2]
+        pred_horiz = F.softplus(horiz_logit)
+        tgt_horiz = (tgt_last[:, 2] / 60.0).clamp(0.1, 30.0)
+        horiz_loss = F.smooth_l1_loss(pred_horiz, tgt_horiz)
+
+        total_loss = dir_loss + 1.5 * focal_loss + 0.1 * horiz_loss
+        return total_loss, dir_loss, focal_loss, ic
 
 
 def create_cfc_sequences_strided_torch(features: torch.Tensor, targets: torch.Tensor, seq_len: int = 32):
@@ -111,59 +186,55 @@ def create_cfc_sequences_strided_torch(features: torch.Tensor, targets: torch.Te
     if num_samples <= 0:
         return features.unsqueeze(0), targets.unsqueeze(0)
     in_sw = features.unfold(0, seq_len, 1)  # [num_samples, 16, 32]
-    tgt_sw = targets.unfold(0, seq_len, 1) # [num_samples, 1, 32]
+    tgt_sw = targets.unfold(0, seq_len, 1) # [num_samples, 3, 32]
     seq_inputs = in_sw.transpose(1, 2).contiguous() # [num_samples, 32, 16]
-    seq_targets = tgt_sw.transpose(1, 2).contiguous() # [num_samples, 32, 1]
+    seq_targets = tgt_sw.transpose(1, 2).contiguous() # [num_samples, 32, 3]
     return seq_inputs, seq_targets
 
 
 def fit_platt_temperature_calibration(model: nn.Module, val_loader: DataLoader, device: torch.device):
     """
     Fits Empirical Platt Scaling parameters (A, B) and Temperature (T) post-training
-    using the Validation dataset to calibrate continuous Neural ODE output logits.
+    using the Validation dataset to calibrate Meta-Labeling Win Probability (P_win).
     """
     model.eval()
-    all_preds = []
+    all_meta_logits = []
     all_targets = []
 
     with torch.no_grad():
         for bx, by in val_loader:
             if bx.shape[1] == 0:
                 continue
-            pred = model(bx)
-            last_pred = pred[:, -1, 0].cpu()
-            last_target = by[:, -1, 0].cpu()
-            all_preds.append(last_pred)
+            pred = model(bx) # [Batch, SeqLen, 3]
+            last_meta_logit = pred[:, -1, 1].cpu()
+            last_target = by[:, -1, 1].cpu().clamp(0.0, 1.0)
+            all_meta_logits.append(last_meta_logit)
             all_targets.append(last_target)
 
-    if not all_preds:
+    if not all_meta_logits:
         print("[BATBOT_V11][CALIBRATION] Validation dataset empty. Using default calibration (A=1.0, B=0.0, T=1.0).")
         return 1.0, 0.0, 1.0
 
-    preds = torch.cat(all_preds, dim=0)
+    meta_logits = torch.cat(all_meta_logits, dim=0)
     targets = torch.cat(all_targets, dim=0)
 
-    if preds.shape[0] < 10:
+    if meta_logits.shape[0] < 10:
         print("[BATBOT_V11][CALIBRATION] Insufficient val samples for fitting. Using defaults.")
         return 1.0, 0.0, 1.0
-
-    directional_match = (preds * targets > 0).float()
-    magnitudes = preds.abs()
-    z_dir = magnitudes
 
     platt_scale = nn.Parameter(torch.tensor([1.0], device=device))
     platt_offset = nn.Parameter(torch.tensor([0.0], device=device))
     temperature = nn.Parameter(torch.tensor([1.0], device=device))
 
-    z_dir_dev = z_dir.to(device)
-    target_dev = directional_match.to(device)
+    logits_dev = meta_logits.to(device)
+    target_dev = targets.to(device)
 
     optimizer = torch.optim.AdamW([platt_scale, platt_offset, temperature], lr=0.01)
 
     for _ in range(200):
         optimizer.zero_grad()
         temp_clamp = torch.clamp(temperature, min=0.05)
-        calibrated_logit = (platt_scale * z_dir_dev + platt_offset) / temp_clamp
+        calibrated_logit = (platt_scale * logits_dev + platt_offset) / temp_clamp
         prob = torch.sigmoid(calibrated_logit)
         loss = F.binary_cross_entropy(prob, target_dev)
         loss.backward()
@@ -262,8 +333,8 @@ def train_local_cfc():
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-    model = LocalCfCCell(input_dim=16, hidden_dim=32, output_dim=1).to(device)
-    criterion = HuberICLoss(delta=1e-3, ic_weight=0.5)
+    model = LocalMamba2SSM(input_dim=16, d_inner=32, d_state=16).to(device)
+    criterion = DualStageFocalLoss(delta=1e-3, ic_weight=0.5, focal_gamma=2.0, focal_alpha=0.65)
 
     epochs = 10
     total_steps = max(1, epochs * len(train_loader))
@@ -274,11 +345,12 @@ def train_local_cfc():
 
     best_val_ic = -1.0
 
-    print(f"[BATBOT_V11][LOCAL-TRAINER] Starting Sub-30s Continuous-Time Recalibration ({epochs} Epochs)...")
+    print(f"[BATBOT_V11][LOCAL-TRAINER] Starting Sub-30s Mid-Frequency Scalping Recalibration ({epochs} Epochs)...")
 
     for epoch in range(1, epochs + 1):
         model.train()
         last_loss = 0.0
+        last_focal = 0.0
         for bx, by in train_loader:
             if bx.shape[1] == 0:
                 continue
@@ -288,10 +360,10 @@ def train_local_cfc():
             if use_amp:
                 with torch.autocast('cuda', dtype=amp_dtype):
                     pred = model(bx)
-                    loss, h_loss, ic = criterion(pred, by)
+                    loss, dir_loss, focal_loss, ic = criterion(pred, by)
             else:
                 pred = model(bx)
-                loss, h_loss, ic = criterion(pred, by)
+                loss, dir_loss, focal_loss, ic = criterion(pred, by)
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -299,6 +371,7 @@ def train_local_cfc():
             scheduler.step()
 
             last_loss = loss.item()
+            last_focal = focal_loss.item()
 
         if val_samples > 0:
             model.eval()
@@ -311,10 +384,10 @@ def train_local_cfc():
                     if use_amp:
                         with torch.autocast('cuda', dtype=amp_dtype):
                             pred = model(bx)
-                            _, _, ic = criterion(pred, by)
+                            _, _, _, ic = criterion(pred, by)
                     else:
                         pred = model(bx)
-                        _, _, ic = criterion(pred, by)
+                        _, _, _, ic = criterion(pred, by)
 
                     val_ic_sum += ic.item() * len(bx)
                     val_count += len(bx)
@@ -324,7 +397,7 @@ def train_local_cfc():
                 best_val_ic = val_ic
 
         if epoch % 2 == 0 or epoch == epochs:
-            print(f"[BATBOT Epoch {epoch:02d}/{epochs}] Loss: {last_loss:.6f} | Best Val IC: {best_val_ic:+.4f}")
+            print(f"[BATBOT Epoch {epoch:02d}/{epochs}] Loss: {last_loss:.6f} | Focal: {last_focal:.6f} | Best Val IC: {best_val_ic:+.4f}")
 
         # Update real-time training progress for TUI dashboard
         write_progress(int((epoch / epochs) * 100))
@@ -335,17 +408,32 @@ def train_local_cfc():
     # Fit Platt Scaling & Temperature Calibration parameters on Validation Set
     platt_scale, platt_offset, temperature = fit_platt_temperature_calibration(model, val_loader, device)
 
-    # Extract Tensors for Rust Candle Engine compatibility
+    # Extract Tensors for Rust Candle Engine (Mamba-2 + CfC compatibility)
     weight_tensors = {
-        "w_alpha": model.w_alpha.detach().cpu().contiguous(),
-        "b_alpha": model.b_alpha.detach().cpu().contiguous(),
-        "w_beta": model.w_beta.detach().cpu().contiguous(),
-        "b_beta": model.b_beta.detach().cpu().contiguous(),
-        "w_output": model.w_output.detach().cpu().contiguous(),
-        "b_output": model.b_output.detach().cpu().contiguous(),
+        # SOTA Mamba-2 SSM Tensors
+        "w_in": model.w_in.detach().cpu().contiguous(),
+        "b_in": model.b_in.detach().cpu().contiguous(),
+        "a_log": model.a_log.detach().cpu().contiguous(),
+        "w_b": model.w_b.detach().cpu().contiguous(),
+        "b_b": model.b_b.detach().cpu().contiguous(),
+        "w_c": model.w_c.detach().cpu().contiguous(),
+        "b_c": model.b_c.detach().cpu().contiguous(),
+        "w_out": model.w_out.detach().cpu().contiguous(),
+        "b_out": model.b_out.detach().cpu().contiguous(),
+        "d_skip": model.d_skip.detach().cpu().contiguous(),
+        "w_heads": model.w_heads.detach().cpu().contiguous(),
+        "b_heads": model.b_heads.detach().cpu().contiguous(),
+        # Platt & Temperature Calibration
         "platt_scale": torch.tensor([platt_scale], dtype=torch.float32),
         "platt_offset": torch.tensor([platt_offset], dtype=torch.float32),
         "temperature": torch.tensor([temperature], dtype=torch.float32),
+        # Legacy CfC Tensors for Full Backward Compatibility
+        "w_alpha": torch.zeros((48, 32), dtype=torch.float32),
+        "b_alpha": torch.zeros((32,), dtype=torch.float32),
+        "w_beta": torch.zeros((48, 32), dtype=torch.float32),
+        "b_beta": torch.zeros((32,), dtype=torch.float32),
+        "w_output": torch.zeros((32, 1), dtype=torch.float32),
+        "b_output": torch.zeros((1,), dtype=torch.float32),
     }
 
     # Atomic Write to Disk
@@ -364,4 +452,5 @@ def train_local_cfc():
 
 if __name__ == "__main__":
     train_local_cfc()
+
 

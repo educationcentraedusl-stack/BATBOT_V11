@@ -52,7 +52,7 @@ class AutoRecalibrationManager {
     shadowTickCounter = 0;
     driftTickCounter = 0;
     sustainedDriftThreshold = 50; // 50 consecutive ticks below IC threshold (0.0300)
-    cooldownMs = 60000; // 60s cooldown between recalibration attempts
+    cooldownMs = 1800000; // Strictly tuned 30-minute cooldown floor (1,800,000 ms = max 1-2 recalibrations/hour)
     lastAttemptTimestamp = 0;
     lastSuccessTimestamp = 0;
     totalRecalibrations = 0;
@@ -83,6 +83,12 @@ class AutoRecalibrationManager {
         this.cfcFeaturesPath = path.join(this.dataDir, "cfc_features.safetensors");
         this.errorLogPath = path.join(this.dataDir, "recalibration_errors.log");
         this.tkanScheduleFilePath = path.join(this.dataDir, ".tkan_last_train");
+        // Tuned CUSUM Cooldown Floor: strictly clamped between 25.0 and 60.0 minutes (guarantees 1-2 recalibrations/hr)
+        const envCooldownMin = process.env.RECALIBRATION_COOLDOWN_MINUTES
+            ? parseFloat(process.env.RECALIBRATION_COOLDOWN_MINUTES)
+            : (process.env.RECALIBRATION_COOLDOWN_SEC ? parseFloat(process.env.RECALIBRATION_COOLDOWN_SEC) / 60 : 30.0);
+        const clampedCooldownMin = Number.isFinite(envCooldownMin) ? Math.max(25.0, Math.min(60.0, envCooldownMin)) : 30.0;
+        this.cooldownMs = Math.round(clampedCooldownMin * 60 * 1000);
         const envDays = process.env.TKAN_TRAINING_INTERVAL_DAYS ? parseFloat(process.env.TKAN_TRAINING_INTERVAL_DAYS) : 7.0;
         this.tkanScheduleIntervalDays = Number.isFinite(envDays) && envDays > 0 ? envDays : 7.0;
         // Load last T-KAN training timestamp if persisted on disk, defaulting to boot time to prevent cold-start triggers
@@ -105,6 +111,12 @@ class AutoRecalibrationManager {
             AutoRecalibrationManager.instance = new AutoRecalibrationManager();
         }
         return AutoRecalibrationManager.instance;
+    }
+    getCooldownMs() {
+        return this.cooldownMs;
+    }
+    getCooldownMinutes() {
+        return this.cooldownMs / 60000;
     }
     getTkanScheduleIntervalDays() {
         return this.tkanScheduleIntervalDays;
@@ -281,12 +293,13 @@ class AutoRecalibrationManager {
         if (!this.isShadowMode || this.isRecalibrating || this.isPromptActive || !this.isRustWarmupComplete())
             return;
         this.shadowTickCounter++;
+        const timeSinceLastAttempt = Date.now() - this.lastAttemptTimestamp;
         if (this.shadowTickCounter >= 300 &&
             !this.isRecalibrating &&
             !this.isPromptActive &&
-            Date.now() - this.lastAttemptTimestamp >= this.cooldownMs) {
+            timeSinceLastAttempt >= this.cooldownMs) {
             this.shadowTickCounter = 0;
-            console.log("[BATBOT_V11][SHADOW_MODE] Triggering background PyTorch calibration training...");
+            console.log(`[BATBOT_V11][SHADOW_MODE] Triggering background PyTorch calibration training (Elapsed: ${(timeSinceLastAttempt / 60000).toFixed(1)}m >= ${(this.cooldownMs / 60000).toFixed(1)}m)...`);
             void this.runRecalibrationPipeline(ic);
         }
     }
@@ -310,13 +323,15 @@ class AutoRecalibrationManager {
         }
         if (isDrifted) {
             this.driftTickCounter++;
-            // Exponential backoff cooldown if previous recalibration failed
+            const timeSinceLastAttempt = Date.now() - this.lastAttemptTimestamp;
             const effectiveCooldown = this.recalibrationFailed
-                ? Math.min(300000, this.cooldownMs * 2)
+                ? Math.max(this.cooldownMs, 1800000) // Keep strict 30m cooldown floor even after failure
                 : this.cooldownMs;
+            // Rate limit to strictly 1-2 recalibrations per hour
             if (this.driftTickCounter >= this.sustainedDriftThreshold &&
                 !this.isRecalibrating &&
-                Date.now() - this.lastAttemptTimestamp >= effectiveCooldown) {
+                timeSinceLastAttempt >= effectiveCooldown) {
+                console.log(`[BATBOT_V11][CUSUM_DRIFT] Statistically verified regime transition (Drift Ticks: ${this.driftTickCounter}, Elapsed: ${(timeSinceLastAttempt / 60000).toFixed(1)}m >= ${(effectiveCooldown / 60000).toFixed(1)}m). Triggering recalibration...`);
                 void this.runRecalibrationPipeline(ic);
             }
         }
@@ -369,6 +384,12 @@ class AutoRecalibrationManager {
         }
         // Physical Hard Gate: Block background recalibration during warm-up (< 1000 pairs) unless forced
         if (!force && !this.isRustWarmupComplete()) {
+            return false;
+        }
+        // Enforce strict CUSUM cooldown floor (25-30 min) unless explicitly forced
+        if (!force && this.lastAttemptTimestamp > 0 && Date.now() - this.lastAttemptTimestamp < this.cooldownMs) {
+            const remainingMin = ((this.cooldownMs - (Date.now() - this.lastAttemptTimestamp)) / 60000).toFixed(1);
+            console.log(`[BATBOT_V11][CUSUM_RATE_LIMIT] Recalibration suppressed by cooldown floor (${remainingMin}m remaining). Enforcing max 1-2 recalibrations/hour.`);
             return false;
         }
         // Set attempt timestamp IMMEDIATELY at entry to enforce cooldown on all execution paths

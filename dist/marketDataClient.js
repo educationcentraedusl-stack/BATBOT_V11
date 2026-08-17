@@ -449,6 +449,13 @@ class MarketDataClient {
     setOmsShortUnrealizedPnl(pnl, assetIdx = 0) {
         this.writeAtomicFloat64Asset(assetIdx, 148, pnl);
     }
+    // --- Slot 149: Bivariate Hawkes Asymmetry ---
+    getHawkesAsymmetry(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 149);
+    }
+    setHawkesAsymmetry(val, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 149, val);
+    }
     /**
      * Broadcasts atomic Kill-Switch activation across all asset slots simultaneously.
      */
