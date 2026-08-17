@@ -381,8 +381,8 @@ impl AtomicSharedMemoryBridge {
         self.store_f64_asset(asset_idx, 125, regime as f64);
         self.store_f64_asset(asset_idx, 126, if is_sweep_detected { 1.0 } else { 0.0 });
 
-        // Slots 130..131: Multi-Level OFI and Bivariate Hawkes Asymmetry
-        self.store_f64_asset(asset_idx, 130, multi_level_ofi);
-        self.store_f64_asset(asset_idx, 131, hawkes_asymmetry);
+        // Slots 138 & 149: Multi-Level OFI and Bivariate Hawkes Asymmetry
+        self.store_f64_asset(asset_idx, 138, multi_level_ofi);
+        self.store_f64_asset(asset_idx, 149, hawkes_asymmetry);
     }
 }

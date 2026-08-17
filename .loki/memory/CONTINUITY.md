@@ -15,6 +15,12 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-08-17 - Final Phase 1 Memory Collision Remediation Completed & 100% QA Verified:
+  - Re-allocated SharedArrayBuffer slots to eliminate collision with Interactive Control Flags (Slots 130..133):
+    - Multi-Level OFI moved to Slot 138 (`src/ipc/shared_memory.rs`, `src/ai/engine.rs`, `src/marketDataClient.ts`).
+    - Bivariate Hawkes Asymmetry moved to Slot 149 (`src/ipc/shared_memory.rs`, `src/ai/engine.rs`, `src/marketDataClient.ts`).
+    - Added zero-allocation TypeScript getters/setters `getHawkesAsymmetry` and `setHawkesAsymmetry` in `MarketDataClient` on Slot 149 and updated `sabSchema.ts`.
+  - 100% Verified: `cargo test --lib` (36/36 passed), `npx napi build --platform --release` (exit code 0), and `npx tsc --noEmit` (0 errors).
 * 2026-08-17 - Phase 1 Emergency Remediation of 9 Audit Defects Completed & 100% QA Verified:
   - Fixed Mamba-2 SSM (`src/ai/mamba.rs`): Implemented true $[1, d_{inner}, d_{state}]$ 3D latent expansion, outer product $u_t \otimes B_t$, selective discretization with numerically stable clamped softplus on $A_{\log}$, contraction of $h_t$ with $C_t$ ($y_t = \sum_j h_{t, :, j} C_{t, j}$), and skip connection $u_t \odot D$.
   - Fixed Microstructure (`src/lob/microstructure.rs`, `src/lob/metrics.rs`, `src/lob/book.rs`): Replaced ordinal array index shifts in `recalculate_multi_level_ofi` with exact price-level matching across top 10 depths. Updated `update_hawkes` to consume exact nanosecond timestamps ($\Delta t = (ts - ts_{prev})/10^9$) and routed physical trade timestamps from network packets to book metrics.

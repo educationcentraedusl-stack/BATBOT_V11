@@ -592,6 +592,16 @@ export class MarketDataClient {
     this.writeAtomicFloat64Asset(assetIdx, 148, pnl);
   }
 
+  // --- Slot 149: Bivariate Hawkes Asymmetry ---
+
+  public getHawkesAsymmetry(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 149);
+  }
+
+  public setHawkesAsymmetry(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 149, val);
+  }
+
 
   /**
    * Broadcasts atomic Kill-Switch activation across all asset slots simultaneously.

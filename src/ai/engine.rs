@@ -189,9 +189,9 @@ impl StreamingFeaturePipeline {
         let obi_lag5 = *self.obi_hist.get(4).unwrap_or(&obi);
         let obi_vel_5 = (obi - obi_lag5) / 5.0;
 
-        // Ingest SOTA Multi-Level OFI and Bivariate Hawkes Asymmetry from SAB slots 130 and 131
-        let multi_level_ofi = sab.load_f64_asset(asset_idx, 130).clamp(-1.0, 1.0);
-        let hawkes_asymmetry = sab.load_f64_asset(asset_idx, 131).clamp(-1.0, 1.0);
+        // Ingest SOTA Multi-Level OFI and Bivariate Hawkes Asymmetry from SAB slots 138 and 149
+        let multi_level_ofi = sab.load_f64_asset(asset_idx, 138).clamp(-1.0, 1.0);
+        let hawkes_asymmetry = sab.load_f64_asset(asset_idx, 149).clamp(-1.0, 1.0);
 
         let cvd_raw = sab.load_f64_asset(asset_idx, 2);
         let cvd_lag1 = *self.cvd_hist.get(0).unwrap_or(&cvd_raw);
