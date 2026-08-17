@@ -4,14 +4,15 @@ use candle_core::{DType, Device, Error, Result, Tensor};
 /// Implements continuous/discrete selective state space transition with linear time complexity O(1) per step.
 ///
 /// Mathematical Formulation:
-/// Input: x_t \in \mathbb{R}^{d_{in}}
-/// u_t = x_t W_{in} + b_{in}
-/// \Delta A = \text{softplus}(A_{log}) \cdot \Delta t
-/// \text{decay} = \exp(-\Delta A)
-/// B_t = u_t W_B + b_B
-/// C_t = u_t W_C + b_C
-/// h_t = h_{t-1} \odot \text{decay} + B_t \odot u_t
-/// y_t = (h_t \odot C_t) W_{out} + b_{out} + u_t \odot D
+/// Input: x_t \in \mathbb{R}^{1 \times d_{in}}
+/// u_t = x_t W_{in} + b_{in} \in \mathbb{R}^{1 \times d_{inner}}
+/// \Delta A = \text{softplus}(A_{log}) \cdot \Delta t \in \mathbb{R}^{d_{inner}}
+/// \text{decay} = \exp(-\Delta A) \in \mathbb{R}^{1 \times d_{inner} \times 1}
+/// B_t = u_t W_B + b_B \in \mathbb{R}^{1 \times d_{state}}
+/// C_t = u_t W_C + b_C \in \mathbb{R}^{1 \times d_{state}}
+/// h_t = h_{t-1} \odot \text{decay} + (u_t \otimes B_t) \in \mathbb{R}^{1 \times d_{inner} \times d_{state}}
+/// y_{ssm} = \sum_{j=1}^{d_{state}} (h_{t, :, j} \odot C_{t, j}) W_{out} + b_{out}
+/// y_t = y_{ssm} + u_t \odot D \in \mathbb{R}^{1 \times d_{inner}}
 ///
 /// Output Heads:
 /// 1. Directional Skew: \tanh(y_t W_{dir} + b_{dir}) \in [-1.0, 1.0]
@@ -87,7 +88,7 @@ impl Mamba2Cell {
         let b_b = Tensor::zeros((d_state,), DType::F32, device)?;
         let w_c = Tensor::zeros((d_inner, d_state), DType::F32, device)?;
         let b_c = Tensor::zeros((d_state,), DType::F32, device)?;
-        let w_out = Tensor::zeros((d_state, d_inner), DType::F32, device)?;
+        let w_out = Tensor::zeros((d_inner, d_inner), DType::F32, device)?;
         let b_out = Tensor::zeros((d_inner,), DType::F32, device)?;
         let d_skip = Tensor::ones((d_inner,), DType::F32, device)?;
         let w_heads = Tensor::zeros((d_inner, 3), DType::F32, device)?;
@@ -103,11 +104,11 @@ impl Mamba2Cell {
     ///
     /// Args:
     /// - `input`: [1, input_dim] feature tensor
-    /// - `h_prev`: [1, d_state] or [1, d_inner] hidden state tensor
+    /// - `h_prev`: [1, d_inner, d_state] latent state tensor
     /// - `delta_t`: elapsed time interval in seconds (clamped to [0.0001, 10.0])
     ///
     /// Returns:
-    /// - `(output_heads, h_next)`: output_heads shape [1, 3] -> (direction, p_win, horizon_sec), h_next shape [1, d_state]
+    /// - `(output_heads, h_next)`: output_heads shape [1, 3] -> (direction, p_win, horizon_sec), h_next shape [1, d_inner, d_state]
     pub fn forward(
         &self,
         input: &Tensor,
@@ -119,25 +120,43 @@ impl Mamba2Cell {
         // 1. Input Linear Projection
         let u = input.matmul(&self.w_in)?.broadcast_add(&self.b_in)?; // [1, d_inner]
 
-        // 2. Selective Discretization Parameter A
-        let a_exp = (self.a_log.exp()? + 1.0)?.log()?; // softplus
-        let delta_a = (a_exp * (dt_clamped as f64))?; // [d_inner]
+        // 2. Selective Discretization Parameter A with Numerically Stable Softplus
+        let a_clamped = self.a_log.clamp(-20.0f32, 20.0f32)?;
+        let a_softplus = (a_clamped.exp()? + 1.0)?.log()?;
+        let delta_a = (&a_softplus * (dt_clamped as f64))?; // [d_inner]
         let decay = delta_a.neg()?.exp()?; // [d_inner]
+        let decay_3d = decay.reshape((1, self.d_inner, 1))?; // [1, d_inner, 1]
 
         // 3. Selective B and C projections
         let b_proj = u.matmul(&self.w_b)?.broadcast_add(&self.b_b)?; // [1, d_state]
-        let _c_proj = u.matmul(&self.w_c)?.broadcast_add(&self.b_c)?; // [1, d_state]
+        let c_proj = u.matmul(&self.w_c)?.broadcast_add(&self.b_c)?; // [1, d_state]
 
-        // 4. SSM State Update
-        let decay_mean = decay.mean_all()?.to_scalar::<f32>()? as f64;
-        let u_mean = u.mean_all()?.to_scalar::<f32>()? as f64;
+        let u_3d = u.reshape((1, self.d_inner, 1))?; // [1, d_inner, 1]
+        let b_3d = b_proj.reshape((1, 1, self.d_state))?; // [1, 1, d_state]
+        let c_3d = c_proj.reshape((1, 1, self.d_state))?; // [1, 1, d_state]
 
-        let h_decayed = h_prev.affine(decay_mean, 0.0)?;
-        let h_input = b_proj.affine(u_mean, 0.0)?;
-        let h_next = (&h_decayed + &h_input)?; // [1, d_state]
+        // 4. True Multi-Dimensional SSM Latent State Update [1, d_inner, d_state]
+        // Ensure h_prev matches [1, d_inner, d_state]
+        let h_prev_aligned = if h_prev.dims() != &[1, self.d_inner, self.d_state] {
+            Tensor::zeros((1, self.d_inner, self.d_state), DType::F32, input.device())?
+        } else {
+            h_prev.clone()
+        };
 
-        // 5. Output Projection with Skip Connection
-        let y_ssm = h_next.matmul(&self.w_out)?.broadcast_add(&self.b_out)?; // [1, d_inner]
+        let h_decayed = h_prev_aligned.broadcast_mul(&decay_3d)?; // [1, d_inner, d_state]
+        let input_outer = u_3d.broadcast_mul(&b_3d)?; // [1, d_inner, d_state]
+        let h_next = (&h_decayed + &input_outer)?; // [1, d_inner, d_state]
+
+        // 5. Output Gating with C_t Projection: Contraction across d_state dimension
+        let h_contracted = h_next.broadcast_mul(&c_3d)?.sum(2)?; // [1, d_inner]
+
+        // Output Projection with Skip Connection
+        let y_ssm = if self.w_out.dims() == &[self.d_inner, self.d_inner] {
+            h_contracted.matmul(&self.w_out)?.broadcast_add(&self.b_out)?
+        } else {
+            h_contracted.broadcast_add(&self.b_out)?
+        };
+
         let y_skip = u.broadcast_mul(&self.d_skip)?; // [1, d_inner]
         let y = (&y_ssm + &y_skip)?; // [1, d_inner]
 
@@ -184,13 +203,13 @@ mod tests {
         let cell = Mamba2Cell::default_cell(input_dim, d_inner, d_state, &device)?;
 
         let input = Tensor::zeros((1, input_dim), DType::F32, &device)?;
-        let h_prev = Tensor::zeros((1, d_state), DType::F32, &device)?;
+        let h_prev = Tensor::zeros((1, d_inner, d_state), DType::F32, &device)?;
         let delta_t = 0.010;
 
         let (heads, h_next) = cell.forward(&input, &h_prev, delta_t)?;
 
         assert_eq!(heads.dims(), &[1, 3]);
-        assert_eq!(h_next.dims(), &[1, d_state]);
+        assert_eq!(h_next.dims(), &[1, d_inner, d_state]);
 
         let (dir, p_win, horiz) = cell.evaluate_scalar_heads(&heads)?;
         assert_eq!(dir, 0.0);

@@ -15,6 +15,8 @@ pub struct MicrostructureMetrics {
     pub lob_entropy: f64,
     pub regime: u8,
     pub is_sweep_detected: bool,
+    pub multi_level_ofi: f64,
+    pub hawkes_asymmetry: f64,
 }
 
 impl Default for MicrostructureMetrics {
@@ -35,6 +37,8 @@ impl Default for MicrostructureMetrics {
             lob_entropy: 0.0,
             regime: 0,
             is_sweep_detected: false,
+            multi_level_ofi: 0.0,
+            hawkes_asymmetry: 0.0,
         }
     }
 }

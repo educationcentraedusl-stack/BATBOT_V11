@@ -189,7 +189,9 @@ impl StreamingFeaturePipeline {
         let obi_lag5 = *self.obi_hist.get(4).unwrap_or(&obi);
         let obi_vel_5 = (obi - obi_lag5) / 5.0;
 
-        let obi_press_ratio = obi * spread;
+        // Ingest SOTA Multi-Level OFI and Bivariate Hawkes Asymmetry from SAB slots 130 and 131
+        let multi_level_ofi = sab.load_f64_asset(asset_idx, 130).clamp(-1.0, 1.0);
+        let hawkes_asymmetry = sab.load_f64_asset(asset_idx, 131).clamp(-1.0, 1.0);
 
         let cvd_raw = sab.load_f64_asset(asset_idx, 2);
         let cvd_lag1 = *self.cvd_hist.get(0).unwrap_or(&cvd_raw);
@@ -213,9 +215,6 @@ impl StreamingFeaturePipeline {
 
         let trade_vel_mean_10 = vec_mean(&self.trade_vel_hist, 10);
         let vpin_proxy_10 = cvd_delta_10.abs() / (trade_vel_mean_10 + 1e-5);
-
-        let trade_vel_mean_50 = vec_mean(&self.trade_vel_hist, 50);
-        let vpin_proxy_50 = cvd_delta_50.abs() / (trade_vel_mean_50 + 1e-5);
 
         let lat_us = lat_us_val;
         let lat_us_lag1 = *self.lat_us_hist.get(0).unwrap_or(&lat_us);
@@ -264,7 +263,7 @@ impl StreamingFeaturePipeline {
             obi_ema_250_val,
             obi_vel_1,
             obi_vel_5,
-            obi_press_ratio,
+            multi_level_ofi,
             cvd_raw,
             cvd_delta_1,
             cvd_delta_5,
@@ -274,7 +273,7 @@ impl StreamingFeaturePipeline {
             trade_vel,
             trade_vel_accel,
             vpin_proxy_10,
-            vpin_proxy_50,
+            hawkes_asymmetry,
             lat_us,
             lat_us_mean_50,
             lat_us_std_50,
@@ -326,6 +325,8 @@ impl StreamingFeaturePipeline {
         let mut cvd_z = 0.0f64;
         let mut vel_z = 0.0f64;
         let mut micro_z = 0.0f64;
+        let mut ofi_z = 0.0f64;
+        let mut hawkes_z = 0.0f64;
 
         for i in 0..40 {
             let val = raw_features[i];
@@ -347,14 +348,16 @@ impl StreamingFeaturePipeline {
             let z = (val - mean) / (std_dev + 1e-8);
 
             if i == 8 { obi_z = z.abs(); }
+            if i == 17 { ofi_z = z.abs(); }
             if i == 21 { cvd_z = z.abs(); }
             if i == 24 { vel_z = z.abs(); }
+            if i == 27 { hawkes_z = z.abs(); }
             if i == 2 { micro_z = z.abs(); }
 
             norm_features[i] = (z / 3.0).tanh();
         }
 
-        let snr_score = 1.0 + 0.6 * (obi_z + 0.8 * cvd_z + 0.5 * vel_z + 0.5 * micro_z).min(8.0);
+        let snr_score = 1.0 + 0.5 * (obi_z + 0.8 * cvd_z + 0.5 * vel_z + 0.5 * micro_z + 0.6 * ofi_z + 0.6 * hawkes_z).min(8.0);
 
         Ok((norm_features, snr_score))
     }
@@ -372,7 +375,7 @@ impl AssetTelemetryTracker {
         Self {
             last_mid_price: AtomicU64::new(0.0f64.to_bits()),
             last_prediction_dir: AtomicU64::new(0.0f64.to_bits()),
-            horizon_history: Mutex::new(VecDeque::with_capacity(3600)),
+            horizon_history: Mutex::new(VecDeque::with_capacity(36_000)),
         }
     }
 }
@@ -517,33 +520,41 @@ impl AIEngine {
         };
 
         // Multi-minute Horizon Alignment (300s / 5m observation evaluation):
-        let horizon_eval = {
+        let matured_entries = {
             let trackers = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
             if asset_idx < trackers.len() {
                 if let Ok(mut hist) = trackers[asset_idx].horizon_history.lock() {
                     let horizon_ns = 300_000_000_000u64; // 300 seconds
-                    let mut matured = None;
+                    let mut entries = Vec::new();
                     while let Some(front) = hist.front() {
                         if start_ns.saturating_sub(front.0) >= horizon_ns {
-                            matured = hist.pop_front();
-                            break;
+                            if let Some(item) = hist.pop_front() {
+                                entries.push(item);
+                            }
+                            if entries.len() >= 10 {
+                                break;
+                            }
                         } else {
                             break;
                         }
                     }
-                    matured
+                    entries
                 } else {
-                    None
+                    Vec::new()
                 }
             } else {
-                None
+                Vec::new()
             }
         };
 
-        if let Some((_, hist_mid, hist_pred)) = horizon_eval {
+        let gk_vol = sab.load_f64_asset(asset_idx, 121).max(0.0005);
+        let horizon_vol = gk_vol * (300.0f64 / 5.0).sqrt(); // Scale 5s micro-vol to 300s horizon
+
+        for (_, hist_mid, hist_pred) in matured_entries {
             if hist_mid > 0.0 && current_mid > 0.0 && hist_pred != 0.0 {
                 let realized_horizon_return = (current_mid - hist_mid) / hist_mid;
-                let residual = realized_horizon_return - hist_pred;
+                let return_target = (realized_horizon_return / (2.0 * horizon_vol + 1e-6)).tanh();
+                let residual = return_target - hist_pred;
                 if let Ok(mut tracker) = self.ic_tracker.lock() {
                     tracker.add_observation_asset(hist_pred, realized_horizon_return, Some(sab), asset_idx);
                     tracker.update_cusum_residual(residual, start_ns, Some(sab), asset_idx);
@@ -578,8 +589,8 @@ impl AIEngine {
         let mut hidden_guard = hs_holder[asset_idx].lock().unwrap_or_else(|e| e.into_inner());
 
         let (direction, confidence, horizon_ms) = if let Some(mamba) = &self.mamba {
-            if hidden_guard.dims() != &[1, mamba.d_state] {
-                *hidden_guard = Tensor::zeros((1, mamba.d_state), DType::F32, &Device::Cpu)?;
+            if hidden_guard.dims() != &[1, mamba.d_inner, mamba.d_state] {
+                *hidden_guard = Tensor::zeros((1, mamba.d_inner, mamba.d_state), DType::F32, &Device::Cpu)?;
             }
             let (heads, next_h) = mamba.forward(&tkan_tensor, &*hidden_guard, delta_t)?;
             *hidden_guard = next_h;
@@ -652,7 +663,7 @@ impl AIEngine {
                 tracker.last_prediction_dir.store(direction.to_bits(), Ordering::Relaxed);
                 if let Ok(mut hist) = tracker.horizon_history.lock() {
                     hist.push_back((start_ns, current_mid, direction));
-                    if hist.len() > 3600 {
+                    if hist.len() > 36_000 {
                         hist.pop_front();
                     }
                 }
@@ -681,8 +692,8 @@ impl AIEngine {
             if let Some(hs_mutex) = hs_holder.get(0) {
                 if let Ok(mut hidden_guard) = hs_mutex.lock() {
                     if let Some(mamba) = &self.mamba {
-                        if hidden_guard.dims() != &[1, mamba.d_state] {
-                            if let Ok(new_h) = Tensor::zeros((1, mamba.d_state), DType::F32, &Device::Cpu) {
+                        if hidden_guard.dims() != &[1, mamba.d_inner, mamba.d_state] {
+                            if let Ok(new_h) = Tensor::zeros((1, mamba.d_inner, mamba.d_state), DType::F32, &Device::Cpu) {
                                 *hidden_guard = new_h;
                             }
                         }
@@ -697,7 +708,17 @@ impl AIEngine {
                             *hidden_guard = next_h;
                             if let Ok(flat) = output_tensor.flatten_all() {
                                 let raw_dir = flat.get(0).and_then(|t| t.to_scalar::<f32>()).map(|v| (v as f64).tanh()).unwrap_or(0.0);
-                                return (raw_dir, 0.70);
+                                let conf = compute_calibrated_confidence(
+                                    raw_dir.abs(),
+                                    1.0,
+                                    0.0010,
+                                    0.0,
+                                    raw_dir,
+                                    self.calibration_params.temperature,
+                                    self.calibration_params.platt_scale,
+                                    self.calibration_params.platt_offset,
+                                );
+                                return (raw_dir, conf);
                             }
                         }
                     }
@@ -734,8 +755,8 @@ impl AIEngine {
         let mut hidden_guard = hs_holder[0].lock().unwrap_or_else(|e| e.into_inner());
 
         let (direction, confidence, horizon_ms, hidden_norm) = if let Some(mamba) = &self.mamba {
-            if hidden_guard.dims() != &[1, mamba.d_state] {
-                *hidden_guard = Tensor::zeros((1, mamba.d_state), DType::F32, &Device::Cpu)?;
+            if hidden_guard.dims() != &[1, mamba.d_inner, mamba.d_state] {
+                *hidden_guard = Tensor::zeros((1, mamba.d_inner, mamba.d_state), DType::F32, &Device::Cpu)?;
             }
             let (heads, next_h) = mamba.forward(&tkan_tensor, &*hidden_guard, 0.001)?;
             let norm = next_h.sqr()?.sum_all()?.to_scalar::<f32>()?.sqrt() as f64;

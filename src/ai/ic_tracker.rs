@@ -9,14 +9,16 @@ pub const DEFAULT_RECALIB_COOLDOWN_NS: u64 = 1500_000_000_000; // 25 minutes coo
 /// Page's Cumulative Sum (CUSUM) Structural Break Detector for Predictive Alphas.
 /// Monitors cumulative squared residual errors: S_t = max(0, S_{t-1} + (z_t^2 - 1.0 - \kappa)).
 /// Triggers drift alert when S_t >= h_drift and mandatory cooldown floor has elapsed.
+/// Freezes baseline in-control variance during drift state to prevent self-normalizing paradox.
 #[derive(Debug, Clone)]
 pub struct CusumDriftDetector {
     pub s_pos: f64,
     pub s_neg: f64,
     pub kappa: f64,
     pub threshold: f64,
-    pub residual_mean: f64,
-    pub residual_var: f64,
+    pub baseline_mean: f64,
+    pub baseline_var: f64,
+    pub in_control_count: usize,
     pub sample_count: usize,
     pub is_drifted: bool,
     pub last_recalib_ts_ns: u64,
@@ -30,8 +32,9 @@ impl CusumDriftDetector {
             s_neg: 0.0,
             kappa,
             threshold,
-            residual_mean: 0.0,
-            residual_var: 0.0001,
+            baseline_mean: 0.0,
+            baseline_var: 0.0001,
+            in_control_count: 0,
             sample_count: 0,
             is_drifted: false,
             last_recalib_ts_ns: 0,
@@ -48,21 +51,24 @@ impl CusumDriftDetector {
     pub fn update(&mut self, residual: f64, current_ts_ns: u64) -> bool {
         self.sample_count += 1;
 
-        // Online Welford update of residual mean and variance
-        let delta = residual - self.residual_mean;
-        self.residual_mean += delta / (self.sample_count as f64);
-        let delta2 = residual - self.residual_mean;
-        self.residual_var += delta * delta2;
+        // Only update in-control baseline statistics when NOT actively drifted
+        if !self.is_drifted {
+            self.in_control_count += 1;
+            let count_f = self.in_control_count.min(2000) as f64;
+            let delta = residual - self.baseline_mean;
+            self.baseline_mean += delta / count_f;
+            let delta2 = residual - self.baseline_mean;
+            if count_f > 1.0 {
+                self.baseline_var = ((count_f - 1.0) * self.baseline_var + delta * delta2) / count_f;
+            } else {
+                self.baseline_var = (delta * delta2).max(0.0001);
+            }
+        }
 
-        let var = if self.sample_count > 1 {
-            self.residual_var / ((self.sample_count - 1) as f64)
-        } else {
-            0.0001
-        };
-        let std_dev = var.sqrt().max(1e-6);
+        let std_dev = self.baseline_var.sqrt().max(1e-4);
 
-        // Standardized residual score
-        let z = (residual - self.residual_mean) / std_dev;
+        // Standardized residual score against frozen in-control baseline
+        let z = (residual - self.baseline_mean) / std_dev;
         let z_sq = z * z;
 
         // CUSUM Accumulator on standardized variance shift:
@@ -76,7 +82,7 @@ impl CusumDriftDetector {
 
         if self.sample_count >= 20 && self.s_pos >= self.threshold && is_cooldown_satisfied {
             self.is_drifted = true;
-        } else if self.s_pos < self.threshold * 0.3 {
+        } else if self.s_pos < self.threshold * 0.20 {
             self.is_drifted = false;
         }
 
@@ -88,13 +94,15 @@ impl CusumDriftDetector {
         self.s_pos = 0.0;
         self.s_neg = 0.0;
         self.is_drifted = false;
+        self.in_control_count = 0;
     }
 
     pub fn reset(&mut self) {
         self.s_pos = 0.0;
         self.s_neg = 0.0;
-        self.residual_mean = 0.0;
-        self.residual_var = 0.0001;
+        self.baseline_mean = 0.0;
+        self.baseline_var = 0.0001;
+        self.in_control_count = 0;
         self.sample_count = 0;
         self.is_drifted = false;
     }

@@ -274,6 +274,8 @@ impl AtomicSharedMemoryBridge {
         lob_entropy: f64,
         regime: u8,
         is_sweep_detected: bool,
+        multi_level_ofi: f64,
+        hawkes_asymmetry: f64,
         timestamp_ns: u64,
         dropped_events: u64,
         seq: u64,
@@ -281,6 +283,7 @@ impl AtomicSharedMemoryBridge {
         self.write_lob_snapshot_asset(
             0, bids, asks, obi, cvd, spread_vel, total_liq, buy_liq, sell_liq,
             rv_gk, vpin, hurst, lob_entropy, regime, is_sweep_detected,
+            multi_level_ofi, hawkes_asymmetry,
             timestamp_ns, dropped_events, seq
         );
     }
@@ -303,6 +306,8 @@ impl AtomicSharedMemoryBridge {
         lob_entropy: f64,
         regime: u8,
         is_sweep_detected: bool,
+        multi_level_ofi: f64,
+        hawkes_asymmetry: f64,
         timestamp_ns: u64,
         dropped_events: u64,
         seq: u64,
@@ -375,5 +380,9 @@ impl AtomicSharedMemoryBridge {
         self.store_f64_asset(asset_idx, 124, lob_entropy);
         self.store_f64_asset(asset_idx, 125, regime as f64);
         self.store_f64_asset(asset_idx, 126, if is_sweep_detected { 1.0 } else { 0.0 });
+
+        // Slots 130..131: Multi-Level OFI and Bivariate Hawkes Asymmetry
+        self.store_f64_asset(asset_idx, 130, multi_level_ofi);
+        self.store_f64_asset(asset_idx, 131, hawkes_asymmetry);
     }
 }

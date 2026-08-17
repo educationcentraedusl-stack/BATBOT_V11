@@ -175,6 +175,8 @@ impl LimitOrderBook {
         self.metrics.micro_price = self.analyzer.get_micro_price();
         self.metrics.regime = self.analyzer.get_regime() as u8;
         self.metrics.is_sweep_detected = self.analyzer.is_sweep_detected();
+        self.metrics.multi_level_ofi = self.analyzer.get_multi_level_ofi();
+        self.metrics.hawkes_asymmetry = self.analyzer.get_hawkes_asymmetry();
         self.last_update_ns = timestamp_ns;
     }
 
@@ -259,14 +261,16 @@ impl LimitOrderBook {
         }
     }
 
-    pub fn process_trade(&mut self, price: f64, quantity: f64, is_buyer_maker: bool) {
+    pub fn process_trade(&mut self, price: f64, quantity: f64, is_buyer_maker: bool, timestamp_ns: u64) {
         self.metrics.cvd = update_cvd(self.metrics.cvd, price, quantity, is_buyer_maker);
-        self.analyzer.on_trade(price, quantity, is_buyer_maker);
+        self.analyzer.on_trade_with_ts(price, quantity, is_buyer_maker, timestamp_ns);
 
         self.metrics.rv_gk = self.analyzer.get_rv_gk();
         self.metrics.vpin = self.analyzer.get_vpin();
         self.metrics.hurst = self.analyzer.get_hurst();
         self.metrics.regime = self.analyzer.get_regime() as u8;
+        self.metrics.multi_level_ofi = self.analyzer.get_multi_level_ofi();
+        self.metrics.hawkes_asymmetry = self.analyzer.get_hawkes_asymmetry();
     }
 
     pub fn process_event(&mut self, event: MarketUpdateEvent) {
@@ -282,9 +286,9 @@ impl LimitOrderBook {
                 price,
                 quantity,
                 is_buyer_maker,
-                ..
+                timestamp_ns,
             } => {
-                self.process_trade(price, quantity, is_buyer_maker);
+                self.process_trade(price, quantity, is_buyer_maker, timestamp_ns);
             }
             MarketUpdateEvent::LiquidationEvent {
                 side,

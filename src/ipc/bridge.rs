@@ -82,6 +82,8 @@ impl IngestionBridge {
                         lob.metrics.lob_entropy,
                         lob.metrics.regime,
                         lob.metrics.is_sweep_detected,
+                        lob.metrics.multi_level_ofi,
+                        lob.metrics.hawkes_asymmetry,
                         lob.last_update_ns,
                         LockFreeSpscQueue::dropped_count(),
                         seq,

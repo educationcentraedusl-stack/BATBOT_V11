@@ -267,9 +267,11 @@ impl MicrostructureAnalyzer {
         let beta = 1.50; // Exponential decay rate per second
 
         let dt_sec = if self.last_trade_ts_ns > 0 && ts_ns > self.last_trade_ts_ns {
-            ((ts_ns - self.last_trade_ts_ns) as f64 / 1e9).clamp(0.0001, 10.0)
+            ((ts_ns - self.last_trade_ts_ns) as f64 / 1e9).clamp(0.000001, 10.0)
+        } else if self.last_trade_ts_ns == 0 && ts_ns > 0 {
+            0.001
         } else {
-            0.050 // Default 50ms interval if ts not provided
+            0.050 // Fallback interval
         };
 
         let decay = (-beta * dt_sec).exp();
@@ -340,7 +342,7 @@ impl MicrostructureAnalyzer {
         self.recalculate_lob_entropy(bids, asks);
     }
 
-    /// Calculate Multi-Level Order Flow Imbalance (OFI) across L1..L10 with depth exponential weights.
+    /// Calculate Multi-Level Order Flow Imbalance (OFI) across L1..L10 with exact price-level matching and depth exponential weights.
     fn recalculate_multi_level_ofi(
         &mut self,
         bids: &[(f64, f64); 20],
@@ -362,33 +364,52 @@ impl MicrostructureAnalyzer {
         for k in 0..LOB_DEPTH_LEVELS {
             let curr_bid_px = bids[k].0;
             let curr_bid_qty = bids[k].1;
-            let prev_bid_px = self.prev_bids[k].0;
-            let prev_bid_qty = self.prev_bids[k].1;
+            let weight = (-0.25 * (k as f64)).exp();
 
-            let delta_bid_qty = if curr_bid_px > prev_bid_px {
-                curr_bid_qty
-            } else if (curr_bid_px - prev_bid_px).abs() < 1e-9 {
-                curr_bid_qty - prev_bid_qty
-            } else {
-                -prev_bid_qty
+            // Match current bid price against previous bid levels to eliminate index-shift artifact
+            let mut prev_bid_qty_opt = None;
+            for j in 0..LOB_DEPTH_LEVELS {
+                if (curr_bid_px - self.prev_bids[j].0).abs() < 1e-6 {
+                    prev_bid_qty_opt = Some(self.prev_bids[j].1);
+                    break;
+                }
+            }
+
+            let delta_bid_qty = match prev_bid_qty_opt {
+                Some(prev_qty) => curr_bid_qty - prev_qty,
+                None => {
+                    if curr_bid_px > self.prev_bids[0].0 {
+                        curr_bid_qty // New higher bid level created
+                    } else {
+                        curr_bid_qty // Newly appeared deeper level
+                    }
+                }
             };
 
             let curr_ask_px = asks[k].0;
             let curr_ask_qty = asks[k].1;
-            let prev_ask_px = self.prev_asks[k].0;
-            let prev_ask_qty = self.prev_asks[k].1;
 
-            let delta_ask_qty = if curr_ask_px < prev_ask_px {
-                curr_ask_qty
-            } else if (curr_ask_px - prev_ask_px).abs() < 1e-9 {
-                curr_ask_qty - prev_ask_qty
-            } else {
-                -prev_ask_qty
+            // Match current ask price against previous ask levels to eliminate index-shift artifact
+            let mut prev_ask_qty_opt = None;
+            for j in 0..LOB_DEPTH_LEVELS {
+                if (curr_ask_px - self.prev_asks[j].0).abs() < 1e-6 {
+                    prev_ask_qty_opt = Some(self.prev_asks[j].1);
+                    break;
+                }
+            }
+
+            let delta_ask_qty = match prev_ask_qty_opt {
+                Some(prev_qty) => curr_ask_qty - prev_qty,
+                None => {
+                    if curr_ask_px < self.prev_asks[0].0 && self.prev_asks[0].0 > 0.0 {
+                        curr_ask_qty // New lower ask level created
+                    } else {
+                        curr_ask_qty // Newly appeared deeper level
+                    }
+                }
             };
 
             let level_ofi = delta_bid_qty - delta_ask_qty;
-            let weight = (-0.25 * (k as f64)).exp();
-
             weighted_ofi_sum += weight * level_ofi;
             total_weight_depth += weight * (curr_bid_qty + curr_ask_qty + 1e-6);
 

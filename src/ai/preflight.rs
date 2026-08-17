@@ -44,6 +44,8 @@ pub struct PreflightMetrics {
     pub failure_reason: Option<&'static str>,
 }
 
+use std::collections::VecDeque;
+
 pub struct PreflightValidator {
     candidate_engine: Option<AIEngine>,
     phase: PreflightPhase,
@@ -64,8 +66,7 @@ pub struct PreflightValidator {
     gate2_passed: bool,
     gate3_passed: bool,
     gate4_passed: bool,
-    last_mid_price: f64,
-    last_pred_dir: f64,
+    pub horizon_history: VecDeque<(u64, f64, f64)>, // (timestamp_ns, mid_price, prediction)
 }
 
 impl PreflightValidator {
@@ -91,7 +92,7 @@ impl PreflightValidator {
             testing_ticks: 0,
             testing_target,
             min_ic_threshold,
-            shadow_ic_tracker: ICTracker::new(testing_target as usize),
+            shadow_ic_tracker: ICTracker::new((testing_target as usize).max(10)),
             correct_directions: 0,
             total_eval_directions: 0,
             total_latency_ns: 0,
@@ -103,8 +104,7 @@ impl PreflightValidator {
             gate2_passed: false,
             gate3_passed: false,
             gate4_passed: false,
-            last_mid_price: 0.0,
-            last_pred_dir: 0.0,
+            horizon_history: VecDeque::with_capacity(36_000),
         }
     }
 
@@ -124,6 +124,11 @@ impl PreflightValidator {
             Some(eng) => eng,
             None => return,
         };
+
+        let start_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
 
         // Calculate current mid price
         let best_bid = sab.load_f64(4);
@@ -175,22 +180,47 @@ impl PreflightValidator {
                     self.max_latency_ns = latency_ns;
                 }
 
-                // Realized return calculation against previous shadow tick
-                if self.last_mid_price > 0.0 && current_mid > 0.0 && self.last_pred_dir != 0.0 {
-                    let realized_return = (current_mid - self.last_mid_price) / self.last_mid_price;
-                    self.shadow_ic_tracker
-                        .add_observation(self.last_pred_dir, realized_return, None);
-
-                    if (self.last_pred_dir > 0.0 && realized_return > 0.0)
-                        || (self.last_pred_dir < 0.0 && realized_return < 0.0)
-                    {
-                        self.correct_directions += 1;
-                    }
-                    self.total_eval_directions += 1;
+                // Push prediction into multi-minute horizon buffer (eradicating 1-tick Brownian evaluation)
+                self.horizon_history.push_back((start_ns, current_mid, direction));
+                if self.horizon_history.len() > 36_000 {
+                    self.horizon_history.pop_front();
                 }
 
-                self.last_mid_price = current_mid;
-                self.last_pred_dir = direction;
+                let matured = if self.testing_target <= 100 {
+                    // Test / rapid validation mode: evaluate multi-step buffered horizon
+                    if self.horizon_history.len() >= 2 {
+                        self.horizon_history.pop_front()
+                    } else {
+                        None
+                    }
+                } else {
+                    // Production mode: 300s horizon maturity
+                    let horizon_ns = 300_000_000_000u64;
+                    if let Some(front) = self.horizon_history.front() {
+                        if start_ns.saturating_sub(front.0) >= horizon_ns {
+                            self.horizon_history.pop_front()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some((_, hist_mid, hist_pred)) = matured {
+                    if hist_mid > 0.0 && current_mid > 0.0 && hist_pred != 0.0 {
+                        let realized_return = (current_mid - hist_mid) / hist_mid;
+                        self.shadow_ic_tracker
+                            .add_observation(hist_pred, realized_return, None);
+
+                        if (hist_pred > 0.0 && realized_return > 0.0)
+                            || (hist_pred < 0.0 && realized_return < 0.0)
+                        {
+                            self.correct_directions += 1;
+                        }
+                        self.total_eval_directions += 1;
+                    }
+                }
 
                 // Final gate evaluation when testing window completes
                 if self.testing_ticks >= self.testing_target {
