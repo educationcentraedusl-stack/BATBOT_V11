@@ -967,6 +967,8 @@ class HedgePositionLedger {
         this.coreLong.stopLossPercent = slPercent;
         this.coreLong.tpStageReached = 0;
         this.coreLong.breakEvenLocked = false;
+        this.coreLong.stepCollarTier = 0;
+        this.coreLong.peakRoe = 0;
         this.coreLong.peakPrice = entryPrice;
         const makerFee = this.sizingCalc.getMakerFeeRate();
         const takerFee = this.sizingCalc.getTakerFeeRate();
@@ -1005,6 +1007,8 @@ class HedgePositionLedger {
         this.coreLong.tpStageReached = 0;
         this.coreLong.breakEvenLocked = false;
         this.coreLong.breakEvenPrice = 0;
+        this.coreLong.stepCollarTier = 0;
+        this.coreLong.peakRoe = 0;
         this.coreLong.tpPrices = [];
         for (let i = 0; i < this.maxShortSlots; i++) {
             const slot = this.shortSlots[i];
@@ -1018,6 +1022,8 @@ class HedgePositionLedger {
             slot.tpStageReached = 0;
             slot.breakEvenLocked = false;
             slot.breakEvenPrice = 0;
+            slot.stepCollarTier = 0;
+            slot.peakRoe = 0;
             slot.tpPrices = [];
         }
         this.legacyLedger.reset();
@@ -1155,6 +1161,8 @@ class HedgePositionLedger {
         slot.stopLossPercent = slPercent;
         slot.tpStageReached = 0;
         slot.breakEvenLocked = false;
+        slot.stepCollarTier = 0;
+        slot.peakRoe = 0;
         slot.troughPrice = entryPrice;
         const makerFee = this.sizingCalc.getMakerFeeRate();
         const takerFee = this.sizingCalc.getTakerFeeRate();
@@ -1263,51 +1271,54 @@ class HedgePositionLedger {
                 }
                 return ids;
             };
-            // 0A. CAD-DTLM Time-Decay Tier Escalation (60s Breakeven, 180s Micro-Profit, 600s Profit Lock, 1800s Hard Kill)
-            // Strictly profit-gated: only locks break-even / profit if current price is actually in verified profit
-            const beOffset = feeBuffer + 0.0002;
-            const targetBeSl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset));
-            const isEligibleForBe = isLong ? markPrice >= targetBeSl : markPrice <= targetBeSl;
-            if (durationSec >= 60.0 && isEligibleForBe) {
-                if (!slot.timeDecayTier || slot.timeDecayTier < 1) {
-                    slot.timeDecayTier = 1;
+            // 0A. SOTA 3-Tier ROE Step-Collar Dynamic Profit Lock (Zero Time Delays)
+            const effectiveLev = this.leverage > 0 ? this.leverage : 20.0;
+            const rawRoePct = isLong
+                ? ((markPrice - slot.entryPrice) / slot.entryPrice) * effectiveLev * 100.0
+                : ((slot.entryPrice - markPrice) / slot.entryPrice) * effectiveLev * 100.0;
+            if (rawRoePct > (slot.peakRoe ?? 0)) {
+                slot.peakRoe = rawRoePct;
+            }
+            // Tier 1: +8.0% Net ROE -> Lock Entry + Round-Trip Fees
+            if (rawRoePct >= 8.0) {
+                const beOffset = feeBuffer + 0.0002;
+                const targetBeSl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset));
+                if (!slot.stepCollarTier || slot.stepCollarTier < 1) {
+                    slot.stepCollarTier = 1;
                     slot.breakEvenLocked = true;
                     slot.breakEvenPrice = targetBeSl;
-                    slot.stopLossPrice = isLong
-                        ? Math.max(slot.stopLossPrice, targetBeSl)
-                        : (slot.stopLossPrice === 0 ? targetBeSl : Math.min(slot.stopLossPrice, targetBeSl));
                 }
+                slot.stopLossPrice = isLong
+                    ? Math.max(slot.stopLossPrice, targetBeSl)
+                    : (slot.stopLossPrice === 0 ? targetBeSl : Math.min(slot.stopLossPrice, targetBeSl));
             }
-            if (durationSec >= 180.0) {
-                const profitOffset = feeBuffer + minNetAlpha;
-                const targetTier2Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + profitOffset) : slot.entryPrice * (1.0 - profitOffset));
-                const isEligibleForTier2 = isLong ? markPrice >= targetTier2Sl : markPrice <= targetTier2Sl;
-                if (isEligibleForTier2) {
-                    if (!slot.timeDecayTier || slot.timeDecayTier < 2) {
-                        slot.timeDecayTier = 2;
-                        slot.breakEvenLocked = true;
-                        slot.breakEvenPrice = targetTier2Sl;
-                        slot.stopLossPrice = isLong
-                            ? Math.max(slot.stopLossPrice, targetTier2Sl)
-                            : Math.min(slot.stopLossPrice, targetTier2Sl);
-                    }
+            // Tier 2: +15.0% Net ROE -> Lock +10.0% ROE
+            if (rawRoePct >= 15.0) {
+                const lockOffset = (10.0 / 100.0) / effectiveLev;
+                const targetTier2Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset));
+                if (!slot.stepCollarTier || slot.stepCollarTier < 2) {
+                    slot.stepCollarTier = 2;
+                    slot.breakEvenLocked = true;
                 }
+                slot.stopLossPrice = isLong
+                    ? Math.max(slot.stopLossPrice, targetTier2Sl)
+                    : Math.min(slot.stopLossPrice, targetTier2Sl);
             }
-            if (durationSec >= 600.0) {
-                const lockedOffset = feeBuffer + minNetAlpha * 2.0;
-                const targetTier3Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + lockedOffset) : slot.entryPrice * (1.0 - lockedOffset));
-                const isEligibleForTier3 = isLong ? markPrice >= targetTier3Sl : markPrice <= targetTier3Sl;
-                if (isEligibleForTier3) {
-                    if (!slot.timeDecayTier || slot.timeDecayTier < 3) {
-                        slot.timeDecayTier = 3;
-                        slot.breakEvenLocked = true;
-                        slot.breakEvenPrice = targetTier3Sl;
-                        slot.stopLossPrice = isLong
-                            ? Math.max(slot.stopLossPrice, targetTier3Sl)
-                            : Math.min(slot.stopLossPrice, targetTier3Sl);
-                    }
+            // Tier 3: >= +25.0% Net ROE -> Aggressive 70% Trailing Profit Collar
+            if (rawRoePct >= 25.0 || (slot.peakRoe && slot.peakRoe >= 25.0)) {
+                const currentPeakRoe = slot.peakRoe ?? rawRoePct;
+                const trailRoe = currentPeakRoe * 0.70;
+                const trailOffset = (trailRoe / 100.0) / effectiveLev;
+                const targetTier3Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + trailOffset) : slot.entryPrice * (1.0 - trailOffset));
+                if (!slot.stepCollarTier || slot.stepCollarTier < 3) {
+                    slot.stepCollarTier = 3;
+                    slot.breakEvenLocked = true;
                 }
+                slot.stopLossPrice = isLong
+                    ? Math.max(slot.stopLossPrice, targetTier3Sl)
+                    : Math.min(slot.stopLossPrice, targetTier3Sl);
             }
+            // Terminal Lifespan Harvest (30 Minutes Max Horizon)
             if (durationSec >= 1800.0) {
                 if (!slot.timeDecayTier || slot.timeDecayTier < 4) {
                     slot.timeDecayTier = 4;
@@ -1639,56 +1650,53 @@ class HedgePositionLedger {
         const durationMs = Math.max(0, nowMs - openTime);
         const durationSec = durationMs / 1000;
         // -------------------------------------------------------------------------
-        // 1. CAD-DTLM (Continuous Alpha Decay & 4-Stage Time-in-Market Management)
+        // 1. SOTA 3-Tier ROE Step-Collar Dynamic Profit Lock (Zero Time Delays)
         // -------------------------------------------------------------------------
-        // Phase 2: Profit-Gated Break-Even Ratchet & Half-Life Decay (duration >= 60s or duration >= halfLifeSec)
-        // CRITICAL PROFIT-GATE FIX: Only lock break-even if current price is actually in profit beyond the break-even target!
-        if (durationSec >= Math.min(60.0, halfLifeSec)) {
+        const effectiveLev = this.leverage > 0 ? this.leverage : 20.0;
+        const rawRoePct = isLong
+            ? ((markPrice - slot.entryPrice) / slot.entryPrice) * effectiveLev * 100.0
+            : ((slot.entryPrice - markPrice) / slot.entryPrice) * effectiveLev * 100.0;
+        if (rawRoePct > (slot.peakRoe ?? 0)) {
+            slot.peakRoe = rawRoePct;
+        }
+        // Tier 1: +8.0% Net ROE -> Lock Entry + Round-Trip Fees
+        if (rawRoePct >= 8.0) {
             const beOffset = roundTripFeeBuffer + 0.0002;
             const targetBeSl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset));
-            const isEligibleForBe = isLong ? markPrice >= targetBeSl : markPrice <= targetBeSl;
-            if (isEligibleForBe) {
-                if (!slot.timeDecayTier || slot.timeDecayTier < 1) {
-                    slot.timeDecayTier = 1;
-                    slot.breakEvenLocked = true;
-                    slot.breakEvenPrice = targetBeSl;
-                    slot.stopLossPrice = isLong
-                        ? Math.max(slot.stopLossPrice, targetBeSl)
-                        : (slot.stopLossPrice === 0 ? targetBeSl : Math.min(slot.stopLossPrice, targetBeSl));
-                }
+            if (!slot.stepCollarTier || slot.stepCollarTier < 1) {
+                slot.stepCollarTier = 1;
+                slot.breakEvenLocked = true;
+                slot.breakEvenPrice = targetBeSl;
             }
+            slot.stopLossPrice = isLong
+                ? Math.max(slot.stopLossPrice, targetBeSl)
+                : (slot.stopLossPrice === 0 ? targetBeSl : Math.min(slot.stopLossPrice, targetBeSl));
         }
-        // Phase 3: Micro-Profit Guard & Accelerated Decay (duration >= 180s or duration >= 2 * halfLifeSec)
-        if (durationSec >= Math.min(180.0, halfLifeSec * 2.0)) {
-            const profitOffset = roundTripFeeBuffer + minNetAlpha;
-            const targetTier2Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + profitOffset) : slot.entryPrice * (1.0 - profitOffset));
-            const isEligibleForTier2 = isLong ? markPrice >= targetTier2Sl : markPrice <= targetTier2Sl;
-            if (isEligibleForTier2) {
-                if (!slot.timeDecayTier || slot.timeDecayTier < 2) {
-                    slot.timeDecayTier = 2;
-                    slot.breakEvenLocked = true;
-                    slot.breakEvenPrice = targetTier2Sl;
-                    slot.stopLossPrice = isLong
-                        ? Math.max(slot.stopLossPrice, targetTier2Sl)
-                        : Math.min(slot.stopLossPrice, targetTier2Sl);
-                }
+        // Tier 2: +15.0% Net ROE -> Lock +10.0% ROE
+        if (rawRoePct >= 15.0) {
+            const lockOffset = (10.0 / 100.0) / effectiveLev;
+            const targetTier2Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset));
+            if (!slot.stepCollarTier || slot.stepCollarTier < 2) {
+                slot.stepCollarTier = 2;
+                slot.breakEvenLocked = true;
             }
+            slot.stopLossPrice = isLong
+                ? Math.max(slot.stopLossPrice, targetTier2Sl)
+                : Math.min(slot.stopLossPrice, targetTier2Sl);
         }
-        // Phase 4A: Guaranteed Profit Harvest (duration >= 600s or duration >= 4 * halfLifeSec)
-        if (durationSec >= Math.min(600.0, halfLifeSec * 4.0)) {
-            const lockedOffset = roundTripFeeBuffer + minNetAlpha * 2.0;
-            const targetTier3Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + lockedOffset) : slot.entryPrice * (1.0 - lockedOffset));
-            const isEligibleForTier3 = isLong ? markPrice >= targetTier3Sl : markPrice <= targetTier3Sl;
-            if (isEligibleForTier3) {
-                if (!slot.timeDecayTier || slot.timeDecayTier < 3) {
-                    slot.timeDecayTier = 3;
-                    slot.breakEvenLocked = true;
-                    slot.breakEvenPrice = targetTier3Sl;
-                    slot.stopLossPrice = isLong
-                        ? Math.max(slot.stopLossPrice, targetTier3Sl)
-                        : Math.min(slot.stopLossPrice, targetTier3Sl);
-                }
+        // Tier 3: >= +25.0% Net ROE -> Aggressive 70% Trailing Profit Collar
+        if (rawRoePct >= 25.0 || (slot.peakRoe && slot.peakRoe >= 25.0)) {
+            const currentPeakRoe = slot.peakRoe ?? rawRoePct;
+            const trailRoe = currentPeakRoe * 0.70;
+            const trailOffset = (trailRoe / 100.0) / effectiveLev;
+            const targetTier3Sl = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + trailOffset) : slot.entryPrice * (1.0 - trailOffset));
+            if (!slot.stepCollarTier || slot.stepCollarTier < 3) {
+                slot.stepCollarTier = 3;
+                slot.breakEvenLocked = true;
             }
+            slot.stopLossPrice = isLong
+                ? Math.max(slot.stopLossPrice, targetTier3Sl)
+                : Math.min(slot.stopLossPrice, targetTier3Sl);
         }
         // Phase 4B: Hard Terminal Horizon Timeout (duration >= 1800s / 30 Minutes Max Lifespan)
         // Idempotency guard: timeDecayTier < 4 prevents multi-tick trigger floods after 30 minutes.

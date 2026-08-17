@@ -1,6 +1,16 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-17
+- **Feature/Task:** Master Plan Phase 1 & 2: Payoff Skew Realignment, Dynamic Volatility Stops & Live Tick-by-Tick Step-Collar Wiring
+- **Artifacts Created/Modified:** `.env`, `src/strategy/engine.ts`, `src/strategy/positionLedger.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** 
+  1. **Phase 1 (Payoff Skew & Dynamic Volatility Stops):** Realigned `.env` strategy defaults to enforce minimum 2.5:1 R:R baseline (`LONG_TAKE_PROFIT_PERCENT=2.50`, `LONG_STOP_LOSS_PERCENT=1.00`, `SHORT_TAKE_PROFIT_PERCENT=2.50`, `SHORT_STOP_LOSS_PERCENT=1.00`, `COOLDOWN_MS=15000`). Upgraded entry fill and order dispatch logic in `StrategyEngine` (`src/strategy/engine.ts`) to dynamically calculate stop loss distance from continuous Garman-Klass volatility ($\max(1.00\%, 3.50 \times \sigma_{\text{GK}})$) and lock Take Profit to strictly $2.50 \times \text{SL}_{\text{pct}}$.
+  2. **Phase 2 (Live Tick-by-Tick Step-Collar Wiring):** Eradicated the 60-second CAD-DTLM timer barrier in `HedgePositionLedger` (`src/strategy/positionLedger.ts`), replacing it with pure tick-by-tick Return on Equity (ROE%) ratchets: Tier 1 (+8.0% Net ROE -> Lock Entry + Fees), Tier 2 (+15.0% Net ROE -> Lock +10.0% ROE), and Tier 3 (>= +25.0% Net ROE -> Trail at 70% of peak unrealized ROE).
+  3. **Exchange Stop Loss Sync & SAB Telemetry:** Connected dynamic stop loss ratchets directly to `syncExchangeStopLossOrder` (cancelling and replacing resting Binance `STOP_MARKET` orders) and updated SharedArrayBuffer Slot 141 and active position telemetry with real-time ratcheted stops on every tick.
+  4. **Verification & Proof:** 100% verified via `npm run build:ts` (`tsc`, 0 errors), `cargo test --lib` (36/36 passed), `test_phase3_step_collar_risk.ts` (4/4 passed), and `test_sota_dynamic_exit_integration.ts` (5/5 passed in 0.382 µs / tick).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-17
 - **Feature/Task:** Active Positions Telemetry Table Formatting & Real-Time Dynamic SL / TP / Trade Value Column Integration
 - **Artifacts Created/Modified:** `src/telemetry/multiAssetDashboard.ts`, `src/telemetry/dashboard.ts`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** 

@@ -309,11 +309,12 @@ class StrategyEngine {
         }
         this.pendingEntryOrders.delete(orderId);
         const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
-        const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
+        const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
         const baseSlPercent = posSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
-        const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.0, volEstimate * 2.0 * 100));
+        const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.00, volEstimate * 3.50 * 100));
+        const dynamicTpPercent = dynamicSlPercent * 2.50;
         if (posSide === "LONG") {
-            this.hedgeLedger.occupyCoreLong(execQty, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
+            this.hedgeLedger.occupyCoreLong(execQty, execPx, dynamicTpPercent, dynamicSlPercent);
             const slot = this.hedgeLedger.getCoreLong();
             this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch((err) => {
                 console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
@@ -325,7 +326,7 @@ class StrategyEngine {
         else if (posSide === "SHORT") {
             const targetIdx = slotIndex !== undefined ? slotIndex : (this.hedgeLedger.getAvailableShortSlotIndex() >= 0 ? this.hedgeLedger.getAvailableShortSlotIndex() : 0);
             const targetSlotId = `SHORT_SLOT_${targetIdx}`;
-            this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
+            this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, dynamicTpPercent, dynamicSlPercent);
             const slot = this.hedgeLedger.getShortSlots()[targetIdx];
             this.dispatchBatchPostOnlyTpOrders(targetSlotId, execPx, execQty, "SHORT").catch((err) => {
                 console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
@@ -685,11 +686,12 @@ class StrategyEngine {
                 if (isEntrySide) {
                     console.log(`[BinanceExecution][UNTRACKED_ENTRY_FILL] [${this.config.symbol}:${targetPosSide}] OrderId #${orderId} (ClId: ${order.clientOrderId || "N/A"}) filled for ${this.config.symbol} ${targetPosSide}! Occupying/accumulating slot. Qty: ${execQty} @ $${execPx}`);
                     const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
-                    const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
+                    const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
                     const baseSlPercent = targetPosSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
-                    const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.0, volEstimate * 2.0 * 100));
+                    const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.00, volEstimate * 3.50 * 100));
+                    const dynamicTpPercent = dynamicSlPercent * 2.50;
                     if (targetPosSide === "LONG") {
-                        this.hedgeLedger.occupyCoreLong(execQty, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
+                        this.hedgeLedger.occupyCoreLong(execQty, execPx, dynamicTpPercent, dynamicSlPercent);
                         const slot = this.hedgeLedger.getCoreLong();
                         this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch((err) => {
                             console.error(`[BinanceExecution][UNTRACKED_TP_DISPATCH_ERROR] [${this.config.symbol}:CORE_LONG] ${err?.message || String(err)}`);
@@ -702,7 +704,7 @@ class StrategyEngine {
                         const slotIdx = this.hedgeLedger.getAvailableShortSlotIndex();
                         const targetIdx = slotIdx >= 0 ? slotIdx : 0;
                         const slotId = `SHORT_SLOT_${targetIdx}`;
-                        this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
+                        this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, dynamicTpPercent, dynamicSlPercent);
                         const slot = this.hedgeLedger.getShortSlots()[targetIdx];
                         this.dispatchBatchPostOnlyTpOrders(slotId, execPx, execQty, "SHORT").catch((err) => {
                             console.error(`[BinanceExecution][UNTRACKED_TP_DISPATCH_ERROR] [${this.config.symbol}:${slotId}] ${err?.message || String(err)}`);
@@ -1201,11 +1203,23 @@ class StrategyEngine {
             this.client.setHJBReservationPrice(hjbResPrice, this.assetIndex);
             this.client.setSurvivalProbability(hazardMetrics.survivalProbability, this.assetIndex);
             const hasActivePos = summary.netQuantity > 0 || summary.side !== "FLAT";
-            const dynamicSlPx = hasActivePos
-                ? (summary.side === "LONG"
+            let dynamicSlPx = 0;
+            if (this.hedgeLedger.getCoreLong().isOccupied && this.hedgeLedger.getCoreLong().quantity > 0) {
+                dynamicSlPx = this.hedgeLedger.getCoreLong().stopLossPrice;
+            }
+            else {
+                for (const s of this.hedgeLedger.getShortSlots()) {
+                    if (s.isOccupied && s.quantity > 0 && s.stopLossPrice > 0) {
+                        dynamicSlPx = s.stopLossPrice;
+                        break;
+                    }
+                }
+            }
+            if (dynamicSlPx === 0 && hasActivePos) {
+                dynamicSlPx = summary.side === "LONG"
                     ? summary.averageEntryPrice * (1.0 - this.config.longStopLossPercent / 100)
-                    : summary.averageEntryPrice * (1.0 + this.config.shortStopLossPercent / 100))
-                : 0;
+                    : summary.averageEntryPrice * (1.0 + this.config.shortStopLossPercent / 100);
+            }
             this.client.setDynamicStopLossPrice(dynamicSlPx, this.assetIndex);
             // Sync active position state to SharedArrayBuffer for TUI Table telemetry
             if (markPrice > 0) {
@@ -1667,11 +1681,12 @@ class StrategyEngine {
                                 fillTimestampMs: Date.now(),
                             });
                             const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
-                            const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
+                            const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
                             const baseSlPercent = targetPosSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
-                            const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.0, volEstimate * 2.0 * 100));
+                            const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.00, volEstimate * 3.50 * 100));
+                            const dynamicTpPercent = dynamicSlPercent * 2.50;
                             if (targetPosSide === "LONG") {
-                                this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, this.config.longTakeProfitPercent, dynamicSlPercent);
+                                this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, dynamicTpPercent, dynamicSlPercent);
                                 const slot = this.hedgeLedger.getCoreLong();
                                 this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, finalQuantity, "LONG").catch((err) => {
                                     console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
@@ -1682,7 +1697,7 @@ class StrategyEngine {
                             }
                             else if (targetPosSide === "SHORT" && targetSlotIndex !== undefined) {
                                 const slotId = `SHORT_SLOT_${targetSlotIndex}`;
-                                this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, this.config.shortTakeProfitPercent, dynamicSlPercent);
+                                this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, dynamicTpPercent, dynamicSlPercent);
                                 const slot = this.hedgeLedger.getShortSlots()[targetSlotIndex];
                                 this.dispatchBatchPostOnlyTpOrders(slotId, execPx, finalQuantity, "SHORT").catch((err) => {
                                     console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
