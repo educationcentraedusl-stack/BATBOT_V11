@@ -15,6 +15,13 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-08-17 - Phase 2 (Python Mid-Frequency Scalping & Meta-Labeling Trainer) & Emergency Remediation of Defect P2-01 Completed & 100% QA Verified:
+  - Remediated Defect P2-01 in `training/local_async_trainer.py`: Added dynamic target dimensionality check in `DualStageFocalLoss.forward()` and `fit_platt_temperature_calibration()` to synthesize pseudo-targets ($y_{\text{meta}} = (|y_{\text{dir}}| > 0.5)$, $y_{\text{horiz}} = 300.0 / 60.0$) when training on $<3$-target datasets, completely eradicating cold-start `IndexError` crashes.
+  - Implemented Volatility-Adjusted Triple-Barrier Labeling ($P_{\text{TP}} = P_0 (1 + \max(0.0150, 3.50\sigma))$, $P_{\text{SL}} = P_0 (1 - \max(0.0100, 1.75\sigma))$, $T_{\text{max}} = 1800\text{s}$) capturing macro $2.00 to $5.00+ net expansions in `training/prepare_data.py`.
+  - Implemented 30-minute non-overlapping purge buffer preventing lookahead target leakage across chronological train/validation splits.
+  - Implemented PyTorch Mamba-2 SSM with Dual-Stage Primary Direction + Meta-Labeling Win Probability ($P_{\text{win}}$) Classifier trained via Focal Loss ($\gamma = 2.0, \alpha = 0.65$) + Huber IC Rank Correlation.
+  - Enforced strictly tuned CUSUM rate-limiting in `AutoRecalibrationManager` (`src/ai/recalibrationWorker.ts`) with 25-30 minute cooldown floor (guaranteeing max 1-2 recalibrations/hour).
+  - 100% verified via `npx tsx src/tests/test_local_ai_and_tui_integration.ts` (cold-start training pass, N-API lock-free RCU atomic hot-swap, and TUI integration), `npx tsx src/tests/test_cusum_recalibration_rate_limit.ts` (100% pass), and `npm run build:ts` (0 errors).
 * 2026-08-17 - Final Phase 1 Memory Collision Remediation Completed & 100% QA Verified:
   - Re-allocated SharedArrayBuffer slots to eliminate collision with Interactive Control Flags (Slots 130..133):
     - Multi-Level OFI moved to Slot 138 (`src/ipc/shared_memory.rs`, `src/ai/engine.rs`, `src/marketDataClient.ts`).

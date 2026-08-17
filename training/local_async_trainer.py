@@ -137,16 +137,18 @@ class DualStageFocalLoss(nn.Module):
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor):
         # pred: [Batch, SeqLen, 3] or [Batch, 3]
-        # target: [Batch, SeqLen, 3] or [Batch, 3]
+        # target: [Batch, SeqLen, 3] or [Batch, 3] or [Batch, SeqLen, 1]
         if pred.dim() == 3:
             pred_last = pred[:, -1, :] # [Batch, 3]
         else:
             pred_last = pred
 
         if target.dim() == 3:
-            tgt_last = target[:, -1, :] # [Batch, 3]
-        else:
+            tgt_last = target[:, -1, :] # [Batch, 3] or [Batch, 1]
+        elif target.dim() == 2:
             tgt_last = target
+        else:
+            tgt_last = target.unsqueeze(-1)
 
         # 1. Primary Direction Head
         dir_logit = pred_last[:, 0]
@@ -163,9 +165,16 @@ class DualStageFocalLoss(nn.Module):
         ic = cov / (p_std * t_std + self.eps)
         dir_loss = h_loss + self.ic_weight * (1.0 - ic)
 
-        # 2. Meta-Labeling Head (Focal Loss)
+        # 2. Meta-Labeling Head (Focal Loss with Dynamic Pseudo-Target Backward Compatibility)
         meta_logit = pred_last[:, 1]
-        tgt_meta = tgt_last[:, 1].clamp(0.0, 1.0)
+        if tgt_last.shape[-1] < 3:
+            # Backward-compatibility for legacy 1D target datasets: synthesize pseudo-targets
+            tgt_meta = (tgt_dir.abs() > 0.5).float()
+            tgt_horiz = torch.full_like(tgt_dir, 300.0 / 60.0) # 5.0 minutes
+        else:
+            tgt_meta = tgt_last[:, 1].clamp(0.0, 1.0)
+            tgt_horiz = (tgt_last[:, 2] / 60.0).clamp(0.1, 30.0)
+
         bce = F.binary_cross_entropy_with_logits(meta_logit, tgt_meta, reduction='none')
         p_t = torch.exp(-bce)
         alpha_t = self.focal_alpha * tgt_meta + (1.0 - self.focal_alpha) * (1.0 - tgt_meta)
@@ -174,7 +183,6 @@ class DualStageFocalLoss(nn.Module):
         # 3. Horizon Head (in minutes)
         horiz_logit = pred_last[:, 2]
         pred_horiz = F.softplus(horiz_logit)
-        tgt_horiz = (tgt_last[:, 2] / 60.0).clamp(0.1, 30.0)
         horiz_loss = F.smooth_l1_loss(pred_horiz, tgt_horiz)
 
         total_loss = dir_loss + 1.5 * focal_loss + 0.1 * horiz_loss
@@ -186,9 +194,9 @@ def create_cfc_sequences_strided_torch(features: torch.Tensor, targets: torch.Te
     if num_samples <= 0:
         return features.unsqueeze(0), targets.unsqueeze(0)
     in_sw = features.unfold(0, seq_len, 1)  # [num_samples, 16, 32]
-    tgt_sw = targets.unfold(0, seq_len, 1) # [num_samples, 3, 32]
+    tgt_sw = targets.unfold(0, seq_len, 1) # [num_samples, 3, 32] or [num_samples, 1, 32]
     seq_inputs = in_sw.transpose(1, 2).contiguous() # [num_samples, 32, 16]
-    seq_targets = tgt_sw.transpose(1, 2).contiguous() # [num_samples, 32, 3]
+    seq_targets = tgt_sw.transpose(1, 2).contiguous() # [num_samples, 32, 3] or [num_samples, 32, 1]
     return seq_inputs, seq_targets
 
 
@@ -207,7 +215,19 @@ def fit_platt_temperature_calibration(model: nn.Module, val_loader: DataLoader, 
                 continue
             pred = model(bx) # [Batch, SeqLen, 3]
             last_meta_logit = pred[:, -1, 1].cpu()
-            last_target = by[:, -1, 1].cpu().clamp(0.0, 1.0)
+
+            if by.dim() == 3:
+                tgt_by = by[:, -1, :]
+            elif by.dim() == 2:
+                tgt_by = by
+            else:
+                tgt_by = by.unsqueeze(-1)
+
+            if tgt_by.shape[-1] < 3:
+                last_target = (tgt_by[:, 0].abs() > 0.5).float().cpu()
+            else:
+                last_target = tgt_by[:, 1].cpu().clamp(0.0, 1.0)
+
             all_meta_logits.append(last_meta_logit)
             all_targets.append(last_target)
 
