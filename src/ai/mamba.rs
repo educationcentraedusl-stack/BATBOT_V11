@@ -171,6 +171,15 @@ impl Mamba2Cell {
         &self,
         raw_heads: &Tensor,
     ) -> Result<(f64, f64, f64)> {
+        self.evaluate_scalar_heads_with_temp(raw_heads, 2.0)
+    }
+
+    /// Evaluates scalar predictions with explicit Softmax Temperature scaling.
+    pub fn evaluate_scalar_heads_with_temp(
+        &self,
+        raw_heads: &Tensor,
+        temperature: f64,
+    ) -> Result<(f64, f64, f64)> {
         let flat = raw_heads.flatten_all()?;
         let num_elems = flat.elem_count();
         if num_elems < 3 {
@@ -181,9 +190,10 @@ impl Mamba2Cell {
         let meta_logit = flat.get(1)?.to_scalar::<f32>()? as f64;
         let horiz_logit = flat.get(2)?.to_scalar::<f32>()? as f64;
 
-        let direction = dir_logit.tanh();
-        let p_win = (1.0 / (1.0 + (-meta_logit.clamp(-3.5, 3.5)).exp())).clamp(0.05, 0.98); // calibrated sigmoid
-        let horizon_sec = (horiz_logit.exp() + 1.0).ln().max(5.0); // softplus min 5s
+        let t = temperature.clamp(0.5, 10.0);
+        let direction = (dir_logit / t).tanh();
+        let p_win = 1.0 / (1.0 + (-meta_logit / t).exp());
+        let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().max(5.0);
 
         Ok((direction, p_win, horizon_sec))
     }

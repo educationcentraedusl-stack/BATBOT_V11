@@ -594,18 +594,19 @@ impl AIEngine {
             }
             let (heads, next_h) = mamba.forward(&tkan_tensor, &*hidden_guard, delta_t)?;
             *hidden_guard = next_h;
-            let (dir, _p_win, horiz_sec) = mamba.evaluate_scalar_heads(&heads)?;
-            let direction_magnitude = dir.abs();
 
             let gk_vol = sab.load_f64_asset(asset_idx, 121).max(0.0);
             let sab_temp = sab.load_f64_asset(asset_idx, 127);
             let sab_scale = sab.load_f64_asset(asset_idx, 128);
             let sab_offset = sab.load_f64_asset(asset_idx, 129);
 
-            let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.2, 3.0);
+            let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.5, 5.0);
             let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale }.clamp(0.5, 5.0);
-            let offset = sab_offset.clamp(-1.0, 1.0);
+            let offset = sab_offset.clamp(-2.0, 2.0);
             let obi = sab.load_f64_asset(asset_idx, 1);
+
+            let (dir, _p_win, horiz_sec) = mamba.evaluate_scalar_heads_with_temp(&heads, temp)?;
+            let direction_magnitude = dir.abs();
 
             let conf = compute_calibrated_confidence(
                 direction_magnitude,
@@ -625,18 +626,19 @@ impl AIEngine {
             let num_elems = flat_out.elem_count();
             let raw_direction = if num_elems > 0 { flat_out.get(0)?.to_scalar::<f32>()? as f64 } else { 0.0 };
             let horiz_ms = if num_elems > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
-            let dir = raw_direction.tanh();
-            let direction_magnitude = dir.abs();
 
             let gk_vol = sab.load_f64_asset(asset_idx, 121).max(0.0);
             let sab_temp = sab.load_f64_asset(asset_idx, 127);
             let sab_scale = sab.load_f64_asset(asset_idx, 128);
             let sab_offset = sab.load_f64_asset(asset_idx, 129);
 
-            let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.2, 3.0);
+            let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.5, 5.0);
             let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale }.clamp(0.5, 5.0);
-            let offset = sab_offset.clamp(-1.0, 1.0);
+            let offset = sab_offset.clamp(-2.0, 2.0);
             let obi = sab.load_f64_asset(asset_idx, 1);
+
+            let dir = (raw_direction / temp).tanh();
+            let direction_magnitude = dir.abs();
 
             let conf = compute_calibrated_confidence(
                 direction_magnitude,
@@ -648,7 +650,7 @@ impl AIEngine {
                 scale,
                 offset,
             );
-            (dir, conf, horiz_ms as f64)
+            (dir, conf, horiz_ms)
         } else {
             return Ok(());
         };
@@ -721,14 +723,15 @@ impl AIEngine {
                         }
                         if let Ok((heads, next_h)) = mamba.forward(&tkan_tensor, &*hidden_guard, 0.001) {
                             *hidden_guard = next_h;
-                            if let Ok((dir, _p_win, _)) = mamba.evaluate_scalar_heads(&heads) {
+                            let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
+                            if let Ok((dir, _p_win, _)) = mamba.evaluate_scalar_heads_with_temp(&heads, temp) {
                                 let conf = compute_calibrated_confidence(
                                     dir.abs(),
                                     1.0,
                                     0.0010,
                                     0.0,
                                     dir,
-                                    self.calibration_params.temperature,
+                                    temp,
                                     self.calibration_params.platt_scale,
                                     self.calibration_params.platt_offset,
                                 );
@@ -739,14 +742,15 @@ impl AIEngine {
                         if let Ok((output_tensor, next_h)) = cell.forward(&tkan_tensor, &*hidden_guard, 0.001) {
                             *hidden_guard = next_h;
                             if let Ok(flat) = output_tensor.flatten_all() {
-                                let raw_dir = flat.get(0).and_then(|t| t.to_scalar::<f32>()).map(|v| (v as f64).tanh()).unwrap_or(0.0);
+                                let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
+                                let raw_dir = flat.get(0).and_then(|t| t.to_scalar::<f32>()).map(|v| (v as f64 / temp).tanh()).unwrap_or(0.0);
                                 let conf = compute_calibrated_confidence(
                                     raw_dir.abs(),
                                     1.0,
                                     0.0010,
                                     0.0,
                                     raw_dir,
-                                    self.calibration_params.temperature,
+                                    temp,
                                     self.calibration_params.platt_scale,
                                     self.calibration_params.platt_offset,
                                 );
@@ -793,22 +797,24 @@ impl AIEngine {
             let (heads, next_h) = mamba.forward(&tkan_tensor, &*hidden_guard, 0.001)?;
             let norm = next_h.sqr()?.sum_all()?.to_scalar::<f32>()?.sqrt() as f64;
             *hidden_guard = next_h;
-            let (dir, _p_win, horiz_sec) = mamba.evaluate_scalar_heads(&heads)?;
+            let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
+            let (dir, _p_win, horiz_sec) = mamba.evaluate_scalar_heads_with_temp(&heads, temp)?;
             let gk_vol = sab.load_f64_asset(0, 121).max(0.0);
             let obi = sab.load_f64_asset(0, 1);
-            let conf = compute_calibrated_confidence(dir.abs(), snr_score, gk_vol, obi, dir, 1.0, 1.5, 0.0);
+            let conf = compute_calibrated_confidence(dir.abs(), snr_score, gk_vol, obi, dir, temp, self.calibration_params.platt_scale, self.calibration_params.platt_offset);
             (dir, conf, horiz_sec * 1000.0, norm)
         } else if let Some(cell) = &self.cell {
             let (output_tensor, next_h) = cell.forward(&tkan_tensor, &*hidden_guard, 0.001)?;
             let norm = next_h.sqr()?.sum_all()?.to_scalar::<f32>()?.sqrt() as f64;
             *hidden_guard = next_h;
             let flat_out = output_tensor.flatten_all()?;
+            let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
             let raw_dir = flat_out.get(0)?.to_scalar::<f32>()? as f64;
             let horiz = if flat_out.elem_count() > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
-            let dir = raw_dir.tanh();
+            let dir = (raw_dir / temp).tanh();
             let gk_vol = sab.load_f64_asset(0, 121).max(0.0);
             let obi = sab.load_f64_asset(0, 1);
-            let conf = compute_calibrated_confidence(dir.abs(), snr_score, gk_vol, obi, dir, 1.0, 1.5, 0.0);
+            let conf = compute_calibrated_confidence(dir.abs(), snr_score, gk_vol, obi, dir, temp, self.calibration_params.platt_scale, self.calibration_params.platt_offset);
             (dir, conf, horiz, norm)
         } else {
             return Err(Error::Msg("UNCALIBRATED".to_string()));
@@ -861,14 +867,17 @@ pub fn compute_calibrated_confidence(
     offset: f64,
 ) -> f64 {
     let psi_vol = compute_dual_regime_volatility_multiplier(gk_vol);
-    let snr_norm = (snr_score / 2.5).clamp(0.60, 1.50);
+    let snr_norm = (snr_score / 3.0).clamp(0.50, 1.80);
     let effective_conviction = direction_magnitude * snr_norm * psi_vol;
 
     let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
     let obi_align = obi * direction_sign;
 
-    let calibrated_logit: f64 = ((scale * effective_conviction * 1.75 + obi_align * 0.35 + offset) / temp).clamp(-3.5, 3.5);
-    (1.0f64 / (1.0f64 + (-calibrated_logit).exp())).clamp(0.05f64, 0.98f64)
+    // Centered Platt calibration: neutral conviction (~0.45) maps to 50% confidence
+    let t = temp.clamp(0.5, 5.0);
+    let s = scale.clamp(0.5, 3.0);
+    let calibrated_logit: f64 = (s * (effective_conviction - 0.45) * 2.0 + obi_align * 0.40 + offset) / t;
+    1.0f64 / (1.0f64 + (-calibrated_logit).exp())
 }
 
 impl Default for AIEngine {

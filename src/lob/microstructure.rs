@@ -226,9 +226,9 @@ impl MicrostructureAnalyzer {
                         self.vpin_bucket_count += 1;
                     }
 
-                    self.rolling_trade_volume = self.rolling_trade_volume * 0.95 + total_trade_vol * 0.05;
-                    let min_target = 100.0;
-                    self.bucket_target_volume = (self.rolling_trade_volume * 20.0).clamp(min_target, 100000.0);
+                    self.rolling_trade_volume = self.rolling_trade_volume * 0.995 + total_trade_vol * 0.005;
+                    let min_target = 5000.0;
+                    self.bucket_target_volume = (self.rolling_trade_volume * 100.0).clamp(min_target, 250000.0);
 
                     self.current_bucket_buy = 0.0;
                     self.current_bucket_sell = 0.0;
@@ -255,9 +255,9 @@ impl MicrostructureAnalyzer {
                         self.vpin_bucket_count += 1;
                     }
 
-                    self.rolling_trade_volume = self.rolling_trade_volume * 0.95 + total_trade_vol * 0.05;
-                    let min_target = 100.0;
-                    self.bucket_target_volume = (self.rolling_trade_volume * 20.0).clamp(min_target, 100000.0);
+                    self.rolling_trade_volume = self.rolling_trade_volume * 0.995 + total_trade_vol * 0.005;
+                    let min_target = 5000.0;
+                    self.bucket_target_volume = (self.rolling_trade_volume * 100.0).clamp(min_target, 250000.0);
 
                     self.current_bucket_buy = 0.0;
                     self.current_bucket_sell = 0.0;
@@ -269,6 +269,7 @@ impl MicrostructureAnalyzer {
                         self.current_bucket_buy += rem_vol;
                     }
                     rem_vol = 0.0;
+                    self.recalculate_vpin();
                 }
             }
         }
@@ -474,11 +475,6 @@ impl MicrostructureAnalyzer {
 
     /// Volume-Synchronized Probability of Toxicity (VPIN) calculation.
     fn recalculate_vpin(&mut self) {
-        if self.vpin_bucket_count == 0 {
-            self.cached_vpin = 0.0;
-            return;
-        }
-
         let mut sum_imbalance = 0.0;
         let mut total_vol = 0.0;
 
@@ -490,6 +486,14 @@ impl MicrostructureAnalyzer {
             sum_imbalance += imbalance;
             total_vol += bucket_vol;
             i += 1;
+        }
+
+        // Include current in-progress bucket with continuous volume weighting
+        let curr_imbalance = (self.current_bucket_buy - self.current_bucket_sell).abs();
+        let curr_vol = self.current_bucket_buy + self.current_bucket_sell;
+        if curr_vol > 1e-6 {
+            sum_imbalance += curr_imbalance;
+            total_vol += curr_vol;
         }
 
         if total_vol <= 1e-9 {

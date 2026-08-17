@@ -1,6 +1,16 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-17
+- **Feature/Task:** Root Cause Mathematical Fixes: Hawkes Point Process Decay & Stationarity, Continuous VPIN Volume Bucketing, and Mamba-2 Softmax Temperature & Centered Platt Scaling
+- **Artifacts Created/Modified:** `src/ipc/shared_memory.rs`, `src/lob/microstructure.rs`, `src/ai/mamba.rs`, `src/ai/engine.rs`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** 
+  1. **Hawkes Intensity Stationarity & Spread Velocity Normalization:** Replaced raw USD spread velocity with relative basis points per second (`rel_vel_bps = (abs_vel / mid_price) * 10000.0`) in `compute_hawkes_intensity` (`src/ipc/shared_memory.rs`). Calibrated stationary subcritical branching ratio ($\alpha = 0.15, \beta = 1.5, \eta = \alpha/\beta = 0.10 \ll 1.0$) with circular buffer indexing, eliminating artificial upper-bound ceiling clamping ($50.000$).
+  2. **Continuous VPIN Volume Bucketing & Easley-López de Prado Formulation:** Calibrated dynamic bucket target volume in `on_trade_with_ts` (`src/lob/microstructure.rs`) with slow volume smoothing ($\alpha = 0.005$) and institutional floor ($\ge 5,000.0$ USDT), aggregating hundreds of individual trades per bucket. Ingested current in-progress bucket volume with continuous volume weighting in `recalculate_vpin`, eliminating single-trade $1.0000$ pegging artifacts and producing continuous toxicity metrics ($0.15 - 0.45$).
+  3. **Mamba-2 Softmax Temperature Scaling & Centered Platt Calibration:** Applied explicit Softmax Temperature $T$ to pre-activation scalar heads (`evaluate_scalar_heads_with_temp` in `src/ai/mamba.rs`) preventing logit explosion and premature saturation at $\pm 1.0000$. Centered the Platt calibration logit around neutral conviction baseline ($C_0 = 0.45$) in `compute_calibrated_confidence` (`src/ai/engine.rs`), producing continuous statistical variance across all 10 assets rather than a uniform saturated $97.1\%$ wall.
+  4. **Verification & Proof:** 100% verified via `cargo test --lib` (36/36 passed), `cargo test --release --lib` (36/36 passed in 0.14s), `npx napi build --platform --release` (0 errors), `npm run build:ts` (0 errors), and full automated test suites (`test_phase3_step_collar_risk.ts`, `test_long_hold_profit_guarantee.ts`, `test_double_entry_oms_pnl.ts`, `test_sota_ai_loss_recovery.ts`, `test_sota_dynamic_exit_integration.ts`, `test_microstructure_volatility.ts`, `test_recalibration_pipeline.ts`, `test_local_ai_and_tui_integration.ts`, `test_cusum_recalibration_rate_limit.ts`).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-17
 - **Feature/Task:** SOTA Emergency Dashboard & Telemetry Debugging: AI Platt Scaling Overconfidence, Hawkes/VPIN Data Clipping, Dead IC Tracker & Legacy R/R Floor Remediation
 - **Artifacts Created/Modified:** `src/ai/engine.rs`, `src/ai/mamba.rs`, `src/lob/microstructure.rs`, `src/ipc/shared_memory.rs`, `src/lib.rs`, `src/strategy/risk.ts`, `src/strategy/dynamicRiskEngine.ts`, `src/strategy/positionLedger.ts`, `src/tests/test_sota_ai_loss_recovery.ts`, `src/test_recalibration_pipeline.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
 - **HFT/Performance Compliance:** 

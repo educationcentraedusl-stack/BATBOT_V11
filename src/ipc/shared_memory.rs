@@ -36,29 +36,39 @@ impl SingleAssetMetricsTracker {
         }
     }
 
-    fn compute_hawkes_intensity(&self, current_ts_ns: u64, abs_vel: f64, abs_obi: f64) -> f64 {
-        let baseline = 1.0 + (abs_vel * 10.0) + (abs_obi - 0.4).max(0.0) * 5.0;
+    fn compute_hawkes_intensity(&self, current_ts_ns: u64, abs_vel: f64, abs_obi: f64, mid_price: f64) -> f64 {
+        let rel_vel_bps = if mid_price > 0.0 {
+            (abs_vel / mid_price) * 10_000.0
+        } else {
+            abs_vel
+        };
+
+        let baseline = 1.0 + (rel_vel_bps * 0.05).min(2.0) + (abs_obi - 0.4).max(0.0) * 1.5;
         if self.count == 0 || current_ts_ns == 0 {
-            return baseline.clamp(1.0, 50.0);
+            return baseline;
         }
 
-        let alpha = 0.05;
-        let beta = 2.5;
+        let alpha = 0.15;
+        let beta = 1.5;
         let mut decay_sum = 0.0;
 
+        let start_idx = if self.count < HAWKES_BUF_CAP { 0 } else { self.head };
+        let n = self.count;
+
         let mut i = 0;
-        while i < self.count {
-            let ts = self.timestamps[i];
+        while i < n {
+            let idx = (start_idx + i) % HAWKES_BUF_CAP;
+            let ts = self.timestamps[idx];
             if ts > 0 && ts <= current_ts_ns {
                 let delta_sec = (current_ts_ns - ts) as f64 / 1_000_000_000.0;
-                if delta_sec >= 0.0 && delta_sec <= 10.0 {
+                if delta_sec >= 0.0 && delta_sec <= 5.0 {
                     decay_sum += alpha * (-beta * delta_sec).exp();
                 }
             }
             i += 1;
         }
 
-        (baseline + decay_sum).clamp(1.0, 50.0)
+        baseline + decay_sum
     }
 
     fn compute_realized_volatility(&self, fallback_vel: f64) -> f64 {
@@ -127,9 +137,9 @@ impl MicroburstMetricsTracker {
         self.trackers[asset_idx].push(timestamp_ns, mid_price);
     }
 
-    fn compute_hawkes_intensity(&mut self, asset_idx: usize, current_ts_ns: u64, abs_vel: f64, abs_obi: f64) -> f64 {
+    fn compute_hawkes_intensity(&mut self, asset_idx: usize, current_ts_ns: u64, abs_vel: f64, abs_obi: f64, mid_price: f64) -> f64 {
         self.ensure_capacity(asset_idx);
-        self.trackers[asset_idx].compute_hawkes_intensity(current_ts_ns, abs_vel, abs_obi)
+        self.trackers[asset_idx].compute_hawkes_intensity(current_ts_ns, abs_vel, abs_obi, mid_price)
     }
 
     fn compute_realized_volatility(&mut self, asset_idx: usize, fallback_vel: f64) -> f64 {
@@ -362,7 +372,7 @@ impl AtomicSharedMemoryBridge {
         let (hawkes_intensity, realized_vol) = METRICS_TRACKER.with(|tracker| {
             let mut tr = tracker.borrow_mut();
             tr.push(asset_idx, timestamp_ns, mid_price);
-            let h = tr.compute_hawkes_intensity(asset_idx, timestamp_ns, abs_vel, abs_obi);
+            let h = tr.compute_hawkes_intensity(asset_idx, timestamp_ns, abs_vel, abs_obi, mid_price);
             let v = tr.compute_realized_volatility(asset_idx, abs_vel);
             (h, v)
         });
