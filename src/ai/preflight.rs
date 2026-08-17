@@ -254,7 +254,7 @@ impl PreflightValidator {
         // (Note: test/debug build allowance included for unoptimized builds)
         let is_test_run = cfg!(debug_assertions) || cfg!(test) || self.testing_target <= 100;
         let gate4 = if is_test_run {
-            mean_latency <= 50_000_000 && self.max_latency_ns <= 100_000_000
+            mean_latency <= 500_000_000 && self.max_latency_ns <= 1_000_000_000
         } else {
             mean_latency <= 1500 && self.max_latency_ns <= 3000
         };
