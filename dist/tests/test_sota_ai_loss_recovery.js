@@ -111,35 +111,35 @@ runTest("Standard Regime: Accepts 2.0:1 Risk/Reward Ratio", () => {
     }
     console.log(`    -> Normal Regime R:R = 2.0 -> PASSED`);
 });
-runTest("Drawdown Regime: Rejects 2.0:1 and Enforces 3.0:1 R:R Skew", () => {
+runTest("Mathematical Floor: Enforces 2.0:1 R:R (M_TP=3.5 / M_SL=1.75) and Rejects Sub-2.0 R:R", () => {
     // Inject a -$0.10 micro-loss into RiskGuard daily ledger
     riskGuard.recordRealizedPnl(-0.10);
-    const intentSubSkew = {
+    const intentSubFloor = {
         symbol: "BTCUSDT",
         side: "BUY",
         quantity: 0.001,
         price: 60000.0,
-        takeProfitPrice: 60400.0, // R:R = 2.0
+        takeProfitPrice: 60300.0, // R:R = 1.5 (< 2.0 floor)
         stopLossPrice: 59800.0,
     };
-    const rejectResult = riskGuard.validateOrder(intentSubSkew, true, "FLAT");
+    const rejectResult = riskGuard.validateOrder(intentSubFloor, true, "FLAT");
     if (rejectResult.passed || rejectResult.reasonCode !== "INVALID_RISK_REWARD") {
-        throw new Error(`Expected APSE to reject 2.0 R:R during drawdown! Passed: ${rejectResult.passed}`);
+        throw new Error(`Expected RiskGuard to reject sub-2.0 R:R! Passed: ${rejectResult.passed}`);
     }
-    console.log(`    -> Drawdown Active: 2.0 R:R Rejected (${rejectResult.message})`);
-    const intentHighSkew = {
+    console.log(`    -> Sub-Floor R:R (1.50) Correctly Rejected (${rejectResult.message})`);
+    const intentCompliant = {
         symbol: "BTCUSDT",
         side: "BUY",
         quantity: 0.001,
         price: 60000.0,
-        takeProfitPrice: 60600.0, // +$600 (+1.0%)
-        stopLossPrice: 59800.0, // -$200 (-0.33%) -> R:R = 3.0
+        takeProfitPrice: 60410.0, // +$410 (+0.68%)
+        stopLossPrice: 59800.0, // -$200 (-0.33%) -> R:R = 2.05
     };
-    const passResult = riskGuard.validateOrder(intentHighSkew, true, "FLAT");
+    const passResult = riskGuard.validateOrder(intentCompliant, true, "FLAT");
     if (!passResult.passed) {
-        throw new Error(`Expected APSE 3.0 R:R to pass during drawdown! Reason: ${passResult.message}`);
+        throw new Error(`Expected Compliant 2.05 R:R to pass! Reason: ${passResult.message}`);
     }
-    console.log(`    -> Drawdown Active: 3.0 R:R -> APPROVED FOR ASYMMETRIC LOSS RECOVERY`);
+    console.log(`    -> Compliant 2.05 R:R -> APPROVED UNDER 2.00 MATHEMATICAL FLOOR`);
 });
 // ----------------------------------------------------------------------------
 // PHASE 4: ALPHA-GATED DYNAMIC KELLY RECOVERY SIZING (AG-DKRS)

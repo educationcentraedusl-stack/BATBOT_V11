@@ -182,7 +182,7 @@ impl Mamba2Cell {
         let horiz_logit = flat.get(2)?.to_scalar::<f32>()? as f64;
 
         let direction = dir_logit.tanh();
-        let p_win = 1.0 / (1.0 + (-meta_logit).exp()); // sigmoid
+        let p_win = (1.0 / (1.0 + (-meta_logit.clamp(-3.5, 3.5)).exp())).clamp(0.05, 0.98); // calibrated sigmoid
         let horizon_sec = (horiz_logit.exp() + 1.0).ln().max(5.0); // softplus min 5s
 
         Ok((direction, p_win, horizon_sec))

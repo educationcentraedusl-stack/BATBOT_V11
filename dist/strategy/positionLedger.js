@@ -5,6 +5,15 @@ exports.calculatePartialExitChunk = calculatePartialExitChunk;
 const dynamicSizing_1 = require("./dynamicSizing");
 const clientOrderIdGenerator_1 = require("../execution/clientOrderIdGenerator");
 const symbolPrecision_1 = require("../config/symbolPrecision");
+const tradingSymbols_1 = require("../config/tradingSymbols");
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+let nativeAddon = null;
+try {
+    nativeAddon = require("../../index.js");
+}
+catch {
+    // Safe fallback
+}
 const DEFAULT_MAX_LOTS = 1024;
 class PositionLedger {
     symbol;
@@ -552,6 +561,20 @@ class HedgePositionLedger {
         }
         else if (netTradePnl < 0) {
             this.losingTrades++;
+        }
+        try {
+            if (nativeAddon && typeof nativeAddon.recordTradeIc === "function") {
+                const realizedReturn = slotSide === "LONG"
+                    ? (exitPrice - entryPrice) / entryPrice
+                    : (entryPrice - exitPrice) / entryPrice;
+                const dir = slotSide === "LONG" ? 1.0 : -1.0;
+                const syms = (0, tradingSymbols_1.getTradingSymbols)();
+                const assetIdx = Math.max(0, syms.indexOf(this.symbol));
+                nativeAddon.recordTradeIc(dir, realizedReturn, assetIdx);
+            }
+        }
+        catch {
+            // Safe non-blocking execution
         }
     }
     getSessionDrawdown() {

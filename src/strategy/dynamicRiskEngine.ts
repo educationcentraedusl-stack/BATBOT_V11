@@ -92,7 +92,7 @@ export class DynamicRiskEngine {
     const volFactor = Math.max(metrics.rvGk, 0.0020);
     const minSpreadDistance = Math.max(spread, entryPrice * 0.0001);
     const obiSigned = Math.max(-1.0, Math.min(1.0, metrics.obi));
-    const targetRrMultiplier = isDrawdown ? 3.05 : 2.05;
+    const targetRrMultiplier = 2.05;
 
     let stopLossPrice = 0;
     let takeProfitPrice = 0;

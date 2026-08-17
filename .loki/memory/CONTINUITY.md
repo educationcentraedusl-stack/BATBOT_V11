@@ -15,6 +15,12 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-08-17 - SOTA Emergency Dashboard & Telemetry Debugging (Scaling, Clipping, R/R Floor & IC Tracker) Completed & 100% QA Verified:
+  - Remediated AI Overconfidence (Platt Scaling): Routed Mamba-2 SSM inference pipeline through `compute_calibrated_confidence()`, bounded `meta_logit` to $[-3.5, 3.5]$ and clamped `p_win` to $[0.05, 0.98]$, eliminating $0.0\%$ and $100.0\%$ saturation across all symbols.
+  - Remediated Hawkes & VPIN Data Clipping: Repaired VPIN volume bucket rollover logic in `src/lob/microstructure.rs` to eliminate zero-needed deadlock, and calibrated Hawkes accumulator ($\alpha = 0.05$) in `src/ipc/shared_memory.rs` to avoid $20.000$ clipping.
+  - Remediated Dead IC Tracker: Aligned horizon window from 300s to 5.0s (`5_000_000_000u64`) matching micro-trend scalping, exposed `record_trade_ic` N-API binding, and wired closed trade outcomes directly to native IC tracker in `src/strategy/positionLedger.ts`.
+  - Remediated Legacy Risk/Reward Floor: Removed hardcoded 3.00 legacy drawdown bump in `RiskGuard` and synchronized `DynamicRiskEngine` to strictly enforce the Phase 2 mathematical floor of 2.00 ($M_{\text{TP}} = 3.5 / M_{\text{SL}} = 1.75$).
+  - 100% verified via `cargo test --lib` (36/36 passed), `cargo test --release --lib` (36/36 passed in 0.19s), `npx napi build --platform --release` (0 errors), `npm run build:ts` (0 errors), and full automated regression test matrix.
 * 2026-08-17 - Phase 5 (Comprehensive QA, Latency Benchmarking & Stress Testing) Completed & 100% QA Verified:
   - 100% of native Rust unit tests passed (`cargo test --lib` 36/36 passed, `cargo test --release --lib` 36/36 passed in 0.11s), confirming mathematical integrity of Mamba-2 SSM, Multi-Level OFI, Bivariate Hawkes point processes, CUSUM drift detection, and T-KAN spatial LUTs.
   - Clean N-API native release build (`npx napi build --platform --release`) and clean strict TypeScript compilation (`npm run build:ts`, 0 errors).

@@ -82,6 +82,13 @@ function runTest(): void {
     receivedState = state;
   });
 
+  // Pre-populate warm-up pairs into IC tracker for drift test
+  if (nativeAddon && typeof nativeAddon.recordTradeIc === "function") {
+    for (let k = 0; k < 1000; k++) {
+      nativeAddon.recordTradeIc(0.1, 0.05, 0);
+    }
+  }
+
   manager.setSustainedDriftThreshold(5);
 
   for (let i = 1; i <= 4; i++) {

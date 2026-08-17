@@ -99,6 +99,18 @@ pub fn reset_ic_tracker() -> bool {
 }
 
 #[napi]
+pub fn record_trade_ic(prediction: f64, realized_return: f64, asset_idx: Option<u32>) -> bool {
+    if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
+        if let Ok(mut tracker) = active_engine.ic_tracker.lock() {
+            let idx = asset_idx.unwrap_or(0) as usize;
+            tracker.add_observation_asset(prediction, realized_return, None, idx);
+            return true;
+        }
+    }
+    false
+}
+
+#[napi]
 pub fn get_ic_status() -> String {
     if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
         if let Ok(tracker) = active_engine.ic_tracker.lock() {

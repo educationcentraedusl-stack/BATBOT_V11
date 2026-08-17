@@ -214,8 +214,28 @@ impl MicrostructureAnalyzer {
         if total_trade_vol > 0.0 && total_trade_vol.is_finite() {
             let mut rem_vol = total_trade_vol;
 
-            while rem_vol > 0.0 {
+            while rem_vol > 0.0 || (self.current_bucket_buy + self.current_bucket_sell) >= self.bucket_target_volume {
                 let current_filled = self.current_bucket_buy + self.current_bucket_sell;
+                if current_filled >= self.bucket_target_volume {
+                    self.vpin_buckets[self.vpin_bucket_index] = VolumeBucket {
+                        buy_vol: self.current_bucket_buy,
+                        sell_vol: self.current_bucket_sell,
+                    };
+                    self.vpin_bucket_index = (self.vpin_bucket_index + 1) % VPIN_BUCKETS;
+                    if self.vpin_bucket_count < VPIN_BUCKETS {
+                        self.vpin_bucket_count += 1;
+                    }
+
+                    self.rolling_trade_volume = self.rolling_trade_volume * 0.95 + total_trade_vol * 0.05;
+                    let min_target = 100.0;
+                    self.bucket_target_volume = (self.rolling_trade_volume * 20.0).clamp(min_target, 100000.0);
+
+                    self.current_bucket_buy = 0.0;
+                    self.current_bucket_sell = 0.0;
+                    self.recalculate_vpin();
+                    continue;
+                }
+
                 let needed = (self.bucket_target_volume - current_filled).max(0.0);
 
                 if rem_vol >= needed && needed > 0.0 {

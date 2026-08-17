@@ -39,10 +39,10 @@ impl SingleAssetMetricsTracker {
     fn compute_hawkes_intensity(&self, current_ts_ns: u64, abs_vel: f64, abs_obi: f64) -> f64 {
         let baseline = 1.0 + (abs_vel * 10.0) + (abs_obi - 0.4).max(0.0) * 5.0;
         if self.count == 0 || current_ts_ns == 0 {
-            return baseline.min(20.0);
+            return baseline.clamp(1.0, 50.0);
         }
 
-        let alpha = 0.75;
+        let alpha = 0.05;
         let beta = 2.5;
         let mut decay_sum = 0.0;
 
@@ -58,7 +58,7 @@ impl SingleAssetMetricsTracker {
             i += 1;
         }
 
-        (baseline + decay_sum).min(20.0)
+        (baseline + decay_sum).clamp(1.0, 50.0)
     }
 
     fn compute_realized_volatility(&self, fallback_vel: f64) -> f64 {

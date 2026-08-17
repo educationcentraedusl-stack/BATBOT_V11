@@ -295,13 +295,12 @@ export class RiskGuard {
       if (riskDistance > 0) {
         const rrRatio = rewardDistance / riskDistance;
         const baseMin = this.config.minRiskRewardRatio ?? 2.0;
-        const isDrawdown = this.cumulativeDailyRealizedPnl < 0;
-        const requiredMin = isDrawdown ? Math.min(3.5, baseMin + 1.0) : baseMin;
+        const requiredMin = baseMin;
         if (rrRatio < requiredMin - 1e-4) {
           return {
             passed: false,
             reasonCode: "INVALID_RISK_REWARD",
-            message: `Order rejected: Risk/Reward ratio (${rrRatio.toFixed(2)}) is below mandatory floor (${requiredMin.toFixed(2)}${isDrawdown ? " [APSE DRAWDOWN EXPANSION ACTIVE]" : ""}).`,
+            message: `Order rejected: Risk/Reward ratio (${rrRatio.toFixed(2)}) is below mandatory floor (${requiredMin.toFixed(2)}).`,
           };
         }
       }

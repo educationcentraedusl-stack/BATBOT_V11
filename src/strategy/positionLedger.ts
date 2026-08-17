@@ -5,6 +5,15 @@ import { MicrostructureHazardEngine, MicrostructureMetrics } from "./microstruct
 import { VolatilitySurfaceEngine, VolatilitySurfaceMetrics } from "./volatilitySurfaceEngine";
 import { HJBReservationEngine, HJBExitEvaluation } from "./hjbReservationEngine";
 import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
+import { getTradingSymbols } from "../config/tradingSymbols";
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+let nativeAddon: any = null;
+try {
+  nativeAddon = require("../../index.js");
+} catch {
+  // Safe fallback
+}
 
 
 export interface PositionLot {
@@ -761,6 +770,20 @@ export class HedgePositionLedger {
       this.winningTrades++;
     } else if (netTradePnl < 0) {
       this.losingTrades++;
+    }
+
+    try {
+      if (nativeAddon && typeof nativeAddon.recordTradeIc === "function") {
+        const realizedReturn = slotSide === "LONG"
+          ? (exitPrice - entryPrice) / entryPrice
+          : (entryPrice - exitPrice) / entryPrice;
+        const dir = slotSide === "LONG" ? 1.0 : -1.0;
+        const syms = getTradingSymbols();
+        const assetIdx = Math.max(0, syms.indexOf(this.symbol));
+        nativeAddon.recordTradeIc(dir, realizedReturn, assetIdx);
+      }
+    } catch {
+      // Safe non-blocking execution
     }
   }
 
