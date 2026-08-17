@@ -427,8 +427,9 @@ export class MultiAssetCLIDashboard {
         const longSide = `${green}${this.formatCell("LONG", 8, false)}${reset}`;
         const longEntryPx = longEntry > 0 ? longEntry : this.client.getOmsAvgEntryPrice(i);
         const longUPnl = mark > 0 && longEntryPx > 0 ? (mark - longEntryPx) * longQty : this.client.getOmsLongUnrealizedPnl(i);
+        const longRoe = mark > 0 && longEntryPx > 0 ? ((mark - longEntryPx) / longEntryPx) * this.client.getOmsLeverage(i) * 100 : 0;
         const longUPnlColor = longUPnl >= 0 ? green : red;
-        const longUPnlStr = `${longUPnl >= 0 ? "+" : ""}$${longUPnl.toFixed(2)}`;
+        const longUPnlStr = `${longUPnl >= 0 ? "+" : ""}$${longUPnl.toFixed(2)} (${longRoe >= 0 ? "+" : ""}${longRoe.toFixed(1)}% ROE)`;
         const longUPnlFormatted = this.formatCell(longUPnlStr, 56, false);
 
         out += `| ${longSlotStr} | ${sym} | ${longSide} | ${this.formatCell(longQty.toFixed(4), 10)} | $${this.formatCell(longEntryPx.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${longUPnlColor}${bold}${longUPnlFormatted}${reset} |${clearLine}\n`;
@@ -438,8 +439,9 @@ export class MultiAssetCLIDashboard {
         const shortSide = `${red}${this.formatCell("SHORT", 8, false)}${reset}`;
         const shortEntryPx = shortEntry > 0 ? shortEntry : this.client.getOmsAvgEntryPrice(i);
         const shortUPnl = mark > 0 && shortEntryPx > 0 ? (shortEntryPx - mark) * shortQty : this.client.getOmsShortUnrealizedPnl(i);
+        const shortRoe = mark > 0 && shortEntryPx > 0 ? ((shortEntryPx - mark) / shortEntryPx) * this.client.getOmsLeverage(i) * 100 : 0;
         const shortUPnlColor = shortUPnl >= 0 ? green : red;
-        const shortUPnlStr = `${shortUPnl >= 0 ? "+" : ""}$${shortUPnl.toFixed(2)}`;
+        const shortUPnlStr = `${shortUPnl >= 0 ? "+" : ""}$${shortUPnl.toFixed(2)} (${shortRoe >= 0 ? "+" : ""}${shortRoe.toFixed(1)}% ROE)`;
         const shortUPnlFormatted = this.formatCell(shortUPnlStr, 56, false);
 
         out += `| ${shortSlotStr} | ${sym} | ${shortSide} | ${this.formatCell(shortQty.toFixed(4), 10)} | $${this.formatCell(shortEntryPx.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${shortUPnlColor}${bold}${shortUPnlFormatted}${reset} |${clearLine}\n`;
@@ -450,8 +452,9 @@ export class MultiAssetCLIDashboard {
         const slotStr = this.formatCell(`#${i}-LONG`, 6, false);
         const side = `${green}${this.formatCell("LONG", 8, false)}${reset}`;
         const uPnl = mark > 0 && entry > 0 ? (mark - entry) * displayQty : this.client.getOmsUnrealizedPnl(i);
+        const roe = mark > 0 && entry > 0 ? ((mark - entry) / entry) * this.client.getOmsLeverage(i) * 100 : 0;
         const uPnlColor = uPnl >= 0 ? green : red;
-        const uPnlStr = `${uPnl >= 0 ? "+" : ""}$${uPnl.toFixed(2)}`;
+        const uPnlStr = `${uPnl >= 0 ? "+" : ""}$${uPnl.toFixed(2)} (${roe >= 0 ? "+" : ""}${roe.toFixed(1)}% ROE)`;
         const uPnlFormatted = this.formatCell(uPnlStr, 56, false);
 
         out += `| ${slotStr} | ${sym} | ${side} | ${this.formatCell(displayQty.toFixed(4), 10)} | $${this.formatCell(entry.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${uPnlColor}${bold}${uPnlFormatted}${reset} |${clearLine}\n`;
@@ -462,8 +465,9 @@ export class MultiAssetCLIDashboard {
         const slotStr = this.formatCell(`#${i}-SHORT`, 6, false);
         const side = `${red}${this.formatCell("SHORT", 8, false)}${reset}`;
         const uPnl = mark > 0 && entry > 0 ? (entry - mark) * displayQty : this.client.getOmsUnrealizedPnl(i);
+        const roe = mark > 0 && entry > 0 ? ((entry - mark) / entry) * this.client.getOmsLeverage(i) * 100 : 0;
         const uPnlColor = uPnl >= 0 ? green : red;
-        const uPnlStr = `${uPnl >= 0 ? "+" : ""}$${uPnl.toFixed(2)}`;
+        const uPnlStr = `${uPnl >= 0 ? "+" : ""}$${uPnl.toFixed(2)} (${roe >= 0 ? "+" : ""}${roe.toFixed(1)}% ROE)`;
         const uPnlFormatted = this.formatCell(uPnlStr, 56, false);
 
         out += `| ${slotStr} | ${sym} | ${side} | ${this.formatCell(displayQty.toFixed(4), 10)} | $${this.formatCell(entry.toFixed(posDec), 10)} | $${this.formatCell(mark.toFixed(posDec), 10)} | ${levFormatted} | $${this.formatCell(rPnl.toFixed(2), 10)} | ${uPnlColor}${bold}${uPnlFormatted}${reset} |${clearLine}\n`;

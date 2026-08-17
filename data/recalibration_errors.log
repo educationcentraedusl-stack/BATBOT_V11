@@ -1,1 +1,35 @@
 
+[2026-08-17T09:45:18.378Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py", line 454, in <module>
+    train_local_cfc()
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py", line 366, in train_local_cfc
+    loss, dir_loss, focal_loss, ic = criterion(pred, by)
+                                     ^^^^^^^^^^^^^^^^^^^
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1553, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1562, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py", line 168, in forward
+    tgt_meta = tgt_last[:, 1].clamp(0.0, 1.0)
+               ~~~~~~~~^^^^^^
+IndexError: index 1 is out of bounds for dimension 1 with size 1
+--- PYTHON STDERR TRACEBACK ---
+Traceback (most recent call last):
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py", line 454, in <module>
+    train_local_cfc()
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py", line 366, in train_local_cfc
+    loss, dir_loss, focal_loss, ic = criterion(pred, by)
+                                     ^^^^^^^^^^^^^^^^^^^
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1553, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1562, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py", line 168, in forward
+    tgt_meta = tgt_last[:, 1].clamp(0.0, 1.0)
+               ~~~~~~~~^^^^^^
+IndexError: index 1 is out of bounds for dimension 1 with size 1

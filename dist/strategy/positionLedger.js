@@ -19,6 +19,10 @@ class PositionLedger {
     positionOpenTime = 0;
     cumulativeRealizedPnl = 0;
     cumulativeFees = 0;
+    cumulativeFundingFees = 0;
+    cumulativeCommissions = 0;
+    reconciledWalletBalance = 0;
+    activeStepCollarTier = 0;
     totalTrades = 0;
     winningTrades = 0;
     losingTrades = 0;
@@ -63,6 +67,11 @@ class PositionLedger {
             unrealizedPnl: 0,
             cumulativeRealizedPnl: 0,
             cumulativeFees: 0,
+            cumulativeFundingFees: 0,
+            cumulativeCommissions: 0,
+            reconciledWalletBalance: 0,
+            activeStepCollarTier: 0,
+            roePercent: 0,
             totalTrades: 0,
             winningTrades: 0,
             losingTrades: 0,
@@ -241,16 +250,61 @@ class PositionLedger {
         this.cachedSummary.longAverageEntryPrice = this.side === "LONG" ? Number(this.averageEntryPrice.toFixed(4)) : 0;
         this.cachedSummary.shortAverageEntryPrice = this.side === "SHORT" ? Number(this.averageEntryPrice.toFixed(4)) : 0;
         const uPnl = this.getUnrealizedPnl(currentMarkPrice);
+        let roePercent = 0;
+        if (this.netQuantity > 0 && this.averageEntryPrice > 0 && currentMarkPrice > 0) {
+            if (this.side === "LONG") {
+                roePercent = ((currentMarkPrice - this.averageEntryPrice) / this.averageEntryPrice) * this.leverage * 100;
+            }
+            else if (this.side === "SHORT") {
+                roePercent = ((this.averageEntryPrice - currentMarkPrice) / this.averageEntryPrice) * this.leverage * 100;
+            }
+        }
         this.cachedSummary.longUnrealizedPnl = this.side === "LONG" ? Number(uPnl.toFixed(4)) : 0;
         this.cachedSummary.shortUnrealizedPnl = this.side === "SHORT" ? Number(uPnl.toFixed(4)) : 0;
         this.cachedSummary.unrealizedPnl = Number(uPnl.toFixed(4));
         this.cachedSummary.cumulativeRealizedPnl = Number(this.cumulativeRealizedPnl.toFixed(4));
         this.cachedSummary.cumulativeFees = Number(this.cumulativeFees.toFixed(4));
+        this.cachedSummary.cumulativeFundingFees = Number(this.cumulativeFundingFees.toFixed(4));
+        this.cachedSummary.cumulativeCommissions = Number(this.cumulativeCommissions.toFixed(4));
+        this.cachedSummary.reconciledWalletBalance = Number(this.reconciledWalletBalance.toFixed(2));
+        this.cachedSummary.activeStepCollarTier = this.activeStepCollarTier;
+        this.cachedSummary.roePercent = Number(roePercent.toFixed(2));
         this.cachedSummary.totalTrades = this.totalTrades;
         this.cachedSummary.winningTrades = this.winningTrades;
         this.cachedSummary.losingTrades = this.losingTrades;
         this.cachedSummary.leverage = this.leverage;
         return this.cachedSummary;
+    }
+    recordFundingFee(amount, symbol) {
+        if (!Number.isFinite(amount))
+            return;
+        this.cumulativeFundingFees += amount;
+        this.cumulativeRealizedPnl += amount;
+    }
+    recordExactCommission(amount) {
+        if (!Number.isFinite(amount) || amount < 0)
+            return;
+        this.cumulativeCommissions += amount;
+    }
+    setReconciledWalletBalance(balance) {
+        if (Number.isFinite(balance)) {
+            this.reconciledWalletBalance = balance;
+        }
+    }
+    setActiveStepCollarTier(tier) {
+        this.activeStepCollarTier = tier;
+    }
+    getCumulativeFundingFees() {
+        return this.cumulativeFundingFees;
+    }
+    getCumulativeCommissions() {
+        return this.cumulativeCommissions;
+    }
+    getReconciledWalletBalance() {
+        return this.reconciledWalletBalance;
+    }
+    getActiveStepCollarTier() {
+        return this.activeStepCollarTier;
     }
     setLeverage(leverage) {
         if (Number.isFinite(leverage) && leverage > 0) {
@@ -359,6 +413,10 @@ class HedgePositionLedger {
     // Native zero-GC cumulative trade accounting counters
     cumulativeRealizedPnl = 0;
     cumulativeFees = 0;
+    cumulativeFundingFees = 0;
+    cumulativeCommissions = 0;
+    reconciledWalletBalance = 0;
+    activeStepCollarTier = 0;
     totalTrades = 0;
     winningTrades = 0;
     losingTrades = 0;
@@ -402,6 +460,11 @@ class HedgePositionLedger {
             unrealizedPnl: 0,
             cumulativeRealizedPnl: 0,
             cumulativeFees: 0,
+            cumulativeFundingFees: 0,
+            cumulativeCommissions: 0,
+            reconciledWalletBalance: 0,
+            activeStepCollarTier: 0,
+            roePercent: 0,
             totalTrades: 0,
             winningTrades: 0,
             losingTrades: 0,
@@ -537,6 +600,13 @@ class HedgePositionLedger {
             shortUnrealized = (shortAvgEntry - currentMarkPrice) * shortQty;
         }
         const totalUnrealized = longUnrealized + shortUnrealized;
+        let roePercent = 0;
+        if (longQty > 0 && currentMarkPrice > 0 && longAvgEntry > 0) {
+            roePercent = ((currentMarkPrice - longAvgEntry) / longAvgEntry) * this.leverage * 100;
+        }
+        else if (shortQty > 0 && currentMarkPrice > 0 && shortAvgEntry > 0) {
+            roePercent = ((shortAvgEntry - currentMarkPrice) / shortAvgEntry) * this.leverage * 100;
+        }
         this.cachedSummary.symbol = this.symbol;
         this.cachedSummary.side = side;
         this.cachedSummary.netQuantity = Number(netQty.toFixed(6));
@@ -551,11 +621,58 @@ class HedgePositionLedger {
         this.cachedSummary.unrealizedPnl = Number(totalUnrealized.toFixed(4));
         this.cachedSummary.cumulativeRealizedPnl = Number(this.cumulativeRealizedPnl.toFixed(4));
         this.cachedSummary.cumulativeFees = Number(this.cumulativeFees.toFixed(4));
+        this.cachedSummary.cumulativeFundingFees = Number(this.cumulativeFundingFees.toFixed(4));
+        this.cachedSummary.cumulativeCommissions = Number(this.cumulativeCommissions.toFixed(4));
+        this.cachedSummary.reconciledWalletBalance = Number(this.reconciledWalletBalance.toFixed(2));
+        this.cachedSummary.activeStepCollarTier = this.activeStepCollarTier;
+        this.cachedSummary.roePercent = Number(roePercent.toFixed(2));
         this.cachedSummary.totalTrades = this.totalTrades;
         this.cachedSummary.winningTrades = this.winningTrades;
         this.cachedSummary.losingTrades = this.losingTrades;
         this.cachedSummary.leverage = this.leverage;
         return this.cachedSummary;
+    }
+    recordFundingFee(amount, symbol) {
+        if (!Number.isFinite(amount))
+            return;
+        this.cumulativeFundingFees += amount;
+        this.cumulativeRealizedPnl += amount;
+        if (this.cumulativeRealizedPnl > this.highWaterMarkPnl) {
+            this.highWaterMarkPnl = this.cumulativeRealizedPnl;
+            this.sessionDrawdownPnl = 0;
+        }
+        else {
+            this.sessionDrawdownPnl = this.highWaterMarkPnl - this.cumulativeRealizedPnl;
+        }
+        this.legacyLedger.recordFundingFee(amount, symbol);
+    }
+    recordExactCommission(amount) {
+        if (!Number.isFinite(amount) || amount < 0)
+            return;
+        this.cumulativeCommissions += amount;
+        this.legacyLedger.recordExactCommission(amount);
+    }
+    setReconciledWalletBalance(balance) {
+        if (Number.isFinite(balance)) {
+            this.reconciledWalletBalance = balance;
+            this.legacyLedger.setReconciledWalletBalance(balance);
+        }
+    }
+    setActiveStepCollarTier(tier) {
+        this.activeStepCollarTier = tier;
+        this.legacyLedger.setActiveStepCollarTier(tier);
+    }
+    getCumulativeFundingFees() {
+        return this.cumulativeFundingFees;
+    }
+    getCumulativeCommissions() {
+        return this.cumulativeCommissions;
+    }
+    getReconciledWalletBalance() {
+        return this.reconciledWalletBalance;
+    }
+    getActiveStepCollarTier() {
+        return this.activeStepCollarTier;
     }
     setLeverage(leverage) {
         if (Number.isFinite(leverage) && leverage > 0) {

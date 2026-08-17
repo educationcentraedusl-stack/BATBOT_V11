@@ -1,6 +1,18 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-17
+- **Feature/Task:** Phase 4: Micro-Cent Exchange PnL, Income & Slippage Pipeline (/fapi/v1/income & /fapi/v1/userTrades Synchronizer, Real-Time ROE & Reconciled Wallet Telemetry)
+- **Artifacts Created/Modified:** `src/execution/binance.ts`, `src/strategy/positionLedger.ts`, `src/strategy/engine.ts`, `src/telemetry/dashboard.ts`, `src/telemetry/multiAssetDashboard.ts`, `src/tests/test_phase4_pnl_slippage_pipeline.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** 
+  1. Implemented background synchronization for `/fapi/v1/income` and `/fapi/v1/userTrades` in `BinanceExecutionClient` (`src/execution/binance.ts`), extracting exact exchange commissions and funding rate payments with micro-cent precision.
+  2. Implemented real-time Binance wallet balance reconciliation via `fetchReconciledAccountBalanceAsync()` (`/fapi/v2/account`).
+  3. Extended `PositionLedger` and `HedgePositionLedger` (`src/strategy/positionLedger.ts`) with exact funding fee ingestion (`recordFundingFee`), exact commission tracking (`recordExactCommission`), reconciled wallet balance tracking (`setReconciledWalletBalance`), and real-time ROE percentage calculations.
+  4. Eradicated fallback $0.00 PnL resets on order errors in `StrategyEngine` (`src/strategy/engine.ts`) by utilizing mark price fallback and double-entry REST userTrades reconciliation.
+  5. Enhanced Telemetry Dashboards (`src/telemetry/dashboard.ts` & `src/telemetry/multiAssetDashboard.ts`) to render real-time ROE, active Step-Collar tier (T1:BE / T2:LOCK / T3:TRAIL), cumulative funding fees, and reconciled Binance wallet balance with zero GC heap allocations.
+  6. 100% verified via `npx tsx src/tests/test_phase4_pnl_slippage_pipeline.ts` (5/5 passed), `npm run build:ts` (0 errors), `cargo test --lib` (36/36 passed), and all regression test suites.
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-17
 - **Feature/Task:** Phase 3: Aggressive Profit-Locking Step-Collar (PL-SC) Risk Engine & Order Execution Pipeline Wiring
 - **Artifacts Created/Modified:** `src/execution/risk.ts`, `src/execution/orderManager.ts`, `src/tests/test_phase3_step_collar_risk.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
 - **HFT/Performance Compliance:** 

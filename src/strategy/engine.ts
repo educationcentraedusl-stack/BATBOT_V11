@@ -224,6 +224,26 @@ export class StrategyEngine {
       quantity: this.config.orderQuantity,
       price: 0,
     };
+
+    if (this.executionClient) {
+      this.executionClient.subscribeIncomeUpdates((incomes) => {
+        for (const inc of incomes) {
+          if (inc.symbol && inc.symbol !== this.config.symbol && inc.symbol !== "GLOBAL") continue;
+          const val = parseFloat(inc.income || "0");
+          if (inc.incomeType === "FUNDING_FEE" && !isNaN(val)) {
+            this.hedgeLedger.recordFundingFee(val, inc.symbol);
+            console.log(`[BinanceExecution][INCOME_SYNC] [${this.config.symbol}] Funding fee recorded: ${val >= 0 ? "+" : ""}$${val.toFixed(4)} (Total Funding: $${this.hedgeLedger.getCumulativeFundingFees().toFixed(4)})`);
+          } else if (inc.incomeType === "COMMISSION" && !isNaN(val)) {
+            this.hedgeLedger.recordExactCommission(Math.abs(val));
+          }
+        }
+        const reconciledBal = this.executionClient.getReconciledWalletBalance();
+        if (reconciledBal > 0) {
+          this.hedgeLedger.setReconciledWalletBalance(reconciledBal);
+        }
+        this.syncSabPositionState();
+      });
+    }
   }
 
   /**
@@ -1640,14 +1660,17 @@ export class StrategyEngine {
                       err.message.includes("not configured"))
                   ) {
                     console.warn(
-                      `[DYNAMIC_MONITORING_WARN] Clearing local slot ${trigger.slotId} due to exchange release/error: ${err.message}`
+                      `[DYNAMIC_MONITORING_WARN] Reconciling local slot ${trigger.slotId} with exchange trades due to error: ${err.message}`
                     );
+                    const safeExitPx = markPrice > 0 ? markPrice : (this.client.getMidPrice(this.assetIndex) || undefined);
+                    const takerFeeRate = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
                     if (trigger.side === "LONG") {
-                      this.hedgeLedger.releaseCoreLong();
+                      this.hedgeLedger.releaseCoreLong(safeExitPx, takerFeeRate, "ERROR_SETTLEMENT", markPrice);
                     } else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
                       const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
-                      this.hedgeLedger.releaseShortSlot(sIdx);
+                      this.hedgeLedger.releaseShortSlot(sIdx, safeExitPx, takerFeeRate, "ERROR_SETTLEMENT", markPrice);
                     }
+                    this.reconcileFlatPositionWithUserTrades(trigger.side, 100);
                   }
                   return null;
                 });

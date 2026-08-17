@@ -83,6 +83,17 @@ export interface BinancePositionRisk {
   updateTime: number;
 }
 
+export interface BinanceIncomeHistory {
+  symbol?: string;
+  incomeType: string; // "TRANSFER" | "WELCOME_BONUS" | "REALIZED_PNL" | "FUNDING_FEE" | "COMMISSION" | "INSURANCE_CLEAR" etc.
+  income: string;
+  asset: string;
+  info?: string;
+  time: number;
+  tranId: number | string;
+  tradeId?: string;
+}
+
 export interface BinanceAccountBalance {
   accountAlias: string;
   asset: string;
@@ -93,6 +104,21 @@ export interface BinanceAccountBalance {
   maxWithdrawAmount: string;
   marginAvailable: boolean;
   updateTime: number;
+}
+
+export interface BinanceAccountInfo {
+  totalInitialMargin: string;
+  totalMaintMargin: string;
+  totalWalletBalance: string;
+  totalUnrealizedProfit: string;
+  totalMarginBalance: string;
+  totalPositionInitialMargin: string;
+  totalOpenOrderInitialMargin: string;
+  maxWithdrawAmount: string;
+  availableBalance: string;
+  updateTime: number;
+  assets: BinanceAccountBalance[];
+  positions: BinancePositionRisk[];
 }
 
 export interface BinanceClientOptions {
@@ -138,7 +164,17 @@ export class BinanceExecutionClient {
   private wsUrl: string;
   private testnet: boolean;
   private cachedUsdtAvailableBalance: number = 0;
+  private cachedReconciledWalletBalance: number = 0;
+  private cachedTotalUnrealizedProfit: number = 0;
   private balancePollTimer: NodeJS.Timeout | null = null;
+  private incomeSyncTimer: NodeJS.Timeout | null = null;
+  private userTradesSyncTimer: NodeJS.Timeout | null = null;
+  private lastIncomeSyncTime: number = 0;
+  private lastUserTradeSyncTimes: Map<string, number> = new Map();
+  private cachedCumulativeFunding: Map<string, number> = new Map();
+  private cachedCumulativeCommission: Map<string, number> = new Map();
+  private incomeCallbacks: Set<(incomes: BinanceIncomeHistory[]) => void> = new Set();
+  private userTradeCallbacks: Set<(trades: BinanceUserTrade[]) => void> = new Set();
   private timeOffset: number = 0;
   private isTimeSynced: boolean = false;
   private timeSyncPromise: Promise<number> | null = null;
@@ -831,18 +867,242 @@ export class BinanceExecutionClient {
     );
   }
 
-  public async getUserTrades(symbol: string, limit: number = 5): Promise<BinanceUserTrade[]> {
+  public async getUserTrades(
+    symbol: string,
+    limit: number = 50,
+    startTime?: number,
+    endTime?: number,
+    fromId?: number
+  ): Promise<BinanceUserTrade[]> {
     try {
+      const params: Record<string, string | number> = { symbol, limit };
+      if (startTime !== undefined && startTime > 0) params.startTime = startTime;
+      if (endTime !== undefined && endTime > 0) params.endTime = endTime;
+      if (fromId !== undefined && fromId > 0) params.fromId = fromId;
+
       const res = await this.request<BinanceUserTrade[]>(
         "GET",
         "/fapi/v1/userTrades",
-        { symbol, limit },
+        params,
         true
       );
       return Array.isArray(res) ? res : [];
     } catch (err: any) {
       console.warn(`[BinanceExecutionClient] Notice fetching userTrades for ${symbol}: ${err?.message || String(err)}`);
       return [];
+    }
+  }
+
+  /**
+   * Fetches micro-cent exchange income history (/fapi/v1/income) including FUNDING_FEE, COMMISSION, and REALIZED_PNL.
+   */
+  public async getIncomeHistory(
+    symbol?: string,
+    incomeType?: string,
+    startTime?: number,
+    endTime?: number,
+    limit: number = 100
+  ): Promise<BinanceIncomeHistory[]> {
+    try {
+      const params: Record<string, string | number> = { limit };
+      if (symbol) params.symbol = symbol;
+      if (incomeType) params.incomeType = incomeType;
+      if (startTime !== undefined && startTime > 0) params.startTime = startTime;
+      if (endTime !== undefined && endTime > 0) params.endTime = endTime;
+
+      const res = await this.request<BinanceIncomeHistory[]>(
+        "GET",
+        "/fapi/v1/income",
+        params,
+        true
+      );
+      return Array.isArray(res) ? res : [];
+    } catch (err: any) {
+      console.warn(`[BinanceExecutionClient] Notice fetching income history: ${err?.message || String(err)}`);
+      return [];
+    }
+  }
+
+  /**
+   * Fetches full account telemetry from Binance REST API (/fapi/v2/account).
+   */
+  public async getAccountInfo(): Promise<BinanceAccountInfo> {
+    return this.request<BinanceAccountInfo>("GET", "/fapi/v2/account", {}, true);
+  }
+
+  /**
+   * Reconciles available wallet balance and total unrealized profit directly from Binance REST API.
+   */
+  public async fetchReconciledAccountBalanceAsync(): Promise<{ totalWalletBalance: number; availableBalance: number; unrealizedProfit: number }> {
+    if (!this.isConfigured()) {
+      return { totalWalletBalance: 0, availableBalance: 0, unrealizedProfit: 0 };
+    }
+    try {
+      const accountInfo = await this.getAccountInfo();
+      if (accountInfo) {
+        const totalWallet = parseFloat(accountInfo.totalWalletBalance || "0");
+        const available = parseFloat(accountInfo.availableBalance || "0");
+        const unrealized = parseFloat(accountInfo.totalUnrealizedProfit || "0");
+
+        if (!isNaN(totalWallet)) this.cachedReconciledWalletBalance = totalWallet;
+        if (!isNaN(available)) this.cachedUsdtAvailableBalance = available;
+        if (!isNaN(unrealized)) this.cachedTotalUnrealizedProfit = unrealized;
+
+        return {
+          totalWalletBalance: this.cachedReconciledWalletBalance,
+          availableBalance: this.cachedUsdtAvailableBalance,
+          unrealizedProfit: this.cachedTotalUnrealizedProfit,
+        };
+      }
+    } catch (err: any) {
+      console.warn(`[BinanceExecutionClient] Reconciled account balance fetch notice: ${err?.message || String(err)}`);
+    }
+    return {
+      totalWalletBalance: this.cachedReconciledWalletBalance,
+      availableBalance: this.cachedUsdtAvailableBalance,
+      unrealizedProfit: this.cachedTotalUnrealizedProfit,
+    };
+  }
+
+  public getReconciledWalletBalance(): number {
+    return this.cachedReconciledWalletBalance > 0 ? this.cachedReconciledWalletBalance : this.cachedUsdtAvailableBalance;
+  }
+
+  public getTotalUnrealizedProfit(): number {
+    return this.cachedTotalUnrealizedProfit;
+  }
+
+  public getCumulativeFunding(symbol?: string): number {
+    if (symbol) {
+      return this.cachedCumulativeFunding.get(symbol) ?? 0;
+    }
+    let total = 0;
+    for (const val of this.cachedCumulativeFunding.values()) {
+      total += val;
+    }
+    return total;
+  }
+
+  public getCumulativeCommission(symbol?: string): number {
+    if (symbol) {
+      return this.cachedCumulativeCommission.get(symbol) ?? 0;
+    }
+    let total = 0;
+    for (const val of this.cachedCumulativeCommission.values()) {
+      total += val;
+    }
+    return total;
+  }
+
+  public subscribeIncomeUpdates(callback: (incomes: BinanceIncomeHistory[]) => void): () => void {
+    this.incomeCallbacks.add(callback);
+    return () => {
+      this.incomeCallbacks.delete(callback);
+    };
+  }
+
+  public subscribeUserTradeUpdates(callback: (trades: BinanceUserTrade[]) => void): () => void {
+    this.userTradeCallbacks.add(callback);
+    return () => {
+      this.userTradeCallbacks.delete(callback);
+    };
+  }
+
+  /**
+   * Starts background synchronization of /fapi/v1/income and /fapi/v1/userTrades.
+   */
+  public startBackgroundSync(
+    symbols: string[] = ["BTCUSDT"],
+    incomeIntervalMs: number = 30000,
+    tradeIntervalMs: number = 10000
+  ): void {
+    if (!this.isConfigured()) return;
+
+    // 1. Initial immediate reconciliation
+    this.fetchReconciledAccountBalanceAsync().catch(() => {});
+    this.syncIncomeBackground(symbols).catch(() => {});
+
+    // 2. Start periodic income sync
+    if (!this.incomeSyncTimer) {
+      this.incomeSyncTimer = setInterval(() => {
+        this.syncIncomeBackground(symbols).catch((err: any) => {
+          console.warn(`[BinanceExecutionClient] Background income sync notice: ${err?.message || String(err)}`);
+        });
+        this.fetchReconciledAccountBalanceAsync().catch(() => {});
+      }, incomeIntervalMs);
+    }
+
+    // 3. Start periodic userTrades sync
+    if (!this.userTradesSyncTimer) {
+      this.userTradesSyncTimer = setInterval(() => {
+        this.syncUserTradesBackground(symbols).catch((err: any) => {
+          console.warn(`[BinanceExecutionClient] Background userTrades sync notice: ${err?.message || String(err)}`);
+        });
+      }, tradeIntervalMs);
+    }
+  }
+
+  public stopBackgroundSync(): void {
+    if (this.incomeSyncTimer) {
+      clearInterval(this.incomeSyncTimer);
+      this.incomeSyncTimer = null;
+    }
+    if (this.userTradesSyncTimer) {
+      clearInterval(this.userTradesSyncTimer);
+      this.userTradesSyncTimer = null;
+    }
+  }
+
+  private async syncIncomeBackground(symbols: string[]): Promise<void> {
+    const startTime = this.lastIncomeSyncTime > 0 ? this.lastIncomeSyncTime : Date.now() - 24 * 60 * 60 * 1000;
+    const incomes = await this.getIncomeHistory(undefined, undefined, startTime, undefined, 100);
+
+    if (incomes.length > 0) {
+      let maxTime = this.lastIncomeSyncTime;
+      for (const inc of incomes) {
+        if (inc.time > maxTime) maxTime = inc.time;
+        const sym = inc.symbol || "GLOBAL";
+        const val = parseFloat(inc.income || "0");
+
+        if (inc.incomeType === "FUNDING_FEE" && !isNaN(val)) {
+          const currentFunding = this.cachedCumulativeFunding.get(sym) ?? 0;
+          this.cachedCumulativeFunding.set(sym, currentFunding + val);
+        } else if (inc.incomeType === "COMMISSION" && !isNaN(val)) {
+          const currentComm = this.cachedCumulativeCommission.get(sym) ?? 0;
+          this.cachedCumulativeCommission.set(sym, currentComm + Math.abs(val));
+        }
+      }
+      this.lastIncomeSyncTime = maxTime + 1;
+
+      for (const cb of this.incomeCallbacks) {
+        try {
+          cb(incomes);
+        } catch (err: any) {
+          console.error(`[BinanceExecutionClient] Error in income callback: ${err?.message || String(err)}`);
+        }
+      }
+    }
+  }
+
+  private async syncUserTradesBackground(symbols: string[]): Promise<void> {
+    for (const sym of symbols) {
+      const lastSyncTime = this.lastUserTradeSyncTimes.get(sym) || (Date.now() - 60 * 60 * 1000);
+      const trades = await this.getUserTrades(sym, 50, lastSyncTime);
+      if (trades.length > 0) {
+        let maxTime = lastSyncTime;
+        for (const t of trades) {
+          if (t.time > maxTime) maxTime = t.time;
+        }
+        this.lastUserTradeSyncTimes.set(sym, maxTime + 1);
+
+        for (const cb of this.userTradeCallbacks) {
+          try {
+            cb(trades);
+          } catch (err: any) {
+            console.error(`[BinanceExecutionClient] Error in userTrade callback for ${sym}: ${err?.message || String(err)}`);
+          }
+        }
+      }
     }
   }
 

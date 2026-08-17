@@ -28,6 +28,11 @@ export interface PositionSummary {
   unrealizedPnl: number;
   cumulativeRealizedPnl: number;
   cumulativeFees: number;
+  cumulativeFundingFees: number;
+  cumulativeCommissions: number;
+  reconciledWalletBalance: number;
+  activeStepCollarTier: number; // 0=None, 1=BE Shield, 2=Partial Profit, 3=Trailing Collar
+  roePercent: number;
   totalTrades: number;
   winningTrades: number;
   losingTrades: number;
@@ -77,6 +82,10 @@ export class PositionLedger {
   private positionOpenTime = 0;
   private cumulativeRealizedPnl = 0;
   private cumulativeFees = 0;
+  private cumulativeFundingFees = 0;
+  private cumulativeCommissions = 0;
+  private reconciledWalletBalance = 0;
+  private activeStepCollarTier = 0;
   private totalTrades = 0;
   private winningTrades = 0;
   private losingTrades = 0;
@@ -126,6 +135,11 @@ export class PositionLedger {
       unrealizedPnl: 0,
       cumulativeRealizedPnl: 0,
       cumulativeFees: 0,
+      cumulativeFundingFees: 0,
+      cumulativeCommissions: 0,
+      reconciledWalletBalance: 0,
+      activeStepCollarTier: 0,
+      roePercent: 0,
       totalTrades: 0,
       winningTrades: 0,
       losingTrades: 0,
@@ -334,17 +348,68 @@ export class PositionLedger {
     this.cachedSummary.longAverageEntryPrice = this.side === "LONG" ? Number(this.averageEntryPrice.toFixed(4)) : 0;
     this.cachedSummary.shortAverageEntryPrice = this.side === "SHORT" ? Number(this.averageEntryPrice.toFixed(4)) : 0;
     const uPnl = this.getUnrealizedPnl(currentMarkPrice);
+    let roePercent = 0;
+    if (this.netQuantity > 0 && this.averageEntryPrice > 0 && currentMarkPrice > 0) {
+      if (this.side === "LONG") {
+        roePercent = ((currentMarkPrice - this.averageEntryPrice) / this.averageEntryPrice) * this.leverage * 100;
+      } else if (this.side === "SHORT") {
+        roePercent = ((this.averageEntryPrice - currentMarkPrice) / this.averageEntryPrice) * this.leverage * 100;
+      }
+    }
+
     this.cachedSummary.longUnrealizedPnl = this.side === "LONG" ? Number(uPnl.toFixed(4)) : 0;
     this.cachedSummary.shortUnrealizedPnl = this.side === "SHORT" ? Number(uPnl.toFixed(4)) : 0;
     this.cachedSummary.unrealizedPnl = Number(uPnl.toFixed(4));
     this.cachedSummary.cumulativeRealizedPnl = Number(this.cumulativeRealizedPnl.toFixed(4));
     this.cachedSummary.cumulativeFees = Number(this.cumulativeFees.toFixed(4));
+    this.cachedSummary.cumulativeFundingFees = Number(this.cumulativeFundingFees.toFixed(4));
+    this.cachedSummary.cumulativeCommissions = Number(this.cumulativeCommissions.toFixed(4));
+    this.cachedSummary.reconciledWalletBalance = Number(this.reconciledWalletBalance.toFixed(2));
+    this.cachedSummary.activeStepCollarTier = this.activeStepCollarTier;
+    this.cachedSummary.roePercent = Number(roePercent.toFixed(2));
     this.cachedSummary.totalTrades = this.totalTrades;
     this.cachedSummary.winningTrades = this.winningTrades;
     this.cachedSummary.losingTrades = this.losingTrades;
     this.cachedSummary.leverage = this.leverage;
 
     return this.cachedSummary;
+  }
+
+  public recordFundingFee(amount: number, symbol?: string): void {
+    if (!Number.isFinite(amount)) return;
+    this.cumulativeFundingFees += amount;
+    this.cumulativeRealizedPnl += amount;
+  }
+
+  public recordExactCommission(amount: number): void {
+    if (!Number.isFinite(amount) || amount < 0) return;
+    this.cumulativeCommissions += amount;
+  }
+
+  public setReconciledWalletBalance(balance: number): void {
+    if (Number.isFinite(balance)) {
+      this.reconciledWalletBalance = balance;
+    }
+  }
+
+  public setActiveStepCollarTier(tier: number): void {
+    this.activeStepCollarTier = tier;
+  }
+
+  public getCumulativeFundingFees(): number {
+    return this.cumulativeFundingFees;
+  }
+
+  public getCumulativeCommissions(): number {
+    return this.cumulativeCommissions;
+  }
+
+  public getReconciledWalletBalance(): number {
+    return this.reconciledWalletBalance;
+  }
+
+  public getActiveStepCollarTier(): number {
+    return this.activeStepCollarTier;
   }
 
   public setLeverage(leverage: number): void {
@@ -400,6 +465,9 @@ export interface ActiveTradeSlot {
   slPrice: number;
   leverage: number;
   unrealizedPnl: number;
+  roePercent?: number;
+  stepCollarTier?: string | number;
+  fundingFees?: number;
   durationMs: number;
 }
 
@@ -529,6 +597,10 @@ export class HedgePositionLedger {
   // Native zero-GC cumulative trade accounting counters
   private cumulativeRealizedPnl = 0;
   private cumulativeFees = 0;
+  private cumulativeFundingFees = 0;
+  private cumulativeCommissions = 0;
+  private reconciledWalletBalance = 0;
+  private activeStepCollarTier = 0;
   private totalTrades = 0;
   private winningTrades = 0;
   private losingTrades = 0;
@@ -577,6 +649,11 @@ export class HedgePositionLedger {
       unrealizedPnl: 0,
       cumulativeRealizedPnl: 0,
       cumulativeFees: 0,
+      cumulativeFundingFees: 0,
+      cumulativeCommissions: 0,
+      reconciledWalletBalance: 0,
+      activeStepCollarTier: 0,
+      roePercent: 0,
       totalTrades: 0,
       winningTrades: 0,
       losingTrades: 0,
@@ -740,6 +817,12 @@ export class HedgePositionLedger {
     }
 
     const totalUnrealized = longUnrealized + shortUnrealized;
+    let roePercent = 0;
+    if (longQty > 0 && currentMarkPrice > 0 && longAvgEntry > 0) {
+      roePercent = ((currentMarkPrice - longAvgEntry) / longAvgEntry) * this.leverage * 100;
+    } else if (shortQty > 0 && currentMarkPrice > 0 && shortAvgEntry > 0) {
+      roePercent = ((shortAvgEntry - currentMarkPrice) / shortAvgEntry) * this.leverage * 100;
+    }
 
     this.cachedSummary.symbol = this.symbol;
     this.cachedSummary.side = side;
@@ -755,12 +838,64 @@ export class HedgePositionLedger {
     this.cachedSummary.unrealizedPnl = Number(totalUnrealized.toFixed(4));
     this.cachedSummary.cumulativeRealizedPnl = Number(this.cumulativeRealizedPnl.toFixed(4));
     this.cachedSummary.cumulativeFees = Number(this.cumulativeFees.toFixed(4));
+    this.cachedSummary.cumulativeFundingFees = Number(this.cumulativeFundingFees.toFixed(4));
+    this.cachedSummary.cumulativeCommissions = Number(this.cumulativeCommissions.toFixed(4));
+    this.cachedSummary.reconciledWalletBalance = Number(this.reconciledWalletBalance.toFixed(2));
+    this.cachedSummary.activeStepCollarTier = this.activeStepCollarTier;
+    this.cachedSummary.roePercent = Number(roePercent.toFixed(2));
     this.cachedSummary.totalTrades = this.totalTrades;
     this.cachedSummary.winningTrades = this.winningTrades;
     this.cachedSummary.losingTrades = this.losingTrades;
     this.cachedSummary.leverage = this.leverage;
 
     return this.cachedSummary;
+  }
+
+  public recordFundingFee(amount: number, symbol?: string): void {
+    if (!Number.isFinite(amount)) return;
+    this.cumulativeFundingFees += amount;
+    this.cumulativeRealizedPnl += amount;
+    if (this.cumulativeRealizedPnl > this.highWaterMarkPnl) {
+      this.highWaterMarkPnl = this.cumulativeRealizedPnl;
+      this.sessionDrawdownPnl = 0;
+    } else {
+      this.sessionDrawdownPnl = this.highWaterMarkPnl - this.cumulativeRealizedPnl;
+    }
+    this.legacyLedger.recordFundingFee(amount, symbol);
+  }
+
+  public recordExactCommission(amount: number): void {
+    if (!Number.isFinite(amount) || amount < 0) return;
+    this.cumulativeCommissions += amount;
+    this.legacyLedger.recordExactCommission(amount);
+  }
+
+  public setReconciledWalletBalance(balance: number): void {
+    if (Number.isFinite(balance)) {
+      this.reconciledWalletBalance = balance;
+      this.legacyLedger.setReconciledWalletBalance(balance);
+    }
+  }
+
+  public setActiveStepCollarTier(tier: number): void {
+    this.activeStepCollarTier = tier;
+    this.legacyLedger.setActiveStepCollarTier(tier);
+  }
+
+  public getCumulativeFundingFees(): number {
+    return this.cumulativeFundingFees;
+  }
+
+  public getCumulativeCommissions(): number {
+    return this.cumulativeCommissions;
+  }
+
+  public getReconciledWalletBalance(): number {
+    return this.reconciledWalletBalance;
+  }
+
+  public getActiveStepCollarTier(): number {
+    return this.activeStepCollarTier;
   }
 
   public setLeverage(leverage: number): void {

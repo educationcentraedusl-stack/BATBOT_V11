@@ -15,6 +15,13 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-08-17 - Phase 4 (Micro-Cent Exchange PnL, Income & Slippage Pipeline) Completed & 100% QA Verified:
+  - Implemented background synchronization for `/fapi/v1/income` and `/fapi/v1/userTrades` in `BinanceExecutionClient` (`src/execution/binance.ts`), extracting exact exchange commissions and funding rate payments with micro-cent precision.
+  - Implemented real-time Binance wallet balance reconciliation via `fetchReconciledAccountBalanceAsync()` (`/fapi/v2/account`).
+  - Extended `PositionLedger` and `HedgePositionLedger` (`src/strategy/positionLedger.ts`) with exact funding fee ingestion (`recordFundingFee`), exact commission tracking (`recordExactCommission`), reconciled wallet balance tracking (`setReconciledWalletBalance`), and real-time ROE percentage calculations.
+  - Eradicated fallback $0.00 PnL resets on order errors in `StrategyEngine` (`src/strategy/engine.ts`) by utilizing mark price fallback and double-entry REST userTrades reconciliation.
+  - Enhanced Telemetry Dashboards (`src/telemetry/dashboard.ts` & `src/telemetry/multiAssetDashboard.ts`) to render real-time ROE, active Step-Collar tier (T1:BE / T2:LOCK / T3:TRAIL), cumulative funding fees, and reconciled Binance wallet balance with zero GC heap allocations.
+  - 100% verified via `npx tsx src/tests/test_phase4_pnl_slippage_pipeline.ts` (5/5 passed), `npm run build:ts` (0 errors), `cargo test --lib` (36/36 passed), and all regression test suites.
 * 2026-08-17 - Phase 3 (Aggressive Profit-Locking Step-Collar Risk Engine & Order Execution Pipeline Wiring) Completed & 100% QA Verified:
   - Implemented `StepCollarRiskEngine` in `src/execution/risk.ts` enforcing Multi-Tier Step-Collar logic:
     - Tier 1 (Break-Even Lock): When unrealized net profit reaches +$0.50 (after round-trip fees), Stop Loss locks at the break-even entry price.

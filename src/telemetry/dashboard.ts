@@ -33,6 +33,10 @@ export interface TelemetryFrame {
   riskStatus: string;
   isEngineActive: boolean;
   usdtBalance: number;
+  reconciledWalletBalance?: number;
+  cumulativeFundingFees?: number;
+  activeStepCollarTier?: string | number;
+  roePercent?: number;
   aiDirection?: number;
   aiConfidence?: number;
   rollingIc?: number;
@@ -97,9 +101,9 @@ export class CLIDashboard {
     const slippage = frame.slippageTicks ?? 2;
     const aiDirStr = aiDir >= 0 ? `+${aiDir.toFixed(4)}` : aiDir.toFixed(4);
 
-    const borderLine = `${cyan}${bold}======================================================================================================================${reset}${clearLine}\n`;
-    const subDivider = `----------------------------------------------------------------------------------------------------------------------${clearLine}\n`;
-    const tableDivider = `+-----------+-------------+----------+--------------+----------------+------------+------------+-----------+---------------------+-----------+${clearLine}\n`;
+    const borderLine = `${cyan}${bold}===================================================================================================================================${reset}${clearLine}\n`;
+    const subDivider = `-----------------------------------------------------------------------------------------------------------------------------------${clearLine}\n`;
+    const tableDivider = `+-----------+-------------+----------+--------------+----------------+------------+------------+-----------+---------------------+-----------+-----------+-----------+${clearLine}\n`;
 
     let output = "";
     output += "\x1b[H"; // Move cursor to top-left (0,0) without full screen erase to eliminate flicker
@@ -113,7 +117,7 @@ export class CLIDashboard {
       : "\x1b[33m[IDLE/PAUSED]\x1b[0m";
 
     output += borderLine;
-    output += `${cyan}${bold}                               BATBOT_V11 HFT ENGINE TELEMETRY & COMMAND MONITOR                                      ${reset}${clearLine}\n`;
+    output += `${cyan}${bold}                               BATBOT_V11 HFT ENGINE TELEMETRY & COMMAND MONITOR                                                   ${reset}${clearLine}\n`;
     output += borderLine;
     output += ` Status: ${engineStatusStr}  |  Memory: ${memMb} MB  |  Sequence: #${frame.sequenceNum.toString()}${clearLine}\n`;
     output += ` Tick Latency: ${yellow}${frame.tickEvaluationLatencyUs.toFixed(3)} µs${reset}  |  Avg Latency: ${frame.stats.avgTickLatencyUs.toFixed(3)} µs  |  Queue Depth: ${frame.stats.bufferQueueDepth}${clearLine}\n`;
@@ -131,14 +135,14 @@ export class CLIDashboard {
     output += ` Active Signal: ${signalColor}${bold}${frame.lastSignal}${reset}  |  Risk Gate: ${frame.riskStatus}${clearLine}\n`;
     output += ` Logged Signals: ${frame.stats.totalSignalsLogged}  |  Executions Logged: ${frame.stats.totalExecutionsLogged}${clearLine}\n`;
     output += subDivider;
-    output += `${bold}--- ACTIVE TRADES MONITOR (SLOTS, TP, SL & LEVERAGE) ---${reset}${clearLine}\n`;
+    output += `${bold}--- ACTIVE TRADES MONITOR (SLOTS, TP, SL & STEP-COLLAR) ---${reset}${clearLine}\n`;
     output += tableDivider;
-    output += `| ${bold}Symbol${reset}    | ${bold}Side${reset}        | ${bold}Size${reset}     | ${bold}Entry Price${reset}  | ${bold}Current Price${reset}  | ${bold}TP${reset}         | ${bold}SL${reset}         | ${bold}Leverage${reset}  | ${bold}Unrealized PnL ($)${reset}  | ${bold}Duration${reset}  |${clearLine}\n`;
+    output += `| ${bold}Symbol${reset}    | ${bold}Side${reset}        | ${bold}Size${reset}     | ${bold}Entry Price${reset}  | ${bold}Current Price${reset}  | ${bold}TP${reset}         | ${bold}SL${reset}         | ${bold}Leverage${reset}  | ${bold}Unrealized PnL ($)${reset}  | ${bold}ROE (%)${reset}   | ${bold}SC Tier${reset}   | ${bold}Duration${reset}  |${clearLine}\n`;
     output += tableDivider;
 
     const activeTrades = frame.activeTrades ?? [];
     if (activeTrades.length === 0) {
-      output += `| ${yellow}NO ACTIVE OPEN POSITIONS (ALL TRADE SLOTS FLAT)${reset}`.padEnd(142) + `|${clearLine}\n`;
+      output += `| ${yellow}NO ACTIVE OPEN POSITIONS (ALL TRADE SLOTS FLAT)${reset}`.padEnd(166) + `|${clearLine}\n`;
     } else {
       for (const trade of activeTrades) {
         const symStr = trade.symbol.padEnd(9);
@@ -159,17 +163,33 @@ export class CLIDashboard {
         const pnlRawStr = `${pnlSign}$${pnl.toFixed(2)}`;
         const pnlPadded = pnlRawStr.padEnd(19);
 
+        const roe = trade.roePercent !== undefined ? trade.roePercent : (trade.entryPrice > 0 && trade.currentPrice > 0 ? (((trade.side.startsWith("BUY") || trade.side === "LONG" ? (trade.currentPrice - trade.entryPrice) : (trade.entryPrice - trade.currentPrice)) / trade.entryPrice) * trade.leverage * 100) : 0);
+        const roeSign = roe >= 0 ? "+" : "";
+        const roeColor = roe >= 0 ? green : red;
+        const roeStr = `${roeSign}${roe.toFixed(2)}%`.padEnd(9);
+
+        let tierStr = "NONE";
+        if (trade.stepCollarTier === "TIER_1_BREAK_EVEN" || trade.stepCollarTier === 1 || trade.stepCollarTier === "1") tierStr = "T1:BE";
+        else if (trade.stepCollarTier === "TIER_2_PARTIAL_PROFIT" || trade.stepCollarTier === 2 || trade.stepCollarTier === "2") tierStr = "T2:LOCK";
+        else if (trade.stepCollarTier === "TIER_3_AGGRESSIVE_TRAIL" || trade.stepCollarTier === 3 || trade.stepCollarTier === "3") tierStr = "T3:TRAIL";
+        const tierPadded = tierStr.padEnd(9);
+
         const durStr = this.formatDuration(trade.durationMs).padEnd(9);
 
-        output += `| ${symStr} | ${sideColor}${bold}${sidePadded}${reset} | ${sizeStr} | ${entryStr} | ${currStr} | ${tpStr} | ${slStr} | ${levStr} | ${pnlColor}${bold}${pnlPadded}${reset} | ${durStr} |${clearLine}\n`;
+        output += `| ${symStr} | ${sideColor}${bold}${sidePadded}${reset} | ${sizeStr} | ${entryStr} | ${currStr} | ${tpStr} | ${slStr} | ${levStr} | ${pnlColor}${bold}${pnlPadded}${reset} | ${roeColor}${bold}${roeStr}${reset} | ${yellow}${tierPadded}${reset} | ${durStr} |${clearLine}\n`;
       }
     }
     output += tableDivider;
 
-    output += `${bold}--- TRADING PERFORMANCE, INVENTORY & PnL ---${reset}${clearLine}\n`;
-    output += ` Position: ${posSideColor}${bold}${frame.stats.positionSide}${reset} (${frame.stats.netQuantity.toFixed(4)})  |  Avg Entry: $${frame.stats.averageEntryPrice.toFixed(2)}  |  Unrealized PnL: ${unrealizedColor}${bold}$${frame.stats.unrealizedPnl.toFixed(2)}${reset}${clearLine}\n`;
-    output += ` Available Balance: ${green}${bold}$${frame.usdtBalance.toFixed(2)}${reset}  |  Realized PnL: ${pnlColor}${bold}$${frame.stats.realizedPnl.toFixed(2)}${reset}  |  Fees: $${frame.stats.totalFees.toFixed(2)}${clearLine}\n`;
-    output += ` Win Rate: ${yellow}${frame.stats.winRatePercent.toFixed(2)}%${reset}  |  Total Trades: ${frame.stats.totalTrades} (W: ${frame.stats.winningTrades} / L: ${frame.stats.losingTrades})${clearLine}\n`;
+    const recBalance = frame.reconciledWalletBalance !== undefined && frame.reconciledWalletBalance > 0 ? frame.reconciledWalletBalance : frame.usdtBalance;
+    const fundingVal = frame.cumulativeFundingFees ?? 0;
+    const fundingColor = fundingVal >= 0 ? green : red;
+    const fundingSign = fundingVal >= 0 ? "+" : "";
+
+    output += `${bold}--- TRADING PERFORMANCE, INVENTORY & EXCHANGE PnL ---${reset}${clearLine}\n`;
+    output += ` Position: ${posSideColor}${bold}${frame.stats.positionSide}${reset} (${frame.stats.netQuantity.toFixed(4)})  |  Avg Entry: $${frame.stats.averageEntryPrice.toFixed(2)}  |  Unrealized PnL: ${unrealizedColor}${bold}$${frame.stats.unrealizedPnl.toFixed(2)}${reset}  |  ROE: ${frame.roePercent !== undefined ? `${frame.roePercent >= 0 ? green : red}${bold}${frame.roePercent >= 0 ? "+" : ""}${frame.roePercent.toFixed(2)}%${reset}` : "0.00%"}${clearLine}\n`;
+    output += ` Available Balance: ${green}${bold}$${frame.usdtBalance.toFixed(2)}${reset}  |  Reconciled Wallet: ${cyan}${bold}$${recBalance.toFixed(2)}${reset}  |  Realized PnL: ${pnlColor}${bold}$${frame.stats.realizedPnl.toFixed(2)}${reset}  |  Funding: ${fundingColor}${bold}${fundingSign}$${fundingVal.toFixed(4)}${reset}  |  Fees: $${frame.stats.totalFees.toFixed(2)}${clearLine}\n`;
+    output += ` Win Rate: ${yellow}${frame.stats.winRatePercent.toFixed(2)}%${reset}  |  Total Trades: ${frame.stats.totalTrades} (W: ${frame.stats.winningTrades} / L: ${frame.stats.losingTrades})  |  SC Tier: ${yellow}${bold}${frame.activeStepCollarTier ?? "NONE"}${reset}${clearLine}\n`;
 
     const trainingProgress = readTrainingProgress();
     if (trainingProgress !== null) {
