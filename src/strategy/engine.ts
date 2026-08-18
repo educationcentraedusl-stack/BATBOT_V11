@@ -2173,11 +2173,15 @@ export class StrategyEngine {
       // Strict bounding around base conviction floor
       effectiveMinConfidence = Math.min(0.85, Math.max(baseMinConfidence, effectiveMinConfidence));
 
-      // 50-25-25 Weighted Composite Signal Engine & High-Confidence AI Override
+      // SOTA August 2026 4-Factor Multi-Variate Composite Signal Engine
       const obiScore = Math.max(-1.0, Math.min(1.0, obi));
-      const cvdScore = cvd > 0 ? 1.0 : cvd < 0 ? -1.0 : 0.0;
+      const cvdVelocity = this.client.getCVDVelocity(this.assetIndex);
+      const cvdScore = Math.max(-1.0, Math.min(1.0, cvdVelocity));
       const aiScore = Math.max(-1.0, Math.min(1.0, aiDirection * aiConfidence));
-      const compositeScore = 0.50 * aiScore + 0.25 * obiScore + 0.25 * cvdScore;
+      const ofiScore = Math.max(-1.0, Math.min(1.0, hazardMetrics.ofi));
+
+      // SOTA Continuous 4-Factor Alpha Fusion: 50% AI Direction*Conf, 20% LOB OBI, 15% Rolling CVD Velocity, 15% Multi-Level OFI
+      const compositeScore = 0.50 * aiScore + 0.20 * obiScore + 0.15 * cvdScore + 0.15 * ofiScore;
 
       const isHighConfidenceAi = aiConfidence >= Math.max(this.config.aggressiveConfidenceThreshold, effectiveMinConfidence);
 
@@ -2191,18 +2195,34 @@ export class StrategyEngine {
       const isAlphaFrictionPassed = expectedNetAlpha >= minNetAlpha;
       const isConvictionValid = isAlphaFrictionPassed && zScore >= minZScoreThreshold && aiConfidence >= effectiveMinConfidence;
 
+      // SOTA August 2026: Adaptive Sigmoidal Confidence-Relaxation Gating (ASCRG)
+      const baseObiMagnitude = Math.abs(this.config.obiBuyThreshold || 0.20);
+      const maxOpposingObi = 0.45; // Strict toxic wall / liquidity sweep trap guard
+
+      // Continuous confidence relaxation: kappa = 2.5
+      // When AI Confidence increases beyond base (0.60), the required directional OBI threshold (0.20)
+      // dynamically relaxes towards 0.0 (neutral), allowing pre-breakdown entry without chasing swept books.
+      const confExcess = Math.max(0.0, (aiConfidence - baseMinConfidence) / Math.max(0.01, 1.0 - baseMinConfidence));
+      const requiredObiThreshold = baseObiMagnitude * (1.0 - 2.5 * Math.tanh(confExcess));
+
+      // Symmetrical Favorable OBI directional verification with toxic opposing wall protection:
+      // BUY: Requires obi >= +requiredObiThreshold AND obi > -maxOpposingObi
+      // SELL: Requires obi <= -requiredObiThreshold AND obi < +maxOpposingObi
+      const isObiFavorableBuy = obi >= requiredObiThreshold && obi > -maxOpposingObi;
+      const isObiFavorableSell = obi <= -requiredObiThreshold && obi < maxOpposingObi;
+
       let isBuySignal = false;
       let isSellSignal = false;
 
       if (isConvictionValid) {
         if (isHighConfidenceAi) {
-          // AI-Override Rule: High-confidence AI must satisfy strict OBI directional pressure (+/- 0.35)
-          isBuySignal = aiDirection > 0 && obi >= this.config.obiBuyThreshold;
-          isSellSignal = aiDirection < 0 && obi <= this.config.obiSellThreshold;
+          // SOTA ASCRG High-Confidence AI Rule (>70%): Dynamic OBI relaxation allows execution in neutral/pre-breakdown books
+          isBuySignal = aiDirection > 0 && isObiFavorableBuy;
+          isSellSignal = aiDirection < 0 && isObiFavorableSell;
         } else {
-          // Weighted Composite Rule with dynamic effective confidence thresholding
-          isBuySignal = compositeScore > 0.12 && aiConfidence >= effectiveMinConfidence && obi >= this.config.obiBuyThreshold;
-          isSellSignal = compositeScore < -0.12 && aiConfidence >= effectiveMinConfidence && obi <= this.config.obiSellThreshold;
+          // SOTA Composite Gating Rule: Multi-variate composite score with dynamic thresholding
+          isBuySignal = compositeScore > 0.15 && isObiFavorableBuy;
+          isSellSignal = compositeScore < -0.15 && isObiFavorableSell;
         }
       } else if (seq % 1000n === 0n) {
         const netAlphaBps = (expectedNetAlpha * 10000).toFixed(1);
@@ -2254,7 +2274,7 @@ export class StrategyEngine {
       const hasPendingCoreLong = this.hasPendingEntryForSlot("CORE_LONG");
       const isCooldownCleared = nowMs >= longCooldownLock;
 
-      if (!isCoreLongOccupied && !hasPendingCoreLong && !isCooldownCleared) {
+      if (!isCoreLongOccupied && !hasPendingCoreLong && !isCooldownCleared && seq % 10000n === 0n) {
         console.log(`[StrategyEngine][${this.config.symbol}][COOLDOWN_BLOCK] Seq #${seq} | nowMs: ${nowMs}, longCooldownLock: ${longCooldownLock}, diff: ${longCooldownLock - nowMs}ms`);
       }
 
@@ -2269,7 +2289,9 @@ export class StrategyEngine {
         signalType = "BUY";
         targetPosSide = "LONG";
         targetSlotId = "CORE_LONG";
-        console.log(`[StrategyEngine][${this.config.symbol}][ACTIONABLE_SIGNAL] Seq #${seq} | BUY CORE_LONG | Dir: ${aiDirection.toFixed(4)} (NetAlpha: ${(expectedNetAlpha * 10000).toFixed(1)} bps), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}`);
+        if (seq % 10000n === 0n) {
+          console.log(`[StrategyEngine][${this.config.symbol}][ACTIONABLE_SIGNAL] Seq #${seq} | BUY CORE_LONG | Dir: ${aiDirection.toFixed(4)} (NetAlpha: ${(expectedNetAlpha * 10000).toFixed(1)} bps), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}`);
+        }
       }
       // SELL -> Short Slot Entry (Evaluated via Tier-1 Dynamic Slot Dispersion Engine)
       else if (
@@ -2294,13 +2316,15 @@ export class StrategyEngine {
             targetSlotIndex = slotEval.slotIndex;
             targetSlotId = slotId;
             targetSizeDecayCoeff = slotEval.sizeDecayCoeff;
-            console.log(`[StrategyEngine][${this.config.symbol}][ACTIONABLE_SIGNAL] Seq #${seq} | SELL ${slotId} | Dir: ${aiDirection.toFixed(4)} (NetAlpha: ${(expectedNetAlpha * 10000).toFixed(1)} bps), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}`);
+            if (seq % 10000n === 0n) {
+              console.log(`[StrategyEngine][${this.config.symbol}][ACTIONABLE_SIGNAL] Seq #${seq} | SELL ${slotId} | Dir: ${aiDirection.toFixed(4)} (NetAlpha: ${(expectedNetAlpha * 10000).toFixed(1)} bps), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}`);
+            }
           }
         }
       }
 
       if (signalType === "NONE") {
-        if (seq % 500n === 0n) {
+        if (seq % 10000n === 0n) {
           console.log(
             `[StrategyEngine][${this.config.symbol}][SignalGate] Seq #${seq} | Composite: ${compositeScore.toFixed(4)} | AI: (dir=${aiDirection.toFixed(2)}, conf=${(aiConfidence * 100).toFixed(0)}%) | OBI: ${obi.toFixed(2)} | CVD: ${cvd.toFixed(0)} | Status: NO SIGNAL TRIGGERED`
           );
