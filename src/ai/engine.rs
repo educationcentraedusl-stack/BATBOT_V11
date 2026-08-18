@@ -604,8 +604,12 @@ impl AIEngine {
             let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale }.clamp(0.5, 5.0);
             let offset = sab_offset.clamp(-2.0, 2.0);
             let obi = sab.load_f64_asset(asset_idx, 1);
+            let ofi = sab.load_f64_asset(asset_idx, 138);
+            let hawkes_asym = sab.load_f64_asset(asset_idx, 149);
 
-            let (dir, _p_win, horiz_sec) = mamba.evaluate_scalar_heads_with_temp(&heads, temp)?;
+            let (mamba_dir, _p_win, horiz_sec) = mamba.evaluate_scalar_heads_with_temp(&heads, temp)?;
+            let composite_logit = mamba_dir + 0.60 * obi + 0.40 * ofi + 0.25 * hawkes_asym;
+            let dir = (composite_logit / temp).tanh().clamp(-1.0, 1.0);
             let direction_magnitude = dir.abs();
 
             let conf = compute_calibrated_confidence(
@@ -724,12 +728,17 @@ impl AIEngine {
                         if let Ok((heads, next_h)) = mamba.forward(&tkan_tensor, &*hidden_guard, 0.001) {
                             *hidden_guard = next_h;
                             let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
-                            if let Ok((dir, _p_win, _)) = mamba.evaluate_scalar_heads_with_temp(&heads, temp) {
+                            if let Ok((mamba_dir, _p_win, _)) = mamba.evaluate_scalar_heads_with_temp(&heads, temp) {
+                                let obi = features[8];
+                                let ofi = features[17];
+                                let hawkes_asym = features[27];
+                                let composite_logit = mamba_dir + 0.60 * obi + 0.40 * ofi + 0.25 * hawkes_asym;
+                                let dir = (composite_logit / temp).tanh().clamp(-1.0, 1.0);
                                 let conf = compute_calibrated_confidence(
                                     dir.abs(),
                                     1.0,
                                     0.0010,
-                                    0.0,
+                                    obi,
                                     dir,
                                     temp,
                                     self.calibration_params.platt_scale,
@@ -798,9 +807,13 @@ impl AIEngine {
             let norm = next_h.sqr()?.sum_all()?.to_scalar::<f32>()?.sqrt() as f64;
             *hidden_guard = next_h;
             let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
-            let (dir, _p_win, horiz_sec) = mamba.evaluate_scalar_heads_with_temp(&heads, temp)?;
+            let (mamba_dir, _p_win, horiz_sec) = mamba.evaluate_scalar_heads_with_temp(&heads, temp)?;
             let gk_vol = sab.load_f64_asset(0, 121).max(0.0);
             let obi = sab.load_f64_asset(0, 1);
+            let ofi = sab.load_f64_asset(0, 138);
+            let hawkes_asym = sab.load_f64_asset(0, 149);
+            let composite_logit = mamba_dir + 0.60 * obi + 0.40 * ofi + 0.25 * hawkes_asym;
+            let dir = (composite_logit / temp).tanh().clamp(-1.0, 1.0);
             let conf = compute_calibrated_confidence(dir.abs(), snr_score, gk_vol, obi, dir, temp, self.calibration_params.platt_scale, self.calibration_params.platt_offset);
             (dir, conf, horiz_sec * 1000.0, norm)
         } else if let Some(cell) = &self.cell {
@@ -1004,50 +1017,41 @@ mod tests {
         bridge.store_f64(3, 0.50); // Spread vel
         bridge.store_f64(121, 0.001); // RV GK
 
-        // Feed 30 bullish ticks (rising price, high OBI, positive CVD)
-        for tick in 0..30 {
-            bridge.store_f64(4, 50000.0 + (tick as f64 * 20.0));
-            bridge.store_f64(6, 50001.0 + (tick as f64 * 20.0));
+        // Feed 60 bullish ticks (rising price, high OBI, positive CVD)
+        for tick in 0..60 {
+            bridge.store_f64(4, 50000.0 + (tick as f64 * 10.0));
+            bridge.store_f64(6, 50001.0 + (tick as f64 * 10.0));
             bridge.store_f64(1, 0.85); // Strong Bullish OBI
             bridge.store_f64(2, 500.0 + (tick as f64 * 50.0)); // Rising CVD
             bridge.store_f64(3, 0.10);
             bridge.store_f64(121, 0.002);
             bridge.store_f64(138, 0.80); // Strong positive Multi-Level OFI
             bridge.store_f64(149, 0.70); // Positive Hawkes Asymmetry
-            let (lob_features, _) = {
-                let pipelines = engine.feature_pipelines.read().unwrap();
-                let mut pipeline = pipelines[0].lock().unwrap();
-                pipeline.update_and_normalize_with_snr_asset(&bridge, 150.0, 0).unwrap()
-            };
-            let tkan_out = engine.tkan.forward(&lob_features);
-            if tick == 10 {
-                println!("Tick 10 Bullish tkan_out: {:?}", tkan_out);
-            }
             let res = engine.run_inference(&bridge);
             assert!(res.is_ok());
-            if tick % 5 == 0 {
+            if tick % 15 == 0 {
                 let dir = bridge.load_f64(93);
                 let conf = bridge.load_f64(94);
-                println!("Bullish Stream Tick {:02}: Final Dir = {:.4}, Conf = {:.4}", tick, dir, conf);
+                println!("Bullish Stream Tick {:02}: Dir = {:.4}, Conf = {:.4}", tick, dir, conf);
             }
         }
 
-        // Feed 30 bearish ticks (falling price, low OBI, negative CVD)
-        for tick in 0..30 {
-            bridge.store_f64(4, 50600.0 - (tick as f64 * 20.0));
-            bridge.store_f64(6, 50601.0 - (tick as f64 * 20.0));
-            bridge.store_f64(1, -0.85); // Strong Bearish OBI
-            bridge.store_f64(2, 2000.0 - (tick as f64 * 100.0)); // Crashing CVD
+        // Feed 120 bearish ticks (falling price down to 48000, low OBI, crashing CVD)
+        for tick in 0..120 {
+            bridge.store_f64(4, 50600.0 - (tick as f64 * 25.0));
+            bridge.store_f64(6, 50601.0 - (tick as f64 * 25.0));
+            bridge.store_f64(1, -0.90); // Strong Bearish OBI
+            bridge.store_f64(2, 3500.0 - (tick as f64 * 100.0)); // Crashing CVD
             bridge.store_f64(3, 0.10);
             bridge.store_f64(121, 0.002);
-            bridge.store_f64(138, -0.80); // Strong negative OFI
-            bridge.store_f64(149, -0.70); // Negative Hawkes Asymmetry
+            bridge.store_f64(138, -0.90); // Strong negative OFI
+            bridge.store_f64(149, -0.85); // Negative Hawkes Asymmetry
             let res = engine.run_inference(&bridge);
             assert!(res.is_ok());
-            if tick % 5 == 0 {
+            if tick % 30 == 0 || tick == 119 {
                 let dir = bridge.load_f64(93);
                 let conf = bridge.load_f64(94);
-                println!("Bearish Stream Tick {:02}: Final Dir = {:.4}, Conf = {:.4}", tick, dir, conf);
+                println!("Bearish Stream Tick {:02}: Dir = {:.4}, Conf = {:.4}", tick, dir, conf);
             }
         }
     }

@@ -203,6 +203,19 @@ export class RiskGuard {
     return losses >= 5 && expiry > nowMs;
   }
 
+  public isSymbolHalted(symbol?: string, nowMs: number = Date.now()): boolean {
+    const sym = symbol || "DEFAULT";
+    const losses = this.getConsecutiveLosses(sym);
+    if (losses >= 5) {
+      return true; // STRICT CIRCUIT BREAKER HALT
+    }
+    const expiry = this.getSymbolCooldownExpiry(sym);
+    if (expiry > nowMs) {
+      return true; // Exponential loss cooldown backoff active
+    }
+    return false;
+  }
+
   public validateOrder(
     intent: OrderIntent,
     isClientConfigured: boolean,

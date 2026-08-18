@@ -1127,6 +1127,19 @@ class StrategyEngine {
     evaluateTick() {
         let finalizedSignalVal = 0.0;
         try {
+            const symbol = this.config.symbol;
+            if (this.riskGuard.isSymbolHalted(symbol)) {
+                const seq = this.client.getSequenceNum(this.assetIndex);
+                this.staticResult.sequenceNum = seq;
+                this.staticResult.signalType = "NONE";
+                this.staticResult.riskResult = {
+                    passed: false,
+                    reasonCode: "CIRCUIT_BREAKER_ACTIVE",
+                    message: `Trading halted: Symbol ${symbol} circuit breaker active (${this.riskGuard.getConsecutiveLosses(symbol)} consecutive losses).`,
+                };
+                this.staticResult.executionPromise = undefined;
+                return this.staticResult; // STRICT CIRCUIT BREAKER
+            }
             const seq = this.client.getSequenceNum(this.assetIndex);
             if (seq === this.lastProcessedSequence || this.isOrderInFlight) {
                 this.staticResult.sequenceNum = seq;

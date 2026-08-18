@@ -130,6 +130,18 @@ class RiskGuard {
         const expiry = this.getSymbolCooldownExpiry(symbol);
         return losses >= 5 && expiry > nowMs;
     }
+    isSymbolHalted(symbol, nowMs = Date.now()) {
+        const sym = symbol || "DEFAULT";
+        const losses = this.getConsecutiveLosses(sym);
+        if (losses >= 5) {
+            return true; // STRICT CIRCUIT BREAKER HALT
+        }
+        const expiry = this.getSymbolCooldownExpiry(sym);
+        if (expiry > nowMs) {
+            return true; // Exponential loss cooldown backoff active
+        }
+        return false;
+    }
     validateOrder(intent, isClientConfigured, currentPositionSide = "FLAT") {
         if (!isClientConfigured) {
             return exports.RISK_REJECTED_UNCONFIGURED;

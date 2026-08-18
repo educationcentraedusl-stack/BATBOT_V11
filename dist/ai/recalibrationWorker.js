@@ -323,16 +323,18 @@ class AutoRecalibrationManager {
         }
         if (isDrifted) {
             this.driftTickCounter++;
-            const timeSinceLastAttempt = Date.now() - this.lastAttemptTimestamp;
-            const effectiveCooldown = this.recalibrationFailed
-                ? Math.max(this.cooldownMs, 1800000) // Keep strict 30m cooldown floor even after failure
-                : this.cooldownMs;
-            // Rate limit to strictly 1-2 recalibrations per hour
-            if (this.driftTickCounter >= this.sustainedDriftThreshold &&
-                !this.isRecalibrating &&
-                timeSinceLastAttempt >= effectiveCooldown) {
-                console.log(`[BATBOT_V11][CUSUM_DRIFT] Statistically verified regime transition (Drift Ticks: ${this.driftTickCounter}, Elapsed: ${(timeSinceLastAttempt / 60000).toFixed(1)}m >= ${(effectiveCooldown / 60000).toFixed(1)}m). Triggering recalibration...`);
-                void this.runRecalibrationPipeline(ic);
+            if (this.driftTickCounter >= this.sustainedDriftThreshold) {
+                const timeSinceLastAttempt = Date.now() - this.lastAttemptTimestamp;
+                const effectiveCooldown = this.recalibrationFailed
+                    ? Math.max(this.cooldownMs, 1800000) // Keep strict 30m cooldown floor even after failure
+                    : this.cooldownMs;
+                // Rate limit to strictly 1-2 recalibrations per hour
+                if (!this.isRecalibrating && timeSinceLastAttempt >= effectiveCooldown) {
+                    console.log(`[BATBOT_V11][CUSUM_DRIFT] Statistically verified regime transition (Drift Ticks: ${this.driftTickCounter}, Elapsed: ${(timeSinceLastAttempt / 60000).toFixed(1)}m >= ${(effectiveCooldown / 60000).toFixed(1)}m). Triggering recalibration...`);
+                    void this.runRecalibrationPipeline(ic);
+                }
+                // STRICT HARD RESET: Reset drift ticks to 0 when threshold is reached to prevent loop overflow (e.g., 77309/50)
+                this.driftTickCounter = 0;
             }
         }
         else {

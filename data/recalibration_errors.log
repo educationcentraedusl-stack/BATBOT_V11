@@ -33,3 +33,15 @@ Traceback (most recent call last):
     tgt_meta = tgt_last[:, 1].clamp(0.0, 1.0)
                ~~~~~~~~^^^^^^
 IndexError: index 1 is out of bounds for dimension 1 with size 1
+[2026-08-18T07:16:10.786Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDOUT LOG ---
+[BATBOT_V11][LOCAL-TRAINER] Ingesting SafeTensors dataset: 'D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\data\cfc_features.safetensors' (32314556 bytes)...
+[BATBOT_V11][LOCAL-TRAINER] Hardware Acceleration: CPU Vectorized (8 Threads)
+[BATBOT_V11][LOCAL-TRAINER] Unfolded 2D feature matrix into 3D sequences: train=torch.Size([19969, 32, 16]), val=torch.Size([4969, 32, 16])
+[BATBOT_V11][LOCAL-TRAINER] Sequence Dataset Ready: 19969 train samples, 4969 val samples.
+[BATBOT_V11][LOCAL-TRAINER] Starting Sub-30s Mid-Frequency Scalping Recalibration (10 Epochs)...
+[BATBOT Epoch 02/10] Loss: 0.872919 | Focal: 0.022264 | Best Val IC: -0.0221
+[BATBOT Epoch 04/10] Loss: 0.709260 | Focal: 0.005120 | Best Val IC: +0.0011
+[BATBOT Epoch 06/10] Loss: 0.543065 | Focal: 0.003142 | Best Val IC: +0.0216
+[BATBOT Epoch 08/10] Loss: 0.510382 | Focal: 0.001570 | Best Val IC: +0.0216

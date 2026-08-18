@@ -125,7 +125,9 @@ impl Mamba2Cell {
         let a_softplus = (a_clamped.exp()? + 1.0)?.log()?;
         let delta_a = (&a_softplus * (dt_clamped as f64))?; // [d_inner]
         let decay = delta_a.neg()?.exp()?; // [d_inner]
+        let one_minus_decay = (1.0f64 - &decay)?; // [d_inner]
         let decay_3d = decay.reshape((1, self.d_inner, 1))?; // [1, d_inner, 1]
+        let one_minus_decay_3d = one_minus_decay.reshape((1, self.d_inner, 1))?; // [1, d_inner, 1]
 
         // 3. Selective B and C projections
         let b_proj = u.matmul(&self.w_b)?.broadcast_add(&self.b_b)?; // [1, d_state]
@@ -145,11 +147,11 @@ impl Mamba2Cell {
 
         let h_decayed = h_prev_aligned.broadcast_mul(&decay_3d)?; // [1, d_inner, d_state]
         let input_outer = u_3d.broadcast_mul(&b_3d)?; // [1, d_inner, d_state]
-        let h_next = (&h_decayed + &input_outer)?; // [1, d_inner, d_state]
+        let input_scaled = input_outer.broadcast_mul(&one_minus_decay_3d)?; // [1, d_inner, d_state]
+        let h_next = (&h_decayed + &input_scaled)?; // [1, d_inner, d_state]
 
-        // 5. Output Gating with C_t Projection: Contraction across d_state dimension scaled by 1/sqrt(d_state)
-        let scale_d_state = (self.d_state as f64).sqrt() as f32;
-        let h_contracted = (h_next.broadcast_mul(&c_3d)?.sum(2)? / (scale_d_state as f64))?; // [1, d_inner]
+        // 5. Output Gating with C_t Projection: Contraction across d_state dimension
+        let h_contracted = h_next.broadcast_mul(&c_3d)?.sum(2)?; // [1, d_inner]
 
         // Output Projection with Skip Connection
         let y_ssm = if self.w_out.dims() == &[self.d_inner, self.d_inner] {
@@ -159,13 +161,7 @@ impl Mamba2Cell {
         };
 
         let y_skip = u.broadcast_mul(&self.d_skip)?; // [1, d_inner]
-        let y_raw = (&y_ssm + &y_skip)?; // [1, d_inner]
-
-        // LayerNorm on hidden representation to center representation and prevent DC offset bias & directional collapse
-        let y_mean = y_raw.mean_all()?.to_scalar::<f32>()?;
-        let y_centered = (&y_raw - (y_mean as f64))?;
-        let y_std = (y_centered.sqr()?.mean_all()?.to_scalar::<f32>()? + 1e-5).sqrt();
-        let y = (&y_centered / (y_std as f64))?;
+        let y = (&y_ssm + &y_skip)?; // [1, d_inner]
 
         // 6. Multi-Head Predictions (Direction Logit, Meta Logit, Horizon Logit)
         let raw_heads = y.matmul(&self.w_heads)?.broadcast_add(&self.b_heads)?; // [1, 3]
@@ -178,7 +174,7 @@ impl Mamba2Cell {
         &self,
         raw_heads: &Tensor,
     ) -> Result<(f64, f64, f64)> {
-        self.evaluate_scalar_heads_with_temp(raw_heads, 2.0)
+        self.evaluate_scalar_heads_with_temp(raw_heads, 1.0)
     }
 
     /// Evaluates scalar predictions with explicit Softmax Temperature scaling.
@@ -198,9 +194,9 @@ impl Mamba2Cell {
         let horiz_logit = flat.get(2)?.to_scalar::<f32>()? as f64;
 
         let t = temperature.clamp(0.5, 10.0);
-        let dir_scale = ((self.d_inner as f64).sqrt() * 0.75).max(1.0);
-        let direction = (dir_logit / (t * dir_scale)).tanh();
-        let p_win = 1.0 / (1.0 + (-meta_logit / t).exp());
+        let ssm_scale = ((self.d_inner * self.d_state) as f64).sqrt().max(1.0);
+        let direction = (dir_logit / (t * ssm_scale)).tanh().clamp(-1.0, 1.0);
+        let p_win = 1.0 / (1.0 + (-meta_logit / (t * (self.d_inner as f64).sqrt())).exp());
         let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().max(5.0);
 
         Ok((direction, p_win, horizon_sec))
@@ -235,5 +231,22 @@ mod tests {
         assert!(horiz >= 5.0);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_zero_input_loaded_mamba_baseline() {
+        let engine = crate::ai::weights::AiEngine::load_from_file("./models/cfc_weights.safetensors");
+        if let Some(mamba) = &engine.mamba {
+            let dev = Device::Cpu;
+            let zero_input = Tensor::zeros((1, 16), DType::F32, &dev).unwrap();
+            let zero_h = Tensor::zeros((1, mamba.d_inner, mamba.d_state), DType::F32, &dev).unwrap();
+            let (heads, _) = mamba.forward(&zero_input, &zero_h, 0.001).unwrap();
+            let flat = heads.flatten_all().unwrap();
+            let dir_logit = flat.get(0).unwrap().to_scalar::<f32>().unwrap();
+            let meta_logit = flat.get(1).unwrap().to_scalar::<f32>().unwrap();
+            let horiz_logit = flat.get(2).unwrap().to_scalar::<f32>().unwrap();
+            println!("Zero Input Loaded Mamba Logits -> dir: {:.4}, meta: {:.4}, horiz: {:.4}",
+                dir_logit, meta_logit, horiz_logit);
+        }
     }
 }
