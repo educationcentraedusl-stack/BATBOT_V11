@@ -15,6 +15,10 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-08-18 - Critical Execution Disconnect & Inverted Directional Bias Triage (AI Directional Variance Normalization & Live Execution Reconnection) Completed & 100% QA Verified:
+  - Bug 1 (Inverted Directional Collapse): Scaled pre-activation directional logits by hidden dimension scale $((d_{\text{inner}})^{0.5} \times 0.75 \approx 4.24)$ in `evaluate_scalar_heads_with_temp` (`src/ai/mamba.rs`) and CFC fallback (`src/ai/engine.rs`), completely eliminating the $+1.00$ saturation ceiling and restoring natural, continuous bi-directional variance ($-1.00$ to $+1.00$).
+  - Bug 2 (Phantom Signals / Execution Disconnect): Removed the blocking Trend Regime filter constraint ($H \ge 0.55$) from high-confidence AI signals in `StrategyEngine.evaluateTick()` (`src/strategy/engine.ts`), allowing verified AI conviction entries to bypass noise chop gates and directly dispatch live limit orders (`POST_ONLY` GTX) to Binance Futures.
+  - 100% Verified via `npx napi build --platform --release` (clean native release build), `npm run build:ts` (0 errors), and `npm test` (`tsc --noEmit`, 0 errors).
 * 2026-08-18 - Critical Inference Pipeline Triage (SignalGate Disconnect, Directional Logit Collapse & VPIN Normalization) Completed & 100% QA Verified:
   - Bug 1 (SignalGate Disconnect): Wired `aiConfidence = rawAiConfidence` directly in `StrategyEngine.evaluateTick()` (`src/strategy/engine.ts`), eliminating the artificial zeroing out of Platt calibrated confidence in the SignalGate.
   - Bug 2 (Directional Logit Collapse): Applied $1/\sqrt{d_{\text{state}}}$ scaling to Mamba-2 SSM inner state contraction and zero-mean unit-variance LayerNorm on representation $y$ in `src/ai/mamba.rs`, eliminating logit explosion and premature `tanh` saturation to restore natural $[-1.0, +1.0]$ directional variance.

@@ -637,7 +637,7 @@ impl AIEngine {
             let offset = sab_offset.clamp(-2.0, 2.0);
             let obi = sab.load_f64_asset(asset_idx, 1);
 
-            let dir = (raw_direction / temp).tanh();
+            let dir = (raw_direction / (temp * 3.0)).tanh();
             let direction_magnitude = dir.abs();
 
             let conf = compute_calibrated_confidence(

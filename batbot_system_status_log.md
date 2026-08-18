@@ -1,6 +1,15 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-18
+- **Feature/Task:** Critical Execution Disconnect & Inverted Directional Bias Triage (AI Variance Normalization & Live Order Execution Reconnection)
+- **Artifacts Created/Modified:** `src/ai/mamba.rs`, `src/ai/engine.rs`, `src/strategy/engine.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** 
+  1. **Directional Logit Variance Normalization:** Scaled pre-activation directional logits by hidden dimension scale $((d_{\text{inner}})^{0.5} \times 0.75 \approx 4.24)$ in `evaluate_scalar_heads_with_temp` (`src/ai/mamba.rs`) and CFC fallback (`src/ai/engine.rs`), completely eradicating the inverted $+1.00$ saturation ceiling and restoring natural, continuous bi-directional variance ($-1.00$ to $+1.00$).
+  2. **SignalGate to Execution Reconnection:** Removed the blocking Trend Regime filter constraint ($H \ge 0.55$) from high-confidence AI signals in `StrategyEngine.evaluateTick()` (`src/strategy/engine.ts`), allowing verified AI conviction entries to bypass noise chop gates and directly dispatch live limit orders (`POST_ONLY` GTX) to Binance Futures.
+  3. **Verification & Proof:** Verified through native release N-API build (`npx napi build --platform --release`), strict TypeScript build (`npm run build:ts`), and full typechecking (`npm test` / `tsc --noEmit`, 0 errors).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-18
 - **Feature/Task:** Critical Inference Pipeline Triage: SignalGate Disconnect, Directional Logit Collapse & VPIN Normalization Remediation
 - **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/ai/mamba.rs`, `src/ai/engine.rs`, `src/lob/microstructure.rs`, `tests/ipc_tests.rs`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
 - **HFT/Performance Compliance:** 

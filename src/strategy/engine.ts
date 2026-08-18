@@ -1899,21 +1899,23 @@ export class StrategyEngine {
       }
 
       // SOTA Phase 4: Microstructure Chop & LOB Entropy Regime Filter
-      // Mean-Reverting Noise Chop: H < 0.45 and S_LOB > 0.85
-      const isChopRegime = hurstExponent < 0.45 && lobEntropy > 0.85;
+      // Extreme Mean-Reverting Noise Chop (H < 0.30 and S_LOB > 0.90 for AI, or H < 0.45 and S_LOB > 0.85 for composite)
+      const isChopRegime = isHighConfidenceAi
+        ? (hurstExponent < 0.30 && lobEntropy > 0.90)
+        : (hurstExponent < 0.45 && lobEntropy > 0.85);
 
-      // Restrict high-frequency directional entries to verified trend regimes ONLY (H >= 0.55, S_LOB <= 0.75, Hawkes <= 2.0)
+      // Restrict low-conviction directional entries to verified trend regimes ONLY (H >= 0.55, S_LOB <= 0.75, Hawkes <= 2.0)
       const isVerifiedTrendRegime = hurstExponent >= 0.55 && lobEntropy <= 0.75 && safeHawkes <= 2.0;
 
       if (isChopRegime) {
         if (seq % 1000n === 0n || (isBuySignal || isSellSignal)) {
           console.log(
-            `[StrategyEngine][${this.config.symbol}][REJECTED_CHOP_REGIME] Seq #${seq} | Directional signal filtered: Mean-Reverting Noise Chop (H: ${hurstExponent.toFixed(3)} < 0.45, S_LOB: ${lobEntropy.toFixed(3)} > 0.85).`
+            `[StrategyEngine][${this.config.symbol}][REJECTED_CHOP_REGIME] Seq #${seq} | Directional signal filtered: Severe Noise Chop (H: ${hurstExponent.toFixed(3)}, S_LOB: ${lobEntropy.toFixed(3)}).`
           );
         }
         isBuySignal = false;
         isSellSignal = false;
-      } else if (!isVerifiedTrendRegime) {
+      } else if (!isVerifiedTrendRegime && !isHighConfidenceAi) {
         if (seq % 1000n === 0n && (isBuySignal || isSellSignal)) {
           console.log(
             `[StrategyEngine][${this.config.symbol}][TREND_REGIME_GATE] Seq #${seq} | Directional entry restricted: Not a verified trend regime (H: ${hurstExponent.toFixed(3)} [req >= 0.55], S_LOB: ${lobEntropy.toFixed(3)} [req <= 0.75], Hawkes: ${safeHawkes.toFixed(3)} [req <= 2.0]).`

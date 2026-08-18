@@ -198,7 +198,8 @@ impl Mamba2Cell {
         let horiz_logit = flat.get(2)?.to_scalar::<f32>()? as f64;
 
         let t = temperature.clamp(0.5, 10.0);
-        let direction = (dir_logit / t).tanh();
+        let dir_scale = ((self.d_inner as f64).sqrt() * 0.75).max(1.0);
+        let direction = (dir_logit / (t * dir_scale)).tanh();
         let p_win = 1.0 / (1.0 + (-meta_logit / t).exp());
         let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().max(5.0);
 
