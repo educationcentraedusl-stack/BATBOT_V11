@@ -1871,7 +1871,7 @@ export class StrategyEngine {
           const aggLong = this.hedgeLedger.getAggregatedSideSummary("LONG");
           if (aggLong.isOccupied && aggLong.totalQuantity > 0 && aggLong.stopLossPrice > 0) {
             const coreLong = this.hedgeLedger.getCoreLong();
-            if (coreLong.lastSyncedSlPrice === undefined || coreLong.lastSyncedSlPrice === 0 || coreLong.stopLossPrice > coreLong.lastSyncedSlPrice) {
+            if (coreLong.lastSyncedSlPrice === undefined || coreLong.lastSyncedSlPrice === 0 || aggLong.stopLossPrice > coreLong.lastSyncedSlPrice) {
               this.syncExchangeStopLossOrder("CORE_LONG", aggLong.totalQuantity, "LONG", aggLong.stopLossPrice).catch((err: unknown) => {
                 console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Core Long SL ratchet sync failed: ${err instanceof Error ? err.message : String(err)}`);
               });
@@ -1882,8 +1882,8 @@ export class StrategyEngine {
             const primarySlotId = aggShort.slotIds[0] || "SHORT_SLOT_0";
             let needsSync = false;
             for (const s of this.hedgeLedger.getShortSlots()) {
-              if (s.isOccupied && s.quantity > 0 && s.stopLossPrice > 0) {
-                if (s.lastSyncedSlPrice === undefined || s.lastSyncedSlPrice === 0 || s.stopLossPrice < s.lastSyncedSlPrice) {
+              if (s.isOccupied && s.quantity > 0) {
+                if (s.lastSyncedSlPrice === undefined || s.lastSyncedSlPrice === 0 || aggShort.stopLossPrice < s.lastSyncedSlPrice) {
                   needsSync = true;
                   break;
                 }

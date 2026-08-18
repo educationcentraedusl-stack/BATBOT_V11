@@ -1160,6 +1160,7 @@ export class HedgePositionLedger {
       const slots = this.shortSlots;
       const len = slots.length;
 
+      let tightestSlPrice = 0;
       for (let i = 0; i < len; i++) {
         const s = slots[i];
         if (s.isOccupied && s.quantity > 0) {
@@ -1170,6 +1171,11 @@ export class HedgePositionLedger {
           res.slotIds[activeSlotCount++] = s.slotId;
           if (s.activeStopLossOrderId && primarySlOrderId === 0) {
             primarySlOrderId = s.activeStopLossOrderId;
+          }
+          if (s.stopLossPrice > 0) {
+            if (tightestSlPrice === 0 || s.stopLossPrice < tightestSlPrice) {
+              tightestSlPrice = s.stopLossPrice;
+            }
           }
           if (s.activeTpOrderIds && s.activeTpOrderIds.length > 0) {
             for (const tpId of s.activeTpOrderIds) {
@@ -1190,14 +1196,16 @@ export class HedgePositionLedger {
       const invTick = this.invPriceTickSize;
       const priceFactor = this.priceFactor;
 
-      const slPx = isOcc ? Math.round(Math.round(vwap * (1.0 + shortSlPct * 0.01) * invTick) * tickSize * priceFactor) / priceFactor : 0;
+      const initialSlPx = isOcc ? Math.round(Math.round(vwap * (1.0 + shortSlPct * 0.01) * invTick) * tickSize * priceFactor) / priceFactor : 0;
       const tpPx = isOcc ? Math.round(Math.round(vwap * (1.0 - shortTpPct * 0.01) * invTick) * tickSize * priceFactor) / priceFactor : 0;
       const bePx = isOcc ? Math.round(Math.round(vwap * (1.0 - this.feeMultiplier) * invTick) * tickSize * priceFactor) / priceFactor : 0;
+
+      const resolvedSlPx = (tightestSlPrice > 0) ? tightestSlPrice : initialSlPx;
 
       res.isOccupied = isOcc;
       res.totalQuantity = Math.round(totalQty * 1e6) / 1e6;
       res.vwapEntryPrice = vwap;
-      res.stopLossPrice = slPx;
+      res.stopLossPrice = isOcc ? resolvedSlPx : 0;
       res.takeProfitPrice = tpPx;
       res.breakEvenPrice = bePx;
       res.activeStopLossOrderId = isOcc ? primarySlOrderId : 0;
@@ -1233,9 +1241,14 @@ export class HedgePositionLedger {
   }
 
   public updateLastSyncedSlPrice(slotId: string, price: number): void {
-    const slot = slotId === "CORE_LONG" ? this.coreLong : this.shortSlots.find((s) => s.slotId === slotId);
-    if (slot) {
-      slot.lastSyncedSlPrice = price;
+    if (slotId === "CORE_LONG") {
+      this.coreLong.lastSyncedSlPrice = price;
+    } else {
+      for (const s of this.shortSlots) {
+        if (s.isOccupied) {
+          s.lastSyncedSlPrice = price;
+        }
+      }
     }
   }
 
@@ -2046,7 +2059,7 @@ export class HedgePositionLedger {
     const durationMs = Math.max(0, actualNowMs - openTime);
     const durationSec = durationMs / 1000;
 
-    // 0A. Tick-by-Tick Dynamic Trailing SL & 3-Tier ROE Step-Collar Dynamic Profit Lock (Zero Time Delays)
+    // 0A. Tick-by-Tick Dynamic Trailing SL & Early Profit Lock (Zero Time Delays)
     if (isLong) {
       slot.peakPrice = Math.max(slot.peakPrice ?? slot.entryPrice, markPrice);
     } else {
@@ -2063,7 +2076,7 @@ export class HedgePositionLedger {
 
     // Dynamic Continuous Tick-by-Tick Trailing SL (Locks past Entry Price as soon as in profit)
     const minVol = garmanKlass > 0.000001 ? Math.sqrt(garmanKlass) : 0.0020;
-    const dynamicTrailDist = Math.max(this.priceTickSize * 5, slot.entryPrice * Math.max(0.0015, minVol * 1.25));
+    const dynamicTrailDist = Math.max(this.priceTickSize * 3, slot.entryPrice * Math.max(0.0010, minVol * 1.0));
 
     if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
       slot.breakEvenPrice = this.formatPriceFast(
@@ -2071,18 +2084,22 @@ export class HedgePositionLedger {
       );
     }
 
-    const isInProfit = isLong ? markPrice >= slot.breakEvenPrice : markPrice <= slot.breakEvenPrice;
+    const maxLongSl = this.formatPriceFast(markPrice - this.priceTickSize * 2);
+    const minShortSl = this.formatPriceFast(markPrice + this.priceTickSize * 2);
+
+    // Continuous Early Profit & Break-Even Lock (Activates as soon as in profit / rawRoePct >= 1.0%)
+    const isInProfit = rawRoePct >= 1.0 || (isLong ? markPrice >= slot.breakEvenPrice : markPrice <= slot.breakEvenPrice);
     if (isInProfit) {
       slot.breakEvenLocked = true;
       if (isLong) {
         const candidateContinuousSl = this.formatPriceFast(slot.peakPrice! - dynamicTrailDist);
         const baselineBe = slot.breakEvenPrice;
-        const targetSl = Math.max(candidateContinuousSl, baselineBe);
-        slot.stopLossPrice = Math.max(slot.stopLossPrice, targetSl);
+        const targetSl = Math.min(maxLongSl, Math.max(candidateContinuousSl, baselineBe));
+        slot.stopLossPrice = slot.stopLossPrice > 0 ? Math.max(slot.stopLossPrice, targetSl) : targetSl;
       } else {
         const candidateContinuousSl = this.formatPriceFast(slot.troughPrice! + dynamicTrailDist);
         const baselineBe = slot.breakEvenPrice;
-        const targetSl = Math.min(candidateContinuousSl, baselineBe);
+        const targetSl = Math.max(minShortSl, Math.min(candidateContinuousSl, baselineBe));
         slot.stopLossPrice = slot.stopLossPrice > 0 ? Math.min(slot.stopLossPrice, targetSl) : targetSl;
       }
     }
@@ -2090,25 +2107,23 @@ export class HedgePositionLedger {
     // Tier 1: +8.0% Net ROE -> Lock Entry + Round-Trip Fees
     if (rawRoePct >= 8.0) {
       const beOffset = feeBuffer + 0.0002;
-      const targetBeSl = this.formatPriceFast(
-        isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset)
-      );
+      const rawTier1 = isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset);
+      const targetTier1Sl = isLong ? Math.min(maxLongSl, this.formatPriceFast(rawTier1)) : Math.max(minShortSl, this.formatPriceFast(rawTier1));
       if (!slot.stepCollarTier || slot.stepCollarTier < 1) {
         slot.stepCollarTier = 1;
         slot.breakEvenLocked = true;
-        slot.breakEvenPrice = targetBeSl;
+        slot.breakEvenPrice = targetTier1Sl;
       }
       slot.stopLossPrice = isLong
-        ? Math.max(slot.stopLossPrice, targetBeSl)
-        : (slot.stopLossPrice === 0 ? targetBeSl : Math.min(slot.stopLossPrice, targetBeSl));
+        ? Math.max(slot.stopLossPrice, targetTier1Sl)
+        : (slot.stopLossPrice === 0 ? targetTier1Sl : Math.min(slot.stopLossPrice, targetTier1Sl));
     }
 
     // Tier 2: +15.0% Net ROE -> Lock +10.0% ROE
     if (rawRoePct >= 15.0) {
       const lockOffset = (10.0 / 100.0) / effectiveLev;
-      const targetTier2Sl = this.formatPriceFast(
-        isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset)
-      );
+      const rawTier2 = isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset);
+      const targetTier2Sl = isLong ? Math.min(maxLongSl, this.formatPriceFast(rawTier2)) : Math.max(minShortSl, this.formatPriceFast(rawTier2));
       if (!slot.stepCollarTier || slot.stepCollarTier < 2) {
         slot.stepCollarTier = 2;
         slot.breakEvenLocked = true;
@@ -2123,9 +2138,8 @@ export class HedgePositionLedger {
       const currentPeakRoe = slot.peakRoe ?? rawRoePct;
       const trailRoe = currentPeakRoe * 0.70;
       const trailOffset = (trailRoe / 100.0) / effectiveLev;
-      const targetTier3Sl = this.formatPriceFast(
-        isLong ? slot.entryPrice * (1.0 + trailOffset) : slot.entryPrice * (1.0 - trailOffset)
-      );
+      const rawTier3 = isLong ? slot.entryPrice * (1.0 + trailOffset) : slot.entryPrice * (1.0 - trailOffset);
+      const targetTier3Sl = isLong ? Math.min(maxLongSl, this.formatPriceFast(rawTier3)) : Math.max(minShortSl, this.formatPriceFast(rawTier3));
       if (!slot.stepCollarTier || slot.stepCollarTier < 3) {
         slot.stepCollarTier = 3;
         slot.breakEvenLocked = true;
@@ -2572,8 +2586,14 @@ export class HedgePositionLedger {
     const durationSec = durationMs / 1000;
 
     // -------------------------------------------------------------------------
-    // 1. SOTA 3-Tier ROE Step-Collar Dynamic Profit Lock (Zero Time Delays)
+    // 1. SOTA Dynamic Trailing SL & Early Profit Lock (Zero Time Delays)
     // -------------------------------------------------------------------------
+    if (isLong) {
+      slot.peakPrice = Math.max(slot.peakPrice ?? slot.entryPrice, markPrice);
+    } else {
+      slot.troughPrice = Math.min(slot.troughPrice && slot.troughPrice > 0 ? slot.troughPrice : slot.entryPrice, markPrice);
+    }
+
     const effectiveLev = this.leverage > 0 ? this.leverage : 20.0;
     const rawRoePct = isLong
       ? ((markPrice - slot.entryPrice) / slot.entryPrice) * effectiveLev * 100.0
@@ -2583,28 +2603,56 @@ export class HedgePositionLedger {
       slot.peakRoe = rawRoePct;
     }
 
+    // Dynamic Continuous Tick-by-Tick Trailing SL (Locks past Entry Price as soon as in profit)
+    const minVol = (volMetrics && volMetrics.garmanKlass1s > 0.000001) ? Math.sqrt(volMetrics.garmanKlass1s) : 0.0020;
+    const dynamicTrailDist = Math.max(this.priceTickSize * 3, slot.entryPrice * Math.max(0.0010, minVol * 1.0));
+
+    if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
+      slot.breakEvenPrice = this.formatPriceFast(
+        isLong ? slot.entryPrice * (1.0 + roundTripFeeBuffer) : slot.entryPrice * (1.0 - roundTripFeeBuffer)
+      );
+    }
+
+    const maxLongSl = this.formatPriceFast(markPrice - this.priceTickSize * 2);
+    const minShortSl = this.formatPriceFast(markPrice + this.priceTickSize * 2);
+
+    // Continuous Early Profit & Break-Even Lock (Activates as soon as in profit / rawRoePct >= 1.0%)
+    const isInProfit = rawRoePct >= 1.0 || (isLong ? markPrice >= slot.breakEvenPrice : markPrice <= slot.breakEvenPrice);
+    if (isInProfit) {
+      slot.breakEvenLocked = true;
+      if (isLong) {
+        const candidateContinuousSl = this.formatPriceFast(slot.peakPrice! - dynamicTrailDist);
+        const baselineBe = slot.breakEvenPrice;
+        const targetSl = Math.min(maxLongSl, Math.max(candidateContinuousSl, baselineBe));
+        slot.stopLossPrice = slot.stopLossPrice > 0 ? Math.max(slot.stopLossPrice, targetSl) : targetSl;
+      } else {
+        const candidateContinuousSl = this.formatPriceFast(slot.troughPrice! + dynamicTrailDist);
+        const baselineBe = slot.breakEvenPrice;
+        const targetSl = Math.max(minShortSl, Math.min(candidateContinuousSl, baselineBe));
+        slot.stopLossPrice = slot.stopLossPrice > 0 ? Math.min(slot.stopLossPrice, targetSl) : targetSl;
+      }
+    }
+
     // Tier 1: +8.0% Net ROE -> Lock Entry + Round-Trip Fees
     if (rawRoePct >= 8.0) {
       const beOffset = roundTripFeeBuffer + 0.0002;
-      const targetBeSl = this.formatPriceFast(
-        isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset)
-      );
+      const rawTier1 = isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset);
+      const targetTier1Sl = isLong ? Math.min(maxLongSl, this.formatPriceFast(rawTier1)) : Math.max(minShortSl, this.formatPriceFast(rawTier1));
       if (!slot.stepCollarTier || slot.stepCollarTier < 1) {
         slot.stepCollarTier = 1;
         slot.breakEvenLocked = true;
-        slot.breakEvenPrice = targetBeSl;
+        slot.breakEvenPrice = targetTier1Sl;
       }
       slot.stopLossPrice = isLong
-        ? Math.max(slot.stopLossPrice, targetBeSl)
-        : (slot.stopLossPrice === 0 ? targetBeSl : Math.min(slot.stopLossPrice, targetBeSl));
+        ? Math.max(slot.stopLossPrice, targetTier1Sl)
+        : (slot.stopLossPrice === 0 ? targetTier1Sl : Math.min(slot.stopLossPrice, targetTier1Sl));
     }
 
     // Tier 2: +15.0% Net ROE -> Lock +10.0% ROE
     if (rawRoePct >= 15.0) {
       const lockOffset = (10.0 / 100.0) / effectiveLev;
-      const targetTier2Sl = this.formatPriceFast(
-        isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset)
-      );
+      const rawTier2 = isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset);
+      const targetTier2Sl = isLong ? Math.min(maxLongSl, this.formatPriceFast(rawTier2)) : Math.max(minShortSl, this.formatPriceFast(rawTier2));
       if (!slot.stepCollarTier || slot.stepCollarTier < 2) {
         slot.stepCollarTier = 2;
         slot.breakEvenLocked = true;
@@ -2619,9 +2667,8 @@ export class HedgePositionLedger {
       const currentPeakRoe = slot.peakRoe ?? rawRoePct;
       const trailRoe = currentPeakRoe * 0.70;
       const trailOffset = (trailRoe / 100.0) / effectiveLev;
-      const targetTier3Sl = this.formatPriceFast(
-        isLong ? slot.entryPrice * (1.0 + trailOffset) : slot.entryPrice * (1.0 - trailOffset)
-      );
+      const rawTier3 = isLong ? slot.entryPrice * (1.0 + trailOffset) : slot.entryPrice * (1.0 - trailOffset);
+      const targetTier3Sl = isLong ? Math.min(maxLongSl, this.formatPriceFast(rawTier3)) : Math.max(minShortSl, this.formatPriceFast(rawTier3));
       if (!slot.stepCollarTier || slot.stepCollarTier < 3) {
         slot.stepCollarTier = 3;
         slot.breakEvenLocked = true;

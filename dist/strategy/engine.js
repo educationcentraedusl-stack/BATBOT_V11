@@ -43,6 +43,8 @@ class StrategyEngine {
     slSyncLocks = new Set();
     pendingSlSyncTargets = new Map();
     pendingEntryOrders = new Map();
+    processedFillOrderIds = new Set();
+    processedFillClientOrderIds = new Set();
     settlementTimers = new Map();
     reusableOrderIntent;
     // Reusable static result object for NONE signals to achieve zero GC-heap allocation in hot path
@@ -324,6 +326,15 @@ class StrategyEngine {
     }
     handleConfirmedEntryFill(orderId, slotId, posSide, slotIndex, execQty, execPx) {
         const pending = this.pendingEntryOrders.get(orderId);
+        const cid = pending?.clientOrderId;
+        if ((orderId > 0 && this.processedFillOrderIds.has(orderId)) || (cid && this.processedFillClientOrderIds.has(cid))) {
+            console.log(`[BinanceExecution][DUPLICATE_FILL_IGNORED] OrderId #${orderId} (ClId: ${cid || "N/A"}) already processed. Skipping duplicate slot occupation.`);
+            return;
+        }
+        if (orderId > 0)
+            this.processedFillOrderIds.add(orderId);
+        if (cid)
+            this.processedFillClientOrderIds.add(cid);
         if (pending?.timeoutTimer) {
             clearTimeout(pending.timeoutTimer);
         }
@@ -912,13 +923,11 @@ class StrategyEngine {
             return;
         const orderIdsToCancel = [...slot.activeTpOrderIds];
         this.hedgeLedger.registerActiveTpOrderIds(slotId, []);
-        for (const orderId of orderIdsToCancel) {
-            try {
-                await this.executionClient.cancelOrder(this.config.symbol, orderId);
-            }
-            catch (err) {
-                // Non-blocking catch for already filled/cancelled orders
-            }
+        try {
+            await this.executionClient.cancelBatchOrders(this.config.symbol, orderIdsToCancel);
+        }
+        catch (err) {
+            console.warn(`[MAKER_TP_ENGINE][CANCEL_BATCH_WARN] [${this.config.symbol}:${slotId}] ${err instanceof Error ? err.message : String(err)}`);
         }
     }
     async dispatchAggregatedBatchPostOnlyTpOrders(slotId, vwapEntryPrice, aggregatedQty, side) {
@@ -931,19 +940,48 @@ class StrategyEngine {
             const resList = await this.executionClient.placeBatchOrders(intents);
             if (Array.isArray(resList) && resList.length > 0) {
                 const validOrderIds = [];
-                resList.forEach((res) => {
+                const rejectedIntents = [];
+                resList.forEach((res, idx) => {
                     if (res && res.orderId) {
                         validOrderIds.push(res.orderId);
+                    }
+                    else {
+                        const rawRes = res;
+                        if (rawRes && (rawRes.code === -5022 || (rawRes.msg && String(rawRes.msg).includes("-5022")))) {
+                            if (intents[idx])
+                                rejectedIntents.push({ intent: intents[idx], code: rawRes.code });
+                        }
                     }
                 });
                 if (validOrderIds.length > 0) {
                     this.hedgeLedger.registerActiveTpOrderIds(slotId, validOrderIds);
                     console.log(`[MAKER_TP_ENGINE][SUCCESS_AGGREGATED] [${this.config.symbol}:${slotId}] Registered ${validOrderIds.length} POST_ONLY TP limit order IDs for aggregated pos: [${validOrderIds.join(", ")}]`);
                 }
+                // Retry any individual -5022 rejections with 1-tick price shift
+                for (const rej of rejectedIntents) {
+                    try {
+                        const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(rej.intent.symbol);
+                        const currentPx = rej.intent.price || vwapEntryPrice;
+                        const adjustedPx = rej.intent.side === "BUY" ? currentPx - tickSize : currentPx + tickSize;
+                        const newPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(rej.intent.symbol, adjustedPx);
+                        console.warn(`[MAKER_TP_ENGINE][-5022 AGGREGATED ITEM RETRY] [${this.config.symbol}:${slotId}] Retrying rejected TP order 1 tick away @ ${newPrice}...`);
+                        const retryRes = await this.executionClient.placeOrder({
+                            ...rej.intent,
+                            price: newPrice,
+                        });
+                        if (retryRes && retryRes.orderId) {
+                            const currentTps = this.hedgeLedger.getActiveTpOrderIds(slotId);
+                            this.hedgeLedger.registerActiveTpOrderIds(slotId, [...currentTps, retryRes.orderId]);
+                        }
+                    }
+                    catch (retryErr) {
+                        console.error(`[MAKER_TP_ENGINE][-5022 AGGREGATED ITEM RETRY FAILED] [${this.config.symbol}:${slotId}] ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`);
+                    }
+                }
             }
         }
         catch (err) {
-            console.error(`[MAKER_TP_ENGINE][ERROR_AGGREGATED] [${this.config.symbol}:${slotId}] Failed to dispatch aggregated TP batch orders: ${err?.message || String(err)}`);
+            console.error(`[MAKER_TP_ENGINE][ERROR_AGGREGATED] [${this.config.symbol}:${slotId}] Failed to dispatch aggregated TP batch orders: ${err instanceof Error ? err.message : String(err)}`);
         }
     }
     async dispatchBatchPostOnlyTpOrders(slotId, entryPrice, quantity, side) {
@@ -961,9 +999,12 @@ class StrategyEngine {
                     if (res && res.orderId) {
                         validOrderIds.push(res.orderId);
                     }
-                    else if (res && (res.code === -5022 || (res.msg && String(res.msg).includes("-5022")))) {
-                        if (intents[idx])
-                            rejectedIntents.push({ intent: intents[idx], code: res.code });
+                    else {
+                        const rawRes = res;
+                        if (rawRes && (rawRes.code === -5022 || (rawRes.msg && String(rawRes.msg).includes("-5022")))) {
+                            if (intents[idx])
+                                rejectedIntents.push({ intent: intents[idx], code: rawRes.code });
+                        }
                     }
                 });
                 if (validOrderIds.length > 0) {
@@ -983,17 +1024,19 @@ class StrategyEngine {
                             price: newPrice,
                         });
                         if (retryRes && retryRes.orderId) {
-                            this.hedgeLedger.registerActiveTpOrderIds(slotId, [retryRes.orderId]);
+                            const currentTps = this.hedgeLedger.getActiveTpOrderIds(slotId);
+                            this.hedgeLedger.registerActiveTpOrderIds(slotId, [...currentTps, retryRes.orderId]);
                         }
                     }
                     catch (retryErr) {
-                        console.error(`[MAKER_TP_ENGINE][-5022 ITEM RETRY FAILED] [${this.config.symbol}:${slotId}] ${retryErr.message}`);
+                        console.error(`[MAKER_TP_ENGINE][-5022 ITEM RETRY FAILED] [${this.config.symbol}:${slotId}] ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`);
                     }
                 }
             }
         }
         catch (err) {
-            if (err.message && (err.message.includes("-5022") || err.message.includes("5022"))) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            if (errMsg.includes("-5022") || errMsg.includes("5022")) {
                 console.warn(`[MAKER_TP_ENGINE][-5022 BATCH REJECTION] [${this.config.symbol}:${slotId}] Entire TP batch rejected with -5022. Retrying target orders individually with 1-tick price shift...`);
                 for (const intent of intents) {
                     try {
@@ -1006,16 +1049,17 @@ class StrategyEngine {
                             price: newPrice,
                         });
                         if (retryRes && retryRes.orderId) {
-                            this.hedgeLedger.registerActiveTpOrderIds(slotId, [retryRes.orderId]);
+                            const currentTps = this.hedgeLedger.getActiveTpOrderIds(slotId);
+                            this.hedgeLedger.registerActiveTpOrderIds(slotId, [...currentTps, retryRes.orderId]);
                         }
                     }
                     catch (retryErr) {
-                        console.error(`[MAKER_TP_ENGINE][-5022 INDIVIDUAL RETRY FAILED] [${this.config.symbol}:${slotId}] ${retryErr.message}`);
+                        console.error(`[MAKER_TP_ENGINE][-5022 INDIVIDUAL RETRY FAILED] [${this.config.symbol}:${slotId}] ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`);
                     }
                 }
             }
             else {
-                console.error(`[MAKER_TP_ENGINE][ERROR] [${this.config.symbol}:${slotId}] Failed to submit batch POST_ONLY TP orders: ${err.message}`);
+                console.error(`[MAKER_TP_ENGINE][ERROR] [${this.config.symbol}:${slotId}] Failed to submit batch POST_ONLY TP orders: ${errMsg}`);
             }
         }
     }
@@ -1467,105 +1511,124 @@ class StrategyEngine {
                     const aggLong = this.hedgeLedger.getAggregatedSideSummary("LONG");
                     if (aggLong.isOccupied && aggLong.totalQuantity > 0 && aggLong.stopLossPrice > 0) {
                         const coreLong = this.hedgeLedger.getCoreLong();
-                        if (coreLong.lastSyncedSlPrice === undefined || coreLong.lastSyncedSlPrice === 0 || coreLong.stopLossPrice > coreLong.lastSyncedSlPrice) {
+                        if (coreLong.lastSyncedSlPrice === undefined || coreLong.lastSyncedSlPrice === 0 || aggLong.stopLossPrice > coreLong.lastSyncedSlPrice) {
                             this.syncExchangeStopLossOrder("CORE_LONG", aggLong.totalQuantity, "LONG", aggLong.stopLossPrice).catch((err) => {
-                                console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Core Long SL ratchet sync failed: ${err.message}`);
+                                console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Core Long SL ratchet sync failed: ${err instanceof Error ? err.message : String(err)}`);
                             });
                         }
                     }
                     const aggShort = this.hedgeLedger.getAggregatedSideSummary("SHORT");
                     if (aggShort.isOccupied && aggShort.totalQuantity > 0 && aggShort.stopLossPrice > 0) {
+                        const primarySlotId = aggShort.slotIds[0] || "SHORT_SLOT_0";
+                        let needsSync = false;
                         for (const s of this.hedgeLedger.getShortSlots()) {
-                            if (s.isOccupied && s.quantity > 0 && s.stopLossPrice > 0) {
-                                if (s.lastSyncedSlPrice === undefined || s.lastSyncedSlPrice === 0 || s.stopLossPrice < s.lastSyncedSlPrice) {
-                                    this.syncExchangeStopLossOrder(s.slotId, aggShort.totalQuantity, "SHORT", aggShort.stopLossPrice).catch((err) => {
-                                        console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] ${s.slotId} SL ratchet sync failed: ${err.message}`);
-                                    });
+                            if (s.isOccupied && s.quantity > 0) {
+                                if (s.lastSyncedSlPrice === undefined || s.lastSyncedSlPrice === 0 || aggShort.stopLossPrice < s.lastSyncedSlPrice) {
+                                    needsSync = true;
+                                    break;
                                 }
                             }
+                        }
+                        if (needsSync) {
+                            this.syncExchangeStopLossOrder(primarySlotId, aggShort.totalQuantity, "SHORT", aggShort.stopLossPrice).catch((err) => {
+                                console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Aggregated Short SL ratchet sync failed: ${err instanceof Error ? err.message : String(err)}`);
+                            });
                         }
                     }
                 }
                 if (activeTriggers.length > 0) {
-                    const trigger = activeTriggers[0];
-                    const exitSide = trigger.side === "LONG" ? "SELL" : "BUY";
-                    const isHardStopTrigger = trigger.reason.includes("HAZARD") ||
-                        trigger.reason.includes("HJB") ||
-                        trigger.reason.includes("MS_SOPC") ||
-                        trigger.reason.includes("MVA_TS") ||
-                        trigger.reason === "STOP_LOSS" ||
-                        trigger.reason === "BREAK_EVEN_STOP_LOSS" ||
-                        trigger.reason === "LONG_HOLD_PROFIT_HARVEST" ||
-                        trigger.reason === "CAD_TERMINAL_HORIZON_KILL" ||
-                        trigger.reason === "TIME_DECAY_PROFIT_LOCK";
-                    console.log(`[HEDGE_DYNAMIC_MONITORING] Slot ${trigger.slotId} ${trigger.reason} TRIGGERED! Side: ${trigger.side}, Entry: $${trigger.entryPrice.toFixed(2)}, Mark: $${markPrice.toFixed(2)}. Dispatching MARKET close with positionSide: ${trigger.side}.${isHardStopTrigger ? " [RUTHLESS HARD STOP OVERRIDE ACTIVE]" : ""}`);
-                    this.prepareOrderIntent(exitSide, trigger.quantity, markPrice, trigger.side, true, isHardStopTrigger);
+                    const primaryTrigger = activeTriggers[0];
+                    const exitSide = primaryTrigger.side === "LONG" ? "SELL" : "BUY";
+                    const sameSideTriggers = activeTriggers.filter((t) => t.side === primaryTrigger.side);
+                    const isMultiSlotExit = sameSideTriggers.length > 1 && !primaryTrigger.isPartialClose;
+                    const totalExitQty = isMultiSlotExit
+                        ? sameSideTriggers.reduce((sum, t) => sum + t.quantity, 0)
+                        : primaryTrigger.quantity;
+                    const formattedExitQty = symbolPrecision_1.SymbolPrecisionRegistry.formatQuantity(this.config.symbol, totalExitQty);
+                    const allCancelOrderIds = [];
+                    for (const t of sameSideTriggers) {
+                        if (t.cancelOrderIds && t.cancelOrderIds.length > 0) {
+                            for (const cid of t.cancelOrderIds) {
+                                if (!allCancelOrderIds.includes(cid))
+                                    allCancelOrderIds.push(cid);
+                            }
+                        }
+                    }
+                    const isHardStopTrigger = primaryTrigger.reason.includes("HAZARD") ||
+                        primaryTrigger.reason.includes("HJB") ||
+                        primaryTrigger.reason.includes("MS_SOPC") ||
+                        primaryTrigger.reason.includes("MVA_TS") ||
+                        primaryTrigger.reason === "STOP_LOSS" ||
+                        primaryTrigger.reason === "BREAK_EVEN_STOP_LOSS" ||
+                        primaryTrigger.reason === "LONG_HOLD_PROFIT_HARVEST" ||
+                        primaryTrigger.reason === "CAD_TERMINAL_HORIZON_KILL" ||
+                        primaryTrigger.reason === "TIME_DECAY_PROFIT_LOCK";
+                    console.log(`[HEDGE_DYNAMIC_MONITORING] Slot ${primaryTrigger.slotId} ${primaryTrigger.reason} TRIGGERED! Side: ${primaryTrigger.side}, Executing aggregated exit qty: ${formattedExitQty}, Mark: $${markPrice.toFixed(2)}. Dispatching MARKET close with positionSide: ${primaryTrigger.side}.${isHardStopTrigger ? " [RUTHLESS HARD STOP OVERRIDE ACTIVE]" : ""}`);
+                    this.prepareOrderIntent(exitSide, formattedExitQty, markPrice, primaryTrigger.side, true, isHardStopTrigger);
                     const isConfigured = this.executionClient.isConfigured();
                     const riskResult = (this.riskGuard instanceof risk_1.MultiAssetRiskGuard)
                         ? this.riskGuard.validateMultiAssetOrder(this.reusableOrderIntent, isConfigured)
-                        : this.riskGuard.validateOrder(this.reusableOrderIntent, isConfigured, trigger.side);
+                        : this.riskGuard.validateOrder(this.reusableOrderIntent, isConfigured, primaryTrigger.side);
                     let executionPromise = undefined;
                     if (riskResult.passed) {
                         this.isOrderInFlight = true;
                         executionPromise = (async () => {
-                            if (trigger.cancelOrderIds && trigger.cancelOrderIds.length > 0) {
-                                console.log(`[MAKER_TP_ENGINE][EMERGENCY_CANCEL] Cancelling ${trigger.cancelOrderIds.length} open POST_ONLY limit TP orders for ${trigger.slotId} before MARKET SL dispatch...`);
+                            if (allCancelOrderIds.length > 0) {
+                                console.log(`[MAKER_TP_ENGINE][EMERGENCY_CANCEL] Cancelling ${allCancelOrderIds.length} open POST_ONLY limit TP orders before MARKET SL dispatch...`);
                                 try {
-                                    await this.executionClient.cancelBatchOrders(this.config.symbol, trigger.cancelOrderIds);
+                                    await this.executionClient.cancelBatchOrders(this.config.symbol, allCancelOrderIds);
                                     console.log(`[MAKER_TP_ENGINE][EMERGENCY_CANCEL] Batch order cancellation confirmed by exchange.`);
                                 }
                                 catch (err) {
-                                    console.warn(`[MAKER_TP_ENGINE][CANCEL_WARN] Batch order cancellation warning: ${err.message}`);
+                                    console.warn(`[MAKER_TP_ENGINE][CANCEL_WARN] Batch order cancellation warning: ${err instanceof Error ? err.message : String(err)}`);
                                 }
                             }
-                            const exitCid = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(this.config.symbol, trigger.slotId, "EM");
+                            const exitCid = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(this.config.symbol, primaryTrigger.slotId, "EM");
                             return this.executionClient
                                 .placeOrder({
                                 symbol: this.config.symbol,
                                 side: exitSide,
                                 type: "MARKET",
-                                quantity: trigger.quantity,
-                                positionSide: trigger.side,
+                                quantity: formattedExitQty,
+                                positionSide: primaryTrigger.side,
                                 clientOrderId: exitCid,
                             })
                                 .then((res) => {
                                 if (res) {
                                     const execPx = parseFloat(res.price || res.avgPrice || "0") || markPrice;
                                     const takerFeeRate = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
-                                    // Ledger Delta Pattern (Defect #10 Fix):
-                                    // Capture ledger PnL BEFORE deduct/release. The deduct/release calls trigger
-                                    // recordRealizedExit() internally, which is the single source of truth for PnL.
-                                    // We derive realizedPnl as the ledger delta — zero redundant arithmetic,
-                                    // zero fee formula divergence between RiskGuard and HedgePositionLedger.
+                                    // Capture ledger PnL BEFORE deduct/release
                                     const pnlBefore = this.hedgeLedger.getCumulativeRealizedPnl();
-                                    if (trigger.isPartialClose && trigger.quantity > 0) {
-                                        if (trigger.side === "LONG") {
-                                            this.hedgeLedger.deductCoreLongQuantity(trigger.quantity, execPx, takerFeeRate, trigger.reason);
+                                    for (const trig of sameSideTriggers) {
+                                        if (trig.isPartialClose && trig.quantity > 0) {
+                                            if (trig.side === "LONG") {
+                                                this.hedgeLedger.deductCoreLongQuantity(trig.quantity, execPx, takerFeeRate, trig.reason);
+                                            }
+                                            else if (trig.slotId.startsWith("SHORT_SLOT_")) {
+                                                const sIdx = parseInt(trig.slotId.replace("SHORT_SLOT_", ""), 10);
+                                                this.hedgeLedger.deductShortSlotQuantity(sIdx, trig.quantity, execPx, takerFeeRate, trig.reason);
+                                            }
                                         }
-                                        else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
-                                            const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
-                                            this.hedgeLedger.deductShortSlotQuantity(sIdx, trigger.quantity, execPx, takerFeeRate, trigger.reason);
+                                        else if (!trig.isPartialClose) {
+                                            if (trig.side === "LONG") {
+                                                this.hedgeLedger.releaseCoreLong(execPx, takerFeeRate, trig.reason);
+                                            }
+                                            else if (trig.slotId.startsWith("SHORT_SLOT_")) {
+                                                const sIdx = parseInt(trig.slotId.replace("SHORT_SLOT_", ""), 10);
+                                                this.hedgeLedger.releaseShortSlot(sIdx, execPx, takerFeeRate, trig.reason);
+                                            }
                                         }
                                     }
-                                    else if (!trigger.isPartialClose) {
-                                        if (trigger.side === "LONG") {
-                                            this.hedgeLedger.releaseCoreLong(execPx, takerFeeRate, trigger.reason);
-                                        }
-                                        else if (trigger.slotId.startsWith("SHORT_SLOT_")) {
-                                            const sIdx = parseInt(trigger.slotId.replace("SHORT_SLOT_", ""), 10);
-                                            this.hedgeLedger.releaseShortSlot(sIdx, execPx, takerFeeRate, trigger.reason);
-                                        }
-                                    }
-                                    // Delta = exactly what recordRealizedExit recorded \u2014 single source of truth for RiskGuard
+                                    // Delta = exactly what recordRealizedExit recorded
                                     const realizedPnl = this.hedgeLedger.getCumulativeRealizedPnl() - pnlBefore;
                                     // Dual-tier cooldown & risk sync for dynamic MARKET exit executions
                                     this.onExecutionCompleted({
                                         symbol: this.config.symbol,
                                         assetIndex: this.assetIndex,
                                         side: exitSide,
-                                        positionSide: trigger.side,
+                                        positionSide: primaryTrigger.side,
                                         isCloseOrder: true,
-                                        executedQty: trigger.quantity,
+                                        executedQty: formattedExitQty,
                                         executedPrice: execPx,
                                         realizedPnl,
                                         fillTimestampMs: Date.now(),
@@ -1574,15 +1637,15 @@ class StrategyEngine {
                                 return res;
                             })
                                 .catch((err) => {
-                                console.error(`[DYNAMIC_MONITORING_ERROR] Hedge ${trigger.reason} MARKET order failed: ${err.message}`);
-                                if (err.message &&
-                                    (err.message.includes("-2022") ||
-                                        err.message.includes("ReduceOnly") ||
-                                        err.message.includes("-2011") ||
-                                        err.message.includes("not configured"))) {
-                                    console.warn(`[DYNAMIC_MONITORING_WARN] Reconciling local slot ${trigger.slotId} with exchange trades due to error: ${err.message}`);
+                                const errMsg = err instanceof Error ? err.message : String(err);
+                                console.error(`[DYNAMIC_MONITORING_ERROR] Hedge ${primaryTrigger.reason} MARKET order failed: ${errMsg}`);
+                                if (errMsg.includes("-2022") ||
+                                    errMsg.includes("ReduceOnly") ||
+                                    errMsg.includes("-2011") ||
+                                    errMsg.includes("not configured")) {
+                                    console.warn(`[DYNAMIC_MONITORING_WARN] Reconciling local slot ${primaryTrigger.slotId} with exchange trades due to error: ${errMsg}`);
                                     // Do NOT prematurely wipe slot! Directly trigger double-entry reconciliation
-                                    this.reconcileFlatPositionWithUserTrades(trigger.side, 0);
+                                    this.reconcileFlatPositionWithUserTrades(primaryTrigger.side, 0);
                                 }
                                 return null;
                             });
@@ -1594,8 +1657,8 @@ class StrategyEngine {
                     return {
                         sequenceNum: seq,
                         signalType: exitSide,
-                        positionSide: trigger.side,
-                        slotId: trigger.slotId,
+                        positionSide: primaryTrigger.side,
+                        slotId: primaryTrigger.slotId,
                         obi,
                         cvd,
                         spreadVelocity,
@@ -1603,7 +1666,7 @@ class StrategyEngine {
                         askPrice,
                         riskResult,
                         executionPromise,
-                        exitReason: trigger.reason,
+                        exitReason: primaryTrigger.reason,
                     };
                 }
             }
@@ -1938,8 +2001,18 @@ class StrategyEngine {
                         const executedQty = parseFloat(res.executedQty || "0");
                         const isFilled = res.status === "FILLED" || executedQty > 0;
                         const isPending = res.status === "NEW";
-                        console.log(`[BinanceExecution][RESPONSE] [${this.config.symbol}:${entrySlotId}] OrderId: ${res.orderId}, ClId: ${res.clientOrderId || entryCid}, Status: ${res.status}, ExecQty: ${executedQty}, Price: ${execPx}`);
+                        const numericOrderId = res.orderId ? (typeof res.orderId === "number" ? res.orderId : parseInt(String(res.orderId), 10)) : 0;
+                        const resCid = res.clientOrderId || entryCid;
+                        console.log(`[BinanceExecution][RESPONSE] [${this.config.symbol}:${entrySlotId}] OrderId: ${res.orderId}, ClId: ${resCid}, Status: ${res.status}, ExecQty: ${executedQty}, Price: ${execPx}`);
+                        if ((numericOrderId > 0 && this.processedFillOrderIds.has(numericOrderId)) || (resCid && this.processedFillClientOrderIds.has(resCid))) {
+                            console.log(`[BinanceExecution][REST_FILL_ALREADY_PROCESSED] OrderId #${numericOrderId} (ClId: ${resCid}) already reconciled via WebSocket. Skipping redundant slot occupation.`);
+                            return res;
+                        }
                         if (isFilled) {
+                            if (numericOrderId > 0)
+                                this.processedFillOrderIds.add(numericOrderId);
+                            if (resCid)
+                                this.processedFillClientOrderIds.add(resCid);
                             // Confirmed Fill on REST Response! Occupy slot immediately
                             this.onExecutionCompleted({
                                 symbol: this.config.symbol,
@@ -1963,11 +2036,11 @@ class StrategyEngine {
                                 this.cancelRestingTpOrders("CORE_LONG").then(() => {
                                     return this.dispatchAggregatedBatchPostOnlyTpOrders("CORE_LONG", aggLong.vwapEntryPrice, aggLong.totalQuantity, "LONG");
                                 }).catch((err) => {
-                                    console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+                                    console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err instanceof Error ? err.message : String(err)}`);
                                 });
                                 // Position-Level Stop Loss: Submits native STOP_MARKET with closePosition=true covering 100% of aggregated position
                                 this.syncExchangeStopLossOrder("CORE_LONG", aggLong.totalQuantity, "LONG", aggLong.stopLossPrice).catch((err) => {
-                                    console.error(`[EXCHANGE_SL_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+                                    console.error(`[EXCHANGE_SL_ENGINE][UNHANDLED_DISPATCH_ERR] ${err instanceof Error ? err.message : String(err)}`);
                                 });
                             }
                             else if (targetPosSide === "SHORT" && targetSlotIndex !== undefined) {
@@ -1978,11 +2051,11 @@ class StrategyEngine {
                                 Promise.all(aggShort.slotIds.map((slId) => this.cancelRestingTpOrders(slId))).then(() => {
                                     return this.dispatchAggregatedBatchPostOnlyTpOrders(slotId, aggShort.vwapEntryPrice, aggShort.totalQuantity, "SHORT");
                                 }).catch((err) => {
-                                    console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+                                    console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err instanceof Error ? err.message : String(err)}`);
                                 });
                                 // Position-Level Stop Loss: Submits native STOP_MARKET with closePosition=true covering 100% of aggregated position
                                 this.syncExchangeStopLossOrder(slotId, aggShort.totalQuantity, "SHORT", aggShort.stopLossPrice).catch((err) => {
-                                    console.error(`[EXCHANGE_SL_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+                                    console.error(`[EXCHANGE_SL_ENGINE][UNHANDLED_DISPATCH_ERR] ${err instanceof Error ? err.message : String(err)}`);
                                 });
                             }
                         }
@@ -2013,9 +2086,10 @@ class StrategyEngine {
                                         }
                                         catch (err) {
                                             if (this.pendingEntryOrders.has(numericOrderId)) {
-                                                console.error(`[BinanceExecution][FALLBACK_AUDIT_ERROR] Failed to audit order #${numericOrderId}: ${err?.message || String(err)}`);
+                                                const errMsg = err instanceof Error ? err.message : String(err);
+                                                console.error(`[BinanceExecution][FALLBACK_AUDIT_ERROR] Failed to audit order #${numericOrderId}: ${errMsg}`);
                                                 this.syncExchangeState().catch((syncErr) => {
-                                                    console.error(`[BinanceExecution][FALLBACK_SYNC_ERROR] ${syncErr?.message || String(syncErr)}`);
+                                                    console.error(`[BinanceExecution][FALLBACK_SYNC_ERROR] ${syncErr instanceof Error ? syncErr.message : String(syncErr)}`);
                                                 });
                                             }
                                         }

@@ -307,8 +307,7 @@ class BinanceExecutionClient {
         const cid = (params.clientOrderId || "").trim();
         if (cid.length > 0 && retryCount === 0) {
             if (this.inFlightClientOrderIds.has(cid)) {
-                console.warn(`[BinanceExecutionClient][DEDUPLICATION_BARRIER] Blocked duplicate concurrent submission for ClientOrderId: ${cid}`);
-                return null;
+                throw new Error(`[BinanceExecutionClient][DEDUPLICATION_BARRIER] Blocked duplicate concurrent submission for ClientOrderId: ${cid}`);
             }
             this.inFlightClientOrderIds.add(cid);
         }
@@ -698,16 +697,15 @@ class BinanceExecutionClient {
             params.symbol = symbol;
         // Standard open orders query MUST succeed; errors propagate directly to caller
         const standardOrders = await this.request("GET", "/fapi/v1/openOrders", params, true);
-        // Open algo orders query (gracefully fall back if algo endpoint unmapped on this account/symbol)
         const algoOrders = await this.request("GET", "/fapi/v1/openAlgoOrders", params, true).catch((err) => {
-            const msg = err?.message || String(err);
+            const msg = err instanceof Error ? err.message : String(err);
             if (msg.includes("404") || msg.includes("-4120") || msg.includes("not supported")) {
                 return [];
             }
             throw err;
         });
         const mappedAlgoOrders = (Array.isArray(algoOrders) ? algoOrders : []).map((ao) => ({
-            orderId: ao.algoId || ao.orderId,
+            orderId: ao.algoId || ao.orderId || 0,
             symbol: ao.symbol,
             status: ao.algoStatus || ao.status || "NEW",
             clientOrderId: ao.clientAlgoId || ao.clientOrderId || "",
@@ -728,9 +726,9 @@ class BinanceExecutionClient {
         return [...(Array.isArray(standardOrders) ? standardOrders : []), ...mappedAlgoOrders];
     }
     async getAccountBalance() {
-        return this.request("GET", "/fapi/v3/account", {}, true).then((res) => (Array.isArray(res?.assets) ? res.assets : (Array.isArray(res) ? res : []))).catch(async () => {
+        return this.request("GET", "/fapi/v3/account", {}, true).then((res) => (Array.isArray(res?.assets) ? res.assets : [])).catch(async () => {
             const v2Res = await this.request("GET", "/fapi/v2/account", {}, true);
-            return Array.isArray(v2Res?.assets) ? v2Res.assets : (Array.isArray(v2Res) ? v2Res : []);
+            return Array.isArray(v2Res?.assets) ? v2Res.assets : [];
         });
     }
     async getOrder(symbol, orderId) {

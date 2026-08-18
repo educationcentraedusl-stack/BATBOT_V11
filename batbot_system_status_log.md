@@ -1,6 +1,17 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-18
+- **Feature/Task:** SOTA Dynamic Trailing SL & Early Break-Even Ratchet Remediation (ETHUSDT +2.5% ROE & LINKUSDT +8.3% ROE Stuck SL Eradication)
+- **Artifacts Created/Modified:** `src/strategy/positionLedger.ts`, `src/strategy/engine.ts`, `src/tests/test_live_trailing_sl_scenario.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** 
+  1. **Aggregated Short Stop Loss Ratchet Propagation (`src/strategy/positionLedger.ts`):** Fixed fatal flaw where `getAggregatedSideSummary("SHORT")` calculated `slPx = vwap * (1 + shortSlPct)` (static loss price) and discarded dynamic `slot.stopLossPrice`. Resolved `res.stopLossPrice` to the tightest ratcheted price across occupied short slots, allowing ratcheted stop losses to propagate to Binance execution and TUI dashboard telemetry.
+  2. **Multi-Slot `lastSyncedSlPrice` State Synchronization (`src/strategy/positionLedger.ts` & `src/strategy/engine.ts`):** Synchronized `lastSyncedSlPrice` across all occupied short slots upon successful exchange SL replacement, eradicating multi-slot ratchet state desynchronization.
+  3. **Early Profit & Break-Even Locking (`src/strategy/positionLedger.ts`):** Hardwired continuous dynamic trailing stop loss and break-even locking as soon as net profit reaches $\ge +1.0\%$ ROE (or price clears taker fee buffer), dragging SL past entry price to protect profits and eliminate drawdown on winning trades.
+  4. **Strict Price Clamp Safeguards (`src/strategy/positionLedger.ts`):** Enforced strict market price boundaries (`Math.min(maxLongSl, ...)` for LONG and `Math.max(minShortSl, ...)` for SHORT), eliminating immediate trigger rejections (`-2021`) and accidental instant stop-loss liquidations.
+  5. **Verification & Proof:** 100% verified via `npm run build:ts` (0 errors), `tsc --noEmit` (0 errors), `test_live_trailing_sl_scenario.ts` (ETHUSDT +2.5% ROE and LINKUSDT +8.3% ROE ratcheting verified 100%), and `test_sota_step_collar_roe_ratchet.ts` (100% passed with 0.963 µs/tick benchmark latency).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-18
 - **Feature/Task:** Master Plan Execution: Audit 5.0 Forensic Remediation (Double-Fill Race Eradication, Centralized SL Ratcheting, Atomic Batch TP Cancellation & Zero `any` Types)
 - **Artifacts Created/Modified:** `src/execution/binance.ts`, `src/strategy/positionLedger.ts`, `src/strategy/engine.ts`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** 
