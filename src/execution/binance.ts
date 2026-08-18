@@ -814,7 +814,76 @@ export class BinanceExecutionClient {
   public async getPositionRisk(symbol?: string): Promise<BinancePositionRisk[]> {
     const params: Record<string, string> = {};
     if (symbol) params.symbol = symbol;
-    return this.request<BinancePositionRisk[]>("GET", "/fapi/v2/positionRisk", params, true);
+    return this.request<BinancePositionRisk[]>("GET", "/fapi/v3/positionRisk", params, true).catch(async (err: any) => {
+      // Graceful fallback to /fapi/v2/positionRisk if /fapi/v3/positionRisk is unavailable
+      if (err?.message?.includes("404") || err?.message?.includes("-4120")) {
+        return this.request<BinancePositionRisk[]>("GET", "/fapi/v2/positionRisk", params, true);
+      }
+      throw err;
+    });
+  }
+
+  public async getAccountInfo(): Promise<BinanceAccountInfo> {
+    return this.request<BinanceAccountInfo>("GET", "/fapi/v3/account", {}, true).catch(async (err: any) => {
+      // Graceful fallback to /fapi/v2/account if /fapi/v3/account is unavailable
+      if (err?.message?.includes("404") || err?.message?.includes("-4120")) {
+        return this.request<BinanceAccountInfo>("GET", "/fapi/v2/account", {}, true);
+      }
+      throw err;
+    });
+  }
+
+  /**
+   * SOTA Dual-Source Consensus Position Ingestion:
+   * Merges real-time /fapi/v3/positionRisk and authoritative margin ledger /fapi/v3/account in parallel.
+   * Eliminates single-endpoint pagination/caching omissions across all active symbols.
+   */
+  public async getDualPositionRisk(symbol?: string): Promise<BinancePositionRisk[]> {
+    const [posRiskRes, accountInfoRes] = await Promise.allSettled([
+      this.getPositionRisk(symbol),
+      this.getAccountInfo(),
+    ]);
+
+    const posRiskList: BinancePositionRisk[] =
+      posRiskRes.status === "fulfilled" && Array.isArray(posRiskRes.value) ? posRiskRes.value : [];
+    const accountPositions: BinancePositionRisk[] =
+      accountInfoRes.status === "fulfilled" && accountInfoRes.value && Array.isArray(accountInfoRes.value.positions)
+        ? accountInfoRes.value.positions
+        : [];
+
+    const mergedMap = new Map<string, BinancePositionRisk>();
+
+    // 1. Ingest positionRisk entries
+    for (const p of posRiskList) {
+      if (symbol && p.symbol !== symbol) continue;
+      const key = `${p.symbol}:${p.positionSide || "BOTH"}`;
+      mergedMap.set(key, p);
+    }
+
+    // 2. Ingest / Merge account positions (authoritative margin ledger)
+    for (const ap of accountPositions) {
+      if (symbol && ap.symbol !== symbol) continue;
+      const key = `${ap.symbol}:${ap.positionSide || "BOTH"}`;
+      const existing = mergedMap.get(key);
+      const apQty = Math.abs(parseFloat(ap.positionAmt || "0"));
+
+      if (!existing) {
+        mergedMap.set(key, ap);
+      } else {
+        const existingQty = Math.abs(parseFloat(existing.positionAmt || "0"));
+        // If account ledger shows active position and positionRisk was 0/stale, prioritize account ledger
+        if (apQty > 0 && existingQty === 0) {
+          mergedMap.set(key, ap);
+        } else if (apQty > 0 && existingQty > 0) {
+          // Both non-zero, take latest updateTime
+          if ((ap.updateTime || 0) >= (existing.updateTime || 0)) {
+            mergedMap.set(key, { ...existing, ...ap });
+          }
+        }
+      }
+    }
+
+    return Array.from(mergedMap.values());
   }
 
   public async getOpenOrders(symbol?: string): Promise<BinanceOrderResponse[]> {
@@ -822,11 +891,10 @@ export class BinanceExecutionClient {
     if (symbol) params.symbol = symbol;
     const [standardOrders, algoOrders] = await Promise.all([
       this.request<BinanceOrderResponse[]>("GET", "/fapi/v1/openOrders", params, true).catch((err: any) => {
-        console.log(`[BinanceExecutionClient] Notice fetching standard open orders: ${err?.message || String(err)}`);
+        console.log(`[BinanceExecutionClient] Notice fetching standard open orders for ${symbol || "ALL"}: ${err?.message || String(err)}`);
         return [] as BinanceOrderResponse[];
       }),
       this.request<any[]>("GET", "/fapi/v1/openAlgoOrders", params, true).catch((err: any) => {
-        console.log(`[BinanceExecutionClient] Notice fetching open algo orders: ${err?.message || String(err)}`);
         return [] as any[];
       }),
     ]);
@@ -855,7 +923,11 @@ export class BinanceExecutionClient {
   }
 
   public async getAccountBalance(): Promise<BinanceAccountBalance[]> {
-    return this.request<BinanceAccountBalance[]>("GET", "/fapi/v2/account", {}, true);
+    return this.request<BinanceAccountBalance[]>("GET", "/fapi/v3/account", {}, true).then(
+      (res: any) => (Array.isArray(res?.assets) ? res.assets : res as BinanceAccountBalance[])
+    ).catch(async () => {
+      return this.request<BinanceAccountBalance[]>("GET", "/fapi/v2/account", {}, true);
+    });
   }
 
   public async getOrder(symbol: string, orderId: number | string): Promise<BinanceOrderResponse> {
@@ -921,13 +993,6 @@ export class BinanceExecutionClient {
       console.warn(`[BinanceExecutionClient] Notice fetching income history: ${err?.message || String(err)}`);
       return [];
     }
-  }
-
-  /**
-   * Fetches full account telemetry from Binance REST API (/fapi/v2/account).
-   */
-  public async getAccountInfo(): Promise<BinanceAccountInfo> {
-    return this.request<BinanceAccountInfo>("GET", "/fapi/v2/account", {}, true);
   }
 
   /**

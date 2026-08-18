@@ -1,6 +1,6 @@
 import { MarketDataClient } from "../marketDataClient";
 import { MultiAssetRiskGuard } from "./risk";
-import { BinanceExecutionClient, BinancePositionRisk } from "../execution/binance";
+import { BinanceExecutionClient, BinancePositionRisk, BinanceOrderResponse } from "../execution/binance";
 import { MultiAssetPositionLedger } from "./positionLedger";
 import { StrategyEngine, StrategySignalResult, EngineState } from "./engine";
 import { getTradingSymbols } from "../config/tradingSymbols";
@@ -188,21 +188,29 @@ export class MultiAssetStrategyEngine {
     }
 
     try {
-      // Single REST request to fetch ALL open positions and open orders across entire Binance account
-      const [allPositions, allOpenOrders] = await Promise.all([
-        this.executionClient.getPositionRisk(),
-        this.executionClient.getOpenOrders(),
-      ]);
-
+      // SOTA Tri-Vector: Fetch dual-source consensus positions (V3 positionRisk + V3 account)
+      const allPositions = await this.executionClient.getDualPositionRisk();
       const validPositions = Array.isArray(allPositions) ? allPositions : [];
-      const validOrders = Array.isArray(allOpenOrders) ? allOpenOrders : [];
+
+      // Targeted low-weight per-symbol open orders queries (eliminates weight-40 rate limit spikes)
+      const orderPromises = this.activeSymbols.map((sym) =>
+        this.executionClient.getOpenOrders(sym).catch(() => [] as BinanceOrderResponse[])
+      );
+      const symbolOrderArrays = await Promise.all(orderPromises);
+      const ordersBySymbol = new Map<string, BinanceOrderResponse[]>();
+      for (let i = 0; i < this.activeSymbols.length; i++) {
+        const sym = this.activeSymbols[i];
+        if (sym) {
+          ordersBySymbol.set(sym, symbolOrderArrays[i] || []);
+        }
+      }
 
       let totalNotional = 0;
       this.riskGuard.resetSymbolNotionals();
 
       for (const [symbol, engine] of this.engines.entries()) {
         const symbolPositions = validPositions.filter((p) => p.symbol === symbol);
-        const symbolOrders = validOrders.filter((o) => o.symbol === symbol);
+        const symbolOrders = ordersBySymbol.get(symbol) || [];
         await engine.syncExchangeStateWithData(symbolPositions, symbolOrders);
 
         const summary = engine.getHedgeLedger().getSummary(0);

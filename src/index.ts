@@ -89,12 +89,12 @@ export async function syncStateOnStartup(
       await (strategyEngine as any).syncExchangeState();
     } else if ("getConfig" in strategyEngine && typeof (strategyEngine as any).getConfig === "function") {
       const symbol = (strategyEngine as any).getConfig().symbol;
-      const positions = await executionClient.getPositionRisk(symbol);
+      const positions = await executionClient.getDualPositionRisk(symbol);
       if (Array.isArray(positions)) {
         (strategyEngine as StrategyEngine).reconcileStartupPositions(positions);
       }
     } else if (strategyEngine instanceof MultiAssetStrategyEngine) {
-      const positions = await executionClient.getPositionRisk();
+      const positions = await executionClient.getDualPositionRisk();
       if (Array.isArray(positions)) {
         strategyEngine.reconcileStartupPositions(positions);
       }

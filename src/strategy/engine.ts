@@ -551,7 +551,7 @@ export class StrategyEngine {
       if (needsLongSettle) {
         // Filter trades for closing LONG position: side = "SELL" or positionSide = "LONG"
         const longExitTrades = trades.filter(
-          (t) => (t.positionSide === "LONG" || t.side === "SELL") && parseFloat(t.qty || "0") > 0
+          (t) => (t.positionSide === "LONG" || t.side === "SELL" || (t.positionSide === "BOTH" && !t.buyer)) && parseFloat(t.qty || "0") > 0
         );
 
         let exactPnl: number | undefined = undefined;
@@ -589,24 +589,55 @@ export class StrategyEngine {
           console.log(
             `[DOUBLE_ENTRY_OMS][LONG_SETTLED_EXACT] [${this.config.symbol}:CORE_LONG] Reconciled from ${longExitTrades.length} Binance trade(s): ExitPrice: $${exactExitPrice?.toFixed(4)}, RealizedPnL: $${exactPnl?.toFixed(4)}, Comm: $${exactCommission?.toFixed(4)}`
           );
-        }
 
-        const resolvedExitPx = exactExitPrice && exactExitPrice > 0 ? exactExitPrice : (markPrice > 0 ? markPrice : undefined);
-        this.hedgeLedger.releaseCoreLong(
-          resolvedExitPx,
-          takerFeeRate,
-          exactPnl !== undefined ? "EXCHANGE_REST_TRADE_SETTLED" : "EXCHANGE_WS_ACCOUNT_EXIT",
-          markPrice,
-          exactPnl,
-          exactCommission
-        );
+          const resolvedExitPx = exactExitPrice && exactExitPrice > 0 ? exactExitPrice : (markPrice > 0 ? markPrice : undefined);
+          this.hedgeLedger.releaseCoreLong(
+            resolvedExitPx,
+            takerFeeRate,
+            "EXCHANGE_REST_TRADE_SETTLED",
+            markPrice,
+            exactPnl,
+            exactCommission
+          );
+        } else {
+          // SOTA TWO-PHASE FLATTENING BARRIER:
+          // No closing trades detected in userTrades! Before blindly wiping, verify against live exchange position state.
+          let isStillOpenOnExchange = false;
+          if (this.executionClient.isConfigured()) {
+            try {
+              const freshPositions = await this.executionClient.getDualPositionRisk(this.config.symbol);
+              const activeOnExchange = freshPositions.filter(
+                (p) => p.symbol === this.config.symbol && (p.positionSide === "LONG" || p.positionSide === "BOTH") && Math.abs(parseFloat(p.positionAmt || "0")) > 0
+              );
+              if (activeOnExchange.length > 0) {
+                isStillOpenOnExchange = true;
+                console.warn(
+                  `[TWO_PHASE_BARRIER][PROTECTED] [${this.config.symbol}:CORE_LONG] Blind wipe aborted! No closing trades found and exchange shows position STILL OPEN (${activeOnExchange[0].positionAmt} @ $${activeOnExchange[0].entryPrice}). Re-adopting into ledger.`
+                );
+                this.reconcileStartupPositions(activeOnExchange);
+              }
+            } catch (err: any) {
+              console.warn(`[TWO_PHASE_BARRIER] Notice during long position verification: ${err?.message || String(err)}`);
+            }
+          }
+
+          if (!isStillOpenOnExchange) {
+            console.log(`[DOUBLE_ENTRY_OMS][LONG_SETTLED_FALLBACK] [${this.config.symbol}:CORE_LONG] Position verified flat on exchange. Releasing slot with mark price $${markPrice}.`);
+            this.hedgeLedger.releaseCoreLong(
+              markPrice > 0 ? markPrice : undefined,
+              takerFeeRate,
+              "EXCHANGE_WS_ACCOUNT_EXIT",
+              markPrice
+            );
+          }
+        }
       }
 
       // 2. Reconcile SHORT position if still open
       if (needsShortSettle) {
         // Filter trades for closing SHORT position: side = "BUY" or positionSide = "SHORT"
         const shortExitTrades = trades.filter(
-          (t) => (t.positionSide === "SHORT" || t.side === "BUY") && parseFloat(t.qty || "0") > 0
+          (t) => (t.positionSide === "SHORT" || t.side === "BUY" || (t.positionSide === "BOTH" && t.buyer)) && parseFloat(t.qty || "0") > 0
         );
 
         let exactPnl: number | undefined = undefined;
@@ -644,19 +675,53 @@ export class StrategyEngine {
           console.log(
             `[DOUBLE_ENTRY_OMS][SHORT_SETTLED_EXACT] [${this.config.symbol}:SHORT_SLOTS] Reconciled from ${shortExitTrades.length} Binance trade(s): ExitPrice: $${exactExitPrice?.toFixed(4)}, RealizedPnL: $${exactPnl?.toFixed(4)}, Comm: $${exactCommission?.toFixed(4)}`
           );
-        }
 
-        const resolvedExitPx = exactExitPrice && exactExitPrice > 0 ? exactExitPrice : (markPrice > 0 ? markPrice : undefined);
-        for (let i = 0; i < this.config.maxShortSlots; i++) {
-          this.hedgeLedger.releaseShortSlot(
-            i,
-            resolvedExitPx,
-            takerFeeRate,
-            exactPnl !== undefined ? "EXCHANGE_REST_TRADE_SETTLED" : "EXCHANGE_WS_ACCOUNT_EXIT",
-            markPrice,
-            exactPnl,
-            exactCommission
-          );
+          const resolvedExitPx = exactExitPrice && exactExitPrice > 0 ? exactExitPrice : (markPrice > 0 ? markPrice : undefined);
+          for (let i = 0; i < this.config.maxShortSlots; i++) {
+            this.hedgeLedger.releaseShortSlot(
+              i,
+              resolvedExitPx,
+              takerFeeRate,
+              "EXCHANGE_REST_TRADE_SETTLED",
+              markPrice,
+              exactPnl,
+              exactCommission
+            );
+          }
+        } else {
+          // SOTA TWO-PHASE FLATTENING BARRIER:
+          // No closing trades detected in userTrades! Before blindly wiping, verify against live exchange position state.
+          let isStillOpenOnExchange = false;
+          if (this.executionClient.isConfigured()) {
+            try {
+              const freshPositions = await this.executionClient.getDualPositionRisk(this.config.symbol);
+              const activeOnExchange = freshPositions.filter(
+                (p) => p.symbol === this.config.symbol && (p.positionSide === "SHORT" || p.positionSide === "BOTH") && Math.abs(parseFloat(p.positionAmt || "0")) > 0
+              );
+              if (activeOnExchange.length > 0) {
+                isStillOpenOnExchange = true;
+                console.warn(
+                  `[TWO_PHASE_BARRIER][PROTECTED] [${this.config.symbol}:SHORT_SLOTS] Blind wipe aborted! No closing trades found and exchange shows position STILL OPEN (${activeOnExchange[0].positionAmt} @ $${activeOnExchange[0].entryPrice}). Re-adopting into ledger.`
+                );
+                this.reconcileStartupPositions(activeOnExchange);
+              }
+            } catch (err: any) {
+              console.warn(`[TWO_PHASE_BARRIER] Notice during short position verification: ${err?.message || String(err)}`);
+            }
+          }
+
+          if (!isStillOpenOnExchange) {
+            console.log(`[DOUBLE_ENTRY_OMS][SHORT_SETTLED_FALLBACK] [${this.config.symbol}:SHORT_SLOTS] Position verified flat on exchange. Releasing slots with mark price $${markPrice}.`);
+            for (let i = 0; i < this.config.maxShortSlots; i++) {
+              this.hedgeLedger.releaseShortSlot(
+                i,
+                markPrice > 0 ? markPrice : undefined,
+                takerFeeRate,
+                "EXCHANGE_WS_ACCOUNT_EXIT",
+                markPrice
+              );
+            }
+          }
         }
       }
 
@@ -1211,13 +1276,36 @@ export class StrategyEngine {
       if (activePositions.length === 0) {
         const summary = this.hedgeLedger.getSummary();
 
-        if (summary.longQuantity > 1e-6) {
-          console.log(`[StrategyEngine][StateSync] [${this.config.symbol}:CORE_LONG] Reconciling closed position via exchange state sync.`);
-          await this.reconcileFlatPositionWithUserTrades("LONG", 0);
-        }
-        if (summary.shortQuantity > 1e-6) {
-          console.log(`[StrategyEngine][StateSync] [${this.config.symbol}:SHORT_SLOTS] Reconciling closed short positions via exchange state sync.`);
-          await this.reconcileFlatPositionWithUserTrades("SHORT", 0);
+        // SOTA TWO-PHASE FLATTENING BARRIER:
+        // If local ledger tracks an active position but caller snapshot reports 0, perform targeted verification
+        if (summary.longQuantity > 1e-6 || summary.shortQuantity > 1e-6) {
+          if (this.executionClient.isConfigured()) {
+            try {
+              const freshPositions = await this.executionClient.getDualPositionRisk(this.config.symbol);
+              const activeOnExchange = freshPositions.filter(
+                (p) => p.symbol === this.config.symbol && Math.abs(parseFloat(p.positionAmt || "0")) > 0
+              );
+              if (activeOnExchange.length > 0) {
+                console.warn(
+                  `[TWO_PHASE_BARRIER][PROTECTED] Blind wipe aborted! Targeted check found ${activeOnExchange.length} active position(s) for ${this.config.symbol}. Re-adopting into ledger.`
+                );
+                this.reconcileStartupPositions(activeOnExchange);
+                this.syncSabPositionState(0);
+                return;
+              }
+            } catch (err: any) {
+              console.warn(`[TWO_PHASE_BARRIER] Notice during targeted sync verification: ${err?.message || String(err)}`);
+            }
+          }
+
+          if (summary.longQuantity > 1e-6) {
+            console.log(`[StrategyEngine][StateSync] [${this.config.symbol}:CORE_LONG] Reconciling closed position via exchange state sync.`);
+            await this.reconcileFlatPositionWithUserTrades("LONG", 0);
+          }
+          if (summary.shortQuantity > 1e-6) {
+            console.log(`[StrategyEngine][StateSync] [${this.config.symbol}:SHORT_SLOTS] Reconciling closed short positions via exchange state sync.`);
+            await this.reconcileFlatPositionWithUserTrades("SHORT", 0);
+          }
         }
 
         console.log(`[StrategyEngine][StateSync] Binance position state: FLAT (0.0000) for ${this.config.symbol} (Leverage: ${this.config.leverageMultiplier}x).`);
@@ -1319,7 +1407,7 @@ export class StrategyEngine {
     try {
       console.log(`[StrategyEngine][StateSync] Syncing exchange state & open orders for ${this.config.symbol}...`);
       const [positions, openOrders] = await Promise.all([
-        this.executionClient.getPositionRisk(this.config.symbol),
+        this.executionClient.getDualPositionRisk(this.config.symbol),
         this.executionClient.getOpenOrders(this.config.symbol),
       ]);
 

@@ -97,13 +97,13 @@ async function syncStateOnStartup(executionClient, strategyEngine, riskGuard) {
         }
         else if ("getConfig" in strategyEngine && typeof strategyEngine.getConfig === "function") {
             const symbol = strategyEngine.getConfig().symbol;
-            const positions = await executionClient.getPositionRisk(symbol);
+            const positions = await executionClient.getDualPositionRisk(symbol);
             if (Array.isArray(positions)) {
                 strategyEngine.reconcileStartupPositions(positions);
             }
         }
         else if (strategyEngine instanceof multiEngine_1.MultiAssetStrategyEngine) {
-            const positions = await executionClient.getPositionRisk();
+            const positions = await executionClient.getDualPositionRisk();
             if (Array.isArray(positions)) {
                 strategyEngine.reconcileStartupPositions(positions);
             }

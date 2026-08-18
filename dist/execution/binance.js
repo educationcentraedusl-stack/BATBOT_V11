@@ -622,7 +622,70 @@ class BinanceExecutionClient {
         const params = {};
         if (symbol)
             params.symbol = symbol;
-        return this.request("GET", "/fapi/v2/positionRisk", params, true);
+        return this.request("GET", "/fapi/v3/positionRisk", params, true).catch(async (err) => {
+            // Graceful fallback to /fapi/v2/positionRisk if /fapi/v3/positionRisk is unavailable
+            if (err?.message?.includes("404") || err?.message?.includes("-4120")) {
+                return this.request("GET", "/fapi/v2/positionRisk", params, true);
+            }
+            throw err;
+        });
+    }
+    async getAccountInfo() {
+        return this.request("GET", "/fapi/v3/account", {}, true).catch(async (err) => {
+            // Graceful fallback to /fapi/v2/account if /fapi/v3/account is unavailable
+            if (err?.message?.includes("404") || err?.message?.includes("-4120")) {
+                return this.request("GET", "/fapi/v2/account", {}, true);
+            }
+            throw err;
+        });
+    }
+    /**
+     * SOTA Dual-Source Consensus Position Ingestion:
+     * Merges real-time /fapi/v3/positionRisk and authoritative margin ledger /fapi/v3/account in parallel.
+     * Eliminates single-endpoint pagination/caching omissions across all active symbols.
+     */
+    async getDualPositionRisk(symbol) {
+        const [posRiskRes, accountInfoRes] = await Promise.allSettled([
+            this.getPositionRisk(symbol),
+            this.getAccountInfo(),
+        ]);
+        const posRiskList = posRiskRes.status === "fulfilled" && Array.isArray(posRiskRes.value) ? posRiskRes.value : [];
+        const accountPositions = accountInfoRes.status === "fulfilled" && accountInfoRes.value && Array.isArray(accountInfoRes.value.positions)
+            ? accountInfoRes.value.positions
+            : [];
+        const mergedMap = new Map();
+        // 1. Ingest positionRisk entries
+        for (const p of posRiskList) {
+            if (symbol && p.symbol !== symbol)
+                continue;
+            const key = `${p.symbol}:${p.positionSide || "BOTH"}`;
+            mergedMap.set(key, p);
+        }
+        // 2. Ingest / Merge account positions (authoritative margin ledger)
+        for (const ap of accountPositions) {
+            if (symbol && ap.symbol !== symbol)
+                continue;
+            const key = `${ap.symbol}:${ap.positionSide || "BOTH"}`;
+            const existing = mergedMap.get(key);
+            const apQty = Math.abs(parseFloat(ap.positionAmt || "0"));
+            if (!existing) {
+                mergedMap.set(key, ap);
+            }
+            else {
+                const existingQty = Math.abs(parseFloat(existing.positionAmt || "0"));
+                // If account ledger shows active position and positionRisk was 0/stale, prioritize account ledger
+                if (apQty > 0 && existingQty === 0) {
+                    mergedMap.set(key, ap);
+                }
+                else if (apQty > 0 && existingQty > 0) {
+                    // Both non-zero, take latest updateTime
+                    if ((ap.updateTime || 0) >= (existing.updateTime || 0)) {
+                        mergedMap.set(key, { ...existing, ...ap });
+                    }
+                }
+            }
+        }
+        return Array.from(mergedMap.values());
     }
     async getOpenOrders(symbol) {
         const params = {};
@@ -630,11 +693,10 @@ class BinanceExecutionClient {
             params.symbol = symbol;
         const [standardOrders, algoOrders] = await Promise.all([
             this.request("GET", "/fapi/v1/openOrders", params, true).catch((err) => {
-                console.log(`[BinanceExecutionClient] Notice fetching standard open orders: ${err?.message || String(err)}`);
+                console.log(`[BinanceExecutionClient] Notice fetching standard open orders for ${symbol || "ALL"}: ${err?.message || String(err)}`);
                 return [];
             }),
             this.request("GET", "/fapi/v1/openAlgoOrders", params, true).catch((err) => {
-                console.log(`[BinanceExecutionClient] Notice fetching open algo orders: ${err?.message || String(err)}`);
                 return [];
             }),
         ]);
@@ -660,7 +722,9 @@ class BinanceExecutionClient {
         return [...(Array.isArray(standardOrders) ? standardOrders : []), ...mappedAlgoOrders];
     }
     async getAccountBalance() {
-        return this.request("GET", "/fapi/v2/account", {}, true);
+        return this.request("GET", "/fapi/v3/account", {}, true).then((res) => (Array.isArray(res?.assets) ? res.assets : res)).catch(async () => {
+            return this.request("GET", "/fapi/v2/account", {}, true);
+        });
     }
     async getOrder(symbol, orderId) {
         return this.request("GET", "/fapi/v1/order", { symbol, orderId }, true);
@@ -703,12 +767,6 @@ class BinanceExecutionClient {
             console.warn(`[BinanceExecutionClient] Notice fetching income history: ${err?.message || String(err)}`);
             return [];
         }
-    }
-    /**
-     * Fetches full account telemetry from Binance REST API (/fapi/v2/account).
-     */
-    async getAccountInfo() {
-        return this.request("GET", "/fapi/v2/account", {}, true);
     }
     /**
      * Reconciles available wallet balance and total unrealized profit directly from Binance REST API.

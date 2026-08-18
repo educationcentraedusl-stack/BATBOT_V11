@@ -34,6 +34,8 @@ async function runTests() {
 
   // Default mock returns empty array for tests 1-4 to test fallback mark price settlement
   mockExecutionClient.getUserTrades = async () => [];
+  mockExecutionClient.getDualPositionRisk = async () => [];
+  mockExecutionClient.getPositionRisk = async () => [];
 
   const config: Partial<StrategyConfig> = {
     symbol: "XRPUSDT",
