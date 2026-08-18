@@ -395,12 +395,19 @@ class StrategyEngine {
             const longOpenTime = coreLongSlot.isOccupied ? coreLongSlot.openTime : 0;
             const occupiedShortSlots = this.hedgeLedger.getShortSlots().filter((s) => s.isOccupied && s.openTime > 0);
             const shortOpenTime = occupiedShortSlots.length > 0 ? Math.min(...occupiedShortSlots.map((s) => s.openTime)) : 0;
+            // SOTA Audit 3.0 Timestamp Barrier: Bounded 1-hour fallback window for unrecorded/adopted slots (Loophole #2 Fix)
+            const fallbackWindowMs = 3600000; // 1 hour
+            const effectiveLongOpenTime = longOpenTime > 0 ? longOpenTime : (Date.now() - fallbackWindowMs);
+            const effectiveShortOpenTime = shortOpenTime > 0 ? shortOpenTime : (Date.now() - fallbackWindowMs);
             let trades = [];
             if (this.executionClient.isConfigured()) {
                 try {
-                    const slotOpenTime = (posSide === "LONG" || posSide === "BOTH") && longOpenTime > 0
-                        ? longOpenTime
-                        : (shortOpenTime > 0 ? shortOpenTime : undefined);
+                    // SOTA Audit 3.0 Multi-Side Selection: Earliest timestamp strictly governs BOTH mode queries (Loophole #3 Fix)
+                    const slotOpenTime = posSide === "LONG"
+                        ? effectiveLongOpenTime
+                        : posSide === "SHORT"
+                            ? effectiveShortOpenTime
+                            : Math.min(effectiveLongOpenTime, effectiveShortOpenTime);
                     trades = await this.executionClient.getUserTrades(this.config.symbol, 10, slotOpenTime);
                 }
                 catch (err) {
@@ -411,11 +418,12 @@ class StrategyEngine {
             const takerFeeRate = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
             // 1. Reconcile LONG position if still open
             if (needsLongSettle) {
-                // Filter trades for closing LONG position: strictly requires SELL side (!t.buyer || t.side === "SELL") and t.time >= longOpenTime
-                const longExitTrades = trades.filter((t) => (!t.buyer || t.side === "SELL") &&
+                // Filter trades for closing LONG position: strictly requires SELL side and t.time >= effectiveLongOpenTime (Loophole #1 & #2 Fix)
+                const longExitTrades = trades.filter((t) => ((t.buyer === false || t.side === "SELL") && t.side !== "BUY") &&
                     (t.positionSide === "LONG" || t.positionSide === "BOTH" || !t.positionSide) &&
                     parseFloat(t.qty || "0") > 0 &&
-                    (longOpenTime === 0 || (t.time !== undefined && t.time >= longOpenTime)));
+                    t.time !== undefined &&
+                    t.time >= effectiveLongOpenTime);
                 let exactPnl = undefined;
                 let exactCommission = undefined;
                 let exactExitPrice = undefined;
@@ -493,11 +501,12 @@ class StrategyEngine {
             }
             // 2. Reconcile SHORT position if still open
             if (needsShortSettle) {
-                // Filter trades for closing SHORT position: strictly requires BUY side (t.buyer || t.side === "BUY") and t.time >= shortOpenTime
-                const shortExitTrades = trades.filter((t) => (t.buyer || t.side === "BUY") &&
+                // Filter trades for closing SHORT position: strictly requires BUY side and t.time >= effectiveShortOpenTime (Loophole #1 & #2 Fix)
+                const shortExitTrades = trades.filter((t) => ((t.buyer === true || t.side === "BUY") && t.side !== "SELL") &&
                     (t.positionSide === "SHORT" || t.positionSide === "BOTH" || !t.positionSide) &&
                     parseFloat(t.qty || "0") > 0 &&
-                    (shortOpenTime === 0 || (t.time !== undefined && t.time >= shortOpenTime)));
+                    t.time !== undefined &&
+                    t.time >= effectiveShortOpenTime);
                 let exactPnl = undefined;
                 let exactCommission = undefined;
                 let exactExitPrice = undefined;

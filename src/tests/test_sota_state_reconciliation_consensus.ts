@@ -448,8 +448,112 @@ async function runStateReconciliationConsensusTest(): Promise<void> {
   }
   console.log("  ✅ Test 9 Passed: Timestamp barrier strictly filtered out historical trade. Zero stale PnL bleeding.\n");
 
+  // --------------------------------------------------------------------------------------
+  // TEST 10: Audit 3.0 Loophole 1 - JS Truthiness Leak on Undefined Buyer
+  // --------------------------------------------------------------------------------------
+  console.log("[Test 10/12] Verifying Audit 3.0 Loophole 1 (Undefined buyer on BUY side must NOT settle LONG)...");
+
+  // Re-occupy doge long position
+  dogeEngine.getHedgeLedger().occupyCoreLong(644.0, 0.06950, 2.5, 1.5);
+
+  // Simulate a trade payload where buyer is undefined, but side is "BUY"
+  (executionClient as any).getUserTrades = async () => [
+    {
+      id: 999333,
+      symbol: "DOGEUSDT",
+      orderId: 111444,
+      side: "BUY",
+      price: "0.06950",
+      qty: "644.0",
+      realizedPnl: "0",
+      marginAsset: "USDT",
+      quoteQty: "44.758",
+      commission: "0.018",
+      commissionAsset: "USDT",
+      time: Date.now(),
+      positionSide: "LONG",
+      buyer: undefined as any, // Buyer property omitted / undefined!
+      maker: true,
+    },
+  ];
+
+  await dogeEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
+
+  const dogeSummaryAfterUndefBuyer = dogeEngine.getHedgeLedger().getSummary(0.06987);
+  console.log(`  - DOGEUSDT Long Qty After Undefined Buyer Check: ${dogeSummaryAfterUndefBuyer.longQuantity} (Expected: 644)`);
+
+  if (dogeSummaryAfterUndefBuyer.longQuantity === 0) {
+    throw new Error("Test 10 Failed: Undefined buyer on BUY trade caused truthiness leak and settled LONG position!");
+  }
+  console.log("  ✅ Test 10 Passed: Strict value equality ((t.buyer === false || t.side === 'SELL') && t.side !== 'BUY') rejected undefined buyer BUY trade.\n");
+
+  // --------------------------------------------------------------------------------------
+  // TEST 11: Audit 3.0 Loophole 2 - 1-Hour Bounded Fallback Window on openTime === 0
+  // --------------------------------------------------------------------------------------
+  console.log("[Test 11/12] Verifying Audit 3.0 Loophole 2 (1-Hour Bounded Fallback Window on openTime === 0)...");
+
+  // Force slot openTime to 0 to simulate unrecorded/adopted slot
+  (dogeEngine.getHedgeLedger().getCoreLong() as any).openTime = 0;
+
+  // Mock a historical trade from 5 hours ago (older than 1-hour fallback window)
+  (executionClient as any).getUserTrades = async () => [
+    {
+      id: 777222,
+      symbol: "DOGEUSDT",
+      orderId: 333444,
+      side: "SELL",
+      price: "0.07200",
+      qty: "644.0",
+      realizedPnl: "1.6100",
+      marginAsset: "USDT",
+      quoteQty: "46.368",
+      commission: "0.019",
+      commissionAsset: "USDT",
+      time: Date.now() - (5 * 3600 * 1000), // 5 hours ago (exceeds 1-hour fallback barrier)
+      positionSide: "LONG",
+      buyer: false,
+      maker: true,
+    },
+  ];
+
+  await dogeEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
+
+  const dogeSummaryAfterAdoptedCheck = dogeEngine.getHedgeLedger().getSummary(0.06987);
+  console.log(`  - DOGEUSDT Long Qty After 5-Hour Trade on openTime=0: ${dogeSummaryAfterAdoptedCheck.longQuantity} (Expected: 644)`);
+
+  if (dogeSummaryAfterAdoptedCheck.longQuantity === 0) {
+    throw new Error("Test 11 Failed: 5-hour old trade was accepted for openTime === 0 slot!");
+  }
+  console.log("  ✅ Test 11 Passed: 1-hour bounded fallback window strictly rejected ancient trade for unrecorded slot.\n");
+
+  // --------------------------------------------------------------------------------------
+  // TEST 12: Audit 3.0 Loophole 3 - BOTH Mode Query Min-Timestamp Selection
+  // --------------------------------------------------------------------------------------
+  console.log("[Test 12/12] Verifying Audit 3.0 Loophole 3 (BOTH Mode Query uses Earliest Open Timestamp)...");
+
+  let requestedStartTime: number | undefined = undefined;
+  (executionClient as any).getUserTrades = async (symbol: string, limit: number, startTime?: number) => {
+    requestedStartTime = startTime;
+    return [];
+  };
+
+  const now = Date.now();
+  (dogeEngine.getHedgeLedger().getCoreLong() as any).openTime = now - 60000; // Long opened 1 min ago
+  dogeEngine.getHedgeLedger().occupyShortSlot(0, 500, 0.0700, 2.5, 1.5);
+  (dogeEngine.getHedgeLedger().getShortSlots()[0] as any).openTime = now - 600000; // Short opened 10 min ago
+
+  await dogeEngine.reconcileFlatPositionWithUserTrades("BOTH", 0);
+
+  const expectedMinTime = now - 600000;
+  console.log(`  - BOTH Mode Requested startTime: ${requestedStartTime} (Expected <= ${expectedMinTime})`);
+
+  if (!requestedStartTime || requestedStartTime > expectedMinTime) {
+    throw new Error(`Test 12 Failed: BOTH mode passed ${requestedStartTime}, which is later than shortOpenTime ${expectedMinTime}!`);
+  }
+  console.log("  ✅ Test 12 Passed: BOTH mode query strictly selects earliest open position timestamp.\n");
+
   console.log("=========================================================================");
-  console.log("  ALL 9 STAGES OF HOSTILE AUDIT 2.0 REMEDIATION VERIFIED (100%)          ");
+  console.log("  ALL 12 STAGES OF AUDIT 3.0 REMEDIATION VERIFIED (100%)                 ");
   console.log("=========================================================================\n");
 }
 

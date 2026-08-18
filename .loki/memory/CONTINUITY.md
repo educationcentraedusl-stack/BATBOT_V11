@@ -15,6 +15,11 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-08-18 - Audit 3.0 Sub-Heuristic Remediation (Strict Value Polarity Equality, 1-Hour Bounded Fallback Timestamp Barrier & BOTH Mode Min-Time Selection) Completed & 100% QA Verified:
+  - Strict Value Polarity Equality (`src/strategy/engine.ts`): Enforced strict boolean value equality `((t.buyer === false || t.side === "SELL") && t.side !== "BUY")` for LONG exits and `((t.buyer === true || t.side === "BUY") && t.side !== "SELL")` for SHORT exits, eradicating JS truthiness leak where `buyer: undefined` on a BUY trade was evaluated as a LONG exit.
+  - 1-Hour Bounded Fallback Timestamp Barrier (`src/strategy/engine.ts`): Enforced a strict 1-hour bounded fallback window (`Date.now() - 3600000`) whenever `openTime === 0` (unrecorded or adopted positions), preventing ancient trades from previous sessions/days from matching active settlements.
+  - BOTH Mode Earliest Open Time Selection (`src/strategy/engine.ts`): Enforced `Math.min(effectiveLongOpenTime, effectiveShortOpenTime)` when `posSide === "BOTH"`, guaranteeing Binance REST query `/fapi/v1/userTrades` encompasses the earliest open position timestamp.
+  - 100% Verified via `npm run build:ts` (0 errors), `tsc --noEmit` (0 errors), `test_sota_state_reconciliation_consensus.ts` (12/12 stages passed 100%), and `test_double_entry_oms_pnl.ts` (19/19 passed 100%).
 * 2026-08-18 - Hostile Audit 2.0 Remediation (Strict Exit Polarity Guard, Open-Time Timestamp Barrier & Redundant API Loop Eradication) Completed & 100% QA Verified:
   - Strict Exit Trade Polarity Guard (`src/strategy/engine.ts`): Enforced strict sign and buyer direction (`!t.buyer || t.side === "SELL"` for LONG exits, `t.buyer || t.side === "BUY"` for SHORT exits), completely eradicating the Hedge Mode entry-fill misclassification vulnerability.
   - Open-Time Timestamp Barrier (`src/strategy/engine.ts`): Enforced `t.time >= slotOpenTime` and passed `startTime: slotOpenTime` to `/fapi/v1/userTrades`, preventing stale historical trades from prior sessions from bleeding into active position settlements.

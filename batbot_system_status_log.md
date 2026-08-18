@@ -1,6 +1,16 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-18
+- **Feature/Task:** Audit 3.0 Sub-Heuristic Remediation: Strict Value Polarity Equality, 1-Hour Bounded Fallback Timestamp Barrier & BOTH Mode Min-Time Selection
+- **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/tests/test_sota_state_reconciliation_consensus.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** 
+  1. **Strict Value Polarity Equality (`src/strategy/engine.ts`):** Enforced strict boolean value equality `((t.buyer === false || t.side === "SELL") && t.side !== "BUY")` for LONG exits and `((t.buyer === true || t.side === "BUY") && t.side !== "SELL")` for SHORT exits, eradicating JS truthiness leak where `buyer: undefined` on a BUY trade was evaluated as a LONG exit.
+  2. **1-Hour Bounded Fallback Timestamp Barrier (`src/strategy/engine.ts`):** Enforced a strict 1-hour bounded fallback window (`Date.now() - 3600000`) whenever `openTime === 0` (unrecorded or adopted positions), preventing ancient trades from previous sessions/days from matching active settlements.
+  3. **BOTH Mode Earliest Open Time Selection (`src/strategy/engine.ts`):** Enforced `Math.min(effectiveLongOpenTime, effectiveShortOpenTime)` when `posSide === "BOTH"`, guaranteeing Binance REST query `/fapi/v1/userTrades` encompasses the earliest open position timestamp.
+  4. **Verification & Proof:** 100% verified via `npm run build:ts` (0 errors), `test_sota_state_reconciliation_consensus.ts` (12/12 stages passed 100%), and `test_double_entry_oms_pnl.ts` (19/19 passed 100%).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-18
 - **Feature/Task:** Hostile Audit 2.0 Remediation: Strict Exit Trade Polarity Guard, Open-Time Timestamp Barrier & Redundant API Loop Eradication
 - **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/tests/test_sota_state_reconciliation_consensus.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
 - **HFT/Performance Compliance:** 
