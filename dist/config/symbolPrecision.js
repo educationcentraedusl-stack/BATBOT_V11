@@ -137,7 +137,8 @@ class SymbolPrecisionRegistryManager {
             rounded = Math.floor(rawQty / stepSize + 1e-9) * stepSize;
         }
         const clamped = Math.max(stepSize, rounded);
-        return Number(clamped.toFixed(qtyDecimals));
+        const factor = Math.pow(10, qtyDecimals);
+        return Math.round(clamped * factor) / factor;
     }
     /**
      * Formats raw price dynamically according to symbol PRICE_FILTER rules.
@@ -149,7 +150,8 @@ class SymbolPrecisionRegistryManager {
         const { priceDecimals, tickSize } = rule;
         const rounded = Math.round(rawPrice / tickSize) * tickSize;
         const clamped = Math.max(tickSize, rounded);
-        return Number(clamped.toFixed(priceDecimals));
+        const factor = Math.pow(10, priceDecimals);
+        return Math.round(clamped * factor) / factor;
     }
     /**
      * Pre-seeds dynamic fallback rules for offline testing / execution.

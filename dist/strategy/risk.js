@@ -142,6 +142,23 @@ class RiskGuard {
         }
         return false;
     }
+    static PROTECTED_RESULT = Object.freeze({ isProtected: true });
+    /**
+     * Continuous Closed-Loop Invariant Guard: Verifies that 100% of an aggregated active position
+     * has an active exchange-native stop loss order protecting it.
+     */
+    auditAggregatedPositionRisk(symbol, side, aggregatedQuantity, activeStopLossOrderId) {
+        if (aggregatedQuantity <= 0) {
+            return RiskGuard.PROTECTED_RESULT;
+        }
+        if (!activeStopLossOrderId || activeStopLossOrderId <= 0) {
+            return {
+                isProtected: false,
+                reason: `UNPROTECTED_EXPOSURE: ${symbol} ${side} position ${aggregatedQuantity} has NO active exchange-native stop loss order!`,
+            };
+        }
+        return RiskGuard.PROTECTED_RESULT;
+    }
     validateOrder(intent, isClientConfigured, currentPositionSide = "FLAT") {
         if (!isClientConfigured) {
             return exports.RISK_REJECTED_UNCONFIGURED;

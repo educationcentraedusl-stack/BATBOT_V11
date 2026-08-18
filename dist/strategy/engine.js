@@ -334,28 +334,34 @@ class StrategyEngine {
         const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.00, volEstimate * 3.50 * 100));
         const dynamicTpPercent = dynamicSlPercent * 2.50;
         if (posSide === "LONG") {
-            this.hedgeLedger.occupyCoreLong(execQty, execPx, dynamicTpPercent, dynamicSlPercent);
-            const slot = this.hedgeLedger.getCoreLong();
-            this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch((err) => {
+            this.hedgeLedger.occupyCoreLong(execQty, execPx, dynamicTpPercent, dynamicSlPercent, false);
+            const aggLong = this.hedgeLedger.getAggregatedSideSummary("LONG");
+            // Atomic TP Replacement: Cancel previous resting TP limit orders to prevent stale sub-lots
+            this.cancelRestingTpOrders("CORE_LONG").then(() => {
+                return this.dispatchAggregatedBatchPostOnlyTpOrders("CORE_LONG", aggLong.vwapEntryPrice, aggLong.totalQuantity, "LONG");
+            }).catch((err) => {
                 console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
             });
-            this.dispatchExchangeStopLossOrder("CORE_LONG", execPx, execQty, "LONG", slot.stopLossPrice).catch((err) => {
+            // Position-Level Stop Loss: Submits native STOP_MARKET with closePosition=true covering 100% of aggregated position
+            this.syncExchangeStopLossOrder("CORE_LONG", aggLong.totalQuantity, "LONG", aggLong.stopLossPrice).catch((err) => {
                 console.error(`[EXCHANGE_SL_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
             });
         }
         else if (posSide === "SHORT") {
             const targetIdx = slotIndex !== undefined ? slotIndex : (this.hedgeLedger.getAvailableShortSlotIndex() >= 0 ? this.hedgeLedger.getAvailableShortSlotIndex() : 0);
             const targetSlotId = `SHORT_SLOT_${targetIdx}`;
-            this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, dynamicTpPercent, dynamicSlPercent);
-            const slot = this.hedgeLedger.getShortSlots()[targetIdx];
-            this.dispatchBatchPostOnlyTpOrders(targetSlotId, execPx, execQty, "SHORT").catch((err) => {
+            this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, dynamicTpPercent, dynamicSlPercent, false);
+            const aggShort = this.hedgeLedger.getAggregatedSideSummary("SHORT");
+            // Atomic TP Replacement: Cancel all existing resting TP limit orders across short slots
+            Promise.all(aggShort.slotIds.map((slId) => this.cancelRestingTpOrders(slId))).then(() => {
+                return this.dispatchAggregatedBatchPostOnlyTpOrders(targetSlotId, aggShort.vwapEntryPrice, aggShort.totalQuantity, "SHORT");
+            }).catch((err) => {
                 console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
             });
-            if (slot) {
-                this.dispatchExchangeStopLossOrder(targetSlotId, execPx, execQty, "SHORT", slot.stopLossPrice).catch((err) => {
-                    console.error(`[EXCHANGE_SL_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
-                });
-            }
+            // Position-Level Stop Loss: Submits native STOP_MARKET with closePosition=true covering 100% of aggregated position
+            this.syncExchangeStopLossOrder(targetSlotId, aggShort.totalQuantity, "SHORT", aggShort.stopLossPrice).catch((err) => {
+                console.error(`[EXCHANGE_SL_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+            });
         }
         this.onExecutionCompleted({
             symbol: this.config.symbol,
@@ -624,18 +630,27 @@ class StrategyEngine {
             if (!isTracked) {
                 console.warn(`[BinanceExecution][WS_ACCOUNT_UPDATE_DESYNC] Reconciling active ${targetSide} position for ${this.config.symbol}: ${absQty} @ $${entryPx}`);
                 if (targetSide === "LONG") {
-                    this.hedgeLedger.occupyCoreLong(absQty, entryPx, this.config.longTakeProfitPercent, this.config.longStopLossPercent);
+                    this.hedgeLedger.occupyCoreLong(absQty, entryPx, this.config.longTakeProfitPercent, this.config.longStopLossPercent, true);
                     if (posUpdate.positionSide === "BOTH") {
                         this.reconcileFlatPositionWithUserTrades("SHORT", 0);
                     }
+                    const aggLong = this.hedgeLedger.getAggregatedSideSummary("LONG");
+                    this.syncExchangeStopLossOrder("CORE_LONG", aggLong.totalQuantity, "LONG", aggLong.stopLossPrice).catch((err) => {
+                        console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Long SL desync sync failed: ${err.message}`);
+                    });
                 }
                 else {
                     const availIdx = this.hedgeLedger.getAvailableShortSlotIndex();
                     const slotIdx = availIdx >= 0 ? availIdx : 0;
-                    this.hedgeLedger.occupyShortSlot(slotIdx, absQty, entryPx, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent);
+                    this.hedgeLedger.occupyShortSlot(slotIdx, absQty, entryPx, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent, true);
                     if (posUpdate.positionSide === "BOTH") {
                         this.reconcileFlatPositionWithUserTrades("LONG", 0);
                     }
+                    const aggShort = this.hedgeLedger.getAggregatedSideSummary("SHORT");
+                    const targetSlotId = `SHORT_SLOT_${slotIdx}`;
+                    this.syncExchangeStopLossOrder(targetSlotId, aggShort.totalQuantity, "SHORT", aggShort.stopLossPrice).catch((err) => {
+                        console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Short SL desync sync failed: ${err.message}`);
+                    });
                 }
                 this.syncSabPositionState(0);
             }
@@ -883,9 +898,52 @@ class StrategyEngine {
                 const pending = this.pendingEntryOrders.get(orderId);
                 if (pending?.timeoutTimer)
                     clearTimeout(pending.timeoutTimer);
-                console.warn(`[BinanceExecution][WS_ENTRY_CANCELLED] [${this.config.symbol}] Pending entry OrderId #${orderId} (ClId: ${order.clientOrderId || "N/A"}) was ${order.orderStatus} on Binance. Local slot remains FLAT.`);
+                console.warn(`[BinanceExecution][WS_ENTRY_CANCELLED] [${this.config.symbol}] Pending entry OrderId #${orderId} (ClId: ${order.clientOrderId || "N/A"}) was ${order.orderStatus} on Binance. Rolling back slot ${pending?.slotId} to FLAT.`);
+                if (pending?.slotId) {
+                    this.hedgeLedger.rollbackPendingSlot(pending.slotId, `WS_${order.orderStatus}`);
+                }
                 this.pendingEntryOrders.delete(orderId);
             }
+        }
+    }
+    async cancelRestingTpOrders(slotId) {
+        const slot = slotId === "CORE_LONG" ? this.hedgeLedger.getCoreLong() : this.hedgeLedger.getShortSlots().find((s) => s.slotId === slotId);
+        if (!slot || !slot.activeTpOrderIds || slot.activeTpOrderIds.length === 0)
+            return;
+        const orderIdsToCancel = [...slot.activeTpOrderIds];
+        this.hedgeLedger.registerActiveTpOrderIds(slotId, []);
+        for (const orderId of orderIdsToCancel) {
+            try {
+                await this.executionClient.cancelOrder(this.config.symbol, orderId);
+            }
+            catch (err) {
+                // Non-blocking catch for already filled/cancelled orders
+            }
+        }
+    }
+    async dispatchAggregatedBatchPostOnlyTpOrders(slotId, vwapEntryPrice, aggregatedQty, side) {
+        let intents = [];
+        try {
+            intents = this.hedgeLedger.generateAggregatedBatchTpIntents(side, aggregatedQty, vwapEntryPrice, slotId);
+            if (intents.length === 0)
+                return;
+            console.log(`[MAKER_TP_ENGINE][DISPATCHING_AGGREGATED] [${this.config.symbol}:${slotId}] Submitting ${intents.length} POST_ONLY limit TP orders for aggregated size ${aggregatedQty} @ VWAP $${vwapEntryPrice}...`);
+            const resList = await this.executionClient.placeBatchOrders(intents);
+            if (Array.isArray(resList) && resList.length > 0) {
+                const validOrderIds = [];
+                resList.forEach((res) => {
+                    if (res && res.orderId) {
+                        validOrderIds.push(res.orderId);
+                    }
+                });
+                if (validOrderIds.length > 0) {
+                    this.hedgeLedger.registerActiveTpOrderIds(slotId, validOrderIds);
+                    console.log(`[MAKER_TP_ENGINE][SUCCESS_AGGREGATED] [${this.config.symbol}:${slotId}] Registered ${validOrderIds.length} POST_ONLY TP limit order IDs for aggregated pos: [${validOrderIds.join(", ")}]`);
+                }
+            }
+        }
+        catch (err) {
+            console.error(`[MAKER_TP_ENGINE][ERROR_AGGREGATED] [${this.config.symbol}:${slotId}] Failed to dispatch aggregated TP batch orders: ${err?.message || String(err)}`);
         }
     }
     async dispatchBatchPostOnlyTpOrders(slotId, entryPrice, quantity, side) {
@@ -962,28 +1020,17 @@ class StrategyEngine {
         }
     }
     async dispatchExchangeStopLossOrder(slotId, entryPrice, quantity, side, stopLossPrice) {
-        if (stopLossPrice <= 0 || quantity <= 0)
+        if (stopLossPrice <= 0)
             return undefined;
         const exitSide = side === "LONG" ? "SELL" : "BUY";
         const formattedSlPx = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.config.symbol, stopLossPrice);
-        const formattedQty = symbolPrecision_1.SymbolPrecisionRegistry.formatQuantity(this.config.symbol, quantity);
-        if (formattedQty <= 0)
-            return undefined;
         const clientOrderId = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(this.config.symbol, slotId, "SL");
         try {
-            console.log(`[EXCHANGE_SL_ENGINE][DISPATCHING] [${this.config.symbol}:${slotId}] Submitting resting STOP_MARKET order on Binance: ${exitSide} ${formattedQty} @ stopPrice $${formattedSlPx} (ClId: ${clientOrderId})...`);
-            const res = await this.executionClient.placeOrder({
-                symbol: this.config.symbol,
-                side: exitSide,
-                type: "STOP_MARKET",
-                quantity: formattedQty,
-                stopPrice: formattedSlPx,
-                positionSide: side,
-                clientOrderId,
-            });
+            console.log(`[EXCHANGE_SL_ENGINE][DISPATCHING] [${this.config.symbol}:${slotId}] Submitting position-level STOP_MARKET order on Binance: ${exitSide} (closePosition: true) @ stopPrice $${formattedSlPx} (ClId: ${clientOrderId})...`);
+            const res = await this.executionClient.placePositionStopLoss(this.config.symbol, exitSide, side, stopLossPrice, clientOrderId);
             if (res && res.orderId) {
                 this.hedgeLedger.registerActiveStopLossOrderId(slotId, res.orderId);
-                console.log(`[EXCHANGE_SL_ENGINE][SUCCESS] [${this.config.symbol}:${slotId}] Registered resting Exchange STOP_MARKET OrderId #${res.orderId} (ClId: ${res.clientOrderId || clientOrderId})`);
+                console.log(`[EXCHANGE_SL_ENGINE][SUCCESS] [${this.config.symbol}:${slotId}] Registered position-level Exchange STOP_MARKET OrderId #${res.orderId} (ClId: ${res.clientOrderId || clientOrderId})`);
                 return res.orderId;
             }
         }
@@ -1026,15 +1073,14 @@ class StrategyEngine {
                     console.log(`[EXCHANGE_SL_ENGINE][SKIP] [${this.config.symbol}:${slotId}] Slot closed during cancellation. Skipping new SL order.`);
                     return;
                 }
-                const targetQty = slot.quantity > 0 ? slot.quantity : currentQty;
-                const placedOrderId = await this.dispatchExchangeStopLossOrder(slotId, slot.entryPrice, targetQty, currentSide, currentTargetPrice);
+                const placedOrderId = await this.dispatchExchangeStopLossOrder(slotId, slot.entryPrice, currentQty, currentSide, currentTargetPrice);
                 if (placedOrderId) {
                     this.hedgeLedger.updateLastSyncedSlPrice(slotId, currentTargetPrice);
                 }
                 // If a subsequent ratchet target was queued while the network request was in-flight, process it immediately
                 if (this.pendingSlSyncTargets.has(slotId)) {
                     const queued = this.pendingSlSyncTargets.get(slotId);
-                    if (queued.price !== currentTargetPrice || queued.quantity !== targetQty) {
+                    if (queued.price !== currentTargetPrice || queued.quantity !== currentQty) {
                         currentTargetPrice = queued.price;
                         currentQty = queued.quantity;
                         currentSide = queued.side;
@@ -1046,6 +1092,34 @@ class StrategyEngine {
         }
         finally {
             this.slSyncLocks.delete(slotId);
+        }
+    }
+    /**
+     * Closed-Loop Zero-Naked Invariant Guard.
+     * Continuously verifies that 100% of the active aggregated position is protected by an active exchange-native stop loss order.
+     * If any unhedged exposure is detected, auto-dispatches an emergency position-level SL.
+     */
+    auditActivePositionRiskClosedLoop() {
+        const longSummary = this.hedgeLedger.getAggregatedSideSummary("LONG");
+        if (longSummary.isOccupied && longSummary.totalQuantity > 0) {
+            const audit = this.riskGuard.auditAggregatedPositionRisk(this.config.symbol, "LONG", longSummary.totalQuantity, longSummary.activeStopLossOrderId);
+            if (!audit.isProtected) {
+                console.warn(`[RiskGuard][CLOSED_LOOP_AUDIT_FAIL] [${this.config.symbol}:LONG] ${audit.reason} Auto-dispatching emergency position-level SL...`);
+                this.syncExchangeStopLossOrder("CORE_LONG", longSummary.totalQuantity, "LONG", longSummary.stopLossPrice).catch((err) => {
+                    console.error(`[RiskGuard][CLOSED_LOOP_EMERGENCY_SL_FAIL] Long SL emergency sync failed: ${err.message}`);
+                });
+            }
+        }
+        const shortSummary = this.hedgeLedger.getAggregatedSideSummary("SHORT");
+        if (shortSummary.isOccupied && shortSummary.totalQuantity > 0) {
+            const audit = this.riskGuard.auditAggregatedPositionRisk(this.config.symbol, "SHORT", shortSummary.totalQuantity, shortSummary.activeStopLossOrderId);
+            if (!audit.isProtected) {
+                const targetSlot = shortSummary.slotIds[0] || "SHORT_SLOT_0";
+                console.warn(`[RiskGuard][CLOSED_LOOP_AUDIT_FAIL] [${this.config.symbol}:SHORT] ${audit.reason} Auto-dispatching emergency position-level SL...`);
+                this.syncExchangeStopLossOrder(targetSlot, shortSummary.totalQuantity, "SHORT", shortSummary.stopLossPrice).catch((err) => {
+                    console.error(`[RiskGuard][CLOSED_LOOP_EMERGENCY_SL_FAIL] Short SL emergency sync failed: ${err.message}`);
+                });
+            }
         }
     }
     getEngineState() {
@@ -1386,22 +1460,28 @@ class StrategyEngine {
                     ? this.hedgeLedger.evaluateHedgeDynamicTpSl(markPrice, aiDirection, aiConfidence, hazardMetrics.vpin, hawkesIntensity, volMetrics.garmanKlass1s, hazardMetrics.ofi, Date.now())
                     : [];
                 const activeTriggers = sotaTriggers.length > 0 ? sotaTriggers : hedgeTriggers;
+                // Closed-Loop Zero-Naked Invariant Audit: Verify 100% of aggregated active positions are protected by resting exchange-native SL
+                this.auditActivePositionRiskClosedLoop();
                 // Check for Stop-Loss Ratchet Shifts that require Exchange-Native STOP_MARKET cancel-replace sync
                 if (activeTriggers.length === 0) {
-                    const coreLong = this.hedgeLedger.getCoreLong();
-                    if (coreLong.isOccupied && coreLong.quantity > 0 && coreLong.stopLossPrice > 0) {
+                    const aggLong = this.hedgeLedger.getAggregatedSideSummary("LONG");
+                    if (aggLong.isOccupied && aggLong.totalQuantity > 0 && aggLong.stopLossPrice > 0) {
+                        const coreLong = this.hedgeLedger.getCoreLong();
                         if (coreLong.lastSyncedSlPrice === undefined || coreLong.lastSyncedSlPrice === 0 || coreLong.stopLossPrice > coreLong.lastSyncedSlPrice) {
-                            this.syncExchangeStopLossOrder("CORE_LONG", coreLong.quantity, "LONG", coreLong.stopLossPrice).catch((err) => {
+                            this.syncExchangeStopLossOrder("CORE_LONG", aggLong.totalQuantity, "LONG", aggLong.stopLossPrice).catch((err) => {
                                 console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Core Long SL ratchet sync failed: ${err.message}`);
                             });
                         }
                     }
-                    for (const s of this.hedgeLedger.getShortSlots()) {
-                        if (s.isOccupied && s.quantity > 0 && s.stopLossPrice > 0) {
-                            if (s.lastSyncedSlPrice === undefined || s.lastSyncedSlPrice === 0 || s.stopLossPrice < s.lastSyncedSlPrice) {
-                                this.syncExchangeStopLossOrder(s.slotId, s.quantity, "SHORT", s.stopLossPrice).catch((err) => {
-                                    console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] ${s.slotId} SL ratchet sync failed: ${err.message}`);
-                                });
+                    const aggShort = this.hedgeLedger.getAggregatedSideSummary("SHORT");
+                    if (aggShort.isOccupied && aggShort.totalQuantity > 0 && aggShort.stopLossPrice > 0) {
+                        for (const s of this.hedgeLedger.getShortSlots()) {
+                            if (s.isOccupied && s.quantity > 0 && s.stopLossPrice > 0) {
+                                if (s.lastSyncedSlPrice === undefined || s.lastSyncedSlPrice === 0 || s.stopLossPrice < s.lastSyncedSlPrice) {
+                                    this.syncExchangeStopLossOrder(s.slotId, aggShort.totalQuantity, "SHORT", aggShort.stopLossPrice).catch((err) => {
+                                        console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] ${s.slotId} SL ratchet sync failed: ${err.message}`);
+                                    });
+                                }
                             }
                         }
                     }
@@ -1640,9 +1720,6 @@ class StrategyEngine {
                     // AI-Override Rule: High-confidence AI must satisfy strict OBI directional pressure (+/- 0.35)
                     isBuySignal = aiDirection > 0 && obi >= this.config.obiBuyThreshold;
                     isSellSignal = aiDirection < 0 && obi <= this.config.obiSellThreshold;
-                    if (isBuySignal || isSellSignal) {
-                        console.log(`[StrategyEngine][${this.config.symbol}][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (NetAlpha: ${(expectedNetAlpha * 10000).toFixed(1)} bps >= ${(minNetAlpha * 10000).toFixed(1)} bps), Conf: ${(aiConfidence * 100).toFixed(1)}% (Floor: ${(effectiveMinConfidence * 100).toFixed(1)}%), OBI: ${obi.toFixed(4)}, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
-                    }
                 }
                 else {
                     // Weighted Composite Rule with dynamic effective confidence thresholding
@@ -1684,8 +1761,9 @@ class StrategyEngine {
                 isBuySignal = false;
                 isSellSignal = false;
             }
-            // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
-            const isCoreLongOccupied = this.hedgeLedger.getCoreLong().isOccupied;
+            // BUY -> Core Long Entry (allowed if Core Long is FLAT, not PENDING_ENTRY, & temporal cooldown expired)
+            const coreLongSlot = this.hedgeLedger.getCoreLong();
+            const isCoreLongOccupied = coreLongSlot.isOccupied || coreLongSlot.lifecycleState === "PENDING_ENTRY";
             const hasPendingCoreLong = this.hasPendingEntryForSlot("CORE_LONG");
             const isCooldownCleared = nowMs >= longCooldownLock;
             if (!isCoreLongOccupied && !hasPendingCoreLong && !isCooldownCleared) {
@@ -1700,6 +1778,7 @@ class StrategyEngine {
                 signalType = "BUY";
                 targetPosSide = "LONG";
                 targetSlotId = "CORE_LONG";
+                console.log(`[StrategyEngine][${this.config.symbol}][ACTIONABLE_SIGNAL] Seq #${seq} | BUY CORE_LONG | Dir: ${aiDirection.toFixed(4)} (NetAlpha: ${(expectedNetAlpha * 10000).toFixed(1)} bps), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}`);
             }
             // SELL -> Short Slot Entry (Evaluated via Tier-1 Dynamic Slot Dispersion Engine)
             else if (isSellSignal &&
@@ -1714,6 +1793,7 @@ class StrategyEngine {
                         targetSlotIndex = slotEval.slotIndex;
                         targetSlotId = slotId;
                         targetSizeDecayCoeff = slotEval.sizeDecayCoeff;
+                        console.log(`[StrategyEngine][${this.config.symbol}][ACTIONABLE_SIGNAL] Seq #${seq} | SELL ${slotId} | Dir: ${aiDirection.toFixed(4)} (NetAlpha: ${(expectedNetAlpha * 10000).toFixed(1)} bps), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}`);
                     }
                 }
             }
@@ -1797,7 +1877,35 @@ class StrategyEngine {
             }
             let executionPromise = undefined;
             if (riskResult.passed) {
+                const entrySlotId = targetPosSide === "LONG" ? "CORE_LONG" : `SHORT_SLOT_${targetSlotIndex !== undefined ? targetSlotIndex : 0}`;
+                const entryCid = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(this.config.symbol, entrySlotId, "EN");
+                // 1. Synchronously reserve slot in HedgePositionLedger (Optimistic Mutex Lock)
+                let isReserved = false;
+                if (targetPosSide === "LONG") {
+                    isReserved = this.hedgeLedger.reserveCoreLongPending(entryCid, targetPrice, finalQuantity);
+                }
+                else if (targetPosSide === "SHORT" && targetSlotIndex !== undefined) {
+                    isReserved = this.hedgeLedger.reserveShortSlotPending(targetSlotIndex, entryCid, targetPrice, finalQuantity);
+                }
+                if (!isReserved) {
+                    console.warn(`[OPTIMISTIC_MUTEX][BLOCKED] [${this.config.symbol}:${entrySlotId}] Slot is already occupied or pending entry. Aborting duplicate order dispatch.`);
+                    this.staticResult.sequenceNum = seq;
+                    this.staticResult.signalType = "NONE";
+                    this.staticResult.riskResult = undefined;
+                    this.staticResult.executionPromise = undefined;
+                    return this.staticResult;
+                }
                 this.isOrderInFlight = true;
+                // 2. Synchronously pre-register in pendingEntryOrders with clientOrderId
+                const preFlightKey = -Math.abs(Date.now());
+                this.pendingEntryOrders.set(preFlightKey, {
+                    slotId: entrySlotId,
+                    posSide: targetPosSide,
+                    slotIndex: targetSlotIndex,
+                    qty: finalQuantity,
+                    targetPrice,
+                    clientOrderId: entryCid,
+                });
                 // Set atomic SAB hysteresis lockout (cooldown per side) to suppress microburst sweeps
                 if (targetPosSide === "SHORT") {
                     this.client.setShortCooldownLock(Date.now() + this.config.cooldownMs, this.assetIndex);
@@ -1807,8 +1915,6 @@ class StrategyEngine {
                     this.client.setLongCooldownLock(Date.now() + this.config.cooldownMs, this.assetIndex);
                     this.client.setLastLongFillPrice(this.reusableOrderIntent.price, this.assetIndex);
                 }
-                const entrySlotId = targetPosSide === "LONG" ? "CORE_LONG" : `SHORT_SLOT_${targetSlotIndex !== undefined ? targetSlotIndex : 0}`;
-                const entryCid = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(this.config.symbol, entrySlotId, "EN");
                 console.log(`[BinanceExecution][DISPATCHING] [${this.config.symbol}:${entrySlotId}] Submitting ${orderType} ${this.reusableOrderIntent.side} order for ${this.reusableOrderIntent.quantity} ${this.reusableOrderIntent.symbol} (ClId: ${entryCid}) to Binance Futures...`);
                 const orderParams = {
                     symbol: this.reusableOrderIntent.symbol,
@@ -1825,6 +1931,8 @@ class StrategyEngine {
                 executionPromise = this.executionClient
                     .placeOrder(orderParams)
                     .then((res) => {
+                    // Remove preflight temporary pending key
+                    this.pendingEntryOrders.delete(preFlightKey);
                     if (res) {
                         const execPx = parseFloat(res.price || res.avgPrice || "0") || targetPrice;
                         const executedQty = parseFloat(res.executedQty || "0");
@@ -1849,31 +1957,37 @@ class StrategyEngine {
                             const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.00, volEstimate * 3.50 * 100));
                             const dynamicTpPercent = dynamicSlPercent * 2.50;
                             if (targetPosSide === "LONG") {
-                                this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, dynamicTpPercent, dynamicSlPercent);
-                                const slot = this.hedgeLedger.getCoreLong();
-                                this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, finalQuantity, "LONG").catch((err) => {
+                                this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, dynamicTpPercent, dynamicSlPercent, false);
+                                const aggLong = this.hedgeLedger.getAggregatedSideSummary("LONG");
+                                // Atomic TP Replacement: Cancel previous resting TP limit orders to prevent stale sub-lots
+                                this.cancelRestingTpOrders("CORE_LONG").then(() => {
+                                    return this.dispatchAggregatedBatchPostOnlyTpOrders("CORE_LONG", aggLong.vwapEntryPrice, aggLong.totalQuantity, "LONG");
+                                }).catch((err) => {
                                     console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
                                 });
-                                this.dispatchExchangeStopLossOrder("CORE_LONG", execPx, finalQuantity, "LONG", slot.stopLossPrice).catch((err) => {
+                                // Position-Level Stop Loss: Submits native STOP_MARKET with closePosition=true covering 100% of aggregated position
+                                this.syncExchangeStopLossOrder("CORE_LONG", aggLong.totalQuantity, "LONG", aggLong.stopLossPrice).catch((err) => {
                                     console.error(`[EXCHANGE_SL_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
                                 });
                             }
                             else if (targetPosSide === "SHORT" && targetSlotIndex !== undefined) {
                                 const slotId = `SHORT_SLOT_${targetSlotIndex}`;
-                                this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, dynamicTpPercent, dynamicSlPercent);
-                                const slot = this.hedgeLedger.getShortSlots()[targetSlotIndex];
-                                this.dispatchBatchPostOnlyTpOrders(slotId, execPx, finalQuantity, "SHORT").catch((err) => {
+                                this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, dynamicTpPercent, dynamicSlPercent, false);
+                                const aggShort = this.hedgeLedger.getAggregatedSideSummary("SHORT");
+                                // Atomic TP Replacement: Cancel all existing resting TP limit orders across short slots
+                                Promise.all(aggShort.slotIds.map((slId) => this.cancelRestingTpOrders(slId))).then(() => {
+                                    return this.dispatchAggregatedBatchPostOnlyTpOrders(slotId, aggShort.vwapEntryPrice, aggShort.totalQuantity, "SHORT");
+                                }).catch((err) => {
                                     console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
                                 });
-                                if (slot) {
-                                    this.dispatchExchangeStopLossOrder(slotId, execPx, finalQuantity, "SHORT", slot.stopLossPrice).catch((err) => {
-                                        console.error(`[EXCHANGE_SL_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
-                                    });
-                                }
+                                // Position-Level Stop Loss: Submits native STOP_MARKET with closePosition=true covering 100% of aggregated position
+                                this.syncExchangeStopLossOrder(slotId, aggShort.totalQuantity, "SHORT", aggShort.stopLossPrice).catch((err) => {
+                                    console.error(`[EXCHANGE_SL_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
+                                });
                             }
                         }
                         else if (isPending && res.orderId) {
-                            // Pending Limit / Post-Only Order placed on Binance orderbook: DO NOT occupy slot until WS fill confirmation
+                            // Pending Limit / Post-Only Order placed on Binance orderbook
                             const numericOrderId = typeof res.orderId === "number" ? res.orderId : parseInt(String(res.orderId), 10);
                             if (!isNaN(numericOrderId)) {
                                 const fallbackTimer = setTimeout(async () => {
@@ -1892,8 +2006,9 @@ class StrategyEngine {
                                                 this.handleConfirmedEntryFill(numericOrderId, targetSlotId, targetPosSide, targetSlotIndex, execQty, execPx);
                                             }
                                             else if (orderCheck && (orderCheck.status === "CANCELED" || orderCheck.status === "EXPIRED" || orderCheck.status === "REJECTED")) {
-                                                console.warn(`[BinanceExecution][FALLBACK_CLEANUP] OrderId #${numericOrderId} was ${orderCheck.status}. Removing from pending.`);
+                                                console.warn(`[BinanceExecution][FALLBACK_CLEANUP] OrderId #${numericOrderId} was ${orderCheck.status}. Removing from pending and rolling back slot.`);
                                                 this.pendingEntryOrders.delete(numericOrderId);
+                                                this.hedgeLedger.rollbackPendingSlot(entrySlotId, `ORDER_${orderCheck.status}`);
                                             }
                                         }
                                         catch (err) {
@@ -1912,19 +2027,23 @@ class StrategyEngine {
                                     slotIndex: targetSlotIndex,
                                     qty: finalQuantity,
                                     targetPrice: execPx,
+                                    clientOrderId: entryCid,
                                     timeoutTimer: fallbackTimer,
                                 });
-                                console.log(`[BinanceExecution][PENDING_FILL] Registered pending entry OrderId #${numericOrderId} for slot ${targetSlotId}. Slot WILL NOT be occupied until WS fill confirmation (2.5s fallback active).`);
+                                console.log(`[BinanceExecution][PENDING_FILL] Registered pending entry OrderId #${numericOrderId} for slot ${targetSlotId}. Slot reserved in PENDING_ENTRY (2.5s fallback active).`);
                             }
                         }
                         else {
-                            console.warn(`[BinanceExecution][UNFILLED_ORDER] Order placement returned status "${res.status}". Local slot ${targetSlotId} remains FLAT.`);
+                            console.warn(`[BinanceExecution][UNFILLED_ORDER] Order placement returned status "${res.status}". Rolling back slot ${entrySlotId} to FLAT.`);
+                            this.hedgeLedger.rollbackPendingSlot(entrySlotId, `STATUS_${res.status}`);
                         }
                     }
                     return res;
                 })
                     .catch((err) => {
                     console.error(`[BinanceExecution][REJECTED] Order Placement Failed: ${err.message}`);
+                    this.pendingEntryOrders.delete(preFlightKey);
+                    this.hedgeLedger.rollbackPendingSlot(entrySlotId, `REJECTED_${err.message}`);
                     return null;
                 })
                     .finally(() => {

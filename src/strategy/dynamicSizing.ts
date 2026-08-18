@@ -139,13 +139,15 @@ export class DynamicSizingCalculator {
     const targetAllocations = isConsolidated ? this.allocation2Stage : this.allocation3Stage;
 
     const rawChunks: DynamicTpChunk[] = [];
+    const effectivePrecision = Math.max(quantityPrecision, (String(totalQuantity).split(".")[1] || "").length);
     let remainingQuantity = totalQuantity;
 
     for (let i = 0; i < targetAllocations.length; i++) {
       const isLast = i === targetAllocations.length - 1;
       const pct = targetAllocations[i];
       let rawQty = isLast ? remainingQuantity : totalQuantity * pct;
-      rawQty = Number(rawQty.toFixed(quantityPrecision));
+      rawQty = Number(rawQty.toFixed(effectivePrecision));
+      if (rawQty <= 0) continue;
 
       const notional = rawQty * currentPrice;
 
@@ -153,11 +155,11 @@ export class DynamicSizingCalculator {
       if (notional < this.minNotionalUsdt && rawChunks.length > 0) {
         // Merge tiny sub-notional chunk into previous stage
         const prev = rawChunks[rawChunks.length - 1];
-        prev.quantity = Number((prev.quantity + rawQty).toFixed(quantityPrecision));
+        prev.quantity = Number((prev.quantity + rawQty).toFixed(effectivePrecision));
         prev.notionalUsdt = prev.quantity * currentPrice;
         prev.percentage += pct * 100;
         prev.estimatedFeeUsdt = prev.notionalUsdt * this.makerFeeRate;
-        remainingQuantity -= rawQty;
+        remainingQuantity = Number((remainingQuantity - rawQty).toFixed(effectivePrecision));
         continue;
       }
 
@@ -171,7 +173,17 @@ export class DynamicSizingCalculator {
         estimatedFeeUsdt: Number(estimatedMakerFee.toFixed(4)),
       });
 
-      remainingQuantity -= rawQty;
+      remainingQuantity = Number((remainingQuantity - rawQty).toFixed(effectivePrecision));
+    }
+
+    // Invariant Guarantee: Sum of chunk quantities must strictly equal totalQuantity
+    const allocatedSum = rawChunks.reduce((acc, c) => acc + c.quantity, 0);
+    const drift = Number((totalQuantity - allocatedSum).toFixed(effectivePrecision));
+    if (Math.abs(drift) > 0 && rawChunks.length > 0) {
+      const last = rawChunks[rawChunks.length - 1];
+      last.quantity = Number((last.quantity + drift).toFixed(effectivePrecision));
+      last.notionalUsdt = Number((last.quantity * currentPrice).toFixed(2));
+      last.estimatedFeeUsdt = Number((last.notionalUsdt * this.makerFeeRate).toFixed(4));
     }
 
     const totalMakerFeeUsdt = rawChunks.reduce((acc, c) => acc + c.estimatedFeeUsdt, 0);

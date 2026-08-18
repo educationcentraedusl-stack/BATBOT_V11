@@ -445,7 +445,31 @@ class HedgePositionLedger {
         cancelOrderIds: undefined,
     }));
     priceTickSize;
+    invPriceTickSize;
     priceFactor;
+    feeMultiplier;
+    cachedAggregatedLongSummary = {
+        isOccupied: false,
+        totalQuantity: 0,
+        vwapEntryPrice: 0,
+        stopLossPrice: 0,
+        takeProfitPrice: 0,
+        breakEvenPrice: 0,
+        activeStopLossOrderId: 0,
+        activeTpOrderIds: [],
+        slotIds: ["CORE_LONG"],
+    };
+    cachedAggregatedShortSummary = {
+        isOccupied: false,
+        totalQuantity: 0,
+        vwapEntryPrice: 0,
+        stopLossPrice: 0,
+        takeProfitPrice: 0,
+        breakEvenPrice: 0,
+        activeStopLossOrderId: 0,
+        activeTpOrderIds: [],
+        slotIds: [],
+    };
     constructor(symbol = "BTCUSDT", maxShortSlots = 3) {
         this.symbol = symbol;
         this.maxShortSlots = maxShortSlots;
@@ -453,7 +477,9 @@ class HedgePositionLedger {
         this.sizingCalc = new dynamicSizing_1.DynamicSizingCalculator();
         const rule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(symbol);
         this.priceTickSize = rule.tickSize;
+        this.invPriceTickSize = 1.0 / rule.tickSize;
         this.priceFactor = Math.pow(10, rule.priceDecimals);
+        this.feeMultiplier = (this.sizingCalc.getMakerFeeRate() + this.sizingCalc.getTakerFeeRate()) * 2.5;
         this.cachedSummary = {
             symbol: this.symbol,
             side: "FLAT",
@@ -735,21 +761,25 @@ class HedgePositionLedger {
         const tpOffsets = isLong
             ? [stage1Offset, stage2Offset, stage3Offset]
             : [-stage1Offset, -stage2Offset, -stage3Offset];
+        const effectiveDecimals = Math.max(rule.qtyDecimals, (String(quantity).split(".")[1] || "").length);
+        let allocatedQty = 0;
         for (let i = 0; i < dynamicRes.chunks.length; i++) {
             const chunk = dynamicRes.chunks[i];
+            const isLast = i === dynamicRes.chunks.length - 1;
             const offset = tpOffsets[i] !== undefined ? tpOffsets[i] : (isLong ? stage1Offset * (i + 1) : -stage1Offset * (i + 1));
             const targetPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1.0 + offset));
-            const formattedQty = symbolPrecision_1.SymbolPrecisionRegistry.formatQuantity(this.symbol, chunk.quantity);
-            if (formattedQty <= 0)
+            const chunkQty = isLast ? Number((quantity - allocatedQty).toFixed(effectiveDecimals)) : chunk.quantity;
+            if (chunkQty <= 0)
                 continue;
+            allocatedQty = Number((allocatedQty + chunkQty).toFixed(effectiveDecimals));
             tpStagePrices.push(targetPrice);
-            tpStageQuantities.push(formattedQty);
+            tpStageQuantities.push(chunkQty);
             const tpCid = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(this.symbol, slotId, `TP${i + 1}`);
             orderParamsList.push({
                 symbol: this.symbol,
                 side: exitSide,
                 type: "LIMIT",
-                quantity: formattedQty,
+                quantity: chunkQty,
                 price: targetPrice,
                 timeInForce: "GTX", // Post-Only guarantee
                 positionSide: side,
@@ -760,6 +790,133 @@ class HedgePositionLedger {
         slot.tpStageQuantities = tpStageQuantities;
         slot.activeTpOrderIds = [];
         return orderParamsList;
+    }
+    /**
+     * Generates batch Take-Profit limit order intents covering 100% of the aggregated position size
+     * anchored to the true Volume-Weighted Average Entry Price (VWAP).
+     */
+    generateAggregatedBatchTpIntents(side, aggregatedQty, vwapEntryPrice, targetSlotId) {
+        if (vwapEntryPrice <= 0 || aggregatedQty <= 0)
+            return [];
+        const primarySlotId = targetSlotId || (side === "LONG" ? "CORE_LONG" : "SHORT_SLOT_0");
+        const rule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(this.symbol);
+        const dynamicRes = this.sizingCalc.calculateDynamicTpChunks(aggregatedQty, vwapEntryPrice, rule.qtyDecimals);
+        if (dynamicRes.chunks.length === 0)
+            return [];
+        const isLong = side === "LONG";
+        const exitSide = isLong ? "SELL" : "BUY";
+        const orderParamsList = [];
+        const tpStagePrices = [];
+        const tpStageQuantities = [];
+        const minNetAlpha = this.sizingCalc.getMinNetAlpha();
+        const makerFee = this.sizingCalc.getMakerFeeRate();
+        const takerFee = this.sizingCalc.getTakerFeeRate();
+        const stage1Offset = Math.max(0.0035, makerFee + takerFee + minNetAlpha);
+        const stage2Offset = Math.max(0.0065, stage1Offset * 1.8);
+        const stage3Offset = Math.max(0.0120, stage1Offset * 3.2);
+        const tpOffsets = isLong
+            ? [stage1Offset, stage2Offset, stage3Offset]
+            : [-stage1Offset, -stage2Offset, -stage3Offset];
+        const effectiveDecimals = Math.max(rule.qtyDecimals, (String(aggregatedQty).split(".")[1] || "").length);
+        let allocatedQty = 0;
+        for (let i = 0; i < dynamicRes.chunks.length; i++) {
+            const chunk = dynamicRes.chunks[i];
+            const isLast = i === dynamicRes.chunks.length - 1;
+            const offset = tpOffsets[i] !== undefined ? tpOffsets[i] : (isLong ? stage1Offset * (i + 1) : -stage1Offset * (i + 1));
+            const targetPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, vwapEntryPrice * (1.0 + offset));
+            const chunkQty = isLast ? Number((aggregatedQty - allocatedQty).toFixed(effectiveDecimals)) : chunk.quantity;
+            if (chunkQty <= 0)
+                continue;
+            allocatedQty = Number((allocatedQty + chunkQty).toFixed(effectiveDecimals));
+            tpStagePrices.push(targetPrice);
+            tpStageQuantities.push(chunkQty);
+            const tpCid = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(this.symbol, primarySlotId, `TP${i + 1}`);
+            orderParamsList.push({
+                symbol: this.symbol,
+                side: exitSide,
+                type: "LIMIT",
+                quantity: chunkQty,
+                price: targetPrice,
+                timeInForce: "GTX", // Post-Only guarantee
+                positionSide: side,
+                clientOrderId: tpCid,
+            });
+        }
+        if (side === "LONG") {
+            this.coreLong.tpStagePrices = tpStagePrices;
+            this.coreLong.tpStageQuantities = tpStageQuantities;
+        }
+        else {
+            for (const s of this.shortSlots) {
+                if (s.isOccupied) {
+                    s.tpStagePrices = tpStagePrices;
+                    s.tpStageQuantities = tpStageQuantities;
+                }
+            }
+        }
+        return orderParamsList;
+    }
+    /**
+     * Retrieves the authoritative aggregated position summary across all occupied slots for a given side.
+     * Calculates mathematically exact VWAP entry price and total aggregated quantity.
+     */
+    getAggregatedSideSummary(side) {
+        if (side === "LONG") {
+            const isOcc = this.coreLong.isOccupied && this.coreLong.quantity > 0;
+            const res = this.cachedAggregatedLongSummary;
+            res.isOccupied = isOcc;
+            res.totalQuantity = isOcc ? this.coreLong.quantity : 0;
+            res.vwapEntryPrice = isOcc ? this.coreLong.entryPrice : 0;
+            res.stopLossPrice = isOcc ? (this.coreLong.stopLossPrice || 0) : 0;
+            res.takeProfitPrice = isOcc ? (this.coreLong.takeProfitPrice || 0) : 0;
+            res.breakEvenPrice = isOcc ? (this.coreLong.breakEvenPrice || 0) : 0;
+            res.activeStopLossOrderId = this.coreLong.activeStopLossOrderId || 0;
+            res.activeTpOrderIds = this.coreLong.activeTpOrderIds || [];
+            return res;
+        }
+        else {
+            let totalQty = 0;
+            let totalNotional = 0;
+            let primarySlOrderId = 0;
+            let activeSlotCount = 0;
+            let activeTpCount = 0;
+            const res = this.cachedAggregatedShortSummary;
+            const slots = this.shortSlots;
+            const len = slots.length;
+            for (let i = 0; i < len; i++) {
+                const s = slots[i];
+                if (s.isOccupied && s.quantity > 0) {
+                    totalQty += s.quantity;
+                    totalNotional += s.quantity * s.entryPrice;
+                    res.slotIds[activeSlotCount++] = s.slotId;
+                    if (s.activeStopLossOrderId && primarySlOrderId === 0) {
+                        primarySlOrderId = s.activeStopLossOrderId;
+                    }
+                    if (s.activeTpOrderIds && s.activeTpOrderIds.length > 0) {
+                        res.activeTpOrderIds = s.activeTpOrderIds;
+                    }
+                }
+            }
+            res.slotIds.length = activeSlotCount;
+            const isOcc = totalQty > 0;
+            const vwap = isOcc ? totalNotional / totalQty : 0;
+            const shortSlPct = slots[0]?.stopLossPercent || 1.20;
+            const shortTpPct = slots[0]?.takeProfitPercent || 2.50;
+            const tickSize = this.priceTickSize;
+            const invTick = this.invPriceTickSize;
+            const priceFactor = this.priceFactor;
+            const slPx = isOcc ? Math.round(Math.round(vwap * (1.0 + shortSlPct * 0.01) * invTick) * tickSize * priceFactor) / priceFactor : 0;
+            const tpPx = isOcc ? Math.round(Math.round(vwap * (1.0 - shortTpPct * 0.01) * invTick) * tickSize * priceFactor) / priceFactor : 0;
+            const bePx = isOcc ? Math.round(Math.round(vwap * (1.0 - this.feeMultiplier) * invTick) * tickSize * priceFactor) / priceFactor : 0;
+            res.isOccupied = isOcc;
+            res.totalQuantity = Math.round(totalQty * 1e6) / 1e6;
+            res.vwapEntryPrice = vwap;
+            res.stopLossPrice = slPx;
+            res.takeProfitPrice = tpPx;
+            res.breakEvenPrice = bePx;
+            res.activeStopLossOrderId = primarySlOrderId;
+            return res;
+        }
     }
     /**
      * Registers assigned order IDs returned from Binance REST batchOrder execution into slot state.
@@ -801,7 +958,9 @@ class HedgePositionLedger {
         const actualClosedQty = Math.min(slot.quantity, fillQuantity);
         const entryPx = slot.entryPrice;
         const slotSide = slot.side;
-        slot.quantity = symbolPrecision_1.SymbolPrecisionRegistry.formatQuantity(this.symbol, Math.max(0, slot.quantity - fillQuantity));
+        const rule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(this.symbol);
+        const effectiveDecimals = Math.max(rule.qtyDecimals, (String(slot.quantity).split(".")[1] || "").length, (String(fillQuantity).split(".")[1] || "").length);
+        slot.quantity = Number(Math.max(0, slot.quantity - fillQuantity).toFixed(effectiveDecimals));
         const currentStage = (slot.tpStageReached || 0) + 1;
         slot.tpStageReached = currentStage;
         // Record realized trade accounting for the POST_ONLY limit fill
@@ -862,6 +1021,63 @@ class HedgePositionLedger {
         return -1;
     }
     /**
+     * Tier-1 Optimistic Slot Reservation Protocol (August 2026 SOTA).
+     * Synchronously transitions slot to PENDING_ENTRY before network packet dispatch,
+     * completely eradicating execution race conditions and order spam.
+     */
+    reserveCoreLongPending(clientOrderId, targetPrice, targetQty) {
+        if (this.coreLong.isOccupied || this.coreLong.lifecycleState === "PENDING_ENTRY") {
+            return false;
+        }
+        this.coreLong.lifecycleState = "PENDING_ENTRY";
+        this.coreLong.pendingClientOrderId = clientOrderId;
+        this.coreLong.pendingOrderTimestamp = Date.now();
+        this.coreLong.entryPrice = targetPrice;
+        this.coreLong.quantity = targetQty;
+        return true;
+    }
+    reserveShortSlotPending(slotIndex, clientOrderId, targetPrice, targetQty) {
+        if (slotIndex < 0 || slotIndex >= this.maxShortSlots)
+            return false;
+        const slot = this.shortSlots[slotIndex];
+        if (slot.isOccupied || slot.lifecycleState === "PENDING_ENTRY") {
+            return false;
+        }
+        slot.lifecycleState = "PENDING_ENTRY";
+        slot.pendingClientOrderId = clientOrderId;
+        slot.pendingOrderTimestamp = Date.now();
+        slot.entryPrice = targetPrice;
+        slot.quantity = targetQty;
+        return true;
+    }
+    rollbackPendingSlot(slotId, reason) {
+        if (slotId === "CORE_LONG") {
+            if (this.coreLong.lifecycleState === "PENDING_ENTRY" && !this.coreLong.isOccupied) {
+                console.warn(`[OPTIMISTIC_MUTEX][ROLLBACK] Rolling back CORE_LONG from PENDING_ENTRY to FLAT due to: ${reason}`);
+                this.coreLong.lifecycleState = "FLAT";
+                this.coreLong.pendingClientOrderId = undefined;
+                this.coreLong.pendingOrderTimestamp = undefined;
+                this.coreLong.quantity = 0;
+                this.coreLong.entryPrice = 0;
+            }
+            return;
+        }
+        if (slotId.startsWith("SHORT_SLOT_")) {
+            const idx = parseInt(slotId.replace("SHORT_SLOT_", ""), 10);
+            if (idx >= 0 && idx < this.maxShortSlots) {
+                const slot = this.shortSlots[idx];
+                if (slot.lifecycleState === "PENDING_ENTRY" && !slot.isOccupied) {
+                    console.warn(`[OPTIMISTIC_MUTEX][ROLLBACK] Rolling back ${slotId} from PENDING_ENTRY to FLAT due to: ${reason}`);
+                    slot.lifecycleState = "FLAT";
+                    slot.pendingClientOrderId = undefined;
+                    slot.pendingOrderTimestamp = undefined;
+                    slot.quantity = 0;
+                    slot.entryPrice = 0;
+                }
+            }
+        }
+    }
+    /**
      * Tier-1 Institutional Micro-Burst Mitigation & Dynamic Slot Dispersion Engine.
      * Evaluates slot allocation eligibility using Volatility-Adjusted Dynamic Grid Spacing (VADGS)
      * and Time-Weighted Cooldown Hysteresis Lockouts (TWCHL).
@@ -871,10 +1087,10 @@ class HedgePositionLedger {
         if (nowMs < cooldownLockMs) {
             return null;
         }
-        // 2. Locate first unoccupied slot index
+        // 2. Locate first unoccupied and non-pending slot index
         let targetIdx = -1;
         for (let i = 0; i < this.maxShortSlots; i++) {
-            if (!this.shortSlots[i].isOccupied) {
+            if (!this.shortSlots[i].isOccupied && this.shortSlots[i].lifecycleState !== "PENDING_ENTRY") {
                 targetIdx = i;
                 break;
             }
@@ -893,14 +1109,16 @@ class HedgePositionLedger {
         const hawkesFactor = 1.0 + 0.25 * Math.min(10.0, hawkesIntensity);
         const requiredTicks = Math.max(baseTicks, baseTicks * volFactor * Math.sqrt(targetIdx) * hawkesFactor);
         const minSpacing = requiredTicks * tickSize;
-        // 4. Verify spatial separation from all occupied short slots
+        // 4. Verify spatial separation from all occupied and pending short slots
         for (let i = 0; i < targetIdx; i++) {
-            if (this.shortSlots[i].isOccupied) {
+            if (this.shortSlots[i].isOccupied || this.shortSlots[i].lifecycleState === "PENDING_ENTRY") {
                 const fillPrice = this.shortSlots[i].entryPrice;
-                const priceDelta = Math.abs(currentPrice - fillPrice);
-                if (priceDelta < minSpacing) {
-                    // Spatial co-location collision! Reject multi-slot fill at identical price.
-                    return null;
+                if (fillPrice > 0) {
+                    const priceDelta = Math.abs(currentPrice - fillPrice);
+                    if (priceDelta < minSpacing) {
+                        // Spatial co-location collision! Reject multi-slot fill at identical price.
+                        return null;
+                    }
                 }
             }
         }
@@ -919,14 +1137,47 @@ class HedgePositionLedger {
     getActiveShortCount() {
         let count = 0;
         for (let i = 0; i < this.maxShortSlots; i++) {
-            if (this.shortSlots[i].isOccupied)
+            if (this.shortSlots[i].isOccupied || this.shortSlots[i].lifecycleState === "PENDING_ENTRY")
                 count++;
         }
         return count;
     }
-    occupyCoreLong(quantity, entryPrice, tpPercent, slPercent) {
+    occupyCoreLong(quantity, entryPrice, tpPercent, slPercent, isAuthoritativeSnapshot = false) {
         if (quantity <= 0 || entryPrice <= 0)
             return;
+        if (isAuthoritativeSnapshot) {
+            this.coreLong.isOccupied = true;
+            this.coreLong.lifecycleState = "OCCUPIED";
+            this.coreLong.quantity = quantity;
+            this.coreLong.initialQuantity = quantity;
+            this.coreLong.entryPrice = entryPrice;
+            this.coreLong.takeProfitPercent = tpPercent;
+            this.coreLong.stopLossPercent = slPercent;
+            if (!this.coreLong.openTime || this.coreLong.openTime === 0) {
+                this.coreLong.openTime = Date.now();
+            }
+            const makerFee = this.sizingCalc.getMakerFeeRate();
+            const takerFee = this.sizingCalc.getTakerFeeRate();
+            const feeMultiplier = (makerFee + takerFee) * 2.5;
+            this.coreLong.breakEvenPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1.0 + feeMultiplier));
+            this.coreLong.takeProfitPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tpPercent / 100));
+            this.coreLong.stopLossPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - slPercent / 100));
+            this.coreLong.lastSyncedSlPrice = this.coreLong.stopLossPrice;
+            const tp1Pct = Math.min(2.0, tpPercent * 1.0);
+            const tp2Pct = Math.min(3.0, tpPercent * 2.0);
+            const tp3Pct = Math.min(5.0, tpPercent * 4.0);
+            const tp4Pct = Math.min(8.0, tpPercent * 6.0);
+            const tp5Pct = Math.min(12.0, tpPercent * 10.0);
+            this.coreLong.tpPrices = [
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tp1Pct / 100)),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tp2Pct / 100)),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tp3Pct / 100)),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tp4Pct / 100)),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tp5Pct / 100)),
+            ];
+            this.legacyLedger.syncActivePosition("LONG", quantity, entryPrice);
+            return;
+        }
         if (this.coreLong.isOccupied && this.coreLong.quantity > 0) {
             // Accumulate existing Core Long position and recalculate weighted average entry price
             const currentNotional = this.coreLong.quantity * this.coreLong.entryPrice;
@@ -936,6 +1187,9 @@ class HedgePositionLedger {
             this.coreLong.quantity = newQty;
             this.coreLong.initialQuantity = Number(((this.coreLong.initialQuantity || this.coreLong.quantity) + quantity).toFixed(6));
             this.coreLong.entryPrice = newAvgEntry;
+            this.coreLong.lifecycleState = "OCCUPIED";
+            this.coreLong.pendingClientOrderId = undefined;
+            this.coreLong.pendingOrderTimestamp = undefined;
             const makerFee = this.sizingCalc.getMakerFeeRate();
             const takerFee = this.sizingCalc.getTakerFeeRate();
             const feeMultiplier = (makerFee + takerFee) * 2.5;
@@ -959,6 +1213,9 @@ class HedgePositionLedger {
             return;
         }
         this.coreLong.isOccupied = true;
+        this.coreLong.lifecycleState = "OCCUPIED";
+        this.coreLong.pendingClientOrderId = undefined;
+        this.coreLong.pendingOrderTimestamp = undefined;
         this.coreLong.quantity = quantity;
         this.coreLong.initialQuantity = quantity;
         this.coreLong.entryPrice = entryPrice;
@@ -998,6 +1255,9 @@ class HedgePositionLedger {
      */
     clearSlots() {
         this.coreLong.isOccupied = false;
+        this.coreLong.lifecycleState = "FLAT";
+        this.coreLong.pendingClientOrderId = undefined;
+        this.coreLong.pendingOrderTimestamp = undefined;
         this.coreLong.quantity = 0;
         this.coreLong.initialQuantity = 0;
         this.coreLong.entryPrice = 0;
@@ -1013,6 +1273,9 @@ class HedgePositionLedger {
         for (let i = 0; i < this.maxShortSlots; i++) {
             const slot = this.shortSlots[i];
             slot.isOccupied = false;
+            slot.lifecycleState = "FLAT";
+            slot.pendingClientOrderId = undefined;
+            slot.pendingOrderTimestamp = undefined;
             slot.quantity = 0;
             slot.initialQuantity = 0;
             slot.entryPrice = 0;
@@ -1106,6 +1369,9 @@ class HedgePositionLedger {
             }
         }
         this.coreLong.isOccupied = false;
+        this.coreLong.lifecycleState = "FLAT";
+        this.coreLong.pendingClientOrderId = undefined;
+        this.coreLong.pendingOrderTimestamp = undefined;
         this.coreLong.quantity = 0;
         this.coreLong.initialQuantity = 0;
         this.coreLong.entryPrice = 0;
@@ -1117,10 +1383,43 @@ class HedgePositionLedger {
         this.coreLong.breakEvenPrice = 0;
         this.coreLong.tpPrices = [];
     }
-    occupyShortSlot(slotIndex, quantity, entryPrice, tpPercent, slPercent) {
+    occupyShortSlot(slotIndex, quantity, entryPrice, tpPercent, slPercent, isAuthoritativeSnapshot = false) {
         if (slotIndex < 0 || slotIndex >= this.maxShortSlots || quantity <= 0 || entryPrice <= 0)
             return false;
         const slot = this.shortSlots[slotIndex];
+        if (isAuthoritativeSnapshot) {
+            slot.isOccupied = true;
+            slot.lifecycleState = "OCCUPIED";
+            slot.quantity = quantity;
+            slot.initialQuantity = quantity;
+            slot.entryPrice = entryPrice;
+            slot.takeProfitPercent = tpPercent;
+            slot.stopLossPercent = slPercent;
+            if (!slot.openTime || slot.openTime === 0) {
+                slot.openTime = Date.now();
+            }
+            const makerFee = this.sizingCalc.getMakerFeeRate();
+            const takerFee = this.sizingCalc.getTakerFeeRate();
+            const feeMultiplier = (makerFee + takerFee) * 2.5;
+            slot.breakEvenPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1.0 - feeMultiplier));
+            slot.takeProfitPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tpPercent / 100));
+            slot.stopLossPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + slPercent / 100));
+            slot.lastSyncedSlPrice = slot.stopLossPrice;
+            const tp1Pct = Math.min(2.0, tpPercent * 1.0);
+            const tp2Pct = Math.min(3.0, tpPercent * 2.0);
+            const tp3Pct = Math.min(5.0, tpPercent * 4.0);
+            const tp4Pct = Math.min(8.0, tpPercent * 6.0);
+            const tp5Pct = Math.min(12.0, tpPercent * 10.0);
+            slot.tpPrices = [
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tp1Pct / 100)),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tp2Pct / 100)),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tp3Pct / 100)),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tp4Pct / 100)),
+                symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tp5Pct / 100)),
+            ];
+            this.legacyLedger.syncActivePosition("SHORT", quantity, entryPrice);
+            return true;
+        }
         if (slot.isOccupied && slot.quantity > 0) {
             // Accumulate existing short slot position and recalculate weighted average entry price
             const currentNotional = slot.quantity * slot.entryPrice;
@@ -1130,6 +1429,9 @@ class HedgePositionLedger {
             slot.quantity = newQty;
             slot.initialQuantity = Number(((slot.initialQuantity || slot.quantity) + quantity).toFixed(6));
             slot.entryPrice = newAvgEntry;
+            slot.lifecycleState = "OCCUPIED";
+            slot.pendingClientOrderId = undefined;
+            slot.pendingOrderTimestamp = undefined;
             const makerFee = this.sizingCalc.getMakerFeeRate();
             const takerFee = this.sizingCalc.getTakerFeeRate();
             const feeMultiplier = (makerFee + takerFee) * 2.5;
@@ -1153,6 +1455,9 @@ class HedgePositionLedger {
             return true;
         }
         slot.isOccupied = true;
+        slot.lifecycleState = "OCCUPIED";
+        slot.pendingClientOrderId = undefined;
+        slot.pendingOrderTimestamp = undefined;
         slot.quantity = quantity;
         slot.initialQuantity = quantity;
         slot.entryPrice = entryPrice;
@@ -1202,6 +1507,9 @@ class HedgePositionLedger {
             }
         }
         slot.isOccupied = false;
+        slot.lifecycleState = "FLAT";
+        slot.pendingClientOrderId = undefined;
+        slot.pendingOrderTimestamp = undefined;
         slot.quantity = 0;
         slot.initialQuantity = 0;
         slot.entryPrice = 0;
@@ -1270,12 +1578,40 @@ class HedgePositionLedger {
         const openTime = slot.openTime && slot.openTime > 0 ? slot.openTime : actualNowMs;
         const durationMs = Math.max(0, actualNowMs - openTime);
         const durationSec = durationMs / 1000;
-        // 0A. SOTA 3-Tier ROE Step-Collar Dynamic Profit Lock (Zero Time Delays)
+        // 0A. Tick-by-Tick Dynamic Trailing SL & 3-Tier ROE Step-Collar Dynamic Profit Lock (Zero Time Delays)
+        if (isLong) {
+            slot.peakPrice = Math.max(slot.peakPrice ?? slot.entryPrice, markPrice);
+        }
+        else {
+            slot.troughPrice = Math.min(slot.troughPrice && slot.troughPrice > 0 ? slot.troughPrice : slot.entryPrice, markPrice);
+        }
         const rawRoePct = isLong
             ? ((markPrice - slot.entryPrice) / slot.entryPrice) * effectiveLev * 100.0
             : ((slot.entryPrice - markPrice) / slot.entryPrice) * effectiveLev * 100.0;
         if (rawRoePct > (slot.peakRoe ?? 0)) {
             slot.peakRoe = rawRoePct;
+        }
+        // Dynamic Continuous Tick-by-Tick Trailing SL (Locks past Entry Price as soon as in profit)
+        const minVol = garmanKlass > 0.000001 ? Math.sqrt(garmanKlass) : 0.0020;
+        const dynamicTrailDist = Math.max(this.priceTickSize * 5, slot.entryPrice * Math.max(0.0015, minVol * 1.25));
+        if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
+            slot.breakEvenPrice = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + feeBuffer) : slot.entryPrice * (1.0 - feeBuffer));
+        }
+        const isInProfit = isLong ? markPrice >= slot.breakEvenPrice : markPrice <= slot.breakEvenPrice;
+        if (isInProfit) {
+            slot.breakEvenLocked = true;
+            if (isLong) {
+                const candidateContinuousSl = this.formatPriceFast(slot.peakPrice - dynamicTrailDist);
+                const baselineBe = slot.breakEvenPrice;
+                const targetSl = Math.max(candidateContinuousSl, baselineBe);
+                slot.stopLossPrice = Math.max(slot.stopLossPrice, targetSl);
+            }
+            else {
+                const candidateContinuousSl = this.formatPriceFast(slot.troughPrice + dynamicTrailDist);
+                const baselineBe = slot.breakEvenPrice;
+                const targetSl = Math.min(candidateContinuousSl, baselineBe);
+                slot.stopLossPrice = slot.stopLossPrice > 0 ? Math.min(slot.stopLossPrice, targetSl) : targetSl;
+            }
         }
         // Tier 1: +8.0% Net ROE -> Lock Entry + Round-Trip Fees
         if (rawRoePct >= 8.0) {

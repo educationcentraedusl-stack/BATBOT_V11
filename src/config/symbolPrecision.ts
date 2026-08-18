@@ -150,7 +150,8 @@ export class SymbolPrecisionRegistryManager {
     }
 
     const clamped = Math.max(stepSize, rounded);
-    return Number(clamped.toFixed(qtyDecimals));
+    const factor = Math.pow(10, qtyDecimals);
+    return Math.round(clamped * factor) / factor;
   }
 
   /**
@@ -164,7 +165,8 @@ export class SymbolPrecisionRegistryManager {
 
     const rounded = Math.round(rawPrice / tickSize) * tickSize;
     const clamped = Math.max(tickSize, rounded);
-    return Number(clamped.toFixed(priceDecimals));
+    const factor = Math.pow(10, priceDecimals);
+    return Math.round(clamped * factor) / factor;
   }
 
   /**
