@@ -194,7 +194,7 @@ export class MultiAssetStrategyEngine {
 
       // Targeted low-weight per-symbol open orders queries (eliminates weight-40 rate limit spikes)
       const orderPromises = this.activeSymbols.map((sym) =>
-        this.executionClient.getOpenOrders(sym).catch(() => [] as BinanceOrderResponse[])
+        this.executionClient.getOpenOrders(sym)
       );
       const symbolOrderArrays = await Promise.all(orderPromises);
       const ordersBySymbol = new Map<string, BinanceOrderResponse[]>();

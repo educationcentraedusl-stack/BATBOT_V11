@@ -649,6 +649,18 @@ class BinanceExecutionClient {
             this.getPositionRisk(symbol),
             this.getAccountInfo(),
         ]);
+        // Strict Anti-Masking Invariant: If BOTH authoritative queries fail, throw critical consensus failure
+        if (posRiskRes.status === "rejected" && accountInfoRes.status === "rejected") {
+            const posRiskErr = posRiskRes.reason;
+            const accountInfoErr = accountInfoRes.reason;
+            throw new Error(`[BinanceExecutionClient][CONSENSUS_FAILURE] Dual-source position consensus failed: positionRisk error (${posRiskErr?.message || String(posRiskErr)}), accountInfo error (${accountInfoErr?.message || String(accountInfoErr)})`);
+        }
+        if (posRiskRes.status === "rejected") {
+            console.warn(`[BinanceExecutionClient][CONSENSUS_DEGRADED] positionRisk query failed: ${posRiskRes.reason?.message}. Relying on accountInfo ledger.`);
+        }
+        if (accountInfoRes.status === "rejected") {
+            console.warn(`[BinanceExecutionClient][CONSENSUS_DEGRADED] accountInfo query failed: ${accountInfoRes.reason?.message}. Relying on positionRisk stream.`);
+        }
         const posRiskList = posRiskRes.status === "fulfilled" && Array.isArray(posRiskRes.value) ? posRiskRes.value : [];
         const accountPositions = accountInfoRes.status === "fulfilled" && accountInfoRes.value && Array.isArray(accountInfoRes.value.positions)
             ? accountInfoRes.value.positions
@@ -691,15 +703,16 @@ class BinanceExecutionClient {
         const params = {};
         if (symbol)
             params.symbol = symbol;
-        const [standardOrders, algoOrders] = await Promise.all([
-            this.request("GET", "/fapi/v1/openOrders", params, true).catch((err) => {
-                console.log(`[BinanceExecutionClient] Notice fetching standard open orders for ${symbol || "ALL"}: ${err?.message || String(err)}`);
+        // Standard open orders query MUST succeed; errors propagate directly to caller
+        const standardOrders = await this.request("GET", "/fapi/v1/openOrders", params, true);
+        // Open algo orders query (gracefully fall back if algo endpoint unmapped on this account/symbol)
+        const algoOrders = await this.request("GET", "/fapi/v1/openAlgoOrders", params, true).catch((err) => {
+            const msg = err?.message || String(err);
+            if (msg.includes("404") || msg.includes("-4120") || msg.includes("not supported")) {
                 return [];
-            }),
-            this.request("GET", "/fapi/v1/openAlgoOrders", params, true).catch((err) => {
-                return [];
-            }),
-        ]);
+            }
+            throw err;
+        });
         const mappedAlgoOrders = (Array.isArray(algoOrders) ? algoOrders : []).map((ao) => ({
             orderId: ao.algoId || ao.orderId,
             symbol: ao.symbol,
@@ -722,51 +735,40 @@ class BinanceExecutionClient {
         return [...(Array.isArray(standardOrders) ? standardOrders : []), ...mappedAlgoOrders];
     }
     async getAccountBalance() {
-        return this.request("GET", "/fapi/v3/account", {}, true).then((res) => (Array.isArray(res?.assets) ? res.assets : res)).catch(async () => {
-            return this.request("GET", "/fapi/v2/account", {}, true);
+        return this.request("GET", "/fapi/v3/account", {}, true).then((res) => (Array.isArray(res?.assets) ? res.assets : (Array.isArray(res) ? res : []))).catch(async () => {
+            const v2Res = await this.request("GET", "/fapi/v2/account", {}, true);
+            return Array.isArray(v2Res?.assets) ? v2Res.assets : (Array.isArray(v2Res) ? v2Res : []);
         });
     }
     async getOrder(symbol, orderId) {
         return this.request("GET", "/fapi/v1/order", { symbol, orderId }, true);
     }
     async getUserTrades(symbol, limit = 50, startTime, endTime, fromId) {
-        try {
-            const params = { symbol, limit };
-            if (startTime !== undefined && startTime > 0)
-                params.startTime = startTime;
-            if (endTime !== undefined && endTime > 0)
-                params.endTime = endTime;
-            if (fromId !== undefined && fromId > 0)
-                params.fromId = fromId;
-            const res = await this.request("GET", "/fapi/v1/userTrades", params, true);
-            return Array.isArray(res) ? res : [];
-        }
-        catch (err) {
-            console.warn(`[BinanceExecutionClient] Notice fetching userTrades for ${symbol}: ${err?.message || String(err)}`);
-            return [];
-        }
+        const params = { symbol, limit };
+        if (startTime !== undefined && startTime > 0)
+            params.startTime = startTime;
+        if (endTime !== undefined && endTime > 0)
+            params.endTime = endTime;
+        if (fromId !== undefined && fromId > 0)
+            params.fromId = fromId;
+        const res = await this.request("GET", "/fapi/v1/userTrades", params, true);
+        return Array.isArray(res) ? res : [];
     }
     /**
      * Fetches micro-cent exchange income history (/fapi/v1/income) including FUNDING_FEE, COMMISSION, and REALIZED_PNL.
      */
     async getIncomeHistory(symbol, incomeType, startTime, endTime, limit = 100) {
-        try {
-            const params = { limit };
-            if (symbol)
-                params.symbol = symbol;
-            if (incomeType)
-                params.incomeType = incomeType;
-            if (startTime !== undefined && startTime > 0)
-                params.startTime = startTime;
-            if (endTime !== undefined && endTime > 0)
-                params.endTime = endTime;
-            const res = await this.request("GET", "/fapi/v1/income", params, true);
-            return Array.isArray(res) ? res : [];
-        }
-        catch (err) {
-            console.warn(`[BinanceExecutionClient] Notice fetching income history: ${err?.message || String(err)}`);
-            return [];
-        }
+        const params = { limit };
+        if (symbol)
+            params.symbol = symbol;
+        if (incomeType)
+            params.incomeType = incomeType;
+        if (startTime !== undefined && startTime > 0)
+            params.startTime = startTime;
+        if (endTime !== undefined && endTime > 0)
+            params.endTime = endTime;
+        const res = await this.request("GET", "/fapi/v1/income", params, true);
+        return Array.isArray(res) ? res : [];
     }
     /**
      * Reconciles available wallet balance and total unrealized profit directly from Binance REST API.

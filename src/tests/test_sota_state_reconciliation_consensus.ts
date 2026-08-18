@@ -186,7 +186,7 @@ async function runStateReconciliationConsensusTest(): Promise<void> {
   // --------------------------------------------------------------------------------------
   // TEST 3: Non-Destructive Two-Phase Flattening Barrier (Anti-Blind-Wipe Protection)
   // --------------------------------------------------------------------------------------
-  console.log("[Test 3/4] Verifying Non-Destructive Two-Phase Flattening Barrier...");
+  console.log("[Test 3/7] Verifying Non-Destructive Two-Phase Flattening Barrier under Snapshot Gap...");
 
   // Simulate a flawed heartbeat call with empty positions for DOGEUSDT
   (executionClient as any).getUserTrades = async () => []; // No closing trades exist on Binance!
@@ -227,9 +227,96 @@ async function runStateReconciliationConsensusTest(): Promise<void> {
   console.log("  ✅ Test 3 Passed: Two-Phase Flattening Barrier intercepted and eradicated blind-wipe risk.\n");
 
   // --------------------------------------------------------------------------------------
-  // TEST 4: Legitimate Trade Exit Settlement Confirmation
+  // TEST 4: Network Outage Anti-Blind-Wipe Protection (Defect 1.1 & Loophole 2.1)
   // --------------------------------------------------------------------------------------
-  console.log("[Test 4/4] Verifying Legitimate Exit Trade Settlement when verified by userTrades...");
+  console.log("[Test 4/7] Verifying Network Outage Invariant: Barrier Aborts Flattening on Network Error...");
+
+  // Simulate network timeout/error when fetching userTrades AND getDualPositionRisk
+  (executionClient as any).getUserTrades = async () => {
+    throw new Error("ETIMEDOUT: Connection reset by peer (simulated network outage)");
+  };
+  (executionClient as any).getDualPositionRisk = async () => {
+    throw new Error("ECONNREFUSED: Binance REST gateway unreachable (simulated network outage)");
+  };
+
+  console.log("  - Simulating network outage during reconcileFlatPositionWithUserTrades('LONG', 0)...");
+  await dogeEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
+
+  const dogeSummaryAfterNetworkErr = dogeEngine.getHedgeLedger().getSummary(0.06987);
+  console.log(`  - DOGEUSDT Ledger Qty After Network Error: ${dogeSummaryAfterNetworkErr.longQuantity} (Expected: 644)`);
+
+  if (Math.abs(dogeSummaryAfterNetworkErr.longQuantity - 644.0) > 1e-4) {
+    throw new Error("Test 4 Failed: Network failure induced a false-positive position wipe! Barrier invariant violated.");
+  }
+  console.log("  ✅ Test 4 Passed: Network failure aborted flattening, preserving 100% position ledger integrity.\n");
+
+  // --------------------------------------------------------------------------------------
+  // TEST 5: One-Way Mode ('BOTH') Mathematical Polarity Guard (Loophole 2.2)
+  // --------------------------------------------------------------------------------------
+  console.log("[Test 5/7] Verifying ONE-WAY Mode ('BOTH') Polarity Guard against Sign Confusion...");
+
+  // In One-Way mode, positionSide is 'BOTH'. A short position has negative positionAmt (-644.0).
+  (executionClient as any).getUserTrades = async () => [];
+  (executionClient as any).getDualPositionRisk = async () => [
+    {
+      symbol: "DOGEUSDT",
+      positionAmt: "-644.0", // SHORT position in One-Way mode
+      entryPrice: "0.06950",
+      markPrice: "0.06987",
+      unRealizedProfit: "-0.2382",
+      leverage: "20",
+      positionSide: "BOTH",
+    },
+  ];
+
+  // Reconcile LONG settlement: since the exchange position is SHORT (-644.0), LONG is verified flat
+  console.log("  - Simulating LONG settlement check against active SHORT (-644.0) position on exchange...");
+  await dogeEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
+
+  const dogeSummaryAfterPolarityCheck = dogeEngine.getHedgeLedger().getSummary(0.06987);
+  console.log(`  - DOGEUSDT LONG Qty After Polarity Settle: ${dogeSummaryAfterPolarityCheck.longQuantity} (Expected: 0)`);
+
+  if (dogeSummaryAfterPolarityCheck.longQuantity !== 0) {
+    throw new Error("Test 5 Failed: One-Way Mode polarity check failed to identify opposing side sign!");
+  }
+  console.log("  ✅ Test 5 Passed: One-Way Mode sign polarity check strictly distinguishes LONG (+) from SHORT (-).\n");
+
+  // --------------------------------------------------------------------------------------
+  // TEST 6: Dual-Consensus Failure Error Propagation (Defect 1.1)
+  // --------------------------------------------------------------------------------------
+  console.log("[Test 6/7] Verifying Dual-Consensus Failure Error Propagation...");
+
+  const testExecClient = new BinanceExecutionClient({ apiKey: "test_key", apiSecret: "test_secret" });
+  (testExecClient as any).getPositionRisk = async () => {
+    throw new Error("HTTP 500: Binance Internal Server Error");
+  };
+  (testExecClient as any).getAccountInfo = async () => {
+    throw new Error("HTTP 503: Service Temporarily Unavailable");
+  };
+
+  let consensusErrorCaught = false;
+  try {
+    await testExecClient.getDualPositionRisk("BTCUSDT");
+  } catch (err: any) {
+    consensusErrorCaught = true;
+    console.log(`  - Caught Expected Consensus Failure Error: ${err.message}`);
+    if (!err.message.includes("[CONSENSUS_FAILURE]")) {
+      throw new Error("Test 6 Failed: Thrown error does not contain [CONSENSUS_FAILURE] tag!");
+    }
+  }
+
+  if (!consensusErrorCaught) {
+    throw new Error("Test 6 Failed: getDualPositionRisk did not throw when BOTH endpoints failed!");
+  }
+  console.log("  ✅ Test 6 Passed: Dual-consensus failure properly propagated critical error to caller.\n");
+
+  // --------------------------------------------------------------------------------------
+  // TEST 7: Legitimate Trade Exit Settlement Confirmation
+  // --------------------------------------------------------------------------------------
+  console.log("[Test 7/7] Verifying Legitimate Exit Trade Settlement when verified by userTrades...");
+
+  // Re-occupy doge long position for final settlement test
+  dogeEngine.getHedgeLedger().occupyCoreLong(644.0, 0.06950, 2.5, 1.5);
 
   // Mock a real closing fill on exchange
   (executionClient as any).getUserTrades = async () => [
@@ -260,20 +347,20 @@ async function runStateReconciliationConsensusTest(): Promise<void> {
   console.log(`  - DOGEUSDT Realized PnL: $${dogeSummaryAfterRealClose.cumulativeRealizedPnl.toFixed(4)} (Expected: ~$0.9480 net)`);
 
   if (dogeSummaryAfterRealClose.side !== "FLAT" || dogeSummaryAfterRealClose.longQuantity > 1e-6) {
-    throw new Error("Test 4 Failed: Legitimate closing trade did not settle position to FLAT!");
+    throw new Error("Test 7 Failed: Legitimate closing trade did not settle position to FLAT!");
   }
 
   const dogeSabQtyAfterClose = client.getOmsLongPositionQty(6);
   console.log(`  - SAB Slot #6 (DOGE) After Verified Close: ${dogeSabQtyAfterClose} (Expected: 0)`);
 
   if (dogeSabQtyAfterClose !== 0) {
-    throw new Error("Test 4 Failed: SAB OMS Slot not zeroed upon verified trade closure!");
+    throw new Error("Test 7 Failed: SAB OMS Slot not zeroed upon verified trade closure!");
   }
 
-  console.log("  ✅ Test 4 Passed: Legitimate trade exit settled with exact micro-cent exchange PnL & fees.\n");
+  console.log("  ✅ Test 7 Passed: Legitimate trade exit settled with exact micro-cent exchange PnL & fees.\n");
 
   console.log("=========================================================================");
-  console.log("  ALL 4 PHASES OF SOTA STATE RECONCILIATION & CONSENSUS VERIFIED (100%)  ");
+  console.log("  ALL 7 STAGES OF SOTA CONSENSUS & BARRIER REMEDIATION VERIFIED (100%)   ");
   console.log("=========================================================================\n");
 }
 

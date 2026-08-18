@@ -149,7 +149,7 @@ class MultiAssetStrategyEngine {
             const allPositions = await this.executionClient.getDualPositionRisk();
             const validPositions = Array.isArray(allPositions) ? allPositions : [];
             // Targeted low-weight per-symbol open orders queries (eliminates weight-40 rate limit spikes)
-            const orderPromises = this.activeSymbols.map((sym) => this.executionClient.getOpenOrders(sym).catch(() => []));
+            const orderPromises = this.activeSymbols.map((sym) => this.executionClient.getOpenOrders(sym));
             const symbolOrderArrays = await Promise.all(orderPromises);
             const ordersBySymbol = new Map();
             for (let i = 0; i < this.activeSymbols.length; i++) {
