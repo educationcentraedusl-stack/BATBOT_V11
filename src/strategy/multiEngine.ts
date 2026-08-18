@@ -139,8 +139,9 @@ export class MultiAssetStrategyEngine {
     console.log(`[MultiAssetStrategyEngine][ReconciliationHeartbeat] Continuous ${intervalMs}ms state reconciliation heartbeat online.`);
     
     this.reconciliationTimer = setInterval(() => {
-      this.syncExchangeState().catch((err: any) => {
-        console.warn(`[MultiAssetStrategyEngine][ReconciliationHeartbeat] Notice during state sync: ${err?.message || String(err)}`);
+      this.syncExchangeState().catch((err: unknown) => {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        console.warn(`[MultiAssetStrategyEngine][ReconciliationHeartbeat] Notice during state sync: ${errorMessage}`);
       });
     }, intervalMs);
   }
@@ -176,8 +177,9 @@ export class MultiAssetStrategyEngine {
             engine.setLeverageMultiplier(res.leverage);
           }
         }
-      } catch (err: any) {
-        console.warn(`[MultiAssetStrategyEngine] Notice setting leverage for ${symbol}: ${err?.message || String(err)}`);
+      } catch (err: unknown) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        console.warn(`[MultiAssetStrategyEngine] Notice setting leverage for ${symbol}: ${errorMessage}`);
       }
     }
   }
@@ -222,8 +224,9 @@ export class MultiAssetStrategyEngine {
       }
 
       this.riskGuard.updatePositionNotional(totalNotional);
-    } catch (err: any) {
-      console.error(`[MultiAssetStrategyEngine][StateSync][ERROR] Failed to fetch Binance exchange state: ${err.message}`);
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      console.error(`[MultiAssetStrategyEngine][StateSync][ERROR] Failed to fetch Binance exchange state: ${errorMessage}`);
     }
   }
 

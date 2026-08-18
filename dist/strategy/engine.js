@@ -428,7 +428,8 @@ class StrategyEngine {
                     trades = await this.executionClient.getUserTrades(this.config.symbol, 10, slotOpenTime);
                 }
                 catch (err) {
-                    console.warn(`[DOUBLE_ENTRY_OMS][USER_TRADES_WARN] [${this.config.symbol}] Failed to fetch userTrades: ${err?.message || String(err)}`);
+                    const errorMessage = err instanceof Error ? err.message : String(err);
+                    console.warn(`[DOUBLE_ENTRY_OMS][USER_TRADES_WARN] [${this.config.symbol}] Failed to fetch userTrades: ${errorMessage}`);
                 }
             }
             const markPrice = this.client.getMidPrice(this.assetIndex);
@@ -504,7 +505,8 @@ class StrategyEngine {
                             }
                         }
                         catch (err) {
-                            console.error(`[TWO_PHASE_BARRIER][NETWORK_ERROR] [${this.config.symbol}:CORE_LONG] Position verification failed due to network/consensus error: ${err?.message || String(err)}. ABORTING FLATTENING TO PROTECT ACTIVE POSITION.`);
+                            const errorMessage = err instanceof Error ? err.message : String(err);
+                            console.error(`[TWO_PHASE_BARRIER][NETWORK_ERROR] [${this.config.symbol}:CORE_LONG] Position verification failed due to network/consensus error: ${errorMessage}. ABORTING FLATTENING TO PROTECT ACTIVE POSITION.`);
                         }
                     }
                     else {
@@ -589,7 +591,8 @@ class StrategyEngine {
                             }
                         }
                         catch (err) {
-                            console.error(`[TWO_PHASE_BARRIER][NETWORK_ERROR] [${this.config.symbol}:SHORT_SLOTS] Position verification failed due to network/consensus error: ${err?.message || String(err)}. ABORTING FLATTENING TO PROTECT ACTIVE POSITION.`);
+                            const errorMessage = err instanceof Error ? err.message : String(err);
+                            console.error(`[TWO_PHASE_BARRIER][NETWORK_ERROR] [${this.config.symbol}:SHORT_SLOTS] Position verification failed due to network/consensus error: ${errorMessage}. ABORTING FLATTENING TO PROTECT ACTIVE POSITION.`);
                         }
                     }
                     else {
@@ -1079,7 +1082,8 @@ class StrategyEngine {
             }
         }
         catch (err) {
-            console.error(`[EXCHANGE_SL_ENGINE][ERROR] [${this.config.symbol}:${slotId}] Failed to dispatch exchange STOP_MARKET order: ${err.message}`);
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            console.error(`[EXCHANGE_SL_ENGINE][ERROR] [${this.config.symbol}:${slotId}] Failed to dispatch exchange STOP_MARKET order: ${errorMessage}`);
         }
         return undefined;
     }
@@ -1109,7 +1113,8 @@ class StrategyEngine {
                         await this.executionClient.cancelOrder(this.config.symbol, existingSlId);
                     }
                     catch (err) {
-                        console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] [${this.config.symbol}:${slotId}] Unable to cancel previous SL order #${existingSlId}: ${err.message}`);
+                        const errorMessage = err instanceof Error ? err.message : String(err);
+                        console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] [${this.config.symbol}:${slotId}] Unable to cancel previous SL order #${existingSlId}: ${errorMessage}`);
                     }
                 }
                 // Re-verify slot is still occupied after awaiting order cancellation
@@ -1220,7 +1225,8 @@ class StrategyEngine {
                             }
                         }
                         catch (err) {
-                            console.error(`[TWO_PHASE_BARRIER][NETWORK_ERROR] [${this.config.symbol}] Targeted position check failed on network error: ${err?.message || String(err)}. Aborting state sync to protect active position.`);
+                            const errorMessage = err instanceof Error ? err.message : String(err);
+                            console.error(`[TWO_PHASE_BARRIER][NETWORK_ERROR] [${this.config.symbol}] Targeted position check failed on network error: ${errorMessage}. Aborting state sync to protect active position.`);
                             return; // Strict Anti-Blind-Wipe Invariant: Never assume position is flat on network failure
                         }
                     }
@@ -1287,7 +1293,8 @@ class StrategyEngine {
                         console.log(`[ORPHAN_GUARD][DISPATCHED] Live STOP_MARKET order #${slOrder.orderId} confirmed on Binance for ${this.config.symbol} ${posSide}: stopPrice=$${formattedSlPrice}`);
                     }
                     catch (slErr) {
-                        console.error(`[ORPHAN_GUARD][ERROR] Failed to dispatch live STOP_MARKET order to Binance for ${this.config.symbol} ${posSide}: ${slErr.message}`);
+                        const errorMessage = slErr instanceof Error ? slErr.message : String(slErr);
+                        console.error(`[ORPHAN_GUARD][ERROR] Failed to dispatch live STOP_MARKET order to Binance for ${this.config.symbol} ${posSide}: ${errorMessage}`);
                     }
                     console.log(`[ORPHAN_GUARD][DISPATCHED] Dynamic Volatility SL/TP attached to ${this.config.symbol} ${posSide} position: SL=$${formattedSlPrice} (${dynamicSlPercent.toFixed(2)}%), TP=${dynamicTpPercent.toFixed(2)}%`);
                 }
@@ -1299,7 +1306,8 @@ class StrategyEngine {
             this.syncSabPositionState(0);
         }
         catch (err) {
-            console.error(`[StrategyEngine][StateSync][ERROR] Failed to sync exchange state for ${this.config.symbol}: ${err.message}`);
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            console.error(`[StrategyEngine][StateSync][ERROR] Failed to sync exchange state for ${this.config.symbol}: ${errorMessage}`);
         }
     }
     async syncExchangeState() {
@@ -1316,7 +1324,8 @@ class StrategyEngine {
             await this.syncExchangeStateWithData(positions, openOrders);
         }
         catch (err) {
-            console.error(`[StrategyEngine][StateSync][ERROR] Failed to sync exchange state for ${this.config.symbol}: ${err.message}`);
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            console.error(`[StrategyEngine][StateSync][ERROR] Failed to sync exchange state for ${this.config.symbol}: ${errorMessage}`);
         }
     }
     reconcileStartupPositions(rawPositions) {
@@ -2141,13 +2150,14 @@ class StrategyEngine {
         }
         catch (err) {
             finalizedSignalVal = 0.0;
-            console.error(`[ENGINE_EVALUATE_TICK_ERROR][Asset #${this.assetIndex}] Exception in evaluateTick: ${err.message}`);
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            console.error(`[ENGINE_EVALUATE_TICK_ERROR][Asset #${this.assetIndex}] Exception in evaluateTick: ${errorMessage}`);
             this.staticResult.sequenceNum = this.lastProcessedSequence;
             this.staticResult.signalType = "NONE";
             this.staticResult.riskResult = {
                 passed: false,
                 reasonCode: "CRITICAL_EVALUATION_EXCEPTION",
-                message: err.message || "Unhandled exception during tick evaluation",
+                message: errorMessage || "Unhandled exception during tick evaluation",
             };
             this.staticResult.executionPromise = undefined;
             return this.staticResult;
