@@ -212,11 +212,19 @@ impl MicrostructureAnalyzer {
         let total_trade_vol = price * quantity;
 
         if total_trade_vol > 0.0 && total_trade_vol.is_finite() {
+            self.rolling_trade_volume = self.rolling_trade_volume * 0.995 + total_trade_vol * 0.005;
+            let target_from_rolling = (self.rolling_trade_volume * 50.0).clamp(50000.0, 1000000.0);
+            if target_from_rolling > self.bucket_target_volume {
+                self.bucket_target_volume = target_from_rolling;
+            }
+
             let mut rem_vol = total_trade_vol;
 
-            while rem_vol > 0.0 || (self.current_bucket_buy + self.current_bucket_sell) >= self.bucket_target_volume {
+            while rem_vol > 0.0 {
                 let current_filled = self.current_bucket_buy + self.current_bucket_sell;
-                if current_filled >= self.bucket_target_volume {
+                let needed = (self.bucket_target_volume - current_filled).max(0.0);
+
+                if needed <= 1e-6 {
                     self.vpin_buckets[self.vpin_bucket_index] = VolumeBucket {
                         buy_vol: self.current_bucket_buy,
                         sell_vol: self.current_bucket_sell,
@@ -225,20 +233,12 @@ impl MicrostructureAnalyzer {
                     if self.vpin_bucket_count < VPIN_BUCKETS {
                         self.vpin_bucket_count += 1;
                     }
-
-                    self.rolling_trade_volume = self.rolling_trade_volume * 0.995 + total_trade_vol * 0.005;
-                    let min_target = 5000.0;
-                    self.bucket_target_volume = (self.rolling_trade_volume * 100.0).clamp(min_target, 250000.0);
-
                     self.current_bucket_buy = 0.0;
                     self.current_bucket_sell = 0.0;
-                    self.recalculate_vpin();
                     continue;
                 }
 
-                let needed = (self.bucket_target_volume - current_filled).max(0.0);
-
-                if rem_vol >= needed && needed > 0.0 {
+                if rem_vol >= needed {
                     if is_buyer_maker {
                         self.current_bucket_sell += needed;
                     } else {
@@ -254,14 +254,8 @@ impl MicrostructureAnalyzer {
                     if self.vpin_bucket_count < VPIN_BUCKETS {
                         self.vpin_bucket_count += 1;
                     }
-
-                    self.rolling_trade_volume = self.rolling_trade_volume * 0.995 + total_trade_vol * 0.005;
-                    let min_target = 5000.0;
-                    self.bucket_target_volume = (self.rolling_trade_volume * 100.0).clamp(min_target, 250000.0);
-
                     self.current_bucket_buy = 0.0;
                     self.current_bucket_sell = 0.0;
-                    self.recalculate_vpin();
                 } else {
                     if is_buyer_maker {
                         self.current_bucket_sell += rem_vol;
@@ -269,9 +263,9 @@ impl MicrostructureAnalyzer {
                         self.current_bucket_buy += rem_vol;
                     }
                     rem_vol = 0.0;
-                    self.recalculate_vpin();
                 }
             }
+            self.recalculate_vpin();
         }
 
         // 4. Update Bivariate Hawkes Point Process
@@ -488,18 +482,25 @@ impl MicrostructureAnalyzer {
             i += 1;
         }
 
-        // Include current in-progress bucket with continuous volume weighting
+        // Include current in-progress bucket
         let curr_imbalance = (self.current_bucket_buy - self.current_bucket_sell).abs();
         let curr_vol = self.current_bucket_buy + self.current_bucket_sell;
-        if curr_vol > 1e-6 {
-            sum_imbalance += curr_imbalance;
-            total_vol += curr_vol;
-        }
+        sum_imbalance += curr_imbalance;
+        total_vol += curr_vol;
 
-        if total_vol <= 1e-9 {
-            self.cached_vpin = 0.0;
+        // Apply Bayesian prior smoothing (baseline VPIN prior ~ 0.25) to prevent ceiling clipping on cold start
+        let prior_weight = if self.vpin_bucket_count < 10 {
+            ((10 - self.vpin_bucket_count) as f64) * self.bucket_target_volume * 0.5
         } else {
-            self.cached_vpin = (sum_imbalance / total_vol).clamp(0.0, 1.0);
+            0.0
+        };
+        let prior_imbalance = prior_weight * 0.25;
+
+        let combined_vol = total_vol + prior_weight;
+        if combined_vol <= 1e-9 {
+            self.cached_vpin = 0.25;
+        } else {
+            self.cached_vpin = ((sum_imbalance + prior_imbalance) / combined_vol).clamp(0.01, 0.99);
         }
     }
 
@@ -755,5 +756,23 @@ mod tests {
         assert!(tp > entry_price, "Take profit must be above entry price for LONG");
         assert!(sl > 0.0);
         assert!(tp > 0.0);
+    }
+
+    #[test]
+    fn test_vpin_calculation_unclipped() {
+        let mut analyzer = MicrostructureAnalyzer::new(50000.0);
+        let ts_base = 1_000_000_000u64;
+
+        // Ingest sequence of mixed buys and sells typical of active BTC market
+        for i in 0..100 {
+            let is_sell = i % 3 == 0;
+            let qty = 0.2 + ((i % 5) as f64) * 0.1;
+            analyzer.on_trade_with_ts(50000.0, qty, is_sell, ts_base + i * 10_000_000);
+        }
+
+        let vpin = analyzer.get_vpin();
+        println!("Computed VPIN: {:.4}", vpin);
+        assert!(vpin > 0.05, "VPIN should be strictly positive");
+        assert!(vpin < 0.90, "VPIN must NOT be clipped to 1.0000; got {}", vpin);
     }
 }

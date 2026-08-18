@@ -49,6 +49,8 @@ mod tests {
             1.2,    // lob_entropy
             1,      // regime
             true,   // is_sweep_detected
+            0.45,   // multi_level_ofi
+            0.30,   // hawkes_asymmetry
             1_700_000_000,
             0,
             1,

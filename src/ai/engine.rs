@@ -971,4 +971,84 @@ mod tests {
         assert!(dir >= -1.0 && dir <= 1.0);
         assert!(conf >= 0.0 && conf <= 1.0);
     }
+
+    #[test]
+    fn test_live_weights_inference() {
+        let engine = AIEngine::load_from_paths("./models/cfc_weights.safetensors", "./models/tkan_luts.bin");
+        println!("Loaded engine calibrated: {}", engine.is_calibrated());
+        if let Some(mamba) = &engine.mamba {
+            println!("b_heads: {:?}", mamba.b_heads.to_vec1::<f32>().unwrap());
+            println!("b_out (first 10): {:?}", &mamba.b_out.to_vec1::<f32>().unwrap()[0..10]);
+            let w_heads_col0 = mamba.w_heads.t().unwrap().get(0).unwrap().to_vec1::<f32>().unwrap();
+            println!("w_heads col 0 (dir) sum: {:.4}, mean: {:.4}, vals: {:?}",
+                w_heads_col0.iter().sum::<f32>(),
+                w_heads_col0.iter().sum::<f32>() / w_heads_col0.len() as f32,
+                &w_heads_col0[0..10]
+            );
+            let w_out_flat = mamba.w_out.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            println!("w_out sum: {:.4}, mean: {:.4}, min: {:.4}, max: {:.4}",
+                w_out_flat.iter().sum::<f32>(),
+                w_out_flat.iter().sum::<f32>() / w_out_flat.len() as f32,
+                w_out_flat.iter().cloned().fold(f32::INFINITY, f32::min),
+                w_out_flat.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
+            );
+        }
+        let mut buffer = vec![0u8; 4096];
+        let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len()).unwrap();
+        bridge.store_f64(4, 50000.0);
+        bridge.store_f64(5, 1.5);
+        bridge.store_f64(6, 50001.0);
+        bridge.store_f64(7, 2.5);
+        bridge.store_f64(1, 0.20); // OBI
+        bridge.store_f64(2, 50.0); // CVD
+        bridge.store_f64(3, 0.50); // Spread vel
+        bridge.store_f64(121, 0.001); // RV GK
+
+        // Feed 30 bullish ticks (rising price, high OBI, positive CVD)
+        for tick in 0..30 {
+            bridge.store_f64(4, 50000.0 + (tick as f64 * 20.0));
+            bridge.store_f64(6, 50001.0 + (tick as f64 * 20.0));
+            bridge.store_f64(1, 0.85); // Strong Bullish OBI
+            bridge.store_f64(2, 500.0 + (tick as f64 * 50.0)); // Rising CVD
+            bridge.store_f64(3, 0.10);
+            bridge.store_f64(121, 0.002);
+            bridge.store_f64(138, 0.80); // Strong positive Multi-Level OFI
+            bridge.store_f64(149, 0.70); // Positive Hawkes Asymmetry
+            let (lob_features, _) = {
+                let pipelines = engine.feature_pipelines.read().unwrap();
+                let mut pipeline = pipelines[0].lock().unwrap();
+                pipeline.update_and_normalize_with_snr_asset(&bridge, 150.0, 0).unwrap()
+            };
+            let tkan_out = engine.tkan.forward(&lob_features);
+            if tick == 10 {
+                println!("Tick 10 Bullish tkan_out: {:?}", tkan_out);
+            }
+            let res = engine.run_inference(&bridge);
+            assert!(res.is_ok());
+            if tick % 5 == 0 {
+                let dir = bridge.load_f64(93);
+                let conf = bridge.load_f64(94);
+                println!("Bullish Stream Tick {:02}: Final Dir = {:.4}, Conf = {:.4}", tick, dir, conf);
+            }
+        }
+
+        // Feed 30 bearish ticks (falling price, low OBI, negative CVD)
+        for tick in 0..30 {
+            bridge.store_f64(4, 50600.0 - (tick as f64 * 20.0));
+            bridge.store_f64(6, 50601.0 - (tick as f64 * 20.0));
+            bridge.store_f64(1, -0.85); // Strong Bearish OBI
+            bridge.store_f64(2, 2000.0 - (tick as f64 * 100.0)); // Crashing CVD
+            bridge.store_f64(3, 0.10);
+            bridge.store_f64(121, 0.002);
+            bridge.store_f64(138, -0.80); // Strong negative OFI
+            bridge.store_f64(149, -0.70); // Negative Hawkes Asymmetry
+            let res = engine.run_inference(&bridge);
+            assert!(res.is_ok());
+            if tick % 5 == 0 {
+                let dir = bridge.load_f64(93);
+                let conf = bridge.load_f64(94);
+                println!("Bearish Stream Tick {:02}: Final Dir = {:.4}, Conf = {:.4}", tick, dir, conf);
+            }
+        }
+    }
 }

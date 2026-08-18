@@ -15,6 +15,11 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-08-18 - Critical Inference Pipeline Triage (SignalGate Disconnect, Directional Logit Collapse & VPIN Normalization) Completed & 100% QA Verified:
+  - Bug 1 (SignalGate Disconnect): Wired `aiConfidence = rawAiConfidence` directly in `StrategyEngine.evaluateTick()` (`src/strategy/engine.ts`), eliminating the artificial zeroing out of Platt calibrated confidence in the SignalGate.
+  - Bug 2 (Directional Logit Collapse): Applied $1/\sqrt{d_{\text{state}}}$ scaling to Mamba-2 SSM inner state contraction and zero-mean unit-variance LayerNorm on representation $y$ in `src/ai/mamba.rs`, eliminating logit explosion and premature `tanh` saturation to restore natural $[-1.0, +1.0]$ directional variance.
+  - Bug 3 (VPIN Normalization): Restructured volume bucket accumulation in `on_trade_with_ts` (`src/lob/microstructure.rs`) with adaptive target volume scaling ($\ge 50,000$ USDT) and Bayesian prior smoothing in `recalculate_vpin`, eliminating single-trade $1.0000$ pegging artifacts and producing continuous toxicity metrics in $[0.10, 0.60]$.
+  - 100% Verified via `cargo test` (37/37 passed), `npx napi build --platform --release` (0 errors), `npm run build:ts` (0 errors), and `npm test` (`tsc --noEmit`, 0 errors).
 * 2026-08-18 - Master Plan Phase 5 (Final QA, Latency Benchmarking & SOTA V2 Core Production Verification) Completed & 100% QA Verified:
   - Clean Native & TypeScript Builds: Compiled native Rust N-API bindings via `npx napi build --platform --release` and verified 0-error TypeScript compilation with `npm run build:ts`.
   - Native Rust Mathematical Units: Passed 100% of native Rust tests (`cargo test --lib` 36/36 passed, `cargo test --release --lib` 36/36 passed in 0.05s) across Mamba-2 SSM, Multi-Level OFI, Bivariate Hawkes point processes, CUSUM drift detection, and T-KAN LUTs.

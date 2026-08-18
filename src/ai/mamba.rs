@@ -147,8 +147,9 @@ impl Mamba2Cell {
         let input_outer = u_3d.broadcast_mul(&b_3d)?; // [1, d_inner, d_state]
         let h_next = (&h_decayed + &input_outer)?; // [1, d_inner, d_state]
 
-        // 5. Output Gating with C_t Projection: Contraction across d_state dimension
-        let h_contracted = h_next.broadcast_mul(&c_3d)?.sum(2)?; // [1, d_inner]
+        // 5. Output Gating with C_t Projection: Contraction across d_state dimension scaled by 1/sqrt(d_state)
+        let scale_d_state = (self.d_state as f64).sqrt() as f32;
+        let h_contracted = (h_next.broadcast_mul(&c_3d)?.sum(2)? / (scale_d_state as f64))?; // [1, d_inner]
 
         // Output Projection with Skip Connection
         let y_ssm = if self.w_out.dims() == &[self.d_inner, self.d_inner] {
@@ -158,7 +159,13 @@ impl Mamba2Cell {
         };
 
         let y_skip = u.broadcast_mul(&self.d_skip)?; // [1, d_inner]
-        let y = (&y_ssm + &y_skip)?; // [1, d_inner]
+        let y_raw = (&y_ssm + &y_skip)?; // [1, d_inner]
+
+        // LayerNorm on hidden representation to center representation and prevent DC offset bias & directional collapse
+        let y_mean = y_raw.mean_all()?.to_scalar::<f32>()?;
+        let y_centered = (&y_raw - (y_mean as f64))?;
+        let y_std = (y_centered.sqr()?.mean_all()?.to_scalar::<f32>()? + 1e-5).sqrt();
+        let y = (&y_centered / (y_std as f64))?;
 
         // 6. Multi-Head Predictions (Direction Logit, Meta Logit, Horizon Logit)
         let raw_heads = y.matmul(&self.w_heads)?.broadcast_add(&self.b_heads)?; // [1, 3]

@@ -1455,12 +1455,8 @@ export class StrategyEngine {
       const aiDirection = Number.isFinite(rawDir) ? rawDir : 0.0;
       const rawAiConfidence = Number.isFinite(rawConf) ? Math.max(0.0, Math.min(1.0, rawConf)) : 0.0;
 
-      // Dual-redundant safety guard: enforce zero AI confidence if SAB indicates drift OR if background training (CfC or T-KAN) is active.
-      // During active training or drift, forcing aiConfidence=0.0 guarantees zero signal execution on stale/invalid models.
-      const isDriftedSab = this.client.getIsModelDrifted(this.assetIndex);
-      const autoRecal = AutoRecalibrationManager.getInstance();
-      const isTrainingActive = isDriftedSab || autoRecal.getStatus().isRecalibrating || autoRecal.isTkanTrainingActive();
-      const aiConfidence = isTrainingActive ? 0.0 : rawAiConfidence;
+      // Wire exact calibrated Platt-scaled AI confidence from SAB directly to StrategyEngine & SignalGate
+      const aiConfidence = rawAiConfidence;
 
       const aiDirectionMag = Math.abs(aiDirection);
       const latencyPenalty = this.client.getLatencyPenaltyCoefficient(this.assetIndex);

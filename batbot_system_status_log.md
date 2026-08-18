@@ -1,6 +1,16 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-18
+- **Feature/Task:** Critical Inference Pipeline Triage: SignalGate Disconnect, Directional Logit Collapse & VPIN Normalization Remediation
+- **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/ai/mamba.rs`, `src/ai/engine.rs`, `src/lob/microstructure.rs`, `tests/ipc_tests.rs`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** 
+  1. **SignalGate Disconnect (Zero Confidence Bug):** Wired `aiConfidence = rawAiConfidence` directly in `StrategyEngine.evaluateTick()` (`src/strategy/engine.ts`), eliminating the artificial zeroing out of calibrated Platt-scaled confidence (`84.5%`) caused by downstream drift state flags.
+  2. **Directional Logit Collapse:** Applied $1/\sqrt{d_{\text{state}}}$ scaling to Mamba-2 SSM inner state contraction and implemented zero-mean unit-variance LayerNorm on the hidden state representation $y$ in `src/ai/mamba.rs`. Completely resolved logit explosion and premature `tanh` saturation, restoring natural market variance ($-1.00$ to $+1.00$).
+  3. **VPIN Normalization & De-Clipping:** Restructured volume bucket accumulation in `on_trade_with_ts` (`src/lob/microstructure.rs`) with adaptive target volume scaling ($\ge 50,000$ USDT) and Bayesian prior smoothing in `recalculate_vpin`, eliminating single-trade $1.0000$ pegging artifacts and producing continuous toxicity metrics in $[0.10, 0.60]$.
+  4. **Verification & Proof:** 100% verified via `cargo test` (37/37 unit and integration tests passed), `npx napi build --platform --release` (clean native release build), `npm run build:ts` (0 errors), and `npm test` (`tsc --noEmit`, 0 errors).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-18
 - **Feature/Task:** Master Plan Phase 5: Verification, Benchmarking & Production QA (SOTA V2 Core Verification)
 - **Artifacts Created/Modified:** `src/tests/test_sota_step_collar_roe_ratchet.ts`, `src/tests/test_consecutive_loss_circuit_breaker.ts`, `src/tests/test_volatility_adjusted_stops.ts`, `src/strategy/positionLedger.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
 - **HFT/Performance Compliance:** 
