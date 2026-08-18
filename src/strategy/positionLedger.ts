@@ -480,9 +480,14 @@ export interface ActiveTradeSlot {
   durationMs: number;
 }
 
+export type SlotLifecycleState = "FLAT" | "PENDING_ENTRY" | "OCCUPIED" | "PENDING_EXIT";
+
 export interface PositionSlot {
   slotId: string;
   isOccupied: boolean;
+  lifecycleState?: SlotLifecycleState;
+  pendingClientOrderId?: string;
+  pendingOrderTimestamp?: number;
   side: "LONG" | "SHORT";
   quantity: number;
   initialQuantity?: number;
@@ -1128,6 +1133,66 @@ export class HedgePositionLedger {
   }
 
   /**
+   * Tier-1 Optimistic Slot Reservation Protocol (August 2026 SOTA).
+   * Synchronously transitions slot to PENDING_ENTRY before network packet dispatch,
+   * completely eradicating execution race conditions and order spam.
+   */
+  public reserveCoreLongPending(clientOrderId: string, targetPrice: number, targetQty: number): boolean {
+    if (this.coreLong.isOccupied || this.coreLong.lifecycleState === "PENDING_ENTRY") {
+      return false;
+    }
+    this.coreLong.lifecycleState = "PENDING_ENTRY";
+    this.coreLong.pendingClientOrderId = clientOrderId;
+    this.coreLong.pendingOrderTimestamp = Date.now();
+    this.coreLong.entryPrice = targetPrice;
+    this.coreLong.quantity = targetQty;
+    return true;
+  }
+
+  public reserveShortSlotPending(slotIndex: number, clientOrderId: string, targetPrice: number, targetQty: number): boolean {
+    if (slotIndex < 0 || slotIndex >= this.maxShortSlots) return false;
+    const slot = this.shortSlots[slotIndex];
+    if (slot.isOccupied || slot.lifecycleState === "PENDING_ENTRY") {
+      return false;
+    }
+    slot.lifecycleState = "PENDING_ENTRY";
+    slot.pendingClientOrderId = clientOrderId;
+    slot.pendingOrderTimestamp = Date.now();
+    slot.entryPrice = targetPrice;
+    slot.quantity = targetQty;
+    return true;
+  }
+
+  public rollbackPendingSlot(slotId: string, reason: string): void {
+    if (slotId === "CORE_LONG") {
+      if (this.coreLong.lifecycleState === "PENDING_ENTRY" && !this.coreLong.isOccupied) {
+        console.warn(`[OPTIMISTIC_MUTEX][ROLLBACK] Rolling back CORE_LONG from PENDING_ENTRY to FLAT due to: ${reason}`);
+        this.coreLong.lifecycleState = "FLAT";
+        this.coreLong.pendingClientOrderId = undefined;
+        this.coreLong.pendingOrderTimestamp = undefined;
+        this.coreLong.quantity = 0;
+        this.coreLong.entryPrice = 0;
+      }
+      return;
+    }
+
+    if (slotId.startsWith("SHORT_SLOT_")) {
+      const idx = parseInt(slotId.replace("SHORT_SLOT_", ""), 10);
+      if (idx >= 0 && idx < this.maxShortSlots) {
+        const slot = this.shortSlots[idx];
+        if (slot.lifecycleState === "PENDING_ENTRY" && !slot.isOccupied) {
+          console.warn(`[OPTIMISTIC_MUTEX][ROLLBACK] Rolling back ${slotId} from PENDING_ENTRY to FLAT due to: ${reason}`);
+          slot.lifecycleState = "FLAT";
+          slot.pendingClientOrderId = undefined;
+          slot.pendingOrderTimestamp = undefined;
+          slot.quantity = 0;
+          slot.entryPrice = 0;
+        }
+      }
+    }
+  }
+
+  /**
    * Tier-1 Institutional Micro-Burst Mitigation & Dynamic Slot Dispersion Engine.
    * Evaluates slot allocation eligibility using Volatility-Adjusted Dynamic Grid Spacing (VADGS)
    * and Time-Weighted Cooldown Hysteresis Lockouts (TWCHL).
@@ -1145,10 +1210,10 @@ export class HedgePositionLedger {
       return null;
     }
 
-    // 2. Locate first unoccupied slot index
+    // 2. Locate first unoccupied and non-pending slot index
     let targetIdx = -1;
     for (let i = 0; i < this.maxShortSlots; i++) {
-      if (!this.shortSlots[i].isOccupied) {
+      if (!this.shortSlots[i].isOccupied && this.shortSlots[i].lifecycleState !== "PENDING_ENTRY") {
         targetIdx = i;
         break;
       }
@@ -1171,14 +1236,16 @@ export class HedgePositionLedger {
     const requiredTicks = Math.max(baseTicks, baseTicks * volFactor * Math.sqrt(targetIdx) * hawkesFactor);
     const minSpacing = requiredTicks * tickSize;
 
-    // 4. Verify spatial separation from all occupied short slots
+    // 4. Verify spatial separation from all occupied and pending short slots
     for (let i = 0; i < targetIdx; i++) {
-      if (this.shortSlots[i].isOccupied) {
+      if (this.shortSlots[i].isOccupied || this.shortSlots[i].lifecycleState === "PENDING_ENTRY") {
         const fillPrice = this.shortSlots[i].entryPrice;
-        const priceDelta = Math.abs(currentPrice - fillPrice);
-        if (priceDelta < minSpacing) {
-          // Spatial co-location collision! Reject multi-slot fill at identical price.
-          return null;
+        if (fillPrice > 0) {
+          const priceDelta = Math.abs(currentPrice - fillPrice);
+          if (priceDelta < minSpacing) {
+            // Spatial co-location collision! Reject multi-slot fill at identical price.
+            return null;
+          }
         }
       }
     }
@@ -1202,7 +1269,7 @@ export class HedgePositionLedger {
   public getActiveShortCount(): number {
     let count = 0;
     for (let i = 0; i < this.maxShortSlots; i++) {
-      if (this.shortSlots[i].isOccupied) count++;
+      if (this.shortSlots[i].isOccupied || this.shortSlots[i].lifecycleState === "PENDING_ENTRY") count++;
     }
     return count;
   }
@@ -1220,6 +1287,9 @@ export class HedgePositionLedger {
       this.coreLong.quantity = newQty;
       this.coreLong.initialQuantity = Number(((this.coreLong.initialQuantity || this.coreLong.quantity) + quantity).toFixed(6));
       this.coreLong.entryPrice = newAvgEntry;
+      this.coreLong.lifecycleState = "OCCUPIED";
+      this.coreLong.pendingClientOrderId = undefined;
+      this.coreLong.pendingOrderTimestamp = undefined;
 
       const makerFee = this.sizingCalc.getMakerFeeRate();
       const takerFee = this.sizingCalc.getTakerFeeRate();
@@ -1248,6 +1318,9 @@ export class HedgePositionLedger {
     }
 
     this.coreLong.isOccupied = true;
+    this.coreLong.lifecycleState = "OCCUPIED";
+    this.coreLong.pendingClientOrderId = undefined;
+    this.coreLong.pendingOrderTimestamp = undefined;
     this.coreLong.quantity = quantity;
     this.coreLong.initialQuantity = quantity;
     this.coreLong.entryPrice = entryPrice;
@@ -1291,6 +1364,9 @@ export class HedgePositionLedger {
    */
   public clearSlots(): void {
     this.coreLong.isOccupied = false;
+    this.coreLong.lifecycleState = "FLAT";
+    this.coreLong.pendingClientOrderId = undefined;
+    this.coreLong.pendingOrderTimestamp = undefined;
     this.coreLong.quantity = 0;
     this.coreLong.initialQuantity = 0;
     this.coreLong.entryPrice = 0;
@@ -1307,6 +1383,9 @@ export class HedgePositionLedger {
     for (let i = 0; i < this.maxShortSlots; i++) {
       const slot = this.shortSlots[i];
       slot.isOccupied = false;
+      slot.lifecycleState = "FLAT";
+      slot.pendingClientOrderId = undefined;
+      slot.pendingOrderTimestamp = undefined;
       slot.quantity = 0;
       slot.initialQuantity = 0;
       slot.entryPrice = 0;
@@ -1422,6 +1501,9 @@ export class HedgePositionLedger {
       }
     }
     this.coreLong.isOccupied = false;
+    this.coreLong.lifecycleState = "FLAT";
+    this.coreLong.pendingClientOrderId = undefined;
+    this.coreLong.pendingOrderTimestamp = undefined;
     this.coreLong.quantity = 0;
     this.coreLong.initialQuantity = 0;
     this.coreLong.entryPrice = 0;
@@ -1454,6 +1536,9 @@ export class HedgePositionLedger {
       slot.quantity = newQty;
       slot.initialQuantity = Number(((slot.initialQuantity || slot.quantity) + quantity).toFixed(6));
       slot.entryPrice = newAvgEntry;
+      slot.lifecycleState = "OCCUPIED";
+      slot.pendingClientOrderId = undefined;
+      slot.pendingOrderTimestamp = undefined;
 
       const makerFee = this.sizingCalc.getMakerFeeRate();
       const takerFee = this.sizingCalc.getTakerFeeRate();
@@ -1482,6 +1567,9 @@ export class HedgePositionLedger {
     }
 
     slot.isOccupied = true;
+    slot.lifecycleState = "OCCUPIED";
+    slot.pendingClientOrderId = undefined;
+    slot.pendingOrderTimestamp = undefined;
     slot.quantity = quantity;
     slot.initialQuantity = quantity;
     slot.entryPrice = entryPrice;
@@ -1542,6 +1630,9 @@ export class HedgePositionLedger {
       }
     }
     slot.isOccupied = false;
+    slot.lifecycleState = "FLAT";
+    slot.pendingClientOrderId = undefined;
+    slot.pendingOrderTimestamp = undefined;
     slot.quantity = 0;
     slot.initialQuantity = 0;
     slot.entryPrice = 0;
@@ -1669,13 +1760,45 @@ export class HedgePositionLedger {
     const durationMs = Math.max(0, actualNowMs - openTime);
     const durationSec = durationMs / 1000;
 
-    // 0A. SOTA 3-Tier ROE Step-Collar Dynamic Profit Lock (Zero Time Delays)
+    // 0A. Tick-by-Tick Dynamic Trailing SL & 3-Tier ROE Step-Collar Dynamic Profit Lock (Zero Time Delays)
+    if (isLong) {
+      slot.peakPrice = Math.max(slot.peakPrice ?? slot.entryPrice, markPrice);
+    } else {
+      slot.troughPrice = Math.min(slot.troughPrice && slot.troughPrice > 0 ? slot.troughPrice : slot.entryPrice, markPrice);
+    }
+
     const rawRoePct = isLong
       ? ((markPrice - slot.entryPrice) / slot.entryPrice) * effectiveLev * 100.0
       : ((slot.entryPrice - markPrice) / slot.entryPrice) * effectiveLev * 100.0;
 
     if (rawRoePct > (slot.peakRoe ?? 0)) {
       slot.peakRoe = rawRoePct;
+    }
+
+    // Dynamic Continuous Tick-by-Tick Trailing SL (Locks past Entry Price as soon as in profit)
+    const minVol = garmanKlass > 0.000001 ? Math.sqrt(garmanKlass) : 0.0020;
+    const dynamicTrailDist = Math.max(this.priceTickSize * 5, slot.entryPrice * Math.max(0.0015, minVol * 1.25));
+
+    if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
+      slot.breakEvenPrice = this.formatPriceFast(
+        isLong ? slot.entryPrice * (1.0 + feeBuffer) : slot.entryPrice * (1.0 - feeBuffer)
+      );
+    }
+
+    const isInProfit = isLong ? markPrice >= slot.breakEvenPrice : markPrice <= slot.breakEvenPrice;
+    if (isInProfit) {
+      slot.breakEvenLocked = true;
+      if (isLong) {
+        const candidateContinuousSl = this.formatPriceFast(slot.peakPrice! - dynamicTrailDist);
+        const baselineBe = slot.breakEvenPrice;
+        const targetSl = Math.max(candidateContinuousSl, baselineBe);
+        slot.stopLossPrice = Math.max(slot.stopLossPrice, targetSl);
+      } else {
+        const candidateContinuousSl = this.formatPriceFast(slot.troughPrice! + dynamicTrailDist);
+        const baselineBe = slot.breakEvenPrice;
+        const targetSl = Math.min(candidateContinuousSl, baselineBe);
+        slot.stopLossPrice = slot.stopLossPrice > 0 ? Math.min(slot.stopLossPrice, targetSl) : targetSl;
+      }
     }
 
     // Tier 1: +8.0% Net ROE -> Lock Entry + Round-Trip Fees

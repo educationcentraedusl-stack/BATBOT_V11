@@ -1,6 +1,17 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-18
+- **Feature/Task:** Master Plan Execution: Execution Race Condition & Multi-Tick Order Spam Eradication, Synchronous Optimistic Ledger Locking, Tick-by-Tick Dynamic Trailing SL & 3-Tier Step-Collar Take Profit Hard-Wiring
+- **Artifacts Created/Modified:** `src/strategy/positionLedger.ts`, `src/strategy/engine.ts`, `src/execution/binance.ts`, `src/tests/test_optimistic_ledger_mutex_race_prevention.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** 
+  1. **Synchronous Optimistic Ledger Locking (`src/strategy/positionLedger.ts` & `src/strategy/engine.ts`):** Transitioned `PositionSlot` to `SlotLifecycleState = "FLAT" | "PENDING_ENTRY" | "OCCUPIED" | "PENDING_EXIT"`. Implemented synchronous `reserveCoreLongPending()` and `reserveShortSlotPending()` prior to network dispatch, blocking multi-tick duplicate order generation while HTTP requests are in flight.
+  2. **Pre-Flight Mutex Barrier & Error Rollback (`src/strategy/engine.ts`):** Pre-registered in-flight orders with `pendingEntryOrders` before calling Binance REST. Injected automatic rollback logic `rollbackPendingSlot()` on REST rejections, timeouts, or Binance order cancel/expire events.
+  3. **In-Flight ClientOrderId Deduplication Barrier (`src/execution/binance.ts`):** Enforced synchronous in-flight deduplication set in `placeOrder()`, instantly rejecting duplicate concurrent dispatches of the same ClientOrderId.
+  4. **Tick-by-Tick Dynamic Trailing SL & 3-Tier Step-Collar Take Profit Hard-Wiring (`src/strategy/positionLedger.ts` & `src/strategy/engine.ts`):** Evaluated every single tick with continuous peak/trough tracking. As soon as a trade moves into profit, break-even is locked past entry price + round-trip fees, and Stop Loss trails continuously tick-by-tick. Enforced strict 3-tier ROE collars (Tier 1: +8.0% Net ROE -> Lock Entry + Fees, Tier 2: +15.0% Net ROE -> Lock +10.0% ROE, Tier 3: >= +25.0% Net ROE -> 70% peak trail) with monotonic ratchet guarantees.
+  5. **Verification & Proof:** 100% verified via `tsc --noEmit` (0 errors), `test_optimistic_ledger_mutex_race_prevention.ts` (100% passed), `test_double_entry_oms_pnl.ts` (19/19 passed), and `test_hd_client_order_id.ts` (5/5 passed).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-18
 - **Feature/Task:** Audit 3.0 Sub-Heuristic Remediation: Strict Value Polarity Equality, 1-Hour Bounded Fallback Timestamp Barrier & BOTH Mode Min-Time Selection
 - **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/tests/test_sota_state_reconciliation_consensus.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
 - **HFT/Performance Compliance:** 

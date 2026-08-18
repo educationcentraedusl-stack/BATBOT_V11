@@ -92,7 +92,7 @@ export class StrategyEngine {
   private isOrderInFlight: boolean = false;
   private slSyncLocks: Set<string> = new Set();
   private pendingSlSyncTargets: Map<string, { quantity: number; side: "LONG" | "SHORT"; price: number }> = new Map();
-  private pendingEntryOrders: Map<number, { slotId: string; posSide: "LONG" | "SHORT"; slotIndex?: number; qty: number; targetPrice: number; timeoutTimer?: NodeJS.Timeout }> = new Map();
+  private pendingEntryOrders: Map<number, { slotId: string; posSide: "LONG" | "SHORT"; slotIndex?: number; qty: number; targetPrice: number; clientOrderId?: string; timeoutTimer?: NodeJS.Timeout }> = new Map();
   private settlementTimers: Map<string, NodeJS.Timeout> = new Map();
 
   private reusableOrderIntent!: OrderIntent;
@@ -1077,7 +1077,10 @@ export class StrategyEngine {
       if (this.pendingEntryOrders.has(orderId)) {
         const pending = this.pendingEntryOrders.get(orderId);
         if (pending?.timeoutTimer) clearTimeout(pending.timeoutTimer);
-        console.warn(`[BinanceExecution][WS_ENTRY_CANCELLED] [${this.config.symbol}] Pending entry OrderId #${orderId} (ClId: ${order.clientOrderId || "N/A"}) was ${order.orderStatus} on Binance. Local slot remains FLAT.`);
+        console.warn(`[BinanceExecution][WS_ENTRY_CANCELLED] [${this.config.symbol}] Pending entry OrderId #${orderId} (ClId: ${order.clientOrderId || "N/A"}) was ${order.orderStatus} on Binance. Rolling back slot ${pending?.slotId} to FLAT.`);
+        if (pending?.slotId) {
+          this.hedgeLedger.rollbackPendingSlot(pending.slotId, `WS_${order.orderStatus}`);
+        }
         this.pendingEntryOrders.delete(orderId);
       }
     }
@@ -2028,9 +2031,6 @@ export class StrategyEngine {
           // AI-Override Rule: High-confidence AI must satisfy strict OBI directional pressure (+/- 0.35)
           isBuySignal = aiDirection > 0 && obi >= this.config.obiBuyThreshold;
           isSellSignal = aiDirection < 0 && obi <= this.config.obiSellThreshold;
-          if (isBuySignal || isSellSignal) {
-            console.log(`[StrategyEngine][${this.config.symbol}][HIGH_CONFIDENCE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} (NetAlpha: ${(expectedNetAlpha * 10000).toFixed(1)} bps >= ${(minNetAlpha * 10000).toFixed(1)} bps), Conf: ${(aiConfidence * 100).toFixed(1)}% (Floor: ${(effectiveMinConfidence * 100).toFixed(1)}%), OBI: ${obi.toFixed(4)}, BuySignal: ${isBuySignal}, SellSignal: ${isSellSignal}`);
-          }
         } else {
           // Weighted Composite Rule with dynamic effective confidence thresholding
           isBuySignal = compositeScore > 0.12 && aiConfidence >= effectiveMinConfidence && obi >= this.config.obiBuyThreshold;
@@ -2080,8 +2080,9 @@ export class StrategyEngine {
         isSellSignal = false;
       }
 
-      // BUY -> Core Long Entry (allowed if Core Long is FLAT & temporal cooldown expired)
-      const isCoreLongOccupied = this.hedgeLedger.getCoreLong().isOccupied;
+      // BUY -> Core Long Entry (allowed if Core Long is FLAT, not PENDING_ENTRY, & temporal cooldown expired)
+      const coreLongSlot = this.hedgeLedger.getCoreLong();
+      const isCoreLongOccupied = coreLongSlot.isOccupied || coreLongSlot.lifecycleState === "PENDING_ENTRY";
       const hasPendingCoreLong = this.hasPendingEntryForSlot("CORE_LONG");
       const isCooldownCleared = nowMs >= longCooldownLock;
 
@@ -2100,6 +2101,7 @@ export class StrategyEngine {
         signalType = "BUY";
         targetPosSide = "LONG";
         targetSlotId = "CORE_LONG";
+        console.log(`[StrategyEngine][${this.config.symbol}][ACTIONABLE_SIGNAL] Seq #${seq} | BUY CORE_LONG | Dir: ${aiDirection.toFixed(4)} (NetAlpha: ${(expectedNetAlpha * 10000).toFixed(1)} bps), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}`);
       }
       // SELL -> Short Slot Entry (Evaluated via Tier-1 Dynamic Slot Dispersion Engine)
       else if (
@@ -2124,6 +2126,7 @@ export class StrategyEngine {
             targetSlotIndex = slotEval.slotIndex;
             targetSlotId = slotId;
             targetSizeDecayCoeff = slotEval.sizeDecayCoeff;
+            console.log(`[StrategyEngine][${this.config.symbol}][ACTIONABLE_SIGNAL] Seq #${seq} | SELL ${slotId} | Dir: ${aiDirection.toFixed(4)} (NetAlpha: ${(expectedNetAlpha * 10000).toFixed(1)} bps), Conf: ${(aiConfidence * 100).toFixed(1)}%, OBI: ${obi.toFixed(4)}`);
           }
         }
       }
@@ -2253,7 +2256,38 @@ export class StrategyEngine {
       let executionPromise: Promise<BinanceOrderResponse | null> | undefined = undefined;
 
       if (riskResult.passed) {
+        const entrySlotId = targetPosSide === "LONG" ? "CORE_LONG" : `SHORT_SLOT_${targetSlotIndex !== undefined ? targetSlotIndex : 0}`;
+        const entryCid = ClientOrderIdGenerator.generate(this.config.symbol, entrySlotId, "EN");
+
+        // 1. Synchronously reserve slot in HedgePositionLedger (Optimistic Mutex Lock)
+        let isReserved = false;
+        if (targetPosSide === "LONG") {
+          isReserved = this.hedgeLedger.reserveCoreLongPending(entryCid, targetPrice, finalQuantity);
+        } else if (targetPosSide === "SHORT" && targetSlotIndex !== undefined) {
+          isReserved = this.hedgeLedger.reserveShortSlotPending(targetSlotIndex, entryCid, targetPrice, finalQuantity);
+        }
+
+        if (!isReserved) {
+          console.warn(`[OPTIMISTIC_MUTEX][BLOCKED] [${this.config.symbol}:${entrySlotId}] Slot is already occupied or pending entry. Aborting duplicate order dispatch.`);
+          this.staticResult.sequenceNum = seq;
+          this.staticResult.signalType = "NONE";
+          this.staticResult.riskResult = undefined;
+          this.staticResult.executionPromise = undefined;
+          return this.staticResult;
+        }
+
         this.isOrderInFlight = true;
+
+        // 2. Synchronously pre-register in pendingEntryOrders with clientOrderId
+        const preFlightKey = -Math.abs(Date.now());
+        this.pendingEntryOrders.set(preFlightKey, {
+          slotId: entrySlotId,
+          posSide: targetPosSide!,
+          slotIndex: targetSlotIndex,
+          qty: finalQuantity,
+          targetPrice,
+          clientOrderId: entryCid,
+        });
 
         // Set atomic SAB hysteresis lockout (cooldown per side) to suppress microburst sweeps
         if (targetPosSide === "SHORT") {
@@ -2264,8 +2298,6 @@ export class StrategyEngine {
           this.client.setLastLongFillPrice(this.reusableOrderIntent.price, this.assetIndex);
         }
 
-        const entrySlotId = targetPosSide === "LONG" ? "CORE_LONG" : `SHORT_SLOT_${targetSlotIndex !== undefined ? targetSlotIndex : 0}`;
-        const entryCid = ClientOrderIdGenerator.generate(this.config.symbol, entrySlotId, "EN");
         console.log(`[BinanceExecution][DISPATCHING] [${this.config.symbol}:${entrySlotId}] Submitting ${orderType} ${this.reusableOrderIntent.side} order for ${this.reusableOrderIntent.quantity} ${this.reusableOrderIntent.symbol} (ClId: ${entryCid}) to Binance Futures...`);
 
         const orderParams: BinanceOrderParams = {
@@ -2285,6 +2317,9 @@ export class StrategyEngine {
         executionPromise = this.executionClient
           .placeOrder(orderParams)
           .then((res) => {
+            // Remove preflight temporary pending key
+            this.pendingEntryOrders.delete(preFlightKey);
+
             if (res) {
               const execPx = parseFloat(res.price || res.avgPrice || "0") || targetPrice;
               const executedQty = parseFloat(res.executedQty || "0");
@@ -2335,7 +2370,7 @@ export class StrategyEngine {
                   }
                 }
               } else if (isPending && res.orderId) {
-                // Pending Limit / Post-Only Order placed on Binance orderbook: DO NOT occupy slot until WS fill confirmation
+                // Pending Limit / Post-Only Order placed on Binance orderbook
                 const numericOrderId = typeof res.orderId === "number" ? res.orderId : parseInt(String(res.orderId), 10);
                 if (!isNaN(numericOrderId)) {
                   const fallbackTimer = setTimeout(async () => {
@@ -2353,8 +2388,9 @@ export class StrategyEngine {
                           console.log(`[BinanceExecution][FALLBACK_FILL_CONFIRMED] OrderId #${numericOrderId} confirmed FILLED via REST audit!`);
                           this.handleConfirmedEntryFill(numericOrderId, targetSlotId!, targetPosSide!, targetSlotIndex, execQty, execPx);
                         } else if (orderCheck && (orderCheck.status === "CANCELED" || orderCheck.status === "EXPIRED" || orderCheck.status === "REJECTED")) {
-                          console.warn(`[BinanceExecution][FALLBACK_CLEANUP] OrderId #${numericOrderId} was ${orderCheck.status}. Removing from pending.`);
+                          console.warn(`[BinanceExecution][FALLBACK_CLEANUP] OrderId #${numericOrderId} was ${orderCheck.status}. Removing from pending and rolling back slot.`);
                           this.pendingEntryOrders.delete(numericOrderId);
+                          this.hedgeLedger.rollbackPendingSlot(entrySlotId, `ORDER_${orderCheck.status}`);
                         }
                       } catch (err: any) {
                         if (this.pendingEntryOrders.has(numericOrderId)) {
@@ -2373,18 +2409,22 @@ export class StrategyEngine {
                     slotIndex: targetSlotIndex,
                     qty: finalQuantity,
                     targetPrice: execPx,
+                    clientOrderId: entryCid,
                     timeoutTimer: fallbackTimer,
                   });
-                  console.log(`[BinanceExecution][PENDING_FILL] Registered pending entry OrderId #${numericOrderId} for slot ${targetSlotId}. Slot WILL NOT be occupied until WS fill confirmation (2.5s fallback active).`);
+                  console.log(`[BinanceExecution][PENDING_FILL] Registered pending entry OrderId #${numericOrderId} for slot ${targetSlotId}. Slot reserved in PENDING_ENTRY (2.5s fallback active).`);
                 }
               } else {
-                console.warn(`[BinanceExecution][UNFILLED_ORDER] Order placement returned status "${res.status}". Local slot ${targetSlotId} remains FLAT.`);
+                console.warn(`[BinanceExecution][UNFILLED_ORDER] Order placement returned status "${res.status}". Rolling back slot ${entrySlotId} to FLAT.`);
+                this.hedgeLedger.rollbackPendingSlot(entrySlotId, `STATUS_${res.status}`);
               }
             }
             return res;
           })
           .catch((err) => {
             console.error(`[BinanceExecution][REJECTED] Order Placement Failed: ${err.message}`);
+            this.pendingEntryOrders.delete(preFlightKey);
+            this.hedgeLedger.rollbackPendingSlot(entrySlotId, `REJECTED_${err.message}`);
             return null;
           })
           .finally(() => {

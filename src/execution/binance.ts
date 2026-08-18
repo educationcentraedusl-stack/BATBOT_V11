@@ -178,6 +178,7 @@ export class BinanceExecutionClient {
   private timeOffset: number = 0;
   private isTimeSynced: boolean = false;
   private timeSyncPromise: Promise<number> | null = null;
+  private inFlightClientOrderIds: Set<string> = new Set();
 
   constructor(options?: BinanceClientOptions) {
     this.testnet = options?.useTestnet ?? (process.env.USE_TESTNET === "true" || process.env.USE_TESTNET === "1" || process.env.BINANCE_TESTNET === "true");
@@ -453,54 +454,116 @@ export class BinanceExecutionClient {
   }
 
   public async placeOrder(params: BinanceOrderParams, retryCount: number = 0): Promise<BinanceOrderResponse> {
-    const isAlgoOrder = params.type === "STOP_MARKET" || params.type === "TAKE_PROFIT_MARKET";
-    const formattedQty = SymbolPrecisionRegistry.formatQuantity(params.symbol, params.quantity);
-    const payload: Record<string, string | number | boolean> = {
-      symbol: params.symbol,
-      side: params.side,
-      type: params.type,
-      quantity: formattedQty,
-    };
-
-    if (params.price !== undefined) payload.price = SymbolPrecisionRegistry.formatPrice(params.symbol, params.price);
-    if (params.stopPrice !== undefined) payload.stopPrice = SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
-    
-    // Binance API Error -1106: Parameter 'timeinforce' sent when not required.
-    // timeInForce MUST NOT be sent for MARKET, STOP_MARKET, or TAKE_PROFIT_MARKET orders.
-    if (
-      params.type !== "MARKET" &&
-      params.type !== "STOP_MARKET" &&
-      params.type !== "TAKE_PROFIT_MARKET" &&
-      params.timeInForce !== undefined
-    ) {
-      payload.timeInForce = params.timeInForce;
-    } else {
-      delete payload.timeInForce;
-    }
-
-    if (params.closePosition !== undefined) payload.closePosition = params.closePosition;
-    if (params.workingType !== undefined) payload.workingType = params.workingType;
-    if (params.recvWindow !== undefined) payload.recvWindow = params.recvWindow;
-    if (params.positionSide !== undefined) payload.positionSide = params.positionSide;
-    if (params.clientOrderId !== undefined && params.clientOrderId.trim().length > 0) {
-      payload.newClientOrderId = params.clientOrderId.trim();
-    }
-
-    // Binance API Error -1106: Parameter 'reduceonly' sent when not required.
-    // In Hedge Mode (when positionSide is "LONG" or "SHORT"), reduceOnly MUST NOT be sent.
-    if (
-      params.reduceOnly !== undefined &&
-      (params.positionSide === undefined || params.positionSide === "BOTH")
-    ) {
-      payload.reduceOnly = params.reduceOnly;
-    } else {
-      delete payload.reduceOnly;
+    const cid = (params.clientOrderId || "").trim();
+    if (cid.length > 0 && retryCount === 0) {
+      if (this.inFlightClientOrderIds.has(cid)) {
+        console.warn(`[BinanceExecutionClient][DEDUPLICATION_BARRIER] Blocked duplicate concurrent submission for ClientOrderId: ${cid}`);
+        return null as any;
+      }
+      this.inFlightClientOrderIds.add(cid);
     }
 
     try {
-      if (isAlgoOrder) {
-        // Route conditional stop orders through /fapi/v1/algoOrder endpoint with required algoType: "CONDITIONAL" and triggerPrice
-        try {
+      const isAlgoOrder = params.type === "STOP_MARKET" || params.type === "TAKE_PROFIT_MARKET";
+      const formattedQty = SymbolPrecisionRegistry.formatQuantity(params.symbol, params.quantity);
+      const payload: Record<string, string | number | boolean> = {
+        symbol: params.symbol,
+        side: params.side,
+        type: params.type,
+        quantity: formattedQty,
+      };
+
+      if (params.price !== undefined) payload.price = SymbolPrecisionRegistry.formatPrice(params.symbol, params.price);
+      if (params.stopPrice !== undefined) payload.stopPrice = SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
+      
+      // Binance API Error -1106: Parameter 'timeinforce' sent when not required.
+      // timeInForce MUST NOT be sent for MARKET, STOP_MARKET, or TAKE_PROFIT_MARKET orders.
+      if (
+        params.type !== "MARKET" &&
+        params.type !== "STOP_MARKET" &&
+        params.type !== "TAKE_PROFIT_MARKET" &&
+        params.timeInForce !== undefined
+      ) {
+        payload.timeInForce = params.timeInForce;
+      } else {
+        delete payload.timeInForce;
+      }
+
+      if (params.closePosition !== undefined) payload.closePosition = params.closePosition;
+      if (params.workingType !== undefined) payload.workingType = params.workingType;
+      if (params.recvWindow !== undefined) payload.recvWindow = params.recvWindow;
+      if (params.positionSide !== undefined) payload.positionSide = params.positionSide;
+      if (cid.length > 0) {
+        payload.newClientOrderId = cid;
+      }
+
+      // Binance API Error -1106: Parameter 'reduceonly' sent when not required.
+      // In Hedge Mode (when positionSide is "LONG" or "SHORT"), reduceOnly MUST NOT be sent.
+      if (
+        params.reduceOnly !== undefined &&
+        (params.positionSide === undefined || params.positionSide === "BOTH")
+      ) {
+        payload.reduceOnly = params.reduceOnly;
+      } else {
+        delete payload.reduceOnly;
+      }
+
+      try {
+        if (isAlgoOrder) {
+          // Route conditional stop orders through /fapi/v1/algoOrder endpoint with required algoType: "CONDITIONAL" and triggerPrice
+          try {
+            const algoPayload: Record<string, string | number | boolean> = {
+              ...payload,
+              algoType: "CONDITIONAL",
+            };
+            if (params.stopPrice !== undefined) {
+              algoPayload.triggerPrice = SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
+              delete algoPayload.stopPrice;
+            }
+            if (cid.length > 0) {
+              algoPayload.clientAlgoId = cid;
+              delete algoPayload.newClientOrderId;
+            }
+            delete algoPayload.reduceOnly;
+
+            const algoRes = await this.request<any>("POST", "/fapi/v1/algoOrder", algoPayload, true);
+            if (algoRes && (algoRes.algoId || algoRes.orderId)) {
+              return {
+                orderId: algoRes.algoId || algoRes.orderId,
+                symbol: algoRes.symbol || params.symbol,
+                status: algoRes.algoStatus || algoRes.status || "NEW",
+                clientOrderId: algoRes.clientAlgoId || algoRes.clientOrderId || "",
+                price: String(algoRes.price || "0"),
+                avgPrice: String(algoRes.avgPrice || "0"),
+                origQty: String(algoRes.quantity || formattedQty),
+                executedQty: String(algoRes.executedQty || "0"),
+                cumQuote: String(algoRes.cumQuote || "0"),
+                timeInForce: algoRes.timeInForce || "GTC",
+                type: algoRes.orderType || params.type,
+                reduceOnly: false,
+                side: algoRes.side || params.side,
+                positionSide: algoRes.positionSide || params.positionSide || "BOTH",
+                stopPrice: String(algoRes.triggerPrice || params.stopPrice || "0"),
+                workingType: algoRes.workingType || params.workingType || "CONTRACT_PRICE",
+                updateTime: algoRes.updateTime || Date.now(),
+              };
+            }
+            return algoRes as BinanceOrderResponse;
+          } catch (algoErr: any) {
+            const algoMsg = algoErr?.message || String(algoErr);
+            if (algoMsg.includes("-4120") || algoMsg.includes("404") || algoMsg.includes("not supported")) {
+              // Fall back to standard /fapi/v1/order if algoOrder endpoint is unmapped
+              return await this.request<BinanceOrderResponse>("POST", "/fapi/v1/order", payload, true);
+            }
+            throw algoErr;
+          }
+        }
+
+        return await this.request<BinanceOrderResponse>("POST", "/fapi/v1/order", payload, true);
+      } catch (err: any) {
+        const errMsg = err?.message || String(err);
+        if (errMsg.includes("-4120") && !isAlgoOrder) {
+          // Fallback to /fapi/v1/algoOrder if /fapi/v1/order threw -4120
           const algoPayload: Record<string, string | number | boolean> = {
             ...payload,
             algoType: "CONDITIONAL",
@@ -509,12 +572,7 @@ export class BinanceExecutionClient {
             algoPayload.triggerPrice = SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
             delete algoPayload.stopPrice;
           }
-          if (params.clientOrderId !== undefined && params.clientOrderId.trim().length > 0) {
-            algoPayload.clientAlgoId = params.clientOrderId.trim();
-            delete algoPayload.newClientOrderId;
-          }
           delete algoPayload.reduceOnly;
-
           const algoRes = await this.request<any>("POST", "/fapi/v1/algoOrder", algoPayload, true);
           if (algoRes && (algoRes.algoId || algoRes.orderId)) {
             return {
@@ -538,78 +596,36 @@ export class BinanceExecutionClient {
             };
           }
           return algoRes as BinanceOrderResponse;
-        } catch (algoErr: any) {
-          const algoMsg = algoErr?.message || String(algoErr);
-          if (algoMsg.includes("-4120") || algoMsg.includes("404") || algoMsg.includes("not supported")) {
-            // Fall back to standard /fapi/v1/order if algoOrder endpoint is unmapped
-            return await this.request<BinanceOrderResponse>("POST", "/fapi/v1/order", payload, true);
+        }
+
+        if ((errMsg.includes("-5022") || errMsg.includes("5022")) && retryCount < 2) {
+          const tickSize = SymbolPrecisionRegistry.getTickSize(params.symbol);
+          const currentPrice = params.price || 0;
+          // Shift 1 tick away from spread to guarantee Maker placement
+          const adjustedPrice = params.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
+          const newPrice = SymbolPrecisionRegistry.formatPrice(params.symbol, adjustedPrice);
+
+          if (retryCount === 0 && params.timeInForce === "GTX") {
+            console.warn(`[BinanceExecutionClient][-5022 REJECTION] POST_ONLY order for ${params.symbol} ${params.side} @ ${currentPrice} crossed spread. Shifting 1 tick away to ${newPrice} and retrying...`);
+            return await this.placeOrder({
+              ...params,
+              price: newPrice,
+            }, 1);
+          } else if (retryCount === 1) {
+            console.warn(`[BinanceExecutionClient][-5022 FALLBACK] GTX retry failed for ${params.symbol}. Falling back to standard LIMIT (GTC) order @ ${newPrice} to safeguard position...`);
+            return await this.placeOrder({
+              ...params,
+              price: newPrice,
+              timeInForce: "GTC",
+            }, 2);
           }
-          throw algoErr;
         }
+        throw err;
       }
-
-      return await this.request<BinanceOrderResponse>("POST", "/fapi/v1/order", payload, true);
-    } catch (err: any) {
-      const errMsg = err?.message || String(err);
-      if (errMsg.includes("-4120") && !isAlgoOrder) {
-        // Fallback to /fapi/v1/algoOrder if /fapi/v1/order threw -4120
-        const algoPayload: Record<string, string | number | boolean> = {
-          ...payload,
-          algoType: "CONDITIONAL",
-        };
-        if (params.stopPrice !== undefined) {
-          algoPayload.triggerPrice = SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
-          delete algoPayload.stopPrice;
-        }
-        delete algoPayload.reduceOnly;
-        const algoRes = await this.request<any>("POST", "/fapi/v1/algoOrder", algoPayload, true);
-        if (algoRes && (algoRes.algoId || algoRes.orderId)) {
-          return {
-            orderId: algoRes.algoId || algoRes.orderId,
-            symbol: algoRes.symbol || params.symbol,
-            status: algoRes.algoStatus || algoRes.status || "NEW",
-            clientOrderId: algoRes.clientAlgoId || algoRes.clientOrderId || "",
-            price: String(algoRes.price || "0"),
-            avgPrice: String(algoRes.avgPrice || "0"),
-            origQty: String(algoRes.quantity || formattedQty),
-            executedQty: String(algoRes.executedQty || "0"),
-            cumQuote: String(algoRes.cumQuote || "0"),
-            timeInForce: algoRes.timeInForce || "GTC",
-            type: algoRes.orderType || params.type,
-            reduceOnly: false,
-            side: algoRes.side || params.side,
-            positionSide: algoRes.positionSide || params.positionSide || "BOTH",
-            stopPrice: String(algoRes.triggerPrice || params.stopPrice || "0"),
-            workingType: algoRes.workingType || params.workingType || "CONTRACT_PRICE",
-            updateTime: algoRes.updateTime || Date.now(),
-          };
-        }
-        return algoRes as BinanceOrderResponse;
+    } finally {
+      if (cid.length > 0 && retryCount === 0) {
+        this.inFlightClientOrderIds.delete(cid);
       }
-
-      if ((errMsg.includes("-5022") || errMsg.includes("5022")) && retryCount < 2) {
-        const tickSize = SymbolPrecisionRegistry.getTickSize(params.symbol);
-        const currentPrice = params.price || 0;
-        // Shift 1 tick away from spread to guarantee Maker placement
-        const adjustedPrice = params.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
-        const newPrice = SymbolPrecisionRegistry.formatPrice(params.symbol, adjustedPrice);
-
-        if (retryCount === 0 && params.timeInForce === "GTX") {
-          console.warn(`[BinanceExecutionClient][-5022 REJECTION] POST_ONLY order for ${params.symbol} ${params.side} @ ${currentPrice} crossed spread. Shifting 1 tick away to ${newPrice} and retrying...`);
-          return await this.placeOrder({
-            ...params,
-            price: newPrice,
-          }, 1);
-        } else if (retryCount === 1) {
-          console.warn(`[BinanceExecutionClient][-5022 FALLBACK] GTX retry failed for ${params.symbol}. Falling back to standard LIMIT (GTC) order @ ${newPrice} to safeguard position...`);
-          return await this.placeOrder({
-            ...params,
-            price: newPrice,
-            timeInForce: "GTC",
-          }, 2);
-        }
-      }
-      throw err;
     }
   }
 
