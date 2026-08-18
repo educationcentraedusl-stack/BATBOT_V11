@@ -391,10 +391,17 @@ class StrategyEngine {
                 return; // Slot was already settled by an incoming WS fill report during the grace buffer
             }
             console.log(`[DOUBLE_ENTRY_OMS][SETTLEMENT_TRIGGERED] [${this.config.symbol}] Fallback settlement active after ${delayMs}ms grace buffer. Fetching REST userTrades for exact PnL...`);
+            const coreLongSlot = this.hedgeLedger.getCoreLong();
+            const longOpenTime = coreLongSlot.isOccupied ? coreLongSlot.openTime : 0;
+            const occupiedShortSlots = this.hedgeLedger.getShortSlots().filter((s) => s.isOccupied && s.openTime > 0);
+            const shortOpenTime = occupiedShortSlots.length > 0 ? Math.min(...occupiedShortSlots.map((s) => s.openTime)) : 0;
             let trades = [];
             if (this.executionClient.isConfigured()) {
                 try {
-                    trades = await this.executionClient.getUserTrades(this.config.symbol, 10);
+                    const slotOpenTime = (posSide === "LONG" || posSide === "BOTH") && longOpenTime > 0
+                        ? longOpenTime
+                        : (shortOpenTime > 0 ? shortOpenTime : undefined);
+                    trades = await this.executionClient.getUserTrades(this.config.symbol, 10, slotOpenTime);
                 }
                 catch (err) {
                     console.warn(`[DOUBLE_ENTRY_OMS][USER_TRADES_WARN] [${this.config.symbol}] Failed to fetch userTrades: ${err?.message || String(err)}`);
@@ -404,8 +411,11 @@ class StrategyEngine {
             const takerFeeRate = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
             // 1. Reconcile LONG position if still open
             if (needsLongSettle) {
-                // Filter trades for closing LONG position: side = "SELL" or positionSide = "LONG"
-                const longExitTrades = trades.filter((t) => (t.positionSide === "LONG" || (t.positionSide === "BOTH" && !t.buyer) || (t.side === "SELL" && t.positionSide !== "SHORT")) && parseFloat(t.qty || "0") > 0);
+                // Filter trades for closing LONG position: strictly requires SELL side (!t.buyer || t.side === "SELL") and t.time >= longOpenTime
+                const longExitTrades = trades.filter((t) => (!t.buyer || t.side === "SELL") &&
+                    (t.positionSide === "LONG" || t.positionSide === "BOTH" || !t.positionSide) &&
+                    parseFloat(t.qty || "0") > 0 &&
+                    (longOpenTime === 0 || (t.time !== undefined && t.time >= longOpenTime)));
                 let exactPnl = undefined;
                 let exactCommission = undefined;
                 let exactExitPrice = undefined;
@@ -483,8 +493,11 @@ class StrategyEngine {
             }
             // 2. Reconcile SHORT position if still open
             if (needsShortSettle) {
-                // Filter trades for closing SHORT position: side = "BUY" or positionSide = "SHORT"
-                const shortExitTrades = trades.filter((t) => (t.positionSide === "SHORT" || (t.positionSide === "BOTH" && t.buyer) || (t.side === "BUY" && t.positionSide !== "LONG")) && parseFloat(t.qty || "0") > 0);
+                // Filter trades for closing SHORT position: strictly requires BUY side (t.buyer || t.side === "BUY") and t.time >= shortOpenTime
+                const shortExitTrades = trades.filter((t) => (t.buyer || t.side === "BUY") &&
+                    (t.positionSide === "SHORT" || t.positionSide === "BOTH" || !t.positionSide) &&
+                    parseFloat(t.qty || "0") > 0 &&
+                    (shortOpenTime === 0 || (t.time !== undefined && t.time >= shortOpenTime)));
                 let exactPnl = undefined;
                 let exactCommission = undefined;
                 let exactExitPrice = undefined;
@@ -604,9 +617,7 @@ class StrategyEngine {
                 if (targetSide === "LONG") {
                     this.hedgeLedger.occupyCoreLong(absQty, entryPx, this.config.longTakeProfitPercent, this.config.longStopLossPercent);
                     if (posUpdate.positionSide === "BOTH") {
-                        for (let i = 0; i < this.config.maxShortSlots; i++) {
-                            this.reconcileFlatPositionWithUserTrades("SHORT", 0);
-                        }
+                        this.reconcileFlatPositionWithUserTrades("SHORT", 0);
                     }
                 }
                 else {

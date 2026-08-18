@@ -313,7 +313,7 @@ async function runStateReconciliationConsensusTest(): Promise<void> {
   // --------------------------------------------------------------------------------------
   // TEST 7: Legitimate Trade Exit Settlement Confirmation
   // --------------------------------------------------------------------------------------
-  console.log("[Test 7/7] Verifying Legitimate Exit Trade Settlement when verified by userTrades...");
+  console.log("[Test 7/9] Verifying Legitimate Exit Trade Settlement when verified by userTrades...");
 
   // Re-occupy doge long position for final settlement test
   dogeEngine.getHedgeLedger().occupyCoreLong(644.0, 0.06950, 2.5, 1.5);
@@ -359,8 +359,97 @@ async function runStateReconciliationConsensusTest(): Promise<void> {
 
   console.log("  ✅ Test 7 Passed: Legitimate trade exit settled with exact micro-cent exchange PnL & fees.\n");
 
+  // --------------------------------------------------------------------------------------
+  // TEST 8: Hedge Mode Entry Fill Polarity Guard (Fatal Flaw 1 Remediation)
+  // --------------------------------------------------------------------------------------
+  console.log("[Test 8/9] Verifying Hedge Mode Entry Fill Polarity Guard (BUY orders must NOT settle LONG positions)...");
+
+  // Re-occupy doge long position in Hedge Mode
+  dogeEngine.getHedgeLedger().occupyCoreLong(644.0, 0.06950, 2.5, 1.5);
+
+  // Simulate a Hedge Mode ENTRY fill in userTrades: positionSide === "LONG", side === "BUY", buyer === true
+  (executionClient as any).getUserTrades = async () => [
+    {
+      id: 999111,
+      symbol: "DOGEUSDT",
+      orderId: 111222,
+      side: "BUY", // ENTRY fill
+      price: "0.06950",
+      qty: "644.0",
+      realizedPnl: "0",
+      marginAsset: "USDT",
+      quoteQty: "44.758",
+      commission: "0.018",
+      commissionAsset: "USDT",
+      time: Date.now(),
+      positionSide: "LONG",
+      buyer: true,
+      maker: true,
+    },
+  ];
+  // Exchange dual position check shows position is STILL OPEN (since it's an entry!)
+  (executionClient as any).getDualPositionRisk = async () => [
+    {
+      symbol: "DOGEUSDT",
+      positionAmt: "644.0",
+      entryPrice: "0.06950",
+      markPrice: "0.06987",
+      unRealizedProfit: "0.2382",
+      leverage: "20",
+      positionSide: "LONG",
+    },
+  ];
+
+  await dogeEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
+
+  const dogeSummaryAfterEntryCheck = dogeEngine.getHedgeLedger().getSummary(0.06987);
+  console.log(`  - DOGEUSDT Long Qty After Entry Fill Check: ${dogeSummaryAfterEntryCheck.longQuantity} (Expected: 644)`);
+
+  if (dogeSummaryAfterEntryCheck.longQuantity === 0) {
+    throw new Error("Test 8 Failed: Hedge Mode Entry fill (BUY) was misclassified as an EXIT fill and wiped the active position!");
+  }
+  console.log("  ✅ Test 8 Passed: Hedge Mode Entry Fill (BUY) strictly rejected as exit trade. Active position preserved.\n");
+
+  // --------------------------------------------------------------------------------------
+  // TEST 9: Open-Time Timestamp Barrier (Fatal Flaw 2 Remediation)
+  // --------------------------------------------------------------------------------------
+  console.log("[Test 9/9] Verifying Open-Time Timestamp Barrier (Stale historical trades must NOT settle current position)...");
+
+  const currentSlotOpenTime = dogeEngine.getHedgeLedger().getCoreLong().openTime;
+
+  // Mock historical trade from 2 hours prior to position openTime
+  (executionClient as any).getUserTrades = async () => [
+    {
+      id: 888111,
+      symbol: "DOGEUSDT",
+      orderId: 555666,
+      side: "SELL",
+      price: "0.07500",
+      qty: "644.0",
+      realizedPnl: "5.0000",
+      marginAsset: "USDT",
+      quoteQty: "48.300",
+      commission: "0.020",
+      commissionAsset: "USDT",
+      time: currentSlotOpenTime - (2 * 3600 * 1000), // 2 hours BEFORE position opened!
+      positionSide: "LONG",
+      buyer: false,
+      maker: true,
+    },
+  ];
+
+  await dogeEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
+
+  const dogeSummaryAfterStaleTrade = dogeEngine.getHedgeLedger().getSummary(0.06987);
+  console.log(`  - DOGEUSDT Long Qty After Stale Historical Trade Check: ${dogeSummaryAfterStaleTrade.longQuantity} (Expected: 644)`);
+
+  if (dogeSummaryAfterStaleTrade.longQuantity === 0) {
+    throw new Error("Test 9 Failed: Stale historical trade prior to slot openTime induced a false settlement!");
+  }
+  console.log("  ✅ Test 9 Passed: Timestamp barrier strictly filtered out historical trade. Zero stale PnL bleeding.\n");
+
   console.log("=========================================================================");
-  console.log("  ALL 7 STAGES OF SOTA CONSENSUS & BARRIER REMEDIATION VERIFIED (100%)   ");
+  console.log("  ALL 9 STAGES OF HOSTILE AUDIT 2.0 REMEDIATION VERIFIED (100%)          ");
   console.log("=========================================================================\n");
 }
 
