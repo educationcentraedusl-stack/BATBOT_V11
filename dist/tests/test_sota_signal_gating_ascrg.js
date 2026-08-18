@@ -281,20 +281,22 @@ async function runAscrgTestSuite() {
         console.log("  ✓ Test 5 Passed: Extreme Noise Chop strictly rejected signal!\n");
     }
     // --------------------------------------------------------------------------------
-    // [TEST 6] Rolling CVD Velocity Engine Zero-Drift Verification
+    // [TEST 6] Rolling CVD Velocity Engine Zero-Drift & Time Normalization Verification
     // --------------------------------------------------------------------------------
-    console.log("[TEST 6] Testing Rolling CVD Velocity Engine Zero-Drift Verification...");
+    console.log("[TEST 6] Testing Rolling CVD Velocity Engine Zero-Drift & Time Normalization...");
     {
         client.writeAtomicFloat64Asset(1, 2, 500000.0);
         const vel1 = client.getCVDVelocity(1, 5000);
-        console.log(`  - Initial CVD: 500000.0, Rolling Velocity: ${vel1.toFixed(4)}`);
+        console.log(`  - Initial CVD: 500000.0, Initial Velocity (cold start): ${vel1.toFixed(4)}`);
+        // Wait 250ms so elapsedMs >= 200ms threshold
+        await new Promise((r) => setTimeout(r, 250));
         client.writeAtomicFloat64Asset(1, 2, 502000.0);
         const vel2 = client.getCVDVelocity(1, 5000);
-        console.log(`  - CVD Delta +2000.0, Rolling Velocity: ${vel2.toFixed(4)}`);
-        if (Math.abs(vel1) > 1.0 || Math.abs(vel2) > 1.0) {
-            throw new Error("Test 6 Failed: CVD velocity exceeded [-1.0, +1.0] bounds");
+        console.log(`  - CVD Delta +2000.0 over ~250ms, Rolling Velocity: ${vel2.toFixed(4)}`);
+        if (Math.abs(vel1) > 1.0 || Math.abs(vel2) > 1.0 || vel2 <= 0.0) {
+            throw new Error(`Test 6 Failed: CVD velocity ${vel2} invalid or out of bounds`);
         }
-        console.log("  ✓ Test 6 Passed: Rolling CVD Velocity strictly bounded in [-1.0, +1.0] with zero session drift!\n");
+        console.log("  ✓ Test 6 Passed: Rolling CVD Velocity correctly computed positive velocity with zero session drift!\n");
     }
     // --------------------------------------------------------------------------------
     // [TEST 7] Latency Benchmark over 50,000 Iterations (< 1.50 µs SLA)
@@ -313,9 +315,12 @@ async function runAscrgTestSuite() {
             maxShortSlots: 3,
         };
         const benchEngine = new engine_1.StrategyEngine(client, riskGuard, mockExec, xrpConfig);
+        benchEngine.getHedgeLedger().occupyShortSlot(0, 59.9, 1.0009, 2.5, 1.5, false);
+        benchEngine.getHedgeLedger().getShortSlots()[0].activeStopLossOrderId = 999999;
+        benchEngine.getHedgeLedger().getShortSlots()[0].lastSyncedSlPrice = 1.0159;
         const bigIntView = new BigInt64Array(sab);
-        // Warm up
-        for (let i = 0; i < 1000; i++) {
+        // Warm up V8 TurboFan JIT compiler & optimize hot path functions
+        for (let i = 0; i < 5000; i++) {
             Atomics.store(bigIntView, 5 * 256 + 92, BigInt(1000 + i));
             benchEngine.evaluateTick();
         }

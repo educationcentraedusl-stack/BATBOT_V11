@@ -98,6 +98,7 @@ export class StrategyEngine {
   private settlementTimers: Map<string, NodeJS.Timeout> = new Map();
 
   private reusableOrderIntent!: OrderIntent;
+  private lastSabSyncTs: number = 0;
 
   // Reusable static result object for NONE signals to achieve zero GC-heap allocation in hot path
   private staticResult: StrategySignalResult = {
@@ -1772,6 +1773,7 @@ export class StrategyEngine {
       const penaltyCoeff = latencyPenalty > 0 ? Math.max(0.75, latencyPenalty) : 1.0;
 
       // 1. Dynamic Monitoring: Evaluate Microstructure, Volatility & Dynamic Exit Boundaries
+      const nowMs = Date.now();
       const markPrice = askPrice > 0 ? (askPrice + bidPrice) / 2 : bidPrice;
 
       // Feed live orderbook & price ticks into SOTA microstructure & volatility engines
@@ -1784,12 +1786,12 @@ export class StrategyEngine {
       const activePosSide: "LONG" | "SHORT" = summary.side === "SHORT" ? "SHORT" : "LONG";
       let holdingDurationMs = 0;
       const coreLong = this.hedgeLedger.getCoreLong();
-      const coreLongDuration = coreLong.isOccupied && coreLong.openTime > 0 ? Math.max(0, Date.now() - coreLong.openTime) : 0;
+      const coreLongDuration = coreLong.isOccupied && coreLong.openTime > 0 ? Math.max(0, nowMs - coreLong.openTime) : 0;
       let shortDuration = 0;
       const shortSlots = this.hedgeLedger.getShortSlots();
       for (const slot of shortSlots) {
         if (slot.isOccupied && slot.openTime > 0) {
-          const dur = Math.max(0, Date.now() - slot.openTime);
+          const dur = Math.max(0, nowMs - slot.openTime);
           if (dur > shortDuration) shortDuration = dur;
         }
       }
@@ -1830,7 +1832,8 @@ export class StrategyEngine {
       this.client.setDynamicStopLossPrice(dynamicSlPx, this.assetIndex);
 
       // Sync active position state to SharedArrayBuffer for TUI Table telemetry
-      if (markPrice > 0) {
+      if (hasActivePos && markPrice > 0 && nowMs - this.lastSabSyncTs >= 100) {
+        this.lastSabSyncTs = nowMs;
         this.syncSabPositionState(markPrice);
       }
 
@@ -1866,36 +1869,38 @@ export class StrategyEngine {
 
         const activeTriggers = sotaTriggers.length > 0 ? sotaTriggers : hedgeTriggers;
 
-        // Closed-Loop Zero-Naked Invariant Audit: Verify 100% of aggregated active positions are protected by resting exchange-native SL
-        this.auditActivePositionRiskClosedLoop();
+        if (hasActivePos) {
+          // Closed-Loop Zero-Naked Invariant Audit: Verify 100% of aggregated active positions are protected by resting exchange-native SL
+          this.auditActivePositionRiskClosedLoop();
 
-        // Check for Stop-Loss Ratchet Shifts that require Exchange-Native STOP_MARKET cancel-replace sync
-        if (activeTriggers.length === 0) {
-          const aggLong = this.hedgeLedger.getAggregatedSideSummary("LONG");
-          if (aggLong.isOccupied && aggLong.totalQuantity > 0 && aggLong.stopLossPrice > 0) {
-            const coreLong = this.hedgeLedger.getCoreLong();
-            if (coreLong.lastSyncedSlPrice === undefined || coreLong.lastSyncedSlPrice === 0 || aggLong.stopLossPrice > coreLong.lastSyncedSlPrice) {
-              this.syncExchangeStopLossOrder("CORE_LONG", aggLong.totalQuantity, "LONG", aggLong.stopLossPrice).catch((err: unknown) => {
-                console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Core Long SL ratchet sync failed: ${err instanceof Error ? err.message : String(err)}`);
-              });
-            }
-          }
-          const aggShort = this.hedgeLedger.getAggregatedSideSummary("SHORT");
-          if (aggShort.isOccupied && aggShort.totalQuantity > 0 && aggShort.stopLossPrice > 0) {
-            const primarySlotId = aggShort.slotIds[0] || "SHORT_SLOT_0";
-            let needsSync = false;
-            for (const s of this.hedgeLedger.getShortSlots()) {
-              if (s.isOccupied && s.quantity > 0) {
-                if (s.lastSyncedSlPrice === undefined || s.lastSyncedSlPrice === 0 || aggShort.stopLossPrice < s.lastSyncedSlPrice) {
-                  needsSync = true;
-                  break;
-                }
+          // Check for Stop-Loss Ratchet Shifts that require Exchange-Native STOP_MARKET cancel-replace sync
+          if (activeTriggers.length === 0) {
+            const aggLong = this.hedgeLedger.getAggregatedSideSummary("LONG");
+            if (aggLong.isOccupied && aggLong.totalQuantity > 0 && aggLong.stopLossPrice > 0) {
+              const coreLong = this.hedgeLedger.getCoreLong();
+              if (coreLong.lastSyncedSlPrice === undefined || coreLong.lastSyncedSlPrice === 0 || aggLong.stopLossPrice > coreLong.lastSyncedSlPrice) {
+                this.syncExchangeStopLossOrder("CORE_LONG", aggLong.totalQuantity, "LONG", aggLong.stopLossPrice).catch((err: unknown) => {
+                  console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Core Long SL ratchet sync failed: ${err instanceof Error ? err.message : String(err)}`);
+                });
               }
             }
-            if (needsSync) {
-              this.syncExchangeStopLossOrder(primarySlotId, aggShort.totalQuantity, "SHORT", aggShort.stopLossPrice).catch((err: unknown) => {
-                console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Aggregated Short SL ratchet sync failed: ${err instanceof Error ? err.message : String(err)}`);
-              });
+            const aggShort = this.hedgeLedger.getAggregatedSideSummary("SHORT");
+            if (aggShort.isOccupied && aggShort.totalQuantity > 0 && aggShort.stopLossPrice > 0) {
+              const primarySlotId = aggShort.slotIds[0] || "SHORT_SLOT_0";
+              let needsSync = false;
+              for (const s of this.hedgeLedger.getShortSlots()) {
+                if (s.isOccupied && s.quantity > 0) {
+                  if (s.lastSyncedSlPrice === undefined || s.lastSyncedSlPrice === 0 || aggShort.stopLossPrice < s.lastSyncedSlPrice) {
+                    needsSync = true;
+                    break;
+                  }
+                }
+              }
+              if (needsSync) {
+                this.syncExchangeStopLossOrder(primarySlotId, aggShort.totalQuantity, "SHORT", aggShort.stopLossPrice).catch((err: unknown) => {
+                  console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Aggregated Short SL ratchet sync failed: ${err instanceof Error ? err.message : String(err)}`);
+                });
+              }
             }
           }
         }
@@ -2107,8 +2112,6 @@ export class StrategyEngine {
       const hurstExponent = this.client.getHurstExponent(this.assetIndex);
       const lobEntropy = this.client.getLOBEntropy(this.assetIndex);
       const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
-
-      const nowMs = Date.now();
       // Defensive ceiling guard: allow up to 30 min (1,800,000ms) for consecutive loss circuit breaker halts
       const longCooldownLock = rawLongCooldownLock > nowMs + 1800000 ? 0 : rawLongCooldownLock;
       const shortCooldownLock = rawShortCooldownLock > nowMs + 1800000 ? 0 : rawShortCooldownLock;
@@ -2175,7 +2178,7 @@ export class StrategyEngine {
 
       // SOTA August 2026 4-Factor Multi-Variate Composite Signal Engine
       const obiScore = Math.max(-1.0, Math.min(1.0, obi));
-      const cvdVelocity = this.client.getCVDVelocity(this.assetIndex);
+      const cvdVelocity = this.client.getCVDVelocity(this.assetIndex, 5000, nowMs);
       const cvdScore = Math.max(-1.0, Math.min(1.0, cvdVelocity));
       const aiScore = Math.max(-1.0, Math.min(1.0, aiDirection * aiConfidence));
       const ofiScore = Math.max(-1.0, Math.min(1.0, hazardMetrics.ofi));
@@ -2200,9 +2203,9 @@ export class StrategyEngine {
       const maxOpposingObi = 0.45; // Strict toxic wall / liquidity sweep trap guard
 
       // Continuous confidence relaxation: kappa = 2.5
-      // When AI Confidence increases beyond base (0.60), the required directional OBI threshold (0.20)
+      // When AI Confidence increases beyond effective minimum confidence floor, the required directional OBI threshold (0.20)
       // dynamically relaxes towards 0.0 (neutral), allowing pre-breakdown entry without chasing swept books.
-      const confExcess = Math.max(0.0, (aiConfidence - baseMinConfidence) / Math.max(0.01, 1.0 - baseMinConfidence));
+      const confExcess = Math.max(0.0, (aiConfidence - effectiveMinConfidence) / Math.max(0.01, 1.0 - effectiveMinConfidence));
       const requiredObiThreshold = baseObiMagnitude * (1.0 - 2.5 * Math.tanh(confExcess));
 
       // Symmetrical Favorable OBI directional verification with toxic opposing wall protection:
@@ -2449,6 +2452,18 @@ export class StrategyEngine {
 
       if (riskResult.passed) {
         const entrySlotId = targetPosSide === "LONG" ? "CORE_LONG" : `SHORT_SLOT_${targetSlotIndex !== undefined ? targetSlotIndex : 0}`;
+        const targetSlot = targetPosSide === "LONG" ? this.hedgeLedger.getCoreLong() : (targetSlotIndex !== undefined ? this.hedgeLedger.getShortSlots()[targetSlotIndex] : undefined);
+        if (!targetSlot || targetSlot.isOccupied || targetSlot.lifecycleState === "PENDING_ENTRY") {
+          if (seq % 1000n === 0n) {
+            console.warn(`[OPTIMISTIC_MUTEX][BLOCKED] [${this.config.symbol}:${entrySlotId}] Slot is already occupied or pending entry. Aborting duplicate order dispatch.`);
+          }
+          this.staticResult.sequenceNum = seq;
+          this.staticResult.signalType = "NONE";
+          this.staticResult.riskResult = undefined;
+          this.staticResult.executionPromise = undefined;
+          return this.staticResult;
+        }
+
         const entryCid = ClientOrderIdGenerator.generate(this.config.symbol, entrySlotId, "EN");
 
         // 1. Synchronously reserve slot in HedgePositionLedger (Optimistic Mutex Lock)
@@ -2460,7 +2475,9 @@ export class StrategyEngine {
         }
 
         if (!isReserved) {
-          console.warn(`[OPTIMISTIC_MUTEX][BLOCKED] [${this.config.symbol}:${entrySlotId}] Slot is already occupied or pending entry. Aborting duplicate order dispatch.`);
+          if (seq % 1000n === 0n) {
+            console.warn(`[OPTIMISTIC_MUTEX][BLOCKED] [${this.config.symbol}:${entrySlotId}] Slot is already occupied or pending entry. Aborting duplicate order dispatch.`);
+          }
           this.staticResult.sequenceNum = seq;
           this.staticResult.signalType = "NONE";
           this.staticResult.riskResult = undefined;

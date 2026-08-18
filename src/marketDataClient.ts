@@ -40,6 +40,12 @@ export class MarketDataClient {
       );
     }
     this.bigIntView = new BigInt64Array(sab);
+    this.cvdTimestamps = new Float64Array(this.maxAssets * this.cvdRingCap);
+    this.cvdValues = new Float64Array(this.maxAssets * this.cvdRingCap);
+    this.cvdHeads = new Int32Array(this.maxAssets);
+    this.cvdCounts = new Int32Array(this.maxAssets);
+    this.lastCvdUpdateTs = new Float64Array(this.maxAssets);
+    this.lastCvdRecorded = new Float64Array(this.maxAssets);
   }
 
   /**
@@ -88,13 +94,13 @@ export class MarketDataClient {
     return this.readAtomicFloat64Asset(assetIdx, 1);
   }
 
-  private static readonly CVD_RING_CAP = 64;
-  private static readonly cvdTimestamps = new Float64Array(32 * 64);
-  private static readonly cvdValues = new Float64Array(32 * 64);
-  private static readonly cvdHeads = new Int32Array(32);
-  private static readonly cvdCounts = new Int32Array(32);
-  private static readonly lastCvdUpdateTs = new Float64Array(32);
-  private static readonly lastCvdRecorded = new Float64Array(32);
+  private readonly cvdRingCap: number = 1024;
+  private readonly cvdTimestamps: Float64Array;
+  private readonly cvdValues: Float64Array;
+  private readonly cvdHeads: Int32Array;
+  private readonly cvdCounts: Int32Array;
+  private readonly lastCvdUpdateTs: Float64Array;
+  private readonly lastCvdRecorded: Float64Array;
 
   public getCVD(assetIdx: number = 0): number {
     return this.readAtomicFloat64Asset(assetIdx, 2);
@@ -103,32 +109,32 @@ export class MarketDataClient {
   /**
    * Calculates rolling volume-normalized CVD velocity over windowMs (default 5000ms).
    * Bounded in [-1.0, +1.0] using hyperbolic tangent to eliminate session-cumulative drift.
+   * True rate-of-change velocity: Velocity = (Delta CVD / Delta t_sec) * 0.0005.
    * Zero GC allocation hot-path implementation.
    */
-  public getCVDVelocity(assetIdx: number = 0, windowMs: number = 5000): number {
-    const safeAssetIdx = Math.max(0, Math.min(31, assetIdx));
+  public getCVDVelocity(assetIdx: number = 0, windowMs: number = 5000, nowMs: number = Date.now()): number {
+    const safeAssetIdx = Math.max(0, Math.min(this.maxAssets - 1, assetIdx));
     const currentCvd = this.readAtomicFloat64Asset(safeAssetIdx, 2);
-    const nowMs = Date.now();
 
-    const baseOffset = safeAssetIdx << 6; // safeAssetIdx * 64
-    let head = MarketDataClient.cvdHeads[safeAssetIdx];
-    let count = MarketDataClient.cvdCounts[safeAssetIdx];
+    const baseOffset = safeAssetIdx * this.cvdRingCap;
+    let head = this.cvdHeads[safeAssetIdx];
+    let count = this.cvdCounts[safeAssetIdx];
 
     if (
       count === 0 ||
-      Math.abs(currentCvd - MarketDataClient.lastCvdRecorded[safeAssetIdx]) > 1e-6 ||
-      nowMs - MarketDataClient.lastCvdUpdateTs[safeAssetIdx] >= 100
+      Math.abs(currentCvd - this.lastCvdRecorded[safeAssetIdx]) > 1e-6 ||
+      nowMs - this.lastCvdUpdateTs[safeAssetIdx] >= 100
     ) {
       const idx = baseOffset + head;
-      MarketDataClient.cvdTimestamps[idx] = nowMs;
-      MarketDataClient.cvdValues[idx] = currentCvd;
-      MarketDataClient.lastCvdRecorded[safeAssetIdx] = currentCvd;
-      MarketDataClient.lastCvdUpdateTs[safeAssetIdx] = nowMs;
-      head = (head + 1) & 63;
-      MarketDataClient.cvdHeads[safeAssetIdx] = head;
-      if (count < MarketDataClient.CVD_RING_CAP) {
+      this.cvdTimestamps[idx] = nowMs;
+      this.cvdValues[idx] = currentCvd;
+      this.lastCvdRecorded[safeAssetIdx] = currentCvd;
+      this.lastCvdUpdateTs[safeAssetIdx] = nowMs;
+      head = (head + 1) & 1023; // Modulo 1024
+      this.cvdHeads[safeAssetIdx] = head;
+      if (count < this.cvdRingCap) {
         count++;
-        MarketDataClient.cvdCounts[safeAssetIdx] = count;
+        this.cvdCounts[safeAssetIdx] = count;
       }
     }
 
@@ -137,18 +143,28 @@ export class MarketDataClient {
     }
 
     const targetTs = nowMs - windowMs;
-    const oldestIdx = (head - count + 64) & 63;
-    let baselineCvd = MarketDataClient.cvdValues[baseOffset + oldestIdx];
-    let baselineTs = MarketDataClient.cvdTimestamps[baseOffset + oldestIdx];
+    const oldestIdx = (head - count + 1024) & 1023;
+    let baselineCvd = this.cvdValues[baseOffset + oldestIdx];
+    let baselineTs = this.cvdTimestamps[baseOffset + oldestIdx];
+    let low = 0;
+    let high = count - 1;
+    let bestIdx = -1;
 
-    for (let i = 0; i < count; i++) {
-      const checkIdx = (head - 1 - i + 64) & 63;
-      const ts = MarketDataClient.cvdTimestamps[baseOffset + checkIdx];
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      const ringIdx = (head - 1 - mid + 1024) & 1023;
+      const ts = this.cvdTimestamps[baseOffset + ringIdx];
       if (ts <= targetTs) {
-        baselineCvd = MarketDataClient.cvdValues[baseOffset + checkIdx];
-        baselineTs = ts;
-        break;
+        bestIdx = ringIdx;
+        high = mid - 1; // Seek newer timestamp closer to targetTs
+      } else {
+        low = mid + 1; // Seek older timestamp
       }
+    }
+
+    if (bestIdx >= 0) {
+      baselineCvd = this.cvdValues[baseOffset + bestIdx];
+      baselineTs = this.cvdTimestamps[baseOffset + bestIdx];
     }
 
     const elapsedMs = nowMs - baselineTs;
@@ -157,7 +173,12 @@ export class MarketDataClient {
     }
 
     const deltaCvd = currentCvd - baselineCvd;
-    return Math.tanh(deltaCvd * 0.0001);
+    if (Math.abs(deltaCvd) < 1e-9) {
+      return 0.0;
+    }
+    const elapsedSec = elapsedMs / 1000.0;
+    const ratePerSecond = deltaCvd / elapsedSec;
+    return Math.tanh(ratePerSecond * 0.0005);
   }
 
   public getSpreadVelocity(assetIdx: number = 0): number {
@@ -712,6 +733,12 @@ export class MarketDataClient {
    */
   public flushTelemetry(): void {
     this.bigIntView.fill(0n);
+    this.cvdTimestamps.fill(0);
+    this.cvdValues.fill(0);
+    this.cvdHeads.fill(0);
+    this.cvdCounts.fill(0);
+    this.lastCvdUpdateTs.fill(0);
+    this.lastCvdRecorded.fill(0);
   }
 }
 
