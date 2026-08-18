@@ -479,8 +479,7 @@ export class BinanceExecutionClient {
     const cid = (params.clientOrderId || "").trim();
     if (cid.length > 0 && retryCount === 0) {
       if (this.inFlightClientOrderIds.has(cid)) {
-        console.warn(`[BinanceExecutionClient][DEDUPLICATION_BARRIER] Blocked duplicate concurrent submission for ClientOrderId: ${cid}`);
-        return null as any;
+        throw new Error(`[BinanceExecutionClient][DEDUPLICATION_BARRIER] Blocked duplicate concurrent submission for ClientOrderId: ${cid}`);
       }
       this.inFlightClientOrderIds.add(cid);
     }
@@ -920,16 +919,41 @@ export class BinanceExecutionClient {
     const standardOrders = await this.request<BinanceOrderResponse[]>("GET", "/fapi/v1/openOrders", params, true);
 
     // Open algo orders query (gracefully fall back if algo endpoint unmapped on this account/symbol)
-    const algoOrders = await this.request<any[]>("GET", "/fapi/v1/openAlgoOrders", params, true).catch((err: any) => {
-      const msg = err?.message || String(err);
+    interface RawAlgoOrder {
+      algoId?: number;
+      orderId?: number;
+      symbol: string;
+      algoStatus?: string;
+      status?: string;
+      clientAlgoId?: string;
+      clientOrderId?: string;
+      price?: string;
+      avgPrice?: string;
+      quantity?: string;
+      origQty?: string;
+      executedQty?: string;
+      cumQuote?: string;
+      timeInForce?: string;
+      orderType?: string;
+      type?: string;
+      reduceOnly?: boolean;
+      side: "BUY" | "SELL";
+      positionSide?: "LONG" | "SHORT" | "BOTH";
+      stopPrice?: string;
+      workingType?: string;
+      updateTime?: number;
+    }
+
+    const algoOrders = await this.request<RawAlgoOrder[]>("GET", "/fapi/v1/openAlgoOrders", params, true).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("404") || msg.includes("-4120") || msg.includes("not supported")) {
-        return [] as any[];
+        return [] as RawAlgoOrder[];
       }
       throw err;
     });
 
     const mappedAlgoOrders: BinanceOrderResponse[] = (Array.isArray(algoOrders) ? algoOrders : []).map((ao) => ({
-      orderId: ao.algoId || ao.orderId,
+      orderId: ao.algoId || ao.orderId || 0,
       symbol: ao.symbol,
       status: ao.algoStatus || ao.status || "NEW",
       clientOrderId: ao.clientAlgoId || ao.clientOrderId || "",
@@ -952,11 +976,11 @@ export class BinanceExecutionClient {
   }
 
   public async getAccountBalance(): Promise<BinanceAccountBalance[]> {
-    return this.request<any>("GET", "/fapi/v3/account", {}, true).then(
-      (res: any) => (Array.isArray(res?.assets) ? res.assets : (Array.isArray(res) ? res : []))
+    return this.request<BinanceAccountInfo>("GET", "/fapi/v3/account", {}, true).then(
+      (res: BinanceAccountInfo) => (Array.isArray(res?.assets) ? res.assets : [])
     ).catch(async () => {
-      const v2Res = await this.request<any>("GET", "/fapi/v2/account", {}, true);
-      return Array.isArray(v2Res?.assets) ? v2Res.assets : (Array.isArray(v2Res) ? v2Res : []);
+      const v2Res = await this.request<BinanceAccountInfo>("GET", "/fapi/v2/account", {}, true);
+      return Array.isArray(v2Res?.assets) ? v2Res.assets : [];
     });
   }
 

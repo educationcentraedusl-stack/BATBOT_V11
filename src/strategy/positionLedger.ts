@@ -7,10 +7,13 @@ import { HJBReservationEngine, HJBExitEvaluation } from "./hjbReservationEngine"
 import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
 import { getTradingSymbols } from "../config/tradingSymbols";
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-let nativeAddon: any = null;
+interface NativeTradingAddon {
+  recordTradeIc?: (dir: number, realizedReturn: number, assetIndex: number) => void;
+}
+let nativeAddon: NativeTradingAddon | null = null;
 try {
-  nativeAddon = require("../../index.js");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  nativeAddon = require("../../index.js") as NativeTradingAddon;
 } catch {
   // Safe fallback
 }
@@ -1141,17 +1144,19 @@ export class HedgePositionLedger {
       res.stopLossPrice = isOcc ? (this.coreLong.stopLossPrice || 0) : 0;
       res.takeProfitPrice = isOcc ? (this.coreLong.takeProfitPrice || 0) : 0;
       res.breakEvenPrice = isOcc ? (this.coreLong.breakEvenPrice || 0) : 0;
-      res.activeStopLossOrderId = this.coreLong.activeStopLossOrderId || 0;
-      res.activeTpOrderIds = this.coreLong.activeTpOrderIds || [];
+      res.activeStopLossOrderId = isOcc ? (this.coreLong.activeStopLossOrderId || 0) : 0;
+      res.activeTpOrderIds = isOcc ? (this.coreLong.activeTpOrderIds ? [...this.coreLong.activeTpOrderIds] : []) : [];
       return res;
     } else {
       let totalQty = 0;
       let totalNotional = 0;
       let primarySlOrderId = 0;
       let activeSlotCount = 0;
-      let activeTpCount = 0;
+      let totalSlWeight = 0;
+      let totalTpWeight = 0;
 
       const res = this.cachedAggregatedShortSummary;
+      res.activeTpOrderIds = [];
       const slots = this.shortSlots;
       const len = slots.length;
 
@@ -1160,12 +1165,18 @@ export class HedgePositionLedger {
         if (s.isOccupied && s.quantity > 0) {
           totalQty += s.quantity;
           totalNotional += s.quantity * s.entryPrice;
+          totalSlWeight += s.quantity * (s.stopLossPercent > 0 ? s.stopLossPercent : 1.0);
+          totalTpWeight += s.quantity * (s.takeProfitPercent > 0 ? s.takeProfitPercent : 2.5);
           res.slotIds[activeSlotCount++] = s.slotId;
           if (s.activeStopLossOrderId && primarySlOrderId === 0) {
             primarySlOrderId = s.activeStopLossOrderId;
           }
           if (s.activeTpOrderIds && s.activeTpOrderIds.length > 0) {
-            res.activeTpOrderIds = s.activeTpOrderIds;
+            for (const tpId of s.activeTpOrderIds) {
+              if (!res.activeTpOrderIds.includes(tpId)) {
+                res.activeTpOrderIds.push(tpId);
+              }
+            }
           }
         }
       }
@@ -1173,8 +1184,8 @@ export class HedgePositionLedger {
 
       const isOcc = totalQty > 0;
       const vwap = isOcc ? totalNotional / totalQty : 0;
-      const shortSlPct = slots[0]?.stopLossPercent || 1.20;
-      const shortTpPct = slots[0]?.takeProfitPercent || 2.50;
+      const shortSlPct = isOcc && totalQty > 0 ? totalSlWeight / totalQty : (slots[0]?.stopLossPercent > 0 ? slots[0].stopLossPercent : 1.0);
+      const shortTpPct = isOcc && totalQty > 0 ? totalTpWeight / totalQty : (slots[0]?.takeProfitPercent > 0 ? slots[0].takeProfitPercent : 2.5);
       const tickSize = this.priceTickSize;
       const invTick = this.invPriceTickSize;
       const priceFactor = this.priceFactor;
@@ -1189,7 +1200,7 @@ export class HedgePositionLedger {
       res.stopLossPrice = slPx;
       res.takeProfitPrice = tpPx;
       res.breakEvenPrice = bePx;
-      res.activeStopLossOrderId = primarySlOrderId;
+      res.activeStopLossOrderId = isOcc ? primarySlOrderId : 0;
       return res;
     }
   }
@@ -1202,6 +1213,11 @@ export class HedgePositionLedger {
     if (slot) {
       slot.activeTpOrderIds = orderIds;
     }
+  }
+
+  public getActiveTpOrderIds(slotId: string): number[] {
+    const slot = slotId === "CORE_LONG" ? this.coreLong : this.shortSlots.find((s) => s.slotId === slotId);
+    return slot?.activeTpOrderIds ? [...slot.activeTpOrderIds] : [];
   }
 
   public registerActiveStopLossOrderId(slotId: string, orderId: number): void {
@@ -1742,6 +1758,9 @@ export class HedgePositionLedger {
     this.coreLong.tpStageReached = 0;
     this.coreLong.breakEvenLocked = false;
     this.coreLong.breakEvenPrice = 0;
+    this.coreLong.activeStopLossOrderId = 0;
+    this.coreLong.activeTpOrderIds = [];
+    this.coreLong.lastSyncedSlPrice = 0;
     this.coreLong.tpPrices = [];
   }
 
@@ -1906,6 +1925,9 @@ export class HedgePositionLedger {
     slot.tpStageReached = 0;
     slot.breakEvenLocked = false;
     slot.breakEvenPrice = 0;
+    slot.activeStopLossOrderId = 0;
+    slot.activeTpOrderIds = [];
+    slot.lastSyncedSlPrice = 0;
     slot.tpPrices = [];
   }
 
