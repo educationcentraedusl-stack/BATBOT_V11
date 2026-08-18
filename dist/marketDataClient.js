@@ -70,8 +70,65 @@ class MarketDataClient {
     getOBI(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 1);
     }
+    static CVD_RING_CAP = 64;
+    static cvdTimestamps = new Float64Array(32 * 64);
+    static cvdValues = new Float64Array(32 * 64);
+    static cvdHeads = new Int32Array(32);
+    static cvdCounts = new Int32Array(32);
+    static lastCvdUpdateTs = new Float64Array(32);
+    static lastCvdRecorded = new Float64Array(32);
     getCVD(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 2);
+    }
+    /**
+     * Calculates rolling volume-normalized CVD velocity over windowMs (default 5000ms).
+     * Bounded in [-1.0, +1.0] using hyperbolic tangent to eliminate session-cumulative drift.
+     * Zero GC allocation hot-path implementation.
+     */
+    getCVDVelocity(assetIdx = 0, windowMs = 5000) {
+        const safeAssetIdx = Math.max(0, Math.min(31, assetIdx));
+        const currentCvd = this.readAtomicFloat64Asset(safeAssetIdx, 2);
+        const nowMs = Date.now();
+        const baseOffset = safeAssetIdx << 6; // safeAssetIdx * 64
+        let head = MarketDataClient.cvdHeads[safeAssetIdx];
+        let count = MarketDataClient.cvdCounts[safeAssetIdx];
+        if (count === 0 ||
+            Math.abs(currentCvd - MarketDataClient.lastCvdRecorded[safeAssetIdx]) > 1e-6 ||
+            nowMs - MarketDataClient.lastCvdUpdateTs[safeAssetIdx] >= 100) {
+            const idx = baseOffset + head;
+            MarketDataClient.cvdTimestamps[idx] = nowMs;
+            MarketDataClient.cvdValues[idx] = currentCvd;
+            MarketDataClient.lastCvdRecorded[safeAssetIdx] = currentCvd;
+            MarketDataClient.lastCvdUpdateTs[safeAssetIdx] = nowMs;
+            head = (head + 1) & 63;
+            MarketDataClient.cvdHeads[safeAssetIdx] = head;
+            if (count < MarketDataClient.CVD_RING_CAP) {
+                count++;
+                MarketDataClient.cvdCounts[safeAssetIdx] = count;
+            }
+        }
+        if (count < 2) {
+            return 0.0;
+        }
+        const targetTs = nowMs - windowMs;
+        const oldestIdx = (head - count + 64) & 63;
+        let baselineCvd = MarketDataClient.cvdValues[baseOffset + oldestIdx];
+        let baselineTs = MarketDataClient.cvdTimestamps[baseOffset + oldestIdx];
+        for (let i = 0; i < count; i++) {
+            const checkIdx = (head - 1 - i + 64) & 63;
+            const ts = MarketDataClient.cvdTimestamps[baseOffset + checkIdx];
+            if (ts <= targetTs) {
+                baselineCvd = MarketDataClient.cvdValues[baseOffset + checkIdx];
+                baselineTs = ts;
+                break;
+            }
+        }
+        const elapsedMs = nowMs - baselineTs;
+        if (elapsedMs < 200) {
+            return 0.0;
+        }
+        const deltaCvd = currentCvd - baselineCvd;
+        return Math.tanh(deltaCvd * 0.0001);
     }
     getSpreadVelocity(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 3);
