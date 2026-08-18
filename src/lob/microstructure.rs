@@ -207,8 +207,7 @@ impl MicrostructureAnalyzer {
             self.recalculate_rv_gk();
         }
 
-        // 3. Update VPIN Volume Buckets with Dynamic Adaptive Target Volume & Remainder Volume Carry-Over
-        // Taker buy: is_buyer_maker == false
+        // 3. Update VPIN Volume Buckets with Bulk Volume Classification (BVC) & Adaptive Target Volume
         let total_trade_vol = price * quantity;
 
         if total_trade_vol > 0.0 && total_trade_vol.is_finite() {
@@ -218,6 +217,18 @@ impl MicrostructureAnalyzer {
                 self.bucket_target_volume = target_from_rolling;
             }
 
+            // Bulk Volume Classification (Easley, Lopez de Prado, O'Hara 2012)
+            let prev_price = self.current_bar.close;
+            let delta_p = if prev_price > 0.0 { price - prev_price } else { 0.0 };
+            let sigma_p = (price * self.cached_rv_gk.max(0.0001)).max(1e-6);
+            let z_ret = (delta_p / sigma_p).clamp(-3.0, 3.0);
+            let bvc_base = 0.50 + 0.35 * (z_ret / 1.5).tanh();
+            let trade_sign_offset = if is_buyer_maker { -0.15 } else { 0.15 };
+            let buy_frac = (bvc_base + trade_sign_offset).clamp(0.05, 0.95);
+            let sell_frac = 1.0 - buy_frac;
+
+            let mut rem_buy_vol = total_trade_vol * buy_frac;
+            let mut rem_sell_vol = total_trade_vol * sell_frac;
             let mut rem_vol = total_trade_vol;
 
             while rem_vol > 0.0 {
@@ -239,11 +250,14 @@ impl MicrostructureAnalyzer {
                 }
 
                 if rem_vol >= needed {
-                    if is_buyer_maker {
-                        self.current_bucket_sell += needed;
-                    } else {
-                        self.current_bucket_buy += needed;
-                    }
+                    let fill_ratio = (needed / rem_vol).clamp(0.0, 1.0);
+                    let fill_buy = rem_buy_vol * fill_ratio;
+                    let fill_sell = rem_sell_vol * fill_ratio;
+
+                    self.current_bucket_buy += fill_buy;
+                    self.current_bucket_sell += fill_sell;
+                    rem_buy_vol -= fill_buy;
+                    rem_sell_vol -= fill_sell;
                     rem_vol -= needed;
 
                     self.vpin_buckets[self.vpin_bucket_index] = VolumeBucket {
@@ -257,11 +271,8 @@ impl MicrostructureAnalyzer {
                     self.current_bucket_buy = 0.0;
                     self.current_bucket_sell = 0.0;
                 } else {
-                    if is_buyer_maker {
-                        self.current_bucket_sell += rem_vol;
-                    } else {
-                        self.current_bucket_buy += rem_vol;
-                    }
+                    self.current_bucket_buy += rem_buy_vol;
+                    self.current_bucket_sell += rem_sell_vol;
                     rem_vol = 0.0;
                 }
             }
@@ -488,9 +499,9 @@ impl MicrostructureAnalyzer {
         sum_imbalance += curr_imbalance;
         total_vol += curr_vol;
 
-        // Apply Bayesian prior smoothing (baseline VPIN prior ~ 0.25) to prevent ceiling clipping on cold start
+        // Apply Bayesian prior smoothing (baseline VPIN prior ~ 0.25) to prevent instability on cold start
         let prior_weight = if self.vpin_bucket_count < 10 {
-            ((10 - self.vpin_bucket_count) as f64) * self.bucket_target_volume * 0.5
+            ((10 - self.vpin_bucket_count) as f64) * self.bucket_target_volume * 0.25
         } else {
             0.0
         };
@@ -500,7 +511,7 @@ impl MicrostructureAnalyzer {
         if combined_vol <= 1e-9 {
             self.cached_vpin = 0.25;
         } else {
-            self.cached_vpin = ((sum_imbalance + prior_imbalance) / combined_vol).clamp(0.01, 0.99);
+            self.cached_vpin = ((sum_imbalance + prior_imbalance) / combined_vol).clamp(0.01, 0.95);
         }
     }
 
