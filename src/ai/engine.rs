@@ -209,12 +209,20 @@ impl StreamingFeaturePipeline {
         let cvd_lag100 = *self.cvd_hist.get(99).unwrap_or(&cvd_raw);
         let cvd_delta_100 = cvd_raw - cvd_lag100;
 
+        // Bounded Tanh Normalization into strictly [-1.0, 1.0]
+        let cvd_vel_10 = (cvd_delta_10 * 0.0005).tanh().clamp(-1.0, 1.0);
+        let cvd_norm_1 = (cvd_delta_1 * 0.005).tanh().clamp(-1.0, 1.0);
+        let cvd_norm_5 = (cvd_delta_5 * 0.001).tanh().clamp(-1.0, 1.0);
+        let cvd_norm_10 = cvd_vel_10;
+        let cvd_norm_50 = (cvd_delta_50 * 0.0001).tanh().clamp(-1.0, 1.0);
+        let cvd_norm_100 = (cvd_delta_100 * 0.00005).tanh().clamp(-1.0, 1.0);
+
         let trade_vel = sab.load_f64_asset(asset_idx, 3);
         let trade_vel_lag1 = *self.trade_vel_hist.get(0).unwrap_or(&trade_vel);
         let trade_vel_accel = trade_vel - trade_vel_lag1;
 
         let trade_vel_mean_10 = vec_mean(&self.trade_vel_hist, 10);
-        let vpin_proxy_10 = cvd_delta_10.abs() / (trade_vel_mean_10 + 1e-5);
+        let vpin_proxy_10 = ((cvd_delta_10.abs() / (trade_vel_mean_10 + 1e-5)) * 0.05).tanh().clamp(0.0, 1.0);
 
         let lat_us = lat_us_val;
         let lat_us_lag1 = *self.lat_us_hist.get(0).unwrap_or(&lat_us);
@@ -264,12 +272,12 @@ impl StreamingFeaturePipeline {
             obi_vel_1,
             obi_vel_5,
             multi_level_ofi,
-            cvd_raw,
-            cvd_delta_1,
-            cvd_delta_5,
-            cvd_delta_10,
-            cvd_delta_50,
-            cvd_delta_100,
+            cvd_vel_10,
+            cvd_norm_1,
+            cvd_norm_5,
+            cvd_norm_10,
+            cvd_norm_50,
+            cvd_norm_100,
             trade_vel,
             trade_vel_accel,
             vpin_proxy_10,

@@ -321,7 +321,7 @@ export class MultiAssetStrategyEngine {
       const assetIdx = i;
 
       const obi = this.client.getOBI(assetIdx);
-      const cvd = this.client.getCVD(assetIdx);
+      const cvd = this.client.getCVDVelocity(assetIdx, 5000, timestamp);
       const hurst = this.client.getHurst(assetIdx);
       const vpin = this.client.getVPIN(assetIdx);
       const hawkes = this.client.getHawkesIntensity(assetIdx);

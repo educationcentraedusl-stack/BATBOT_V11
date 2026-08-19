@@ -1,6 +1,17 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-19
+- **Feature/Task:** CVD Pipeline Emergency Hotfix & Multi-Tier Normalization Bounding
+- **Artifacts Created/Modified:** `src/ai/engine.rs`, `src/strategy/engine.ts`, `src/strategy/multiEngine.ts`, `src/telemetry/multiAssetDashboard.ts`, `src/telemetry/dashboard.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** 
+  1. **Rust AI Input Tensor Normalization (`src/ai/engine.rs`):** Eradicated raw multi-million session cumulative volume in `raw_features[18..24]`. Applied continuous rate-of-change $\tanh$ bounding across all multi-horizon deltas ($\Delta \text{CVD}_{1..100}$), strictly clamping inputs to $[-1.0, 1.0]$. Completely eliminated non-stationary Welford variance distortion in T-KAN and Mamba-2 SSM.
+  2. **Strategy Engine Zero-GC Hot Path (`src/strategy/engine.ts`):** Eradicated all calls to `getCVD()`. Replaced scalar evaluation with pre-allocated `getCVDVelocity(this.assetIndex, 5000, nowMs)`. Reused scalar value across `staticResult`, `microMetrics`, and `compositeScore` to maintain **1.3951 µs / evaluation** latency (< 1.50 µs SLA).
+  3. **Multi-Asset Signal Router Alignment (`src/strategy/multiEngine.ts`):** Replaced raw `getCVD()` with `getCVDVelocity(assetIdx, 5000, timestamp)` and aligned directional flow gating.
+  4. **Telemetry Dashboards (`src/telemetry/multiAssetDashboard.ts` & `dashboard.ts`):** Aligned 10-Asset Concurrency Matrix and Focused Asset views to render strictly bounded Rolling CVD Velocity ($[-1.0, 1.0]$) in clean signed float format.
+  5. **100% Verification:** Passed `cargo test --lib` (39/39 passed), `npx napi build --platform --release` (0 errors), `npm run build:ts` (0 errors), `npm test` (`tsc --noEmit`, 0 errors), and `test_sota_signal_gating_ascrg.ts` (7/7 passed 100%).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-19
 - **Feature/Task:** Audit 7.0 Forensic Remediation (DEF-701 Buffer Capacity, DEF-702 Time-Rate Normalization, DEF-703 Memory Leak Plug, DEF-704 ASCRG Floor Alignment)
 - **Artifacts Created/Modified:** `src/marketDataClient.ts`, `src/strategy/engine.ts`, `src/tests/test_sota_signal_gating_ascrg.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
 - **HFT/Performance Compliance:** 

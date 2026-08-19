@@ -1716,8 +1716,9 @@ export class StrategyEngine {
       this.lastProcessedSequence = seq;
 
       // Read scalar metrics atomically from SAB
+      const nowMs = Date.now();
       const obi = this.client.getOBI(this.assetIndex);
-      const cvd = this.client.getCVD(this.assetIndex);
+      const cvd = this.client.getCVDVelocity(this.assetIndex, 5000, nowMs);
       const spreadVelocity = this.client.getSpreadVelocity(this.assetIndex);
       const bidPrice = this.client.getBestBidPrice(this.assetIndex);
       const askPrice = this.client.getBestAskPrice(this.assetIndex);
@@ -1773,7 +1774,6 @@ export class StrategyEngine {
       const penaltyCoeff = latencyPenalty > 0 ? Math.max(0.75, latencyPenalty) : 1.0;
 
       // 1. Dynamic Monitoring: Evaluate Microstructure, Volatility & Dynamic Exit Boundaries
-      const nowMs = Date.now();
       const markPrice = askPrice > 0 ? (askPrice + bidPrice) / 2 : bidPrice;
 
       // Feed live orderbook & price ticks into SOTA microstructure & volatility engines
@@ -2178,7 +2178,7 @@ export class StrategyEngine {
 
       // SOTA August 2026 4-Factor Multi-Variate Composite Signal Engine
       const obiScore = Math.max(-1.0, Math.min(1.0, obi));
-      const cvdVelocity = this.client.getCVDVelocity(this.assetIndex, 5000, nowMs);
+      const cvdVelocity = cvd;
       const cvdScore = Math.max(-1.0, Math.min(1.0, cvdVelocity));
       const aiScore = Math.max(-1.0, Math.min(1.0, aiDirection * aiConfidence));
       const ofiScore = Math.max(-1.0, Math.min(1.0, hazardMetrics.ofi));
@@ -2329,7 +2329,7 @@ export class StrategyEngine {
       if (signalType === "NONE") {
         if (seq % 10000n === 0n) {
           console.log(
-            `[StrategyEngine][${this.config.symbol}][SignalGate] Seq #${seq} | Composite: ${compositeScore.toFixed(4)} | AI: (dir=${aiDirection.toFixed(2)}, conf=${(aiConfidence * 100).toFixed(0)}%) | OBI: ${obi.toFixed(2)} | CVD: ${cvd.toFixed(0)} | Status: NO SIGNAL TRIGGERED`
+            `[StrategyEngine][${this.config.symbol}][SignalGate] Seq #${seq} | Composite: ${compositeScore.toFixed(4)} | AI: (dir=${aiDirection.toFixed(2)}, conf=${(aiConfidence * 100).toFixed(0)}%) | OBI: ${obi.toFixed(2)} | CVD: ${(cvd >= 0 ? "+" : "") + cvd.toFixed(4)} | Status: NO SIGNAL TRIGGERED`
           );
         }
         this.staticResult.sequenceNum = seq;

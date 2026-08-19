@@ -120,7 +120,7 @@ class CLIDashboard {
         output += `${bold}--- ORDER BOOK & MICROSTRUCTURE METRICS (${frame.symbol}) ---${reset}${clearLine}\n`;
         output += ` Best Bid: ${frame.bidPrice.toFixed(2)}  |  Best Ask: ${frame.askPrice.toFixed(2)}  |  Spread: ${spread}${clearLine}\n`;
         output += ` OBI (-1..+1): [${obiBar}]  Val: ${frame.obi >= 0 ? "+" : ""}${frame.obi.toFixed(4)}${clearLine}\n`;
-        output += ` CVD: ${frame.cvd >= 0 ? "+" : ""}${frame.cvd.toFixed(2)}  |  Spread Velocity: ${frame.spreadVelocity.toFixed(4)}${clearLine}\n`;
+        output += ` CVD: ${frame.cvd >= 0 ? "+" : ""}${frame.cvd.toFixed(4)}  |  Spread Velocity: ${frame.spreadVelocity.toFixed(4)}${clearLine}\n`;
         output += subDivider;
         output += `${bold}--- AI PREDICTION & DYNAMIC EXECUTION METRICS ---${reset}${clearLine}\n`;
         output += ` Direction: ${aiDir >= 0 ? "\x1b[32m" : "\x1b[31m"}${aiDirStr}${reset}  |  Confidence: ${yellow}${aiConf.toFixed(1)}%${reset}  |  IC: ${icVal.toFixed(4)}  |  Inference: ${infLatUs.toFixed(1)} µs${clearLine}\n`;

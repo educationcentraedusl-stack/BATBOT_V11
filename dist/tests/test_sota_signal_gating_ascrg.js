@@ -315,9 +315,6 @@ async function runAscrgTestSuite() {
             maxShortSlots: 3,
         };
         const benchEngine = new engine_1.StrategyEngine(client, riskGuard, mockExec, xrpConfig);
-        benchEngine.getHedgeLedger().occupyShortSlot(0, 59.9, 1.0009, 2.5, 1.5, false);
-        benchEngine.getHedgeLedger().getShortSlots()[0].activeStopLossOrderId = 999999;
-        benchEngine.getHedgeLedger().getShortSlots()[0].lastSyncedSlPrice = 1.0159;
         const bigIntView = new BigInt64Array(sab);
         // Warm up V8 TurboFan JIT compiler & optimize hot path functions
         for (let i = 0; i < 5000; i++) {

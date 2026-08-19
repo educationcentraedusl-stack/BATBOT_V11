@@ -281,6 +281,7 @@ class MultiAssetCLIDashboard {
         out += MultiAssetCLIDashboard.TABLE_DIVIDER;
         out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Best Bid${reset}   | ${bold}Best Ask${reset}   | ${bold}Live Price${reset} | ${bold}Spread${reset}    | ${bold}OBI (-1..+1)${reset} | ${bold}CVD${reset}        | ${bold}Hawkes${reset}   | ${bold}Garman-Klass${reset} | ${bold}Dir${reset}   | ${bold}Conf%${reset}   | ${bold}Signal${reset}   |${clearLine}\n`;
         out += MultiAssetCLIDashboard.TABLE_DIVIDER;
+        const nowMs = Date.now();
         for (let i = 0; i < this.client.maxAssets; i++) {
             const symName = this.assetSymbols[i] || `ASSET_${i}`;
             const symStr = " " + this.formatCell(symName, 8, false) + " ";
@@ -300,8 +301,8 @@ class MultiAssetCLIDashboard {
             const obi = this.client.getOBI(i);
             const obiBar = this.getFastMiniBar(obi, -1, 1);
             const obiStr = " [" + obiBar + "] ";
-            const cvd = this.client.getCVD(i);
-            const rawCvd = (cvd >= 0 ? "+" : "") + cvd.toFixed(1);
+            const cvd = this.client.getCVDVelocity(i, 5000, nowMs);
+            const rawCvd = (cvd >= 0 ? "+" : "") + cvd.toFixed(2);
             const cvdStr = " " + this.formatCell(rawCvd, 10) + " ";
             const hawkes = this.client.getHawkesIntensity(i);
             const hawkesStr = " " + this.formatCell(hawkes.toFixed(3), 8) + " ";
@@ -342,7 +343,7 @@ class MultiAssetCLIDashboard {
         this.client.fillTopBids(this.bidBuffer, 5, fIdx);
         this.client.fillTopAsks(this.askBuffer, 5, fIdx);
         const fObi = this.client.getOBI(fIdx);
-        const fCvd = this.client.getCVD(fIdx);
+        const fCvd = this.client.getCVDVelocity(fIdx, 5000, nowMs);
         const fHawkes = this.client.getHawkesIntensity(fIdx);
         const fVpin = this.client.getVPIN(fIdx);
         const fHurst = this.client.getHurstExponent(fIdx);
@@ -354,7 +355,7 @@ class MultiAssetCLIDashboard {
         const hjbStr = (fHjb > 0 ? fHjb : 0).toFixed(fDec);
         const survivalStr = (fSurvival > 0 ? fSurvival * 100 : 100.0).toFixed(1);
         out += `${bold}--- FOCUSED ASSET METRICS & LEVEL-2 BOOK (#${fIdx} - ${fSym}) ---${reset}${clearLine}\n`;
-        out += ` OBI: ${fObi >= 0 ? "+" : ""}${fObi.toFixed(4)} | CVD: ${fCvd >= 0 ? "+" : ""}${fCvd.toFixed(2)} | Hawkes: ${fHawkes.toFixed(3)} | VPIN: ${fVpin.toFixed(4)} | HJB Res: $${hjbStr} | Survival: ${survivalStr}%${clearLine}\n`;
+        out += ` OBI: ${fObi >= 0 ? "+" : ""}${fObi.toFixed(4)} | CVD: ${fCvd >= 0 ? "+" : ""}${fCvd.toFixed(4)} | Hawkes: ${fHawkes.toFixed(3)} | VPIN: ${fVpin.toFixed(4)} | HJB Res: $${hjbStr} | Survival: ${survivalStr}%${clearLine}\n`;
         out += ` AI Prediction Direction: ${fAiDir >= 0 ? green : red}${fAiDir >= 0 ? "+" : ""}${fAiDir.toFixed(4)}${reset}  |  Confidence: ${yellow}${fAiConf}%${reset}  |  Inference Latency: ${fInfLat} µs${clearLine}\n`;
         out += ` Top 3 Bids: [1] $${this.bidBuffer[0].toFixed(fDec)} (${this.bidBuffer[1].toFixed(3)})  [2] $${this.bidBuffer[2].toFixed(fDec)} (${this.bidBuffer[3].toFixed(3)})  [3] $${this.bidBuffer[4].toFixed(fDec)} (${this.bidBuffer[5].toFixed(3)})${clearLine}\n`;
         out += ` Top 3 Asks: [1] $${this.askBuffer[0].toFixed(fDec)} (${this.askBuffer[1].toFixed(3)})  [2] $${this.askBuffer[2].toFixed(fDec)} (${this.askBuffer[3].toFixed(3)})  [3] $${this.askBuffer[4].toFixed(fDec)} (${this.askBuffer[5].toFixed(3)})${clearLine}\n`;
