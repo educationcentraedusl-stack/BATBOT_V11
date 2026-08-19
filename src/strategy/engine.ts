@@ -159,9 +159,9 @@ export class StrategyEngine {
     const defaultCvdBuy = !isNaN(envCvdBuy) ? envCvdBuy : 0.0;
     const defaultCvdSell = !isNaN(envCvdSell) ? envCvdSell : 0.0;
     const defaultMaxSpreadVelocity = !isNaN(envMaxSpreadVelocity) ? envMaxSpreadVelocity : 5.0;
-    const defaultMaxSpreadEth = !isNaN(envMaxSpreadEth) ? envMaxSpreadEth : 0.50;
-    const defaultMaxSpreadBtc = !isNaN(envMaxSpreadBtc) ? envMaxSpreadBtc : 50.0;
-    const defaultMaxSpreadAlt = !isNaN(envMaxSpreadAlt) ? envMaxSpreadAlt : 1.0;
+    const defaultMaxSpreadEth = !isNaN(envMaxSpreadEth) ? envMaxSpreadEth : 0.40;
+    const defaultMaxSpreadBtc = !isNaN(envMaxSpreadBtc) ? envMaxSpreadBtc : 1.50;
+    const defaultMaxSpreadAlt = !isNaN(envMaxSpreadAlt) ? envMaxSpreadAlt : 0.20;
     const defaultMinNotionalUsdt = !isNaN(envMinNotionalUsdt) ? envMinNotionalUsdt : 55.0;
     const defaultCooldownMs = !isNaN(envCooldownMs) ? envCooldownMs : 250;
     const defaultVpinThreshold = !isNaN(envVpinThreshold) ? envVpinThreshold : 0.85;
@@ -1723,25 +1723,42 @@ export class StrategyEngine {
       const bidPrice = this.client.getBestBidPrice(this.assetIndex);
       const askPrice = this.client.getBestAskPrice(this.assetIndex);
 
-      // SPREAD & TICK GUARD: Immediately reject invalid tick data (bid <= 0, ask <= 0, bid > ask) or excessive spread BEFORE evaluating dynamic exits or signals
+      // WEBSOCKET FRESHNESS & STALENESS GUARD (750ms Hard Staleness Barrier)
+      const packetTimestampNs = this.client.getTimestampNs(this.assetIndex);
+      const packetAgeMs = packetTimestampNs > 0n ? Number((BigInt(nowMs) * 1000000n - packetTimestampNs) / 1000000n) : 0;
+      const isStale = packetTimestampNs > 0n && packetAgeMs > 750;
+
+      // SPREAD & TICK GUARD: Immediately reject invalid tick data, stale orderbooks, or spread blowouts BEFORE evaluating dynamic exits or signals
       const isTickValid = askPrice > 0 && bidPrice > 0 && askPrice >= bidPrice;
       const currentSpread = isTickValid ? askPrice - bidPrice : Infinity;
+      const currentMidPrice = isTickValid ? (bidPrice + askPrice) * 0.5 : 0;
+
       let maxSpreadAllowed: number;
       if (this.config.symbol.includes("BTC")) {
-        maxSpreadAllowed = Math.max(this.config.maxSpreadBtc, askPrice * 0.0015);
+        // Strict BTC Hard Cap: Min($1.50, max(0.10, currentMidPrice * 1.5 bps))
+        maxSpreadAllowed = Math.min(this.config.maxSpreadBtc, Math.max(0.10, currentMidPrice * 0.00015));
       } else if (this.config.symbol.includes("ETH")) {
-        maxSpreadAllowed = Math.max(this.config.maxSpreadEth, askPrice * 0.0015);
+        // Strict ETH Hard Cap: Min($0.40, max(0.01, currentMidPrice * 2.0 bps))
+        maxSpreadAllowed = Math.min(this.config.maxSpreadEth, Math.max(0.01, currentMidPrice * 0.00020));
       } else {
-        maxSpreadAllowed = Math.max(this.config.maxSpreadAlt, askPrice * 0.0020);
+        // Strict Altcoins Hard Cap: Min(maxSpreadAlt, max(0.0001, currentMidPrice * 5.0 bps))
+        maxSpreadAllowed = Math.min(this.config.maxSpreadAlt, Math.max(0.0001, currentMidPrice * 0.00050));
       }
 
-      if (!isTickValid || currentSpread > maxSpreadAllowed) {
-        const reasonCode = !isTickValid ? "INVALID_TICK_DATA" : "REJECTED_LIQUIDITY_SWEEP_TRAP";
+      if (!isTickValid || isStale || currentSpread > maxSpreadAllowed) {
+        const reasonCode: RiskCheckResult["reasonCode"] = !isTickValid
+          ? "INVALID_TICK_DATA"
+          : isStale
+          ? "REJECTED_STALE_ORDERBOOK"
+          : "REJECTED_MAX_SPREAD_BLOWOUT";
+
         const message = !isTickValid
           ? `Tick evaluation rejected: invalid tick prices (bid: ${bidPrice}, ask: ${askPrice})`
-          : `Tick evaluation rejected: current spread (${currentSpread.toFixed(2)} USDT) > ${maxSpreadAllowed.toFixed(2)} USDT threshold`;
+          : isStale
+          ? `Tick evaluation rejected: stale orderbook data (Packet latency: ${packetAgeMs.toFixed(0)}ms > 750ms threshold)`
+          : `Tick evaluation rejected: current spread (${currentSpread.toFixed(4)} USDT / ${currentMidPrice > 0 ? ((currentSpread / currentMidPrice) * 10000).toFixed(1) : "0"} bps) > ${maxSpreadAllowed.toFixed(4)} USDT threshold (SPREAD BLOWOUT)`;
 
-        if (seq % 500n === 0n || !isTickValid) {
+        if (seq % 500n === 0n || !isTickValid || isStale) {
           console.warn(`[StrategyEngine][SPREAD_GUARD_REJECT] Seq #${seq} | ${message}`);
         }
         this.staticResult.sequenceNum = seq;

@@ -33,7 +33,7 @@ impl CusumDriftDetector {
             kappa,
             threshold,
             baseline_mean: 0.0,
-            baseline_var: 0.0001,
+            baseline_var: 0.25, // Calibrated for normalized tanh return residuals
             in_control_count: 0,
             sample_count: 0,
             is_drifted: false,
@@ -51,23 +51,21 @@ impl CusumDriftDetector {
     pub fn update(&mut self, residual: f64, current_ts_ns: u64) -> bool {
         self.sample_count += 1;
 
-        // Only update in-control baseline statistics when NOT actively drifted
-        if !self.is_drifted {
-            self.in_control_count += 1;
-            let count_f = self.in_control_count.min(2000) as f64;
-            let delta = residual - self.baseline_mean;
-            self.baseline_mean += delta / count_f;
-            let delta2 = residual - self.baseline_mean;
-            if count_f > 1.0 {
-                self.baseline_var = ((count_f - 1.0) * self.baseline_var + delta * delta2) / count_f;
-            } else {
-                self.baseline_var = (delta * delta2).max(0.0001);
-            }
+        // Continuous Welford baseline adaptation (never freeze to avoid singularity deadlocks)
+        self.in_control_count += 1;
+        let count_f = self.in_control_count.min(2000) as f64;
+        let delta = residual - self.baseline_mean;
+        self.baseline_mean += delta / count_f;
+        let delta2 = residual - self.baseline_mean;
+        if count_f > 1.0 {
+            self.baseline_var = ((count_f - 1.0) * self.baseline_var + delta * delta2) / count_f;
+        } else {
+            self.baseline_var = (delta * delta2).max(0.04);
         }
 
-        let std_dev = self.baseline_var.sqrt().max(1e-4);
+        let std_dev = self.baseline_var.sqrt().max(0.05);
 
-        // Standardized residual score against frozen in-control baseline
+        // Standardized residual score against running baseline
         let z = (residual - self.baseline_mean) / std_dev;
         let z_sq = z * z;
 
@@ -80,7 +78,7 @@ impl CusumDriftDetector {
         let is_cooldown_satisfied = self.last_recalib_ts_ns == 0
             || current_ts_ns >= self.last_recalib_ts_ns + self.cooldown_ns;
 
-        if self.sample_count >= 20 && self.s_pos >= self.threshold && is_cooldown_satisfied {
+        if self.sample_count >= 50 && self.s_pos >= self.threshold && is_cooldown_satisfied {
             self.is_drifted = true;
         } else if self.s_pos < self.threshold * 0.20 {
             self.is_drifted = false;
@@ -101,7 +99,7 @@ impl CusumDriftDetector {
         self.s_pos = 0.0;
         self.s_neg = 0.0;
         self.baseline_mean = 0.0;
-        self.baseline_var = 0.0001;
+        self.baseline_var = 0.25;
         self.in_control_count = 0;
         self.sample_count = 0;
         self.is_drifted = false;
@@ -193,20 +191,32 @@ impl ICTracker {
         let dynamic_thresh = (self.ewma_ic - 2.0 * std_dev).clamp(MODEL_DRIFT_FLOOR, 0.0500);
         self.adaptive_threshold = dynamic_thresh;
 
-        // Combined Drift Evaluation: Spearman threshold or CUSUM structural break
-        let cusum_drift = self.cusum.is_drifted;
-        let spearman_drift = ic < dynamic_thresh && ic < 0.0200;
-
-        if spearman_drift || cusum_drift {
-            if !self.is_drifted {
-                self.is_drifted = true;
-                eprintln!(
-                    "[BATBOT_V11][IC Tracker DRIFT] Alert! IC: {:.4} (Thresh: {:.4}), CUSUM: {}, Samples: {}",
-                    ic, dynamic_thresh, cusum_drift, self.pairs.len()
-                );
-            }
-        } else if ic >= dynamic_thresh + 0.03 || ic >= 0.0500 {
+        // Unconditional High-IC Alpha Immunity:
+        // If Spearman IC is strong and predictive (>= 0.0500), drift is strictly FALSE.
+        if ic >= 0.0500 {
             self.is_drifted = false;
+            self.cusum.is_drifted = false;
+            self.cusum.s_pos = 0.0;
+        } else {
+            // Combined Drift Evaluation:
+            // A model is in drift ONLY if IC has decayed below the dynamic floor AND is degraded (< 0.0200),
+            // or if CUSUM flags a structural break while IC is below healthy threshold (< 0.0300).
+            let cusum_drift = self.cusum.is_drifted && ic < 0.0300;
+            let spearman_drift = ic < dynamic_thresh && ic < 0.0200;
+
+            if spearman_drift || cusum_drift {
+                if !self.is_drifted {
+                    self.is_drifted = true;
+                    eprintln!(
+                        "[BATBOT_V11][IC Tracker DRIFT] Alert! IC: {:.4} (Thresh: {:.4}), CUSUM: {}, Samples: {}",
+                        ic, dynamic_thresh, cusum_drift, self.pairs.len()
+                    );
+                }
+            } else if ic >= dynamic_thresh + 0.02 || ic >= 0.0300 {
+                self.is_drifted = false;
+                self.cusum.is_drifted = false;
+                self.cusum.s_pos = 0.0;
+            }
         }
 
         // Broadcast to SAB slots 101 and 102
@@ -225,7 +235,21 @@ impl ICTracker {
     /// Evaluates multi-minute residual and updates CUSUM structural break detector.
     pub fn update_cusum_residual(&mut self, residual: f64, current_ts_ns: u64, sab: Option<&AtomicSharedMemoryBridge>, asset_idx: usize) -> bool {
         let drifted = self.cusum.update(residual, current_ts_ns);
-        if drifted {
+        // Unconditional High-IC Immunity: never drift if rolling IC >= 0.0500
+        if self.current_ic >= 0.0500 {
+            self.is_drifted = false;
+            self.cusum.is_drifted = false;
+            self.cusum.s_pos = 0.0;
+            if let Some(bridge) = sab {
+                bridge.store_f64_asset(asset_idx, 102, 0.0);
+                if asset_idx != 0 {
+                    bridge.store_f64_asset(0, 102, 0.0);
+                }
+            }
+            return false;
+        }
+
+        if drifted && self.current_ic < 0.0300 {
             self.is_drifted = true;
             if let Some(bridge) = sab {
                 bridge.store_f64_asset(asset_idx, 102, 1.0);
@@ -233,8 +257,10 @@ impl ICTracker {
                     bridge.store_f64_asset(0, 102, 1.0);
                 }
             }
+            true
+        } else {
+            false
         }
-        drifted
     }
 
     pub fn record_recalibration(&mut self, ts_ns: u64) {
@@ -407,5 +433,23 @@ mod tests {
         // Record recalibration to reset state
         detector.record_recalibration(ts_base + 90_000_000);
         assert!(!detector.is_drifted);
+    }
+
+    #[test]
+    fn test_high_ic_immunity() {
+        let mut tracker = ICTracker::new(50);
+        // Force CUSUM drift internally
+        tracker.cusum.is_drifted = true;
+        tracker.cusum.s_pos = 50.0;
+
+        // Ingest strong predictive pairs (IC ~ +1.0 >= 0.0500)
+        for i in 1..=50 {
+            let val = i as f64;
+            tracker.add_observation(val, val * 1.5, None);
+        }
+
+        assert!(tracker.current_ic() >= 0.0500, "IC should be high positive");
+        assert!(!tracker.is_drifted(), "High IC (>= 0.0500) MUST unconditionally clear drift");
+        assert!(!tracker.cusum.is_drifted, "CUSUM drift MUST be reset under high IC");
     }
 }

@@ -296,8 +296,11 @@ class MultiAssetCLIDashboard {
             const askStr = " " + this.formatCell(rawAsk, 10) + " ";
             const rawLivePrice = mid > 0 ? mid.toFixed(dec) : (0).toFixed(dec);
             const livePriceStr = " " + this.formatCell(rawLivePrice, 10) + " ";
-            const rawSpread = (ask > 0 && bid > 0 && ask >= bid) ? (ask - bid).toFixed(dec) : (0).toFixed(dec);
-            const spreadStr = " " + this.formatCell(rawSpread, 7) + " ";
+            const spreadVal = (ask > 0 && bid > 0 && ask >= bid) ? ask - bid : 0;
+            const isSpreadBlowout = symName.includes("BTC") ? spreadVal > 1.50 : symName.includes("ETH") ? spreadVal > 0.40 : (mid > 0 && (spreadVal / mid) > 0.0005);
+            const rawSpread = spreadVal.toFixed(dec);
+            const spreadColor = isSpreadBlowout ? red + bold : gray;
+            const spreadStr = " " + spreadColor + this.formatCell(rawSpread, 7) + reset + " ";
             const obi = this.client.getOBI(i);
             const obiBar = this.getFastMiniBar(obi, -1, 1);
             const obiStr = " [" + obiBar + "] ";
@@ -508,13 +511,21 @@ class MultiAssetCLIDashboard {
         }
         const recalStatus = recalibrationWorker_1.AutoRecalibrationManager.getInstance().getStatus();
         const isTkanRunning = recalibrationWorker_1.AutoRecalibrationManager.getInstance().isTkanTrainingActive();
-        const isAnyTrainingActive = (sampleCount >= 1000) && (isDrifted || recalStatus.isRecalibrating || isTkanRunning);
+        const isHighAlpha = rollingIc >= 0.0500;
+        const isHealthy = rollingIc >= 0.0200;
+        const isAnyTrainingActive = (sampleCount >= 1000) && !isHighAlpha && (isDrifted || recalStatus.isRecalibrating || isTkanRunning);
         const trainingProgress = readTrainingProgress();
         const icSign = rollingIc >= 0 ? "+" : "";
-        const icColor = rollingIc >= 0.03 ? green + bold : rollingIc >= 0.01 ? cyan : red + bold;
+        const icColor = rollingIc >= 0.05 ? green + bold : rollingIc >= 0.02 ? cyan : red + bold;
         const ewmaSign = ewmaIc >= 0 ? "+" : "";
-        const driftStateStr = isAnyTrainingActive ? `${red}${bold}[DRIFT DETECTED - RECALIBRATING]${reset}` : `${green}${bold}[HEALTHY - CALIBRATED]${reset}`;
-        const trainerStateStr = (sampleCount >= 1000 && recalStatus.isRecalibrating)
+        const driftStateStr = isAnyTrainingActive
+            ? `${red}${bold}[DRIFT DETECTED - RECALIBRATING]${reset}`
+            : isHighAlpha
+                ? `${green}${bold}[EXCELLENT ALPHA - IN CONTROL]${reset}`
+                : isHealthy
+                    ? `${green}${bold}[HEALTHY - CALIBRATED]${reset}`
+                    : `${yellow}${bold}[DEGRADED ALPHA - MONITORING]${reset}`;
+        const trainerStateStr = (sampleCount >= 1000 && !isHighAlpha && recalStatus.isRecalibrating)
             ? `${yellow}${bold}[CfC TRAINING ACTIVE]${reset}`
             : (sampleCount >= 1000 && isTkanRunning)
                 ? `${cyan}${bold}[T-KAN INIT ACTIVE]${reset}`

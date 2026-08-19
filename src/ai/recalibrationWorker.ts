@@ -368,6 +368,18 @@ export class AutoRecalibrationManager {
       return;
     }
 
+    // Unconditional High-IC Alpha Immunity:
+    // If Spearman IC is strong and predictive (>= 0.0500 or >= 0.0300), drift is strictly impossible.
+    if (ic >= 0.0500 || !isDrifted || ic >= 0.0300) {
+      this.driftTickCounter = 0;
+      if (this.client && ic >= 0.0500) {
+        for (let i = 0; i < this.maxAssetSlots; i++) {
+          this.client.setIsModelDrifted(false, i);
+        }
+      }
+      return;
+    }
+
     if (isDrifted) {
       this.driftTickCounter++;
       if (this.driftTickCounter >= this.sustainedDriftThreshold) {
@@ -437,6 +449,15 @@ export class AutoRecalibrationManager {
 
     // Physical Hard Gate: Block background recalibration during warm-up (< 1000 pairs) unless forced
     if (!force && !this.isRustWarmupComplete()) {
+      return false;
+    }
+
+    // Unconditional High-IC Alpha Immunity: Reject recalibration if IC is healthy (>= 0.0500) unless forced
+    if (!force && currentIc >= 0.0500) {
+      console.log(
+        `[BATBOT_V11][ALPHA_IMMUNITY] High Spearman IC (+${currentIc.toFixed(4)} >= +0.0500). Predictive power is optimal; recalibration rejected.`
+      );
+      this.driftTickCounter = 0;
       return false;
     }
 
