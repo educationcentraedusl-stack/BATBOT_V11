@@ -1,5 +1,17 @@
 # BATBOT_V11 System Status Log
 
+- **Date:** 2026-08-22
+- **Feature/Task:** SOTA Async Mutex Deadlock Elimination, Generation-Tagged Epoch Mutex (GTEM-AE) & Self-Healing Latest-Value Coalescing Queue (LVCQ) Overhaul
+- **Artifacts Created/Modified:** `src/execution/binance.ts`, `src/strategy/engine.ts`, `src/tests/test_sota_sl_mutex_deadlock_recovery.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** 
+  1. **Transport-Level Bounded Socket Timeouts & AbortSignal Propagation (`src/execution/binance.ts`):** Enforced `req.setTimeout(2500)` with explicit socket destruction (`req.destroy()`) across all Node.js `http`/`https` REST requests, completely eliminating the Zombie Promise vulnerability on TCP half-open network drops. Wired caller-driven `AbortSignal` propagation down to HTTP requests.
+  2. **Generation-Tagged Epoch Mutex with 2500ms Auto-Eviction (`src/strategy/engine.ts`):** Replaced naive boolean/Set mutex with `EpochLockManager` tracking monotonic `epoch` IDs and acquisition timestamps. Implemented a strict 2500ms auto-eviction SLA that automatically terminates stale zombie locks, aborts orphaned requests via `AbortController`, and force-acquires a fresh epoch.
+  3. **Epoch Fencing Barrier (`src/strategy/engine.ts`):** Hardwired post-await epoch validation (`this.slSyncLocks.get(slotId)?.epoch !== currentEpoch`) across all async yield points in `syncExchangeStopLossOrder()`. If an evicted zombie promise returns late, its downstream mutations are fenced and discarded with `[EPOCH_FENCED]`, preventing stale state poisoning.
+  4. **Non-Destructive Active Stop Loss Registration (`src/strategy/engine.ts`):** Eradicated premature `registerActiveStopLossOrderId(slotId, 0)` zeroing prior to replacement order confirmation. The active stop loss ID is now preserved until the replacement order is confirmed on Binance, eliminating the naked unprotected exposure window.
+  5. **Resilient Latest-Value Coalescing Queue (LVCQ) (`src/strategy/engine.ts`):** Coalesced rapid microburst SL ratchet updates into atomic slot targets with a self-draining loop bounded to $\le 3$ iterations, eliminating queue latency and event loop lag.
+  6. **100% Verification & Proof:** 100% verified via `npm run build:ts` (0 errors), `tsc --noEmit` (0 errors), `npx tsx src/tests/test_sota_sl_mutex_deadlock_recovery.ts` (all 5 test stages passed 100% including zombie promise injection, 2500ms auto-eviction, epoch fencing, microburst coalescing, and closed-loop risk protection), and all regression test suites.
+- **Status:** ✅ Completed & QA Verified
+
 - **Date:** 2026-08-19
 - **Feature/Task:** SOTA L2 Spread Circuit Breaker, WebSocket Staleness Guard & Unconditional High-IC Alpha Immunity Overhaul
 - **Artifacts Created/Modified:** `src/ai/ic_tracker.rs`, `src/ai/recalibrationWorker.ts`, `src/strategy/engine.ts`, `src/strategy/risk.ts`, `src/telemetry/multiAssetDashboard.ts`, `src/tests/test_sota_spread_and_ic_immunity.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`

@@ -193,14 +193,19 @@ class BinanceExecutionClient {
             .digest("hex");
         return `${queryString}&signature=${signature}`;
     }
-    async request(method, endpoint, params = {}, signed = true, isRetryAfterSync = false) {
+    async request(method, endpoint, params = {}, signed = true, isRetryAfterSync = false, signal) {
         if (signed && !this.isConfigured()) {
             throw new Error("BinanceExecutionClient is not configured with API key and secret. Cannot execute signed request.");
+        }
+        if (signal?.aborted) {
+            throw new Error(`[BinanceExecutionClient] Request aborted by caller before dispatch (${method} ${endpoint})`);
         }
         const queryString = signed ? this.signQuery(params) : new URLSearchParams(params).toString();
         const fullUrl = `${this.baseUrl}${endpoint}${queryString ? "?" + queryString : ""}`;
         const url = new node_url_1.URL(fullUrl);
+        const defaultTimeoutMs = parseInt(process.env.REST_REQUEST_TIMEOUT_MS || "2500", 10);
         return new Promise((resolve, reject) => {
+            let isSettled = false;
             const isHttps = url.protocol === "https:";
             const httpModule = isHttps ? https : http;
             const reqOptions = {
@@ -220,9 +225,13 @@ class BinanceExecutionClient {
                     body += chunk;
                 });
                 res.on("end", async () => {
+                    if (isSettled)
+                        return;
+                    cleanup();
                     try {
                         const data = JSON.parse(body);
                         if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+                            isSettled = true;
                             resolve(data);
                         }
                         else {
@@ -233,24 +242,59 @@ class BinanceExecutionClient {
                                 console.warn(`[BinanceExecutionClient] Timestamp error -1021 detected. Resynchronizing server time and retrying request...`);
                                 await this.syncServerTime();
                                 try {
-                                    const retryRes = await this.request(method, endpoint, params, signed, true);
+                                    const retryRes = await this.request(method, endpoint, params, signed, true, signal);
+                                    isSettled = true;
                                     resolve(retryRes);
                                     return;
                                 }
                                 catch (retryErr) {
+                                    isSettled = true;
                                     reject(retryErr);
                                     return;
                                 }
                             }
+                            isSettled = true;
                             reject(new Error(`Binance API Error [${errCode}]: ${errMsg}`));
                         }
                     }
                     catch (err) {
+                        isSettled = true;
                         reject(new Error(`Failed to parse Binance response: ${body}`));
                     }
                 });
             });
+            // Transport-level Socket Timeout Enforcement:
+            req.setTimeout(defaultTimeoutMs, () => {
+                if (isSettled)
+                    return;
+                isSettled = true;
+                cleanup();
+                req.destroy(new Error(`[BinanceExecutionClient] HTTP request socket timeout (${defaultTimeoutMs}ms) exceeded on ${method} ${endpoint}`));
+                reject(new Error(`[BinanceExecutionClient] HTTP request socket timeout (${defaultTimeoutMs}ms) exceeded on ${method} ${endpoint}`));
+            });
+            let abortHandler = null;
+            if (signal) {
+                abortHandler = () => {
+                    if (isSettled)
+                        return;
+                    isSettled = true;
+                    cleanup();
+                    req.destroy(new Error(`[BinanceExecutionClient] HTTP request aborted by caller on ${method} ${endpoint}`));
+                    reject(new Error(`[BinanceExecutionClient] HTTP request aborted by caller on ${method} ${endpoint}`));
+                };
+                signal.addEventListener("abort", abortHandler, { once: true });
+            }
+            function cleanup() {
+                if (signal && abortHandler) {
+                    signal.removeEventListener("abort", abortHandler);
+                    abortHandler = null;
+                }
+            }
             req.on("error", (err) => {
+                if (isSettled)
+                    return;
+                isSettled = true;
+                cleanup();
                 reject(new Error(`Network error in Binance request: ${err.message}`));
             });
             req.end();
@@ -288,7 +332,7 @@ class BinanceExecutionClient {
             return null;
         }
     }
-    async placePositionStopLoss(symbol, side, positionSide, stopPrice, clientOrderId) {
+    async placePositionStopLoss(symbol, side, positionSide, stopPrice, clientOrderId, signal) {
         const formattedSlPx = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(symbol, stopPrice);
         const cid = clientOrderId || clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(symbol, positionSide === "LONG" ? "CORE_LONG" : "SHORT_SLOT_0", "SL");
         const params = {
@@ -301,9 +345,9 @@ class BinanceExecutionClient {
             clientOrderId: cid,
             workingType: "CONTRACT_PRICE",
         };
-        return await this.placeOrder(params);
+        return await this.placeOrder(params, 0, signal);
     }
-    async placeOrder(params, retryCount = 0) {
+    async placeOrder(params, retryCount = 0, signal) {
         const cid = (params.clientOrderId || "").trim();
         if (cid.length > 0 && retryCount === 0) {
             if (this.inFlightClientOrderIds.has(cid)) {
@@ -359,10 +403,10 @@ class BinanceExecutionClient {
                 payload.newClientOrderId = cid;
             }
             try {
-                return await this.request("POST", "/fapi/v1/order", payload, true);
+                return await this.request("POST", "/fapi/v1/order", payload, true, false, signal);
             }
             catch (err) {
-                const errMsg = err?.message || String(err);
+                const errMsg = err instanceof Error ? err.message : String(err);
                 if (errMsg.includes("-4120")) {
                     // Fallback to /fapi/v1/algoOrder if /fapi/v1/order threw -4120
                     const algoPayload = {
@@ -378,7 +422,7 @@ class BinanceExecutionClient {
                         delete algoPayload.newClientOrderId;
                     }
                     delete algoPayload.reduceOnly;
-                    const algoRes = await this.request("POST", "/fapi/v1/algoOrder", algoPayload, true);
+                    const algoRes = await this.request("POST", "/fapi/v1/algoOrder", algoPayload, true, false, signal);
                     if (algoRes && (algoRes.algoId || algoRes.orderId)) {
                         return {
                             orderId: algoRes.algoId || algoRes.orderId,
@@ -413,7 +457,7 @@ class BinanceExecutionClient {
                         return await this.placeOrder({
                             ...params,
                             price: newPrice,
-                        }, 1);
+                        }, 1, signal);
                     }
                     else if (retryCount === 1) {
                         console.warn(`[BinanceExecutionClient][-5022 FALLBACK] GTX retry failed for ${params.symbol}. Falling back to standard LIMIT (GTC) order @ ${newPrice} to safeguard position...`);
@@ -421,7 +465,7 @@ class BinanceExecutionClient {
                             ...params,
                             price: newPrice,
                             timeInForce: "GTC",
-                        }, 2);
+                        }, 2, signal);
                     }
                 }
                 throw err;
@@ -446,81 +490,57 @@ class BinanceExecutionClient {
             console.warn(`[BinanceExecutionClient] Batch order count (${orders.length}) exceeds BATCH_ORDER_MAX_LIMIT (${maxBatchLimit}). Truncating to ${maxBatchLimit}.`);
         }
         const targetOrders = orders.slice(0, maxBatchLimit);
-        const formattedOrders = targetOrders.map((params) => {
-            const isClosePos = params.closePosition === true || String(params.closePosition).toLowerCase() === "true";
+        const batchPayload = targetOrders.map((params) => {
+            const cid = params.clientOrderId || "";
+            const isClosePosition = params.closePosition === true || String(params.closePosition).toLowerCase() === "true";
             const formattedQty = params.quantity !== undefined ? symbolPrecision_1.SymbolPrecisionRegistry.formatQuantity(params.symbol, params.quantity) : 0;
-            const orderObj = {
+            const payload = {
                 symbol: params.symbol,
                 side: params.side,
                 type: params.type,
             };
-            if (!isClosePos) {
-                orderObj.quantity = formattedQty;
+            if (!isClosePosition) {
+                payload.quantity = formattedQty;
             }
             if (params.price !== undefined)
-                orderObj.price = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, params.price);
+                payload.price = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, params.price);
             if (params.stopPrice !== undefined)
-                orderObj.stopPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
-            if (params.clientOrderId !== undefined && params.clientOrderId.trim().length > 0) {
-                orderObj.newClientOrderId = params.clientOrderId.trim();
-            }
+                payload.stopPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
+            // Binance API Error -1106: Parameter 'timeinforce' sent when not required.
+            // timeInForce MUST NOT be sent for MARKET, STOP_MARKET, or TAKE_PROFIT_MARKET orders.
             if (params.type !== "MARKET" &&
                 params.type !== "STOP_MARKET" &&
                 params.type !== "TAKE_PROFIT_MARKET" &&
                 params.timeInForce !== undefined) {
-                orderObj.timeInForce = params.timeInForce;
+                payload.timeInForce = params.timeInForce;
             }
-            if (params.closePosition !== undefined)
-                orderObj.closePosition = params.closePosition;
-            if (params.workingType !== undefined)
-                orderObj.workingType = params.workingType;
-            if (params.positionSide !== undefined)
-                orderObj.positionSide = params.positionSide;
-            if (params.reduceOnly !== undefined &&
+            if (isClosePosition) {
+                payload.closePosition = "true";
+                delete payload.quantity;
+                delete payload.reduceOnly;
+            }
+            else if (params.reduceOnly !== undefined &&
                 (params.positionSide === undefined || params.positionSide === "BOTH")) {
-                orderObj.reduceOnly = params.reduceOnly;
+                payload.reduceOnly = params.reduceOnly;
             }
-            return orderObj;
+            if (params.workingType !== undefined)
+                payload.workingType = params.workingType;
+            if (params.recvWindow !== undefined)
+                payload.recvWindow = params.recvWindow;
+            if (params.positionSide !== undefined)
+                payload.positionSide = params.positionSide;
+            if (cid.length > 0)
+                payload.newClientOrderId = cid;
+            return payload;
         });
-        const payload = {
-            batchOrders: JSON.stringify(formattedOrders),
+        const batchQuery = {
+            batchOrders: JSON.stringify(batchPayload),
             recvWindow,
         };
-        try {
-            const resList = await this.request("POST", "/fapi/v1/batchOrders", payload, true);
-            return resList;
-        }
-        catch (err) {
-            const errMsg = err?.message || String(err);
-            if (errMsg.includes("-5022") || errMsg.includes("5022")) {
-                console.warn(`[BinanceExecutionClient][-5022 BATCH REJECTION] Batch POST_ONLY order rejected with -5022. Retrying target orders individually with 1-tick price shift...`);
-                const fallbackResults = [];
-                for (const orderParams of targetOrders) {
-                    try {
-                        const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(orderParams.symbol);
-                        const currentPrice = orderParams.price || 0;
-                        const adjustedPrice = orderParams.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
-                        const newPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(orderParams.symbol, adjustedPrice);
-                        const singleRes = await this.placeOrder({
-                            ...orderParams,
-                            price: newPrice,
-                        });
-                        fallbackResults.push(singleRes);
-                    }
-                    catch (itemErr) {
-                        console.error(`[BinanceExecutionClient][-5022 BATCH FALLBACK ITEM FAILED] ${itemErr?.message || String(itemErr)}`);
-                    }
-                }
-                return fallbackResults;
-            }
-            throw err;
-        }
+        return this.request("POST", "/fapi/v1/batchOrders", batchQuery, true);
     }
-    /**
-     * Cancels a list of open orders for a symbol in a single batch request (DELETE /fapi/v1/batchOrders).
-     */
     async cancelBatchOrders(symbol, orderIdList) {
-        if (!symbol || !orderIdList || orderIdList.length === 0)
+        if (!orderIdList || orderIdList.length === 0)
             return [];
         const recvWindow = parseInt(process.env.RECV_WINDOW_MS || "5000", 10);
         const maxBatchLimit = parseInt(process.env.BATCH_ORDER_MAX_LIMIT || "5", 10);
@@ -532,16 +552,16 @@ class BinanceExecutionClient {
         };
         return this.request("DELETE", "/fapi/v1/batchOrders", payload, true);
     }
-    async cancelOrder(symbol, orderId) {
+    async cancelOrder(symbol, orderId, signal) {
         try {
-            return await this.request("DELETE", "/fapi/v1/order", { symbol, orderId }, true);
+            return await this.request("DELETE", "/fapi/v1/order", { symbol, orderId }, true, false, signal);
         }
         catch (err) {
-            const errMsg = err?.message || String(err);
+            const errMsg = err instanceof Error ? err.message : String(err);
             if (errMsg.includes("-2011") || errMsg.includes("-4120") || errMsg.includes("Unknown order") || errMsg.includes("not found")) {
                 // Fallback to /fapi/v1/algoOrder cancellation
                 try {
-                    const algoCancel = await this.request("DELETE", "/fapi/v1/algoOrder", { symbol, algoId: orderId }, true);
+                    const algoCancel = await this.request("DELETE", "/fapi/v1/algoOrder", { symbol, algoId: orderId }, true, false, signal);
                     return {
                         orderId: Number(orderId),
                         symbol,

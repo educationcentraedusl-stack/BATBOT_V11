@@ -40,8 +40,10 @@ class StrategyEngine {
     state = "LIVE_ACTIVE";
     assetIndex = 0;
     isOrderInFlight = false;
-    slSyncLocks = new Set();
+    slSyncLocks = new Map();
     pendingSlSyncTargets = new Map();
+    globalSlEpochSequence = 0;
+    static MAX_SL_LOCK_HOLD_MS = 2500;
     pendingEntryOrders = new Map();
     processedFillOrderIds = new Set();
     processedFillClientOrderIds = new Set();
@@ -1067,7 +1069,7 @@ class StrategyEngine {
             }
         }
     }
-    async dispatchExchangeStopLossOrder(slotId, entryPrice, quantity, side, stopLossPrice) {
+    async dispatchExchangeStopLossOrder(slotId, entryPrice, quantity, side, stopLossPrice, signal) {
         if (stopLossPrice <= 0)
             return undefined;
         const exitSide = side === "LONG" ? "SELL" : "BUY";
@@ -1075,7 +1077,7 @@ class StrategyEngine {
         const clientOrderId = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(this.config.symbol, slotId, "SL");
         try {
             console.log(`[EXCHANGE_SL_ENGINE][DISPATCHING] [${this.config.symbol}:${slotId}] Submitting position-level STOP_MARKET order on Binance: ${exitSide} (closePosition: true) @ stopPrice $${formattedSlPx} (ClId: ${clientOrderId})...`);
-            const res = await this.executionClient.placePositionStopLoss(this.config.symbol, exitSide, side, stopLossPrice, clientOrderId);
+            const res = await this.executionClient.placePositionStopLoss(this.config.symbol, exitSide, side, stopLossPrice, clientOrderId, signal);
             if (res && res.orderId) {
                 this.hedgeLedger.registerActiveStopLossOrderId(slotId, res.orderId);
                 console.log(`[EXCHANGE_SL_ENGINE][SUCCESS] [${this.config.symbol}:${slotId}] Registered position-level Exchange STOP_MARKET OrderId #${res.orderId} (ClId: ${res.clientOrderId || clientOrderId})`);
@@ -1089,43 +1091,92 @@ class StrategyEngine {
         return undefined;
     }
     async syncExchangeStopLossOrder(slotId, quantity, side, newStopLossPrice) {
-        if (this.slSyncLocks.has(slotId)) {
-            this.pendingSlSyncTargets.set(slotId, { quantity, side, price: newStopLossPrice });
-            console.log(`[EXCHANGE_SL_ENGINE][LOCKED] [${this.config.symbol}:${slotId}] Sync is already in-flight. Queued latest target SL $${newStopLossPrice}.`);
-            return;
+        const existingLock = this.slSyncLocks.get(slotId);
+        const now = Date.now();
+        if (existingLock) {
+            const lockAge = now - existingLock.acquiredAt;
+            if (lockAge > StrategyEngine.MAX_SL_LOCK_HOLD_MS) {
+                // Auto-Eviction: Evict stale lock and abort previous zombie request
+                console.warn(`[EXCHANGE_SL_ENGINE][LOCK_EVICTED] [${this.config.symbol}:${slotId}] Stale SL sync lock detected (Age: ${lockAge}ms > ${StrategyEngine.MAX_SL_LOCK_HOLD_MS}ms, Epoch: #${existingLock.epoch}). Auto-evicting zombie lock and aborting stalled operation...`);
+                try {
+                    existingLock.abortController.abort();
+                }
+                catch (_) {
+                    // Ignore AbortController errors
+                }
+                this.slSyncLocks.delete(slotId);
+            }
+            else {
+                // Active In-Flight Worker: Coalesce latest target in LVCQ
+                this.pendingSlSyncTargets.set(slotId, {
+                    quantity,
+                    side,
+                    price: newStopLossPrice,
+                    timestamp: now,
+                });
+                console.log(`[EXCHANGE_SL_ENGINE][LOCKED] [${this.config.symbol}:${slotId}] Sync is already in-flight (Epoch: #${existingLock.epoch}, Age: ${lockAge}ms). Coalesced latest target SL $${newStopLossPrice}.`);
+                return;
+            }
         }
-        this.slSyncLocks.add(slotId);
+        const currentEpoch = ++this.globalSlEpochSequence;
+        const abortController = new AbortController();
+        this.slSyncLocks.set(slotId, {
+            epoch: currentEpoch,
+            acquiredAt: Date.now(),
+            abortController,
+        });
         try {
             let currentTargetPrice = newStopLossPrice;
             let currentQty = quantity;
             let currentSide = side;
-            while (true) {
+            let drainIterations = 0;
+            const maxDrainIterations = 3;
+            while (drainIterations < maxDrainIterations) {
+                drainIterations++;
                 this.pendingSlSyncTargets.delete(slotId);
+                // Epoch Fencing Barrier: Verify this worker has not been superseded or evicted
+                if (this.slSyncLocks.get(slotId)?.epoch !== currentEpoch) {
+                    console.warn(`[EXCHANGE_SL_ENGINE][EPOCH_FENCED] [${this.config.symbol}:${slotId}] Worker Epoch #${currentEpoch} was evicted (Active Epoch: #${this.slSyncLocks.get(slotId)?.epoch}). Terminating stale worker.`);
+                    return;
+                }
                 const slot = slotId === "CORE_LONG" ? this.hedgeLedger.getCoreLong() : this.hedgeLedger.getShortSlots().find((s) => s.slotId === slotId);
                 if (!slot || !slot.isOccupied || slot.quantity <= 0) {
                     console.log(`[EXCHANGE_SL_ENGINE][SKIP] [${this.config.symbol}:${slotId}] Slot is not occupied. Skipping SL placement.`);
                     return;
                 }
                 const existingSlId = this.hedgeLedger.getActiveStopLossOrderId(slotId);
-                if (existingSlId) {
-                    this.hedgeLedger.registerActiveStopLossOrderId(slotId, 0);
+                if (existingSlId && existingSlId > 0) {
                     try {
                         console.log(`[EXCHANGE_SL_ENGINE][RATCHET_CANCEL] [${this.config.symbol}:${slotId}] Cancelling previous resting Exchange STOP_MARKET OrderId #${existingSlId}...`);
-                        await this.executionClient.cancelOrder(this.config.symbol, existingSlId);
+                        await this.executionClient.cancelOrder(this.config.symbol, existingSlId, abortController.signal);
                     }
                     catch (err) {
                         const errorMessage = err instanceof Error ? err.message : String(err);
                         console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] [${this.config.symbol}:${slotId}] Unable to cancel previous SL order #${existingSlId}: ${errorMessage}`);
                     }
                 }
+                // Epoch Fencing Barrier: Re-check after cancellation await
+                if (this.slSyncLocks.get(slotId)?.epoch !== currentEpoch) {
+                    console.warn(`[EXCHANGE_SL_ENGINE][EPOCH_FENCED] [${this.config.symbol}:${slotId}] Worker Epoch #${currentEpoch} evicted after cancelOrder. Aborting.`);
+                    return;
+                }
                 // Re-verify slot is still occupied after awaiting order cancellation
                 if (!slot.isOccupied || slot.quantity <= 0) {
                     console.log(`[EXCHANGE_SL_ENGINE][SKIP] [${this.config.symbol}:${slotId}] Slot closed during cancellation. Skipping new SL order.`);
                     return;
                 }
-                const placedOrderId = await this.dispatchExchangeStopLossOrder(slotId, slot.entryPrice, currentQty, currentSide, currentTargetPrice);
+                const placedOrderId = await this.dispatchExchangeStopLossOrder(slotId, slot.entryPrice, currentQty, currentSide, currentTargetPrice, abortController.signal);
+                // Epoch Fencing Barrier: Re-check after placement await
+                if (this.slSyncLocks.get(slotId)?.epoch !== currentEpoch) {
+                    console.warn(`[EXCHANGE_SL_ENGINE][EPOCH_FENCED] [${this.config.symbol}:${slotId}] Worker Epoch #${currentEpoch} evicted after order placement. Aborting.`);
+                    return;
+                }
                 if (placedOrderId) {
+                    this.hedgeLedger.registerActiveStopLossOrderId(slotId, placedOrderId);
                     this.hedgeLedger.updateLastSyncedSlPrice(slotId, currentTargetPrice);
+                }
+                else {
+                    console.error(`[EXCHANGE_SL_ENGINE][PLACEMENT_FAILED] [${this.config.symbol}:${slotId}] Failed to place replacement SL @ $${currentTargetPrice}.`);
                 }
                 // If a subsequent ratchet target was queued while the network request was in-flight, process it immediately
                 if (this.pendingSlSyncTargets.has(slotId)) {
@@ -1141,7 +1192,11 @@ class StrategyEngine {
             }
         }
         finally {
-            this.slSyncLocks.delete(slotId);
+            // Guaranteed Lock Release with Epoch Invariant: Only release if lock belongs to THIS epoch
+            const activeLock = this.slSyncLocks.get(slotId);
+            if (activeLock && activeLock.epoch === currentEpoch) {
+                this.slSyncLocks.delete(slotId);
+            }
         }
     }
     /**
@@ -1156,7 +1211,7 @@ class StrategyEngine {
             if (!audit.isProtected) {
                 console.warn(`[RiskGuard][CLOSED_LOOP_AUDIT_FAIL] [${this.config.symbol}:LONG] ${audit.reason} Auto-dispatching emergency position-level SL...`);
                 this.syncExchangeStopLossOrder("CORE_LONG", longSummary.totalQuantity, "LONG", longSummary.stopLossPrice).catch((err) => {
-                    console.error(`[RiskGuard][CLOSED_LOOP_EMERGENCY_SL_FAIL] Long SL emergency sync failed: ${err.message}`);
+                    console.error(`[RiskGuard][CLOSED_LOOP_EMERGENCY_SL_FAIL] Long SL emergency sync failed: ${err instanceof Error ? err.message : String(err)}`);
                 });
             }
         }
@@ -1167,7 +1222,7 @@ class StrategyEngine {
                 const targetSlot = shortSummary.slotIds[0] || "SHORT_SLOT_0";
                 console.warn(`[RiskGuard][CLOSED_LOOP_AUDIT_FAIL] [${this.config.symbol}:SHORT] ${audit.reason} Auto-dispatching emergency position-level SL...`);
                 this.syncExchangeStopLossOrder(targetSlot, shortSummary.totalQuantity, "SHORT", shortSummary.stopLossPrice).catch((err) => {
-                    console.error(`[RiskGuard][CLOSED_LOOP_EMERGENCY_SL_FAIL] Short SL emergency sync failed: ${err.message}`);
+                    console.error(`[RiskGuard][CLOSED_LOOP_EMERGENCY_SL_FAIL] Short SL emergency sync failed: ${err instanceof Error ? err.message : String(err)}`);
                 });
             }
         }
