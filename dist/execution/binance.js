@@ -41,6 +41,7 @@ const http = __importStar(require("node:http"));
 const node_url_1 = require("node:url");
 const symbolPrecision_1 = require("../config/symbolPrecision");
 const clientOrderIdGenerator_1 = require("./clientOrderIdGenerator");
+const timeSynchronizer_1 = require("../utils/timeSynchronizer");
 class BinanceRateLimiter {
     static MAX_WEIGHT_1M = 2400;
     static MAX_ORDERS_10S = 300;
@@ -208,7 +209,7 @@ class BinanceExecutionClient {
         return this.apiKey.length > 0 && this.apiSecret.length > 0;
     }
     getTimeOffset() {
-        return this.timeOffset;
+        return Math.round(timeSynchronizer_1.timeSynchronizer.getOffsetMs() || this.timeOffset);
     }
     async syncServerTime() {
         if (this.timeSyncPromise) {
@@ -216,16 +217,10 @@ class BinanceExecutionClient {
         }
         this.timeSyncPromise = (async () => {
             try {
-                const startTime = Date.now();
-                const res = await this.request("GET", "/fapi/v1/time", {}, false);
-                const endTime = Date.now();
-                const rtt = endTime - startTime;
-                if (res && typeof res.serverTime === "number") {
-                    this.timeOffset = res.serverTime - (startTime + Math.floor(rtt / 2));
-                    this.isTimeSynced = true;
-                    console.log(`[BinanceExecutionClient] Time synced with Binance Server. Server Time: ${res.serverTime}, Local Time: ${Date.now()}, Offset: ${this.timeOffset}ms (RTT: ${rtt}ms)`);
-                    return this.timeOffset;
-                }
+                const offset = await timeSynchronizer_1.timeSynchronizer.sync();
+                this.timeOffset = offset;
+                this.isTimeSynced = true;
+                return offset;
             }
             catch (err) {
                 const errMsg = err instanceof Error ? err.message : String(err);
@@ -286,7 +281,7 @@ class BinanceExecutionClient {
         }
     }
     signQuery(params) {
-        const timestamp = Date.now() + this.timeOffset;
+        const timestamp = timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs();
         const queryParams = new URLSearchParams();
         for (const [key, value] of Object.entries(params)) {
             if (value !== undefined && value !== null) {

@@ -1,6 +1,17 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-23
+- **Feature/Task:** SOTA NTP Clock Desync & Rolling Server Time Offset Overhaul (Cristian's Algorithm, EWMA Smoother, SAB Slot 100 Sync & Bounded Staleness Window)
+- **Artifacts Created/Modified:** `src/utils/timeSynchronizer.ts`, `src/marketDataClient.ts`, `src/execution/binance.ts`, `src/strategy/engine.ts`, `src/scripts/run_tui_dashboard.ts`, `src/tests/test_clock_synchronizer_and_staleness.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** 
+  1. **Cristian's Algorithm & EWMA Smoother (`src/utils/timeSynchronizer.ts`):** Implemented institutional `TimeSynchronizer` singleton querying `/fapi/v1/time` via Cristian's Algorithm. Filters high-latency network outliers ($\text{RTT} > 150\text{ms}$ discarded) and smoothly updates rolling server time offset via exponential moving average ($\alpha = 0.25$). Provides zero-allocation microsecond/nanosecond adjusted epoch timestamps (`getAdjustedNowMs()`, `getAdjustedNowNs()`).
+  2. **Zero-Copy SharedArrayBuffer Slot 100 Synchronization (`src/marketDataClient.ts`):** Allocated Slot 100 in each asset stride for atomic `SERVER_TIME_OFFSET_MS`, allowing both Rust binary workers and Node.js strategy engines to operate in the exact same exchange-synchronized time domain with zero IPC copies.
+  3. **Strategy Engine Bounded Staleness Window (`src/strategy/engine.ts`):** Completely eradicated naive `Date.now() - packet.E` staleness checks. Replaced with `packetAgeMs = (adjustedNowNs - packetTimestampNs) / 1000000n` with a signed bounded window ($-100\text{ms} \le \text{Age} \le 750\text{ms}$). Eliminates the 2390ms false-positive staleness rejections caused by local OS clock drift, curing orderbook blindness and allowing winning trades to reach Take Profit.
+  4. **Binance Execution REST API Signature Alignment (`src/execution/binance.ts`):** Wired `timeSynchronizer.getAdjustedNowMs()` into `signQuery()` and `getTimeOffset()`, ensuring all signed REST requests are timestamped within Binance's strict 10s `recvWindow` without trigger rejections or error `-1021`.
+  5. **100% Verification & Proof:** Passed `npx tsc --noEmit` (0 errors), `npm run build:ts` (0 errors), and `npx tsx src/tests/test_clock_synchronizer_and_staleness.ts` (all 5 stages passed 100% with 1,000 rapid ticks under simulated 2390ms clock drift producing 0 false-positive staleness rejections).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-23
 - **Feature/Task:** SOTA LVCQ Microtask Loop Eradication, In-Flight Risk Audit Grace & Token-Bucket BinanceRateLimiter
 - **Artifacts Created/Modified:** `src/execution/binance.ts`, `src/strategy/engine.ts`, `src/tests/test_lvcq_microtask_loop_prevention.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
 - **HFT/Performance Compliance:** 

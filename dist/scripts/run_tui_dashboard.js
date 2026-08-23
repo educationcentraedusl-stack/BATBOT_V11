@@ -47,6 +47,7 @@ const risk_1 = require("../strategy/risk");
 const index_1 = require("../index");
 const symbolPrecision_1 = require("../config/symbolPrecision");
 const recalibrationWorker_1 = require("../ai/recalibrationWorker");
+const timeSynchronizer_1 = require("../utils/timeSynchronizer");
 async function runProductionTuiLauncher() {
     console.log("=========================================================================");
     console.log("  BATBOT_V11 HIGH-FREQUENCY TRADING SYSTEM - PRODUCTION TUI LAUNCHER     ");
@@ -107,6 +108,11 @@ async function runProductionTuiLauncher() {
     console.log("\n[Pre-Flight 3/3] Initializing Zero-Copy SharedArrayBuffer & Telemetry Engine...");
     const sab = new SharedArrayBuffer(totalSABBytes);
     const client = new marketDataClient_1.MarketDataClient(sab, maxAssets, slotsPerAsset);
+    // Initialize SOTA Time Synchronization Engine (NTP Drift Compensation & SAB Slot 100 Sync)
+    timeSynchronizer_1.timeSynchronizer.subscribeOffsetUpdated((offset) => {
+        client.setGlobalServerTimeOffsetMs(offset);
+    });
+    await timeSynchronizer_1.timeSynchronizer.start();
     // Attempt starting native zero-copy ingestion if available
     if (isNativeVerified && nativeModule && typeof nativeModule.startIngestion === "function") {
         try {

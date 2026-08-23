@@ -11,6 +11,7 @@ import { MultiAssetRiskGuard } from "../strategy/risk";
 import { syncStateOnStartup } from "../index";
 import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
 import { AutoRecalibrationManager } from "../ai/recalibrationWorker";
+import { timeSynchronizer } from "../utils/timeSynchronizer";
 
 export interface NativeIngestionModule {
   startIngestion?: (sabBuffer: Buffer, symbols?: string[]) => boolean;
@@ -86,6 +87,12 @@ export async function runProductionTuiLauncher(): Promise<void> {
   console.log("\n[Pre-Flight 3/3] Initializing Zero-Copy SharedArrayBuffer & Telemetry Engine...");
   const sab = new SharedArrayBuffer(totalSABBytes);
   const client = new MarketDataClient(sab, maxAssets, slotsPerAsset);
+
+  // Initialize SOTA Time Synchronization Engine (NTP Drift Compensation & SAB Slot 100 Sync)
+  timeSynchronizer.subscribeOffsetUpdated((offset) => {
+    client.setGlobalServerTimeOffsetMs(offset);
+  });
+  await timeSynchronizer.start();
 
   // Attempt starting native zero-copy ingestion if available
   if (isNativeVerified && nativeModule && typeof nativeModule.startIngestion === "function") {

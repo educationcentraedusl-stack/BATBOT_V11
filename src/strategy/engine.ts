@@ -11,6 +11,7 @@ import { BinanceUserDataStream, OrderTradeUpdatePayload, AccountPositionUpdatePa
 import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
 import { getTradingSymbols } from "../config/tradingSymbols";
 import { AutoRecalibrationManager } from "../ai/recalibrationWorker";
+import { timeSynchronizer } from "../utils/timeSynchronizer";
 
 export interface StrategyConfig {
   symbol: string;
@@ -1322,7 +1323,7 @@ export class StrategyEngine {
     newStopLossPrice: number
   ): Promise<void> {
     const existingLock = this.slSyncLocks.get(slotId);
-    const now = Date.now();
+    const now = timeSynchronizer.getAdjustedNowMs();
 
     if (existingLock) {
       const lockAge = now - existingLock.acquiredAt;
@@ -1356,7 +1357,7 @@ export class StrategyEngine {
     const abortController = new AbortController();
     this.slSyncLocks.set(slotId, {
       epoch: currentEpoch,
-      acquiredAt: Date.now(),
+      acquiredAt: timeSynchronizer.getAdjustedNowMs(),
       abortController,
     });
 
@@ -1470,7 +1471,7 @@ export class StrategyEngine {
    * Lock-aware: In-flight SL sync operations within the 2500ms SLA are treated as IN_TRANSIT and bypassed.
    */
   public auditActivePositionRiskClosedLoop(): void {
-    const now = Date.now();
+    const now = timeSynchronizer.getAdjustedNowMs();
     this.lastRiskAuditTimestamp = now;
 
     const longSummary = this.hedgeLedger.getAggregatedSideSummary("LONG");
@@ -1824,18 +1825,19 @@ export class StrategyEngine {
       }
       this.lastProcessedSequence = seq;
 
-      // Read scalar metrics atomically from SAB
-      const nowMs = Date.now();
+      // Read scalar metrics atomically from SAB using Synchronized Time Domain
+      const nowMs = timeSynchronizer.getAdjustedNowMs();
       const obi = this.client.getOBI(this.assetIndex);
       const cvd = this.client.getCVDVelocity(this.assetIndex, 5000, nowMs);
       const spreadVelocity = this.client.getSpreadVelocity(this.assetIndex);
       const bidPrice = this.client.getBestBidPrice(this.assetIndex);
       const askPrice = this.client.getBestAskPrice(this.assetIndex);
 
-      // WEBSOCKET FRESHNESS & STALENESS GUARD (750ms Hard Staleness Barrier)
+      // WEBSOCKET FRESHNESS & STALENESS GUARD (SOTA Bounded Window: -100ms <= Age <= 750ms)
       const packetTimestampNs = this.client.getTimestampNs(this.assetIndex);
-      const packetAgeMs = packetTimestampNs > 0n ? Number((BigInt(nowMs) * 1000000n - packetTimestampNs) / 1000000n) : 0;
-      const isStale = packetTimestampNs > 0n && packetAgeMs > 750;
+      const adjustedNowNs = BigInt(nowMs) * 1000000n;
+      const packetAgeMs = packetTimestampNs > 0n ? Number((adjustedNowNs - packetTimestampNs) / 1000000n) : 0;
+      const isStale = packetTimestampNs > 0n && (packetAgeMs > 750 || packetAgeMs < -100);
 
       // SPREAD & TICK GUARD: Immediately reject invalid tick data, stale orderbooks, or spread blowouts BEFORE evaluating dynamic exits or signals
       const isTickValid = askPrice > 0 && bidPrice > 0 && askPrice >= bidPrice;
@@ -1973,7 +1975,7 @@ export class StrategyEngine {
               hazardMetrics,
               this.hjbEngine,
               volMetrics,
-              Date.now(),
+              nowMs,
               hurstExponent
             )
           : [];
@@ -1989,7 +1991,7 @@ export class StrategyEngine {
               hawkesIntensity,
               volMetrics.garmanKlass1s,
               hazardMetrics.ofi,
-              Date.now()
+              nowMs
             )
           : [];
 

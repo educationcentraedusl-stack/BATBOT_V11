@@ -5,6 +5,7 @@ import * as http from "node:http";
 import { URL } from "node:url";
 import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
 import { ClientOrderIdGenerator } from "./clientOrderIdGenerator";
+import { timeSynchronizer } from "../utils/timeSynchronizer";
 
 export interface BinanceOrderParams {
   symbol: string;
@@ -407,7 +408,7 @@ export class BinanceExecutionClient {
   }
 
   public getTimeOffset(): number {
-    return this.timeOffset;
+    return Math.round(timeSynchronizer.getOffsetMs() || this.timeOffset);
   }
 
   public async syncServerTime(): Promise<number> {
@@ -417,16 +418,10 @@ export class BinanceExecutionClient {
 
     this.timeSyncPromise = (async () => {
       try {
-        const startTime = Date.now();
-        const res = await this.request<{ serverTime: number }>("GET", "/fapi/v1/time", {}, false);
-        const endTime = Date.now();
-        const rtt = endTime - startTime;
-        if (res && typeof res.serverTime === "number") {
-          this.timeOffset = res.serverTime - (startTime + Math.floor(rtt / 2));
-          this.isTimeSynced = true;
-          console.log(`[BinanceExecutionClient] Time synced with Binance Server. Server Time: ${res.serverTime}, Local Time: ${Date.now()}, Offset: ${this.timeOffset}ms (RTT: ${rtt}ms)`);
-          return this.timeOffset;
-        }
+        const offset = await timeSynchronizer.sync();
+        this.timeOffset = offset;
+        this.isTimeSynced = true;
+        return offset;
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
         console.error(`[BinanceExecutionClient] Failed to sync Binance server time: ${errMsg}`);
@@ -490,7 +485,7 @@ export class BinanceExecutionClient {
 
 
   public signQuery(params: Record<string, string | number | boolean>): string {
-    const timestamp = Date.now() + this.timeOffset;
+    const timestamp = timeSynchronizer.getAdjustedNowMs();
     const queryParams = new URLSearchParams();
 
     for (const [key, value] of Object.entries(params)) {

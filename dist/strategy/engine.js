@@ -13,6 +13,7 @@ const hjbReservationEngine_1 = require("./hjbReservationEngine");
 const userDataStream_1 = require("../execution/userDataStream");
 const symbolPrecision_1 = require("../config/symbolPrecision");
 const tradingSymbols_1 = require("../config/tradingSymbols");
+const timeSynchronizer_1 = require("../utils/timeSynchronizer");
 function getSymbolQuantityPrecision(symbol) {
     const rule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(symbol);
     return {
@@ -1096,7 +1097,7 @@ class StrategyEngine {
     }
     async syncExchangeStopLossOrder(slotId, quantity, side, newStopLossPrice) {
         const existingLock = this.slSyncLocks.get(slotId);
-        const now = Date.now();
+        const now = timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs();
         if (existingLock) {
             const lockAge = now - existingLock.acquiredAt;
             if (lockAge > StrategyEngine.MAX_SL_LOCK_HOLD_MS) {
@@ -1126,7 +1127,7 @@ class StrategyEngine {
         const abortController = new AbortController();
         this.slSyncLocks.set(slotId, {
             epoch: currentEpoch,
-            acquiredAt: Date.now(),
+            acquiredAt: timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs(),
             abortController,
         });
         try {
@@ -1215,7 +1216,7 @@ class StrategyEngine {
      * Lock-aware: In-flight SL sync operations within the 2500ms SLA are treated as IN_TRANSIT and bypassed.
      */
     auditActivePositionRiskClosedLoop() {
-        const now = Date.now();
+        const now = timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs();
         this.lastRiskAuditTimestamp = now;
         const longSummary = this.hedgeLedger.getAggregatedSideSummary("LONG");
         if (longSummary.isOccupied && longSummary.totalQuantity > 0) {
@@ -1478,17 +1479,18 @@ class StrategyEngine {
                 return this.staticResult;
             }
             this.lastProcessedSequence = seq;
-            // Read scalar metrics atomically from SAB
-            const nowMs = Date.now();
+            // Read scalar metrics atomically from SAB using Synchronized Time Domain
+            const nowMs = timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs();
             const obi = this.client.getOBI(this.assetIndex);
             const cvd = this.client.getCVDVelocity(this.assetIndex, 5000, nowMs);
             const spreadVelocity = this.client.getSpreadVelocity(this.assetIndex);
             const bidPrice = this.client.getBestBidPrice(this.assetIndex);
             const askPrice = this.client.getBestAskPrice(this.assetIndex);
-            // WEBSOCKET FRESHNESS & STALENESS GUARD (750ms Hard Staleness Barrier)
+            // WEBSOCKET FRESHNESS & STALENESS GUARD (SOTA Bounded Window: -100ms <= Age <= 750ms)
             const packetTimestampNs = this.client.getTimestampNs(this.assetIndex);
-            const packetAgeMs = packetTimestampNs > 0n ? Number((BigInt(nowMs) * 1000000n - packetTimestampNs) / 1000000n) : 0;
-            const isStale = packetTimestampNs > 0n && packetAgeMs > 750;
+            const adjustedNowNs = BigInt(nowMs) * 1000000n;
+            const packetAgeMs = packetTimestampNs > 0n ? Number((adjustedNowNs - packetTimestampNs) / 1000000n) : 0;
+            const isStale = packetTimestampNs > 0n && (packetAgeMs > 750 || packetAgeMs < -100);
             // SPREAD & TICK GUARD: Immediately reject invalid tick data, stale orderbooks, or spread blowouts BEFORE evaluating dynamic exits or signals
             const isTickValid = askPrice > 0 && bidPrice > 0 && askPrice >= bidPrice;
             const currentSpread = isTickValid ? askPrice - bidPrice : Infinity;
@@ -1603,12 +1605,12 @@ class StrategyEngine {
                 const hurstExponent = this.client.getHurstExponent(this.assetIndex);
                 // Priority 1: Evaluate SOTA Dynamic Exits (MS-SOPC, CAD-DTLM, Cox Hazard Survival Flush, HJB Liquidation Boundary)
                 const sotaTriggers = hasActivePos
-                    ? this.hedgeLedger.evaluateSotaDynamicExits(bidPrice, askPrice, hazardMetrics, this.hjbEngine, volMetrics, Date.now(), hurstExponent)
+                    ? this.hedgeLedger.evaluateSotaDynamicExits(bidPrice, askPrice, hazardMetrics, this.hjbEngine, volMetrics, nowMs, hurstExponent)
                     : [];
                 // Priority 2: Evaluate Hedge Slot Dynamic TP/SL Fallback (Fixed/Trailing TP/SL, Profit Lock)
                 const hawkesIntensity = this.client.getHawkesIntensity(this.assetIndex);
                 const hedgeTriggers = (hasActivePos && sotaTriggers.length === 0)
-                    ? this.hedgeLedger.evaluateHedgeDynamicTpSl(markPrice, aiDirection, aiConfidence, hazardMetrics.vpin, hawkesIntensity, volMetrics.garmanKlass1s, hazardMetrics.ofi, Date.now())
+                    ? this.hedgeLedger.evaluateHedgeDynamicTpSl(markPrice, aiDirection, aiConfidence, hazardMetrics.vpin, hawkesIntensity, volMetrics.garmanKlass1s, hazardMetrics.ofi, nowMs)
                     : [];
                 const activeTriggers = sotaTriggers.length > 0 ? sotaTriggers : hedgeTriggers;
                 if (hasActivePos) {

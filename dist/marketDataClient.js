@@ -232,6 +232,18 @@ class MarketDataClient {
     getDynamicSlippageTicks(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 100);
     }
+    // --- Slot 100: Binance Server Time Offset (EWMA NTP Drift in Milliseconds) ---
+    getServerTimeOffsetMs(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 100);
+    }
+    setServerTimeOffsetMs(offsetMs, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 100, offsetMs);
+    }
+    setGlobalServerTimeOffsetMs(offsetMs) {
+        for (let i = 0; i < this.maxAssets; i++) {
+            this.writeAtomicFloat64Asset(i, 100, offsetMs);
+        }
+    }
     getRollingIC(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 101);
     }
