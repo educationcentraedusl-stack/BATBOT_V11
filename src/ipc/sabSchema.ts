@@ -72,7 +72,7 @@ export const SAB_SLOTS = {
   ENGINE_PAUSED_FLAG: 132,
   TRIGGER_RECALIBRATION_FLAG: 133,
 
-  // Account & Execution Telemetry Slots (134..149)
+  // Account & Execution Telemetry Slots (134..150)
   AVAILABLE_BALANCE: 134,
   OMS_WINNING_TRADES: 135,
   OMS_LOSING_TRADES: 136,
@@ -89,4 +89,5 @@ export const SAB_SLOTS = {
   OMS_LONG_UNREALIZED_PNL: 147,
   OMS_SHORT_UNREALIZED_PNL: 148,
   HAWKES_ASYMMETRY: 149,
+  SERVER_TIME_OFFSET_MS: 150,
 } as const;

@@ -408,7 +408,10 @@ export class BinanceExecutionClient {
   }
 
   public getTimeOffset(): number {
-    return Math.round(timeSynchronizer.getOffsetMs() || this.timeOffset);
+    const syncOffset = timeSynchronizer.getOffsetMs();
+    return Number.isFinite(syncOffset)
+      ? Math.round(syncOffset)
+      : Math.round(this.timeOffset);
   }
 
   public async syncServerTime(): Promise<number> {

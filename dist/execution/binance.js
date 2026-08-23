@@ -209,7 +209,10 @@ class BinanceExecutionClient {
         return this.apiKey.length > 0 && this.apiSecret.length > 0;
     }
     getTimeOffset() {
-        return Math.round(timeSynchronizer_1.timeSynchronizer.getOffsetMs() || this.timeOffset);
+        const syncOffset = timeSynchronizer_1.timeSynchronizer.getOffsetMs();
+        return Number.isFinite(syncOffset)
+            ? Math.round(syncOffset)
+            : Math.round(this.timeOffset);
     }
     async syncServerTime() {
         if (this.timeSyncPromise) {

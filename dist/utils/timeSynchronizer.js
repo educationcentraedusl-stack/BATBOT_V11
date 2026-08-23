@@ -93,13 +93,15 @@ class TimeSynchronizer {
      * Returns the adjusted current timestamp in milliseconds (Date.now() + offset).
      */
     getAdjustedNowMs() {
-        return Date.now() + Math.round(this.offsetMs);
+        const offset = Number.isFinite(this.offsetMs) ? Math.round(this.offsetMs) : 0;
+        return Date.now() + offset;
     }
     /**
      * Returns the adjusted current timestamp in nanoseconds.
      */
     getAdjustedNowNs() {
-        const nowMs = Date.now() + Math.round(this.offsetMs);
+        const offset = Number.isFinite(this.offsetMs) ? Math.round(this.offsetMs) : 0;
+        const nowMs = Date.now() + offset;
         return BigInt(nowMs) * 1000000n;
     }
     /**
@@ -118,7 +120,7 @@ class TimeSynchronizer {
      * Manually sets the offset (useful for test simulations and unit tests).
      */
     setManualOffsetMs(offset) {
-        this.offsetMs = offset;
+        this.offsetMs = Number.isFinite(offset) ? offset : 0;
         this.isInitialized = true;
         this.lastSyncTimestamp = Date.now();
         for (const cb of this.onOffsetUpdatedCallbacks) {
@@ -138,6 +140,10 @@ class TimeSynchronizer {
         const t0 = Date.now();
         try {
             const serverTime = await this.fetchBinanceServerTime();
+            if (!Number.isFinite(serverTime)) {
+                console.warn(`[TimeSynchronizer][NON_FINITE_PAYLOAD] serverTime ${serverTime} is not finite. Discarding probe.`);
+                return null;
+            }
             const t1 = Date.now();
             const rtt = t1 - t0;
             if (rtt > this.maxAcceptableRttMs) {
@@ -147,6 +153,9 @@ class TimeSynchronizer {
             // Cristian's Algorithm: assume symmetric network latency (one-way latency = RTT / 2)
             const estimatedOneWayLatency = Math.floor(rtt / 2);
             const rawOffset = serverTime - (t0 + estimatedOneWayLatency);
+            if (!Number.isFinite(rawOffset)) {
+                return null;
+            }
             return {
                 serverTime,
                 localTimeAtRequest: t0,
@@ -237,6 +246,9 @@ class TimeSynchronizer {
         }
     }
     applySample(sample) {
+        if (!Number.isFinite(sample.rawOffsetMs) || !Number.isFinite(sample.rttMs)) {
+            return;
+        }
         this.lastRttMs = sample.rttMs;
         this.lastSyncTimestamp = Date.now();
         if (!this.isInitialized) {
@@ -280,7 +292,7 @@ class TimeSynchronizer {
                     isSettled = true;
                     try {
                         const data = JSON.parse(body);
-                        if (data && typeof data.serverTime === "number") {
+                        if (data && typeof data.serverTime === "number" && Number.isFinite(data.serverTime)) {
                             resolve(data.serverTime);
                         }
                         else {

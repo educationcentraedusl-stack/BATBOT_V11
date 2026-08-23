@@ -369,7 +369,7 @@ export class StrategyEngine {
     fillTimestampMs?: number;
     netRoe?: number;
   }): void {
-    const fillTime = params.fillTimestampMs ?? Date.now();
+    const fillTime = params.fillTimestampMs ?? timeSynchronizer.getAdjustedNowMs();
     const notionalUsdt = params.executedQty * params.executedPrice;
     let cooldownDurationMs = this.config.cooldownMs;
 
@@ -526,7 +526,7 @@ export class StrategyEngine {
       isCloseOrder: false,
       executedQty: execQty,
       executedPrice: execPx,
-      fillTimestampMs: Date.now(),
+      fillTimestampMs: timeSynchronizer.getAdjustedNowMs(),
     });
     this.syncSabPositionState();
   }
@@ -569,8 +569,8 @@ export class StrategyEngine {
 
       // SOTA Audit 3.0 Timestamp Barrier: Bounded 1-hour fallback window for unrecorded/adopted slots (Loophole #2 Fix)
       const fallbackWindowMs = 3600000; // 1 hour
-      const effectiveLongOpenTime = longOpenTime > 0 ? longOpenTime : (Date.now() - fallbackWindowMs);
-      const effectiveShortOpenTime = shortOpenTime > 0 ? shortOpenTime : (Date.now() - fallbackWindowMs);
+      const effectiveLongOpenTime = longOpenTime > 0 ? longOpenTime : (timeSynchronizer.getAdjustedNowMs() - fallbackWindowMs);
+      const effectiveShortOpenTime = shortOpenTime > 0 ? shortOpenTime : (timeSynchronizer.getAdjustedNowMs() - fallbackWindowMs);
 
       let trades: BinanceUserTrade[] = [];
       if (this.executionClient.isConfigured()) {
@@ -967,7 +967,7 @@ export class StrategyEngine {
             executedQty: order.lastFilledQuantity,
             executedPrice: order.lastFilledPrice,
             realizedPnl,
-            fillTimestampMs: Date.now(),
+            fillTimestampMs: timeSynchronizer.getAdjustedNowMs(),
           });
           this.syncSabPositionState();
           return;
@@ -1077,7 +1077,7 @@ export class StrategyEngine {
             isCloseOrder: false,
             executedQty: execQty,
             executedPrice: execPx,
-            fillTimestampMs: Date.now(),
+            fillTimestampMs: timeSynchronizer.getAdjustedNowMs(),
           });
           this.syncSabPositionState();
         } else if (isExitSide) {
@@ -1105,7 +1105,7 @@ export class StrategyEngine {
             isCloseOrder: true,
             executedQty: execQty,
             executedPrice: execPx,
-            fillTimestampMs: Date.now(),
+            fillTimestampMs: timeSynchronizer.getAdjustedNowMs(),
           });
           this.syncSabPositionState();
         }
@@ -2166,7 +2166,7 @@ export class StrategyEngine {
                       executedQty: formattedExitQty,
                       executedPrice: execPx,
                       realizedPnl,
-                      fillTimestampMs: Date.now(),
+                      fillTimestampMs: timeSynchronizer.getAdjustedNowMs(),
                     });
                   }
                   return res;
@@ -2632,7 +2632,7 @@ export class StrategyEngine {
         this.isOrderInFlight = true;
 
         // 2. Synchronously pre-register in pendingEntryOrders with clientOrderId
-        const preFlightKey = -Math.abs(Date.now());
+        const preFlightKey = -Math.abs(timeSynchronizer.getAdjustedNowMs());
         this.pendingEntryOrders.set(preFlightKey, {
           slotId: entrySlotId,
           posSide: targetPosSide!,
@@ -2644,10 +2644,10 @@ export class StrategyEngine {
 
         // Set atomic SAB hysteresis lockout (cooldown per side) to suppress microburst sweeps
         if (targetPosSide === "SHORT") {
-          this.client.setShortCooldownLock(Date.now() + this.config.cooldownMs, this.assetIndex);
+          this.client.setShortCooldownLock(timeSynchronizer.getAdjustedNowMs() + this.config.cooldownMs, this.assetIndex);
           this.client.setLastShortFillPrice(this.reusableOrderIntent.price, this.assetIndex);
         } else if (targetPosSide === "LONG") {
-          this.client.setLongCooldownLock(Date.now() + this.config.cooldownMs, this.assetIndex);
+          this.client.setLongCooldownLock(timeSynchronizer.getAdjustedNowMs() + this.config.cooldownMs, this.assetIndex);
           this.client.setLastLongFillPrice(this.reusableOrderIntent.price, this.assetIndex);
         }
 
@@ -2702,7 +2702,7 @@ export class StrategyEngine {
                   isCloseOrder: false,
                   executedQty: executedQty > 0 ? executedQty : finalQuantity,
                   executedPrice: execPx,
-                  fillTimestampMs: Date.now(),
+                  fillTimestampMs: timeSynchronizer.getAdjustedNowMs(),
                 });
 
                 const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
