@@ -105,6 +105,15 @@ export class StrategyEngine {
   private processedFillClientOrderIds: Set<string> = new Set();
   private settlementTimers: Map<string, NodeJS.Timeout> = new Map();
 
+  // SOTA 2026 Adaptive Staleness Guard & EWMA Jitter Compensator Scalars (Zero Heap Allocations)
+  private rollingPacketAgeMs: number = 1000;
+  private rollingPacketJitterMs: number = 200;
+  private readonly stalenessMinFloorMs: number = 2500;
+  private readonly stalenessMaxCapMs: number = 6000;
+  private readonly stalenessJitterMultiplier: number = 4.0;
+  private readonly packetAgeAlpha: number = 0.05;
+  private readonly packetJitterBeta: number = 0.10;
+
   private reusableOrderIntent!: OrderIntent;
   private lastSabSyncTs: number = 0;
 
@@ -1833,11 +1842,25 @@ export class StrategyEngine {
       const bidPrice = this.client.getBestBidPrice(this.assetIndex);
       const askPrice = this.client.getBestAskPrice(this.assetIndex);
 
-      // WEBSOCKET FRESHNESS & STALENESS GUARD (SOTA Bounded Window: -100ms <= Age <= 750ms)
+      // SOTA 2026 ADAPTIVE WEBSOCKET FRESHNESS & EWMA JITTER-COMPENSATED STALENESS GUARD
       const packetTimestampNs = this.client.getTimestampNs(this.assetIndex);
       const adjustedNowNs = BigInt(nowMs) * 1000000n;
       const packetAgeMs = packetTimestampNs > 0n ? Number((adjustedNowNs - packetTimestampNs) / 1000000n) : 0;
-      const isStale = packetTimestampNs > 0n && (packetAgeMs > 750 || packetAgeMs < -100);
+
+      // Update zero-allocation rolling EWMA packet transit age and jitter on valid timestamps
+      if (packetTimestampNs > 0n && Number.isFinite(packetAgeMs) && packetAgeMs >= -5000 && packetAgeMs <= 15000) {
+        const diff = Math.abs(packetAgeMs - this.rollingPacketAgeMs);
+        this.rollingPacketAgeMs = this.packetAgeAlpha * packetAgeMs + (1 - this.packetAgeAlpha) * this.rollingPacketAgeMs;
+        this.rollingPacketJitterMs = this.packetJitterBeta * diff + (1 - this.packetJitterBeta) * this.rollingPacketJitterMs;
+      }
+
+      const effectiveStalenessCeiling = Math.min(
+        this.stalenessMaxCapMs,
+        Math.max(this.stalenessMinFloorMs, this.rollingPacketAgeMs + this.stalenessJitterMultiplier * this.rollingPacketJitterMs)
+      );
+      const effectiveFutureFloor = -Math.max(250, this.rollingPacketJitterMs * 2.0);
+
+      const isStale = packetTimestampNs > 0n && (packetAgeMs > effectiveStalenessCeiling || packetAgeMs < effectiveFutureFloor);
 
       // SPREAD & TICK GUARD: Immediately reject invalid tick data, stale orderbooks, or spread blowouts BEFORE evaluating dynamic exits or signals
       const isTickValid = askPrice > 0 && bidPrice > 0 && askPrice >= bidPrice;
@@ -1866,7 +1889,7 @@ export class StrategyEngine {
         const message = !isTickValid
           ? `Tick evaluation rejected: invalid tick prices (bid: ${bidPrice}, ask: ${askPrice})`
           : isStale
-          ? `Tick evaluation rejected: stale orderbook data (Packet latency: ${packetAgeMs.toFixed(0)}ms > 750ms threshold)`
+          ? `Tick evaluation rejected: stale orderbook data (Packet latency: ${packetAgeMs.toFixed(0)}ms > ${effectiveStalenessCeiling.toFixed(0)}ms adaptive ceiling, jitter: ${this.rollingPacketJitterMs.toFixed(0)}ms)`
           : `Tick evaluation rejected: current spread (${currentSpread.toFixed(4)} USDT / ${currentMidPrice > 0 ? ((currentSpread / currentMidPrice) * 10000).toFixed(1) : "0"} bps) > ${maxSpreadAllowed.toFixed(4)} USDT threshold (SPREAD BLOWOUT)`;
 
         if (seq % 500n === 0n || !isTickValid || isStale) {
@@ -2842,6 +2865,21 @@ export class StrategyEngine {
 
   public getConfig(): Readonly<StrategyConfig> {
     return this.config;
+  }
+
+  public getRollingPacketAgeMs(): number {
+    return this.rollingPacketAgeMs;
+  }
+
+  public getRollingPacketJitterMs(): number {
+    return this.rollingPacketJitterMs;
+  }
+
+  public getEffectiveStalenessCeiling(): number {
+    return Math.min(
+      this.stalenessMaxCapMs,
+      Math.max(this.stalenessMinFloorMs, this.rollingPacketAgeMs + this.stalenessJitterMultiplier * this.rollingPacketJitterMs)
+    );
   }
 }
 

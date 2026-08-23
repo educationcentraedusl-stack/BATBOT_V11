@@ -33,6 +33,8 @@ export class TimeSynchronizer {
   private isInitialized: boolean = false;
   private lastSyncTimestamp: number = 0;
   private lastRttMs: number = 0;
+  private ewmaRttMs: number = 0;
+  private rttJitterMs: number = 0;
   private syncTimer: NodeJS.Timeout | null = null;
   private inFlightSyncPromise: Promise<number> | null = null;
   private onOffsetUpdatedCallbacks: Set<(offsetMs: number) => void> = new Set();
@@ -50,7 +52,9 @@ export class TimeSynchronizer {
 
     this.baseUrl = options?.baseUrl ?? defaultRestBase;
     this.syncIntervalMs = options?.syncIntervalMs ?? 30000;
-    this.maxAcceptableRttMs = options?.maxAcceptableRttMs ?? 150;
+    this.maxAcceptableRttMs =
+      options?.maxAcceptableRttMs ??
+      (process.env.TIME_SYNC_MAX_RTT_MS ? parseInt(process.env.TIME_SYNC_MAX_RTT_MS, 10) : 1500);
     this.ewmaAlpha = options?.ewmaAlpha ?? 0.25;
     this.startupBurstSamples = options?.startupBurstSamples ?? 5;
 
@@ -109,6 +113,14 @@ export class TimeSynchronizer {
 
   public getLastRttMs(): number {
     return this.lastRttMs;
+  }
+
+  public getSmoothedRttMs(): number {
+    return this.ewmaRttMs > 0 ? this.ewmaRttMs : this.lastRttMs;
+  }
+
+  public getRttJitterMs(): number {
+    return this.rttJitterMs;
   }
 
   public isReady(): boolean {
@@ -269,11 +281,18 @@ export class TimeSynchronizer {
 
     if (!this.isInitialized) {
       this.offsetMs = sample.rawOffsetMs;
+      this.ewmaRttMs = sample.rttMs;
+      this.rttJitterMs = 0;
       this.isInitialized = true;
     } else {
       // Exponentially Weighted Moving Average (EWMA) smoother
       const prevOffset = this.offsetMs;
       this.offsetMs = this.ewmaAlpha * sample.rawOffsetMs + (1 - this.ewmaAlpha) * prevOffset;
+
+      // RFC 6298 Jacobson RTT & Jitter Tracking
+      const rttDiff = Math.abs(sample.rttMs - this.ewmaRttMs);
+      this.ewmaRttMs = 0.125 * sample.rttMs + 0.875 * this.ewmaRttMs;
+      this.rttJitterMs = 0.25 * rttDiff + 0.75 * this.rttJitterMs;
     }
 
     for (const cb of this.onOffsetUpdatedCallbacks) {
@@ -290,13 +309,14 @@ export class TimeSynchronizer {
     const url = new URL(fullUrl);
     const isHttps = url.protocol === "https:";
     const httpModule = isHttps ? https : http;
+    const socketTimeoutMs = Math.max(2500, this.maxAcceptableRttMs + 1000);
 
     return new Promise((resolve, reject) => {
       let isSettled = false;
       const req = httpModule.get(
         fullUrl,
         {
-          timeout: 1000,
+          timeout: socketTimeoutMs,
           headers: {
             "User-Agent": "BATBOT_V11-HFT-Engine/1.0",
           },
@@ -323,11 +343,11 @@ export class TimeSynchronizer {
         }
       );
 
-      req.setTimeout(1000, () => {
+      req.setTimeout(socketTimeoutMs, () => {
         if (isSettled) return;
         isSettled = true;
-        req.destroy(new Error("Timeout (1000ms) fetching Binance server time"));
-        reject(new Error("Timeout (1000ms) fetching Binance server time"));
+        req.destroy(new Error(`Timeout (${socketTimeoutMs}ms) fetching Binance server time`));
+        reject(new Error(`Timeout (${socketTimeoutMs}ms) fetching Binance server time`));
       });
 
       req.on("error", (err) => {

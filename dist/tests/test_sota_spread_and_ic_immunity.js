@@ -60,11 +60,11 @@ async function runTests() {
     }
     console.log("  ✅ STAGE 2 PASSED: BTCUSDT $0.20 Tight Spread Approved by Spread Guard.");
     // -------------------------------------------------------------------------
-    // TEST 3: SOTA WebSocket Packet Staleness Circuit Breaker (Age > 750ms)
+    // TEST 3: SOTA 2026 Adaptive WebSocket Staleness Circuit Breaker (Age > 6000ms)
     // -------------------------------------------------------------------------
-    console.log("\n[STAGE 3] Testing WebSocket Staleness Circuit Breaker (Age: 1200ms > 750ms)...");
+    console.log("\n[STAGE 3] Testing Adaptive WebSocket Staleness Circuit Breaker (Age: 7000ms > 6000ms cap)...");
     bigIntView[92] = 3n; // Sequence #3
-    const staleNs = BigInt(Date.now() - 1200) * 1000000n;
+    const staleNs = BigInt(Date.now() - 7000) * 1000000n;
     bigIntView[0] = staleNs;
     const tickStale = engineBtc.evaluateTick();
     console.log(`  -> Result passed: ${tickStale.riskResult?.passed}`);
@@ -73,7 +73,7 @@ async function runTests() {
     if (tickStale.riskResult?.reasonCode !== "REJECTED_STALE_ORDERBOOK" || tickStale.riskResult?.passed !== false) {
         throw new Error(`STAGE 3 FAILED: Expected REJECTED_STALE_ORDERBOOK, got ${tickStale.riskResult?.reasonCode}`);
     }
-    console.log("  ✅ STAGE 3 PASSED: Stale WebSocket Packet (1200ms) 100% Rejected.");
+    console.log("  ✅ STAGE 3 PASSED: Genuinely Stale WebSocket Packet (7000ms) 100% Rejected.");
     // -------------------------------------------------------------------------
     // TEST 4: Unconditional High-IC Alpha Immunity in AutoRecalibrationManager
     // -------------------------------------------------------------------------

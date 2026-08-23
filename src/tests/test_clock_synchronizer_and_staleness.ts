@@ -204,43 +204,55 @@ async function runClockSyncAndStalenessTests() {
   console.log("  ✅ STAGE 3 PASSED: 1,000 fresh ticks processed with 0 false-positive staleness rejections!\n");
 
   // ------------------------------------------------------------------------------------------
-  console.log("[STAGE 4] Testing Bounded Staleness Window & Genuinely Stale Packets...");
-  // Case A: Genuinely Stale Packet (850ms old > 750ms threshold)
-  const staleExchangeTs = BigInt(timeSynchronizer.getAdjustedNowMs() - 850) * 1000000n;
-  Atomics.store(bigIntView, 0, staleExchangeTs);
+  console.log("[STAGE 4] Testing SOTA 2026 Adaptive Staleness Guard (EWMA Jitter Compensation)...");
+  // Case A: Non-Colocated Packet (1500ms latency - MUST BE ACCEPTED under Adaptive Ceiling >= 2500ms)
+  const nonColocatedTs = BigInt(timeSynchronizer.getAdjustedNowMs() - 1500) * 1000000n;
+  Atomics.store(bigIntView, 0, nonColocatedTs);
   Atomics.store(bigIntView, 92, 1001n);
 
-  const staleResult = engine.evaluateTick();
-  console.log(`  Genuinely Stale (850ms) Result: ReasonCode=${staleResult.riskResult?.reasonCode}`);
-  if (staleResult.riskResult?.reasonCode !== "REJECTED_STALE_ORDERBOOK") {
-    throw new Error("FAIL: Genuinely stale packet (850ms) was NOT rejected!");
+  const nonColocatedResult = engine.evaluateTick();
+  console.log(`  Non-Colocated Packet (1500ms) Result: ReasonCode=${nonColocatedResult.riskResult?.reasonCode || "ACCEPTED"}`);
+  if (nonColocatedResult.riskResult?.reasonCode === "REJECTED_STALE_ORDERBOOK") {
+    throw new Error("FAIL: Non-colocated packet (1500ms) was falsely rejected by staleness guard!");
   }
-  console.log("  ✅ Genuinely stale packet (>750ms) correctly rejected by SOTA Staleness Guard!");
+  console.log("  ✅ Non-colocated packet (1500ms latency) accepted cleanly by Adaptive Staleness Guard (Ceiling >= 2500ms)!");
 
-  // Case B: Packet with slight future timestamp (-20ms due to timer granularity/clock jitter)
-  const futureJitterTs = BigInt(timeSynchronizer.getAdjustedNowMs() + 20) * 1000000n;
-  Atomics.store(bigIntView, 0, futureJitterTs);
+  // Case B: Genuinely Stale Packet (7000ms old > 6000ms MAX_HARD_CAP threshold)
+  const staleExchangeTs = BigInt(timeSynchronizer.getAdjustedNowMs() - 7000) * 1000000n;
+  Atomics.store(bigIntView, 0, staleExchangeTs);
   Atomics.store(bigIntView, 92, 1002n);
 
-  const futureResult = engine.evaluateTick();
-  console.log(`  Future Jitter (-20ms) Result: ReasonCode=${futureResult.riskResult?.reasonCode || "ACCEPTED"}`);
-  if (futureResult.riskResult?.reasonCode === "REJECTED_STALE_ORDERBOOK") {
-    throw new Error("FAIL: Packet within bounded negative jitter window (-20ms) was incorrectly rejected!");
+  const staleResult = engine.evaluateTick();
+  console.log(`  Genuinely Stale (7000ms) Result: ReasonCode=${staleResult.riskResult?.reasonCode}`);
+  if (staleResult.riskResult?.reasonCode !== "REJECTED_STALE_ORDERBOOK") {
+    throw new Error("FAIL: Genuinely stale packet (7000ms) was NOT rejected!");
   }
-  console.log("  ✅ Packet within bounded negative jitter window (-20ms >= -100ms) accepted cleanly!");
+  console.log("  ✅ Genuinely stale packet (7000ms > 6000ms cap) correctly rejected by SOTA Adaptive Staleness Guard!");
 
-  // Case C: Excessive Future Timestamp (3000ms in future -> corrupt clock/packet)
-  const corruptFutureTs = BigInt(timeSynchronizer.getAdjustedNowMs() + 3000) * 1000000n;
-  Atomics.store(bigIntView, 0, corruptFutureTs);
+  // Case C: Packet with slight future timestamp (-50ms due to timer granularity/clock jitter)
+  const futureJitterTs = BigInt(timeSynchronizer.getAdjustedNowMs() + 50) * 1000000n;
+  Atomics.store(bigIntView, 0, futureJitterTs);
   Atomics.store(bigIntView, 92, 1003n);
 
-  const corruptResult = engine.evaluateTick();
-  console.log(`  Corrupt Future (+3000ms) Result: ReasonCode=${corruptResult.riskResult?.reasonCode}`);
-  if (corruptResult.riskResult?.reasonCode !== "REJECTED_STALE_ORDERBOOK") {
-    throw new Error("FAIL: Corrupt future packet (+3000ms) was NOT rejected!");
+  const futureResult = engine.evaluateTick();
+  console.log(`  Future Jitter (-50ms) Result: ReasonCode=${futureResult.riskResult?.reasonCode || "ACCEPTED"}`);
+  if (futureResult.riskResult?.reasonCode === "REJECTED_STALE_ORDERBOOK") {
+    throw new Error("FAIL: Packet within bounded negative jitter window (-50ms) was incorrectly rejected!");
   }
-  console.log("  ✅ Corrupt future packet (< -100ms) correctly rejected by SOTA Staleness Guard!");
-  console.log("  ✅ STAGE 4 PASSED: Bounded staleness window (-100ms <= Age <= 750ms) fully verified!\n");
+  console.log("  ✅ Packet within bounded negative jitter window (-50ms >= -250ms floor) accepted cleanly!");
+
+  // Case D: Excessive Future Timestamp (+5000ms in future -> corrupt clock/packet)
+  const corruptFutureTs = BigInt(timeSynchronizer.getAdjustedNowMs() + 5000) * 1000000n;
+  Atomics.store(bigIntView, 0, corruptFutureTs);
+  Atomics.store(bigIntView, 92, 1004n);
+
+  const corruptResult = engine.evaluateTick();
+  console.log(`  Corrupt Future (+5000ms) Result: ReasonCode=${corruptResult.riskResult?.reasonCode}`);
+  if (corruptResult.riskResult?.reasonCode !== "REJECTED_STALE_ORDERBOOK") {
+    throw new Error("FAIL: Corrupt future packet (+5000ms) was NOT rejected!");
+  }
+  console.log("  ✅ Corrupt future packet (< -250ms floor) correctly rejected by SOTA Adaptive Staleness Guard!");
+  console.log("  ✅ STAGE 4 PASSED: SOTA 2026 Adaptive Staleness Guard (EWMA Jitter) fully verified!\n");
 
   // ------------------------------------------------------------------------------------------
   console.log("[STAGE 5] Testing BinanceExecutionClient REST Signature & Falsy Trap Fix (DEF-1402)...");
