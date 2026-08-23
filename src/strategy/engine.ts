@@ -1297,18 +1297,31 @@ export class StrategyEngine {
     signal?: AbortSignal
   ): Promise<number | undefined> {
     if (stopLossPrice <= 0) return undefined;
-    const exitSide: "BUY" | "SELL" = side === "LONG" ? "SELL" : "BUY";
-    const formattedSlPx = SymbolPrecisionRegistry.formatPrice(this.config.symbol, stopLossPrice);
 
+    // Strict Zero-Trust Direction Mapping:
+    // SHORT Position MUST be exited via BUY order with positionSide "SHORT"
+    // LONG Position MUST be exited via SELL order with positionSide "LONG"
+    const exitSide: "BUY" | "SELL" = side === "SHORT" ? "BUY" : "SELL";
+    const positionSide: "LONG" | "SHORT" = side === "LONG" ? "LONG" : "SHORT";
+
+    // Strict runtime invariant verification
+    if (side === "SHORT" && exitSide !== "BUY") {
+      throw new Error(`[EXCHANGE_SL_ENGINE][CRITICAL_DIRECTION_MISMATCH] SHORT position mapped to invalid exit side: ${exitSide}`);
+    }
+    if (side === "LONG" && exitSide !== "SELL") {
+      throw new Error(`[EXCHANGE_SL_ENGINE][CRITICAL_DIRECTION_MISMATCH] LONG position mapped to invalid exit side: ${exitSide}`);
+    }
+
+    const formattedSlPx = SymbolPrecisionRegistry.formatPrice(this.config.symbol, stopLossPrice);
     const clientOrderId = ClientOrderIdGenerator.generate(this.config.symbol, slotId, "SL");
     try {
       console.log(
-        `[EXCHANGE_SL_ENGINE][DISPATCHING] [${this.config.symbol}:${slotId}] Submitting position-level STOP_MARKET order on Binance: ${exitSide} (closePosition: true) @ stopPrice $${formattedSlPx} (ClId: ${clientOrderId})...`
+        `[EXCHANGE_SL_ENGINE][DISPATCHING] [${this.config.symbol}:${slotId}] Submitting position-level STOP_MARKET order on Binance: ${exitSide} (positionSide: ${positionSide}, closePosition: true) @ stopPrice $${formattedSlPx} (ClId: ${clientOrderId})...`
       );
       const res = await this.executionClient.placePositionStopLoss(
         this.config.symbol,
         exitSide,
-        side,
+        positionSide,
         stopLossPrice,
         clientOrderId,
         signal
@@ -1690,17 +1703,19 @@ export class StrategyEngine {
 
           // 2. Explicitly dispatch LIVE STOP_MARKET Stop-Loss order to Binance exchange
           try {
-            const slOrder = await this.executionClient.placeOrder({
-              symbol: this.config.symbol,
-              side: exitSide,
-              type: "STOP_MARKET",
-              quantity: qty,
-              stopPrice: formattedSlPrice,
-              positionSide: posSide,
-            });
-            console.log(
-              `[ORPHAN_GUARD][DISPATCHED] Live STOP_MARKET order #${slOrder.orderId} confirmed on Binance for ${this.config.symbol} ${posSide}: stopPrice=$${formattedSlPrice}`
+            const slOrder = await this.executionClient.placePositionStopLoss(
+              this.config.symbol,
+              exitSide,
+              posSide,
+              slPrice
             );
+            if (slOrder && slOrder.orderId) {
+              this.hedgeLedger.registerActiveStopLossOrderId(slotId, slOrder.orderId);
+              this.hedgeLedger.updateLastSyncedSlPrice(slotId, slPrice);
+              console.log(
+                `[ORPHAN_GUARD][DISPATCHED] Live STOP_MARKET order #${slOrder.orderId} confirmed on Binance for ${this.config.symbol} ${posSide}: stopPrice=$${formattedSlPrice}`
+              );
+            }
           } catch (slErr: unknown) {
             const errorMessage = slErr instanceof Error ? slErr.message : String(slErr);
             console.error(

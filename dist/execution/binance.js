@@ -462,9 +462,17 @@ class BinanceExecutionClient {
     async placePositionStopLoss(symbol, side, positionSide, stopPrice, clientOrderId, signal) {
         const formattedSlPx = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(symbol, stopPrice);
         const cid = clientOrderId || clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(symbol, positionSide === "LONG" ? "CORE_LONG" : "SHORT_SLOT_0", "SL");
+        // Strict Zero-Trust Assertion:
+        // SHORT position -> side MUST be "BUY"
+        // LONG position -> side MUST be "SELL"
+        const expectedSide = positionSide === "SHORT" ? "BUY" : "SELL";
+        if (side !== expectedSide) {
+            console.warn(`[BinanceExecutionClient][SL_DIRECTION_CORRECTION] Correcting misaligned SL side ${side} to ${expectedSide} for ${positionSide} position on ${symbol}.`);
+        }
+        const sanitizedSide = expectedSide;
         const params = {
             symbol,
-            side,
+            side: sanitizedSide,
             type: "STOP_MARKET",
             stopPrice: formattedSlPx,
             positionSide,
@@ -512,6 +520,8 @@ class BinanceExecutionClient {
                 payload.closePosition = "true";
                 delete payload.quantity;
                 delete payload.reduceOnly;
+                delete payload.price;
+                delete payload.timeInForce;
             }
             else if (params.reduceOnly !== undefined &&
                 (params.positionSide === undefined || params.positionSide === "BOTH")) {
@@ -572,6 +582,46 @@ class BinanceExecutionClient {
                         };
                     }
                     return algoRes;
+                }
+                if ((errMsg.includes("-4130") ||
+                    errMsg.includes("4130") ||
+                    errMsg.includes("would trigger immediately") ||
+                    errMsg.includes("closePosition in the direction is existing")) &&
+                    retryCount < 2) {
+                    console.warn(`[BinanceExecutionClient][-4130 AUTO_RECOVERY] Binance rejected closePosition order on ${params.symbol} (${params.positionSide || "BOTH"} ${params.side}): ${errMsg}. Purging conflicting conditional orders and retrying...`);
+                    // 1. Actively query and cancel all open conditional / STOP_MARKET / TAKE_PROFIT orders for this symbol & positionSide
+                    try {
+                        const openOrders = await this.getOpenOrders(params.symbol);
+                        const targetPositionSide = params.positionSide || "BOTH";
+                        const conflictingOrders = openOrders.filter((ord) => {
+                            const matchesPosSide = !ord.positionSide || ord.positionSide === "BOTH" || ord.positionSide === targetPositionSide;
+                            const isConditional = ord.type === "STOP_MARKET" ||
+                                ord.type === "TAKE_PROFIT_MARKET" ||
+                                ord.type === "STOP" ||
+                                ord.type === "TAKE_PROFIT";
+                            return matchesPosSide && isConditional;
+                        });
+                        if (conflictingOrders.length > 0) {
+                            console.log(`[BinanceExecutionClient][-4130 RECOVERY] Found ${conflictingOrders.length} conflicting conditional order(s) on ${params.symbol}. Purging from exchange...`);
+                            for (const ord of conflictingOrders) {
+                                try {
+                                    await this.cancelOrder(params.symbol, ord.orderId, signal);
+                                }
+                                catch (cancelErr) {
+                                    // Ignore already cancelled / filled orders
+                                }
+                            }
+                        }
+                    }
+                    catch (queryErr) {
+                        console.warn(`[BinanceExecutionClient][-4130 RECOVERY] Open orders sweep notice: ${queryErr instanceof Error ? queryErr.message : String(queryErr)}`);
+                    }
+                    // Generate a fresh unique clientOrderId for the retry to prevent deduplication barriers
+                    const nextCid = params.clientOrderId ? `${params.clientOrderId}_R${retryCount + 1}` : undefined;
+                    return await this.placeOrder({
+                        ...params,
+                        clientOrderId: nextCid,
+                    }, retryCount + 1, signal);
                 }
                 if ((errMsg.includes("-5022") || errMsg.includes("5022")) && retryCount < 2) {
                     const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(params.symbol);

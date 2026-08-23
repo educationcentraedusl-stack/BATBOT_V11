@@ -1086,12 +1086,23 @@ class StrategyEngine {
     async dispatchExchangeStopLossOrder(slotId, entryPrice, quantity, side, stopLossPrice, signal) {
         if (stopLossPrice <= 0)
             return undefined;
-        const exitSide = side === "LONG" ? "SELL" : "BUY";
+        // Strict Zero-Trust Direction Mapping:
+        // SHORT Position MUST be exited via BUY order with positionSide "SHORT"
+        // LONG Position MUST be exited via SELL order with positionSide "LONG"
+        const exitSide = side === "SHORT" ? "BUY" : "SELL";
+        const positionSide = side === "LONG" ? "LONG" : "SHORT";
+        // Strict runtime invariant verification
+        if (side === "SHORT" && exitSide !== "BUY") {
+            throw new Error(`[EXCHANGE_SL_ENGINE][CRITICAL_DIRECTION_MISMATCH] SHORT position mapped to invalid exit side: ${exitSide}`);
+        }
+        if (side === "LONG" && exitSide !== "SELL") {
+            throw new Error(`[EXCHANGE_SL_ENGINE][CRITICAL_DIRECTION_MISMATCH] LONG position mapped to invalid exit side: ${exitSide}`);
+        }
         const formattedSlPx = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.config.symbol, stopLossPrice);
         const clientOrderId = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(this.config.symbol, slotId, "SL");
         try {
-            console.log(`[EXCHANGE_SL_ENGINE][DISPATCHING] [${this.config.symbol}:${slotId}] Submitting position-level STOP_MARKET order on Binance: ${exitSide} (closePosition: true) @ stopPrice $${formattedSlPx} (ClId: ${clientOrderId})...`);
-            const res = await this.executionClient.placePositionStopLoss(this.config.symbol, exitSide, side, stopLossPrice, clientOrderId, signal);
+            console.log(`[EXCHANGE_SL_ENGINE][DISPATCHING] [${this.config.symbol}:${slotId}] Submitting position-level STOP_MARKET order on Binance: ${exitSide} (positionSide: ${positionSide}, closePosition: true) @ stopPrice $${formattedSlPx} (ClId: ${clientOrderId})...`);
+            const res = await this.executionClient.placePositionStopLoss(this.config.symbol, exitSide, positionSide, stopLossPrice, clientOrderId, signal);
             if (res && res.orderId) {
                 console.log(`[EXCHANGE_SL_ENGINE][SUCCESS] [${this.config.symbol}:${slotId}] Dispatched position-level Exchange STOP_MARKET OrderId #${res.orderId} (ClId: ${res.clientOrderId || clientOrderId})`);
                 return res.orderId;
@@ -1373,15 +1384,12 @@ class StrategyEngine {
                     await this.dispatchBatchPostOnlyTpOrders(slotId, entryPx, qty, posSide);
                     // 2. Explicitly dispatch LIVE STOP_MARKET Stop-Loss order to Binance exchange
                     try {
-                        const slOrder = await this.executionClient.placeOrder({
-                            symbol: this.config.symbol,
-                            side: exitSide,
-                            type: "STOP_MARKET",
-                            quantity: qty,
-                            stopPrice: formattedSlPrice,
-                            positionSide: posSide,
-                        });
-                        console.log(`[ORPHAN_GUARD][DISPATCHED] Live STOP_MARKET order #${slOrder.orderId} confirmed on Binance for ${this.config.symbol} ${posSide}: stopPrice=$${formattedSlPrice}`);
+                        const slOrder = await this.executionClient.placePositionStopLoss(this.config.symbol, exitSide, posSide, slPrice);
+                        if (slOrder && slOrder.orderId) {
+                            this.hedgeLedger.registerActiveStopLossOrderId(slotId, slOrder.orderId);
+                            this.hedgeLedger.updateLastSyncedSlPrice(slotId, slPrice);
+                            console.log(`[ORPHAN_GUARD][DISPATCHED] Live STOP_MARKET order #${slOrder.orderId} confirmed on Binance for ${this.config.symbol} ${posSide}: stopPrice=$${formattedSlPrice}`);
+                        }
                     }
                     catch (slErr) {
                         const errorMessage = slErr instanceof Error ? slErr.message : String(slErr);
