@@ -1630,23 +1630,6 @@ class HedgePositionLedger {
         }
         const maxLongSl = this.formatPriceFast(markPrice - this.priceTickSize * 2);
         const minShortSl = this.formatPriceFast(markPrice + this.priceTickSize * 2);
-        // Continuous Early Profit & Break-Even Lock (Activates as soon as in profit / rawRoePct >= 1.0%)
-        const isInProfit = rawRoePct >= 1.0 || (isLong ? markPrice >= slot.breakEvenPrice : markPrice <= slot.breakEvenPrice);
-        if (isInProfit) {
-            slot.breakEvenLocked = true;
-            if (isLong) {
-                const candidateContinuousSl = this.formatPriceFast(slot.peakPrice - dynamicTrailDist);
-                const baselineBe = slot.breakEvenPrice;
-                const targetSl = Math.min(maxLongSl, Math.max(candidateContinuousSl, baselineBe));
-                slot.stopLossPrice = slot.stopLossPrice > 0 ? Math.max(slot.stopLossPrice, targetSl) : targetSl;
-            }
-            else {
-                const candidateContinuousSl = this.formatPriceFast(slot.troughPrice + dynamicTrailDist);
-                const baselineBe = slot.breakEvenPrice;
-                const targetSl = Math.max(minShortSl, Math.min(candidateContinuousSl, baselineBe));
-                slot.stopLossPrice = slot.stopLossPrice > 0 ? Math.min(slot.stopLossPrice, targetSl) : targetSl;
-            }
-        }
         // Tier 1: +8.0% Net ROE -> Lock Entry + Round-Trip Fees
         if (rawRoePct >= 8.0) {
             const beOffset = feeBuffer + 0.0002;
@@ -1729,11 +1712,8 @@ class HedgePositionLedger {
         if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
             slot.breakEvenPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + feeBuffer) : slot.entryPrice * (1.0 - feeBuffer));
         }
-        const isCrossedIntoProfit = isLong ? markPrice >= slot.breakEvenPrice : markPrice <= slot.breakEvenPrice;
-        if (isCrossedIntoProfit) {
-            slot.breakEvenLocked = true;
-        }
-        if (slot.breakEvenLocked && slot.breakEvenPrice > 0) {
+        const isVerifiedProfit = (slot.peakRoe && slot.peakRoe >= 5.0) || rawRoePct >= 5.0;
+        if (isVerifiedProfit && slot.breakEvenPrice && slot.breakEvenPrice > 0 && (isToxicFlow || isHawkesBurst)) {
             let targetSl = slot.breakEvenPrice;
             if (isToxicFlow) {
                 // Ratchet SL to Breakeven + 0.05% offset to lock profit under toxicity
@@ -2059,23 +2039,6 @@ class HedgePositionLedger {
         }
         const maxLongSl = this.formatPriceFast(markPrice - this.priceTickSize * 2);
         const minShortSl = this.formatPriceFast(markPrice + this.priceTickSize * 2);
-        // Continuous Early Profit & Break-Even Lock (Activates as soon as in profit / rawRoePct >= 1.0%)
-        const isInProfit = rawRoePct >= 1.0 || (isLong ? markPrice >= slot.breakEvenPrice : markPrice <= slot.breakEvenPrice);
-        if (isInProfit) {
-            slot.breakEvenLocked = true;
-            if (isLong) {
-                const candidateContinuousSl = this.formatPriceFast(slot.peakPrice - dynamicTrailDist);
-                const baselineBe = slot.breakEvenPrice;
-                const targetSl = Math.min(maxLongSl, Math.max(candidateContinuousSl, baselineBe));
-                slot.stopLossPrice = slot.stopLossPrice > 0 ? Math.max(slot.stopLossPrice, targetSl) : targetSl;
-            }
-            else {
-                const candidateContinuousSl = this.formatPriceFast(slot.troughPrice + dynamicTrailDist);
-                const baselineBe = slot.breakEvenPrice;
-                const targetSl = Math.max(minShortSl, Math.min(candidateContinuousSl, baselineBe));
-                slot.stopLossPrice = slot.stopLossPrice > 0 ? Math.min(slot.stopLossPrice, targetSl) : targetSl;
-            }
-        }
         // Tier 1: +8.0% Net ROE -> Lock Entry + Round-Trip Fees
         if (rawRoePct >= 8.0) {
             const beOffset = roundTripFeeBuffer + 0.0002;
@@ -2181,15 +2144,6 @@ class HedgePositionLedger {
                         slot.stopLossPrice = msSopcStopPrice;
                     }
                 }
-            }
-        }
-        // Absolute Fee-Adjusted Zero-Loss Guarantee Floor (only active after breakEvenLocked is verified)
-        if (slot.breakEvenLocked && slot.breakEvenPrice && slot.breakEvenPrice > 0) {
-            if (isLong && slot.stopLossPrice < slot.breakEvenPrice) {
-                slot.stopLossPrice = slot.breakEvenPrice;
-            }
-            else if (!isLong && slot.stopLossPrice > slot.breakEvenPrice) {
-                slot.stopLossPrice = slot.breakEvenPrice;
             }
         }
         // Check Trigger

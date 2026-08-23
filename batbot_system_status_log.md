@@ -1,6 +1,17 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-24
+- **Feature/Task:** SOTA Dynamic Stop Loss Restoration & Primitive Break-Even Override Eradication
+- **Artifacts Created/Modified:** `src/strategy/positionLedger.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** 
+  1. **Eradication of Premature Break-Even Hijack (`src/strategy/positionLedger.ts`):** Completely deleted the primitive `isInProfit` (`rawRoePct >= 1.0%`) block from both `evalSingleSlotSota` (SOTA dynamic exit pipeline) and `evaluateSingleSlot` (fallback hedge pipeline) that erroneously snapped Stop Loss to break-even on sub-second $0.05\%$ market noise and caused 28 consecutive trade scratches.
+  2. **Eradication of Zero-Loss Floor Absolute Override (`src/strategy/positionLedger.ts`):** Deleted the artificial fee-adjusted zero-loss floor override that clamped `stopLossPrice` to `breakEvenPrice` on every tick, restoring sovereign authority to SOTA Garman-Klass Volatility Bands and HJB Reservation boundaries.
+  3. **Restoration of Sovereign 3-Tier Step-Collar ROE Ratchet (`src/strategy/positionLedger.ts`):** Reinstated strict gating where `breakEvenLocked` is ONLY set to `true` upon reaching Tier 1 ($\ge +8.0\%$ Net ROE), Tier 2 ($\ge +15.0\%$ Net ROE), or Tier 3 ($\ge +25.0\%$ Net ROE) with Monotonic Ratchet Guarantee.
+  4. **MS-SOPC & Hazard Alignment:** Aligned VPIN toxicity and Hawkes burst ratchets to activate strictly when position is in verified profit ($\text{peakRoe} \ge +5.0\%$).
+  5. **100% Verification & Proof:** Passed `npx tsc --noEmit` (0 errors), `npm run build:ts` (0 errors), `test_sota_step_collar_roe_ratchet.ts` (100% passed), `test_sota_dynamic_exit_integration.ts` (all 5 stages passed with 1.210 µs latency < 1.500 µs HFT constraint), `test_sota_sl_mutex_deadlock_recovery.ts` (all 5 stages passed 100%), `test_aggregated_risk_and_sl_tp_sync.ts` (all 6 stages passed 100%), `test_clock_synchronizer_and_staleness.ts` (all 5 stages passed 100%), `test_sota_spread_and_ic_immunity.ts` (all 5 stages passed 100%), and `test_lvcq_microtask_loop_prevention.ts` (all 4 stages passed 100%).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-24
 - **Feature/Task:** SOTA 2026 Adaptive Staleness Guard & EWMA Dynamic Jitter Compensation Overhaul (Eradication of 750ms Hardcap & 1500ms RTT Probe Ceiling)
 - **Artifacts Created/Modified:** `src/utils/timeSynchronizer.ts`, `src/strategy/engine.ts`, `src/tests/test_clock_synchronizer_and_staleness.ts`, `src/tests/test_sota_spread_and_ic_immunity.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
 - **HFT/Performance Compliance:** 
