@@ -1,6 +1,17 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-08-23
+- **Feature/Task:** SOTA LVCQ Microtask Loop Eradication, In-Flight Risk Audit Grace & Token-Bucket BinanceRateLimiter
+- **Artifacts Created/Modified:** `src/execution/binance.ts`, `src/strategy/engine.ts`, `src/tests/test_lvcq_microtask_loop_prevention.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** 
+  1. **In-Flight Lock-Aware Risk Audit Grace (`src/strategy/engine.ts`):** Implemented `isLockInFlight` checking `this.slSyncLocks` within the 2500ms SLA in `auditActivePositionRiskClosedLoop()`. In-flight SL sync operations are recognized as `IN_TRANSIT` and bypassed, completely eliminating the asynchronous microtask spam loop where incoming ticks at 100-1000 FPS fired redundant emergency SL dispatches during network await windows.
+  2. **Risk Audit Cadence Throttling (`src/strategy/engine.ts`):** Decoupled `auditActivePositionRiskClosedLoop()` from the raw per-tick execution rate by enforcing a strict 1000ms cadence (`RISK_AUDIT_CADENCE_MS`), preventing event loop starvation.
+  3. **Ratchet Price-Delta Thresholding & Macro-Task Yielding (`src/strategy/engine.ts`):** Enforced a minimum price improvement delta ($\Delta P \ge 2 \times \text{tickSize}$) and time spacing ($\ge 1000\text{ms}$) in `evaluateTick()` before dispatching cancel-replace cycles. Hardwired macro-task yielding (`await new Promise(r => setImmediate(r))`) in `syncExchangeStopLossOrder()`'s LVCQ draining loop to guarantee I/O poll and timer phases breathe between cycles.
+  4. **Token-Bucket Header-Driven BinanceRateLimiter (`src/execution/binance.ts`):** Implemented `BinanceRateLimiter` actively intercepting `x-mbx-used-weight-1m`, `x-mbx-order-count-10s`, and `Retry-After` headers on every response. Enforced proactive pre-flight delays when approaching 80% capacity (1,920/2,400 1m weight or 240/300 10s orders), and wired an automatic 429/418 Circuit Breaker with exponential backoff to prevent IP bans.
+  5. **100% Verification & Proof:** Passed `npx tsc --noEmit` (0 errors), `npm run build:ts` (0 errors), `npx tsx src/tests/test_lvcq_microtask_loop_prevention.ts` (all 4 stages passed 100%), `npx tsx src/test_phase3_exchange_native_sl_proof.ts` (100% passed), `npx tsx src/tests/test_sota_sl_mutex_deadlock_recovery.ts` (all 5 stages passed 100%), and `npx tsx src/tests/test_aggregated_risk_and_sl_tp_sync.ts` (all 6 stages passed 100%).
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-08-23
 - **Feature/Task:** Audit 11.0 Forensic Remediation (DEF-1101 Premature Ledger Mutation, DEF-1102 TypeScript Hygiene, DEF-1103 Queue Bypass)
 - **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/execution/binance.ts`, `src/test_phase3_exchange_native_sl_proof.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
 - **HFT/Performance Compliance:** 

@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.BinanceExecutionClient = void 0;
+exports.BinanceExecutionClient = exports.BinanceRateLimiter = void 0;
 require("dotenv/config");
 const crypto = __importStar(require("node:crypto"));
 const https = __importStar(require("node:https"));
@@ -41,12 +41,122 @@ const http = __importStar(require("node:http"));
 const node_url_1 = require("node:url");
 const symbolPrecision_1 = require("../config/symbolPrecision");
 const clientOrderIdGenerator_1 = require("./clientOrderIdGenerator");
+class BinanceRateLimiter {
+    static MAX_WEIGHT_1M = 2400;
+    static MAX_ORDERS_10S = 300;
+    static MAX_ORDERS_1M = 1200;
+    // 80% Proactive Backoff Thresholds
+    static THRESHOLD_WEIGHT_1M = 1920; // 80% of 2400
+    static THRESHOLD_ORDERS_10S = 240; // 80% of 300
+    static THRESHOLD_ORDERS_1M = 960; // 80% of 1200
+    usedWeight1m = 0;
+    orderCount10s = 0;
+    orderCount1m = 0;
+    backoffUntil = 0;
+    lastHeaderTimestamp = 0;
+    updateFromHeaders(headers) {
+        const now = Date.now();
+        this.lastHeaderTimestamp = now;
+        for (const [key, val] of Object.entries(headers)) {
+            const lowerKey = key.toLowerCase();
+            if (lowerKey.includes("used-weight-1m")) {
+                const parsed = parseInt(Array.isArray(val) ? val[0] : String(val), 10);
+                if (!isNaN(parsed) && parsed >= 0) {
+                    this.usedWeight1m = parsed;
+                }
+            }
+            else if (lowerKey.includes("order-count-10s")) {
+                const parsed = parseInt(Array.isArray(val) ? val[0] : String(val), 10);
+                if (!isNaN(parsed) && parsed >= 0) {
+                    this.orderCount10s = parsed;
+                }
+            }
+            else if (lowerKey.includes("order-count-1m")) {
+                const parsed = parseInt(Array.isArray(val) ? val[0] : String(val), 10);
+                if (!isNaN(parsed) && parsed >= 0) {
+                    this.orderCount1m = parsed;
+                }
+            }
+            else if (lowerKey === "retry-after") {
+                const retrySec = parseInt(Array.isArray(val) ? val[0] : String(val), 10);
+                if (!isNaN(retrySec) && retrySec > 0) {
+                    this.backoffUntil = Math.max(this.backoffUntil, now + retrySec * 1000);
+                    console.warn(`[BinanceRateLimiter] Received Retry-After: ${retrySec}s. Enforcing backoff until ${new Date(this.backoffUntil).toISOString()}`);
+                }
+            }
+        }
+    }
+    register429Backoff(retryAfterMs = 5000) {
+        const now = Date.now();
+        this.backoffUntil = Math.max(this.backoffUntil, now + retryAfterMs);
+        console.error(`[BinanceRateLimiter][429_CIRCUIT_BREAKER] Binance 429/418 detected. Backing off for ${retryAfterMs}ms.`);
+    }
+    async acquirePreFlightAllowance(isOrder, signal) {
+        const now = Date.now();
+        // 1. Check active 429/418 Circuit Breaker Backoff
+        if (this.backoffUntil > now) {
+            const waitMs = this.backoffUntil - now;
+            console.warn(`[BinanceRateLimiter][THROTTLED_CIRCUIT_BREAKER] Waiting ${waitMs}ms before dispatching request...`);
+            await this.sleep(waitMs, signal);
+        }
+        // 2. Check 80% Weight Threshold (2400 limit -> 1920 threshold)
+        if (this.usedWeight1m >= BinanceRateLimiter.THRESHOLD_WEIGHT_1M) {
+            const waitMs = Math.min(2000, Math.max(250, (this.usedWeight1m - BinanceRateLimiter.THRESHOLD_WEIGHT_1M) * 5));
+            console.warn(`[BinanceRateLimiter][WEIGHT_THROTTLED] Weight approaching limit (${this.usedWeight1m}/${BinanceRateLimiter.MAX_WEIGHT_1M}). Pre-flight delay: ${waitMs}ms`);
+            await this.sleep(waitMs, signal);
+        }
+        // 3. Check 80% Order Count Threshold (300/10s limit -> 240 threshold)
+        if (isOrder && this.orderCount10s >= BinanceRateLimiter.THRESHOLD_ORDERS_10S) {
+            const waitMs = Math.min(1500, Math.max(200, (this.orderCount10s - BinanceRateLimiter.THRESHOLD_ORDERS_10S) * 25));
+            console.warn(`[BinanceRateLimiter][ORDER_COUNT_THROTTLED] 10s Order count approaching limit (${this.orderCount10s}/${BinanceRateLimiter.MAX_ORDERS_10S}). Pre-flight delay: ${waitMs}ms`);
+            await this.sleep(waitMs, signal);
+        }
+    }
+    sleep(ms, signal) {
+        return new Promise((resolve, reject) => {
+            if (signal?.aborted) {
+                return reject(new Error("Request aborted during rate-limit backoff"));
+            }
+            const timer = setTimeout(() => {
+                cleanup();
+                resolve();
+            }, ms);
+            const abortHandler = () => {
+                clearTimeout(timer);
+                cleanup();
+                reject(new Error("Request aborted during rate-limit backoff"));
+            };
+            if (signal) {
+                signal.addEventListener("abort", abortHandler, { once: true });
+            }
+            function cleanup() {
+                if (signal) {
+                    signal.removeEventListener("abort", abortHandler);
+                }
+            }
+        });
+    }
+    getStatus() {
+        const now = Date.now();
+        return {
+            usedWeight1m: this.usedWeight1m,
+            orderCount10s: this.orderCount10s,
+            orderCount1m: this.orderCount1m,
+            isThrottled: this.backoffUntil > now ||
+                this.usedWeight1m >= BinanceRateLimiter.THRESHOLD_WEIGHT_1M ||
+                this.orderCount10s >= BinanceRateLimiter.THRESHOLD_ORDERS_10S,
+            backoffRemainingMs: Math.max(0, this.backoffUntil - now),
+        };
+    }
+}
+exports.BinanceRateLimiter = BinanceRateLimiter;
 class BinanceExecutionClient {
     apiKey;
     apiSecret;
     baseUrl;
     wsUrl;
     testnet;
+    rateLimiter = new BinanceRateLimiter();
     cachedUsdtAvailableBalance = 0;
     cachedReconciledWalletBalance = 0;
     cachedTotalUnrealizedProfit = 0;
@@ -194,6 +304,9 @@ class BinanceExecutionClient {
             .digest("hex");
         return `${queryString}&signature=${signature}`;
     }
+    getRateLimiter() {
+        return this.rateLimiter;
+    }
     async request(method, endpoint, params = {}, signed = true, isRetryAfterSync = false, signal) {
         if (signed && !this.isConfigured()) {
             throw new Error("BinanceExecutionClient is not configured with API key and secret. Cannot execute signed request.");
@@ -201,6 +314,8 @@ class BinanceExecutionClient {
         if (signal?.aborted) {
             throw new Error(`[BinanceExecutionClient] Request aborted by caller before dispatch (${method} ${endpoint})`);
         }
+        const isOrderEndpoint = endpoint.includes("/order") || endpoint.includes("/batchOrders") || endpoint.includes("/algoOrder");
+        await this.rateLimiter.acquirePreFlightAllowance(isOrderEndpoint, signal);
         const queryString = signed ? this.signQuery(params) : new URLSearchParams(params).toString();
         const fullUrl = `${this.baseUrl}${endpoint}${queryString ? "?" + queryString : ""}`;
         const url = new node_url_1.URL(fullUrl);
@@ -222,6 +337,7 @@ class BinanceExecutionClient {
             };
             const req = httpModule.request(reqOptions, (res) => {
                 let body = "";
+                this.rateLimiter.updateFromHeaders(res.headers);
                 res.on("data", (chunk) => {
                     body += chunk;
                 });
@@ -229,6 +345,7 @@ class BinanceExecutionClient {
                     if (isSettled)
                         return;
                     cleanup();
+                    this.rateLimiter.updateFromHeaders(res.headers);
                     try {
                         const data = JSON.parse(body);
                         if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
@@ -238,6 +355,15 @@ class BinanceExecutionClient {
                         else {
                             const errCode = data?.code ?? res.statusCode;
                             const errMsg = data?.msg ?? body;
+                            const isRateLimit = res.statusCode === 429 ||
+                                res.statusCode === 418 ||
+                                errCode === -1003 ||
+                                errCode === -1015 ||
+                                String(errMsg).includes("Too Many Requests") ||
+                                String(errMsg).includes("IP banned");
+                            if (isRateLimit) {
+                                this.rateLimiter.register429Backoff(5000);
+                            }
                             // Auto-resync timestamp and retry once if error code is -1021 (Timestamp ahead/behind)
                             if (errCode === -1021 && signed && !isRetryAfterSync) {
                                 console.warn(`[BinanceExecutionClient] Timestamp error -1021 detected. Resynchronizing server time and retrying request...`);

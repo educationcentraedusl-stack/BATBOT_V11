@@ -44,6 +44,11 @@ class StrategyEngine {
     pendingSlSyncTargets = new Map();
     globalSlEpochSequence = 0;
     static MAX_SL_LOCK_HOLD_MS = 2500;
+    lastRiskAuditTimestamp = 0;
+    static RISK_AUDIT_CADENCE_MS = 1000;
+    lastLongSlRatchetTimestamp = 0;
+    lastShortSlRatchetTimestamp = 0;
+    static SL_RATCHET_MIN_INTERVAL_MS = 1000;
     pendingEntryOrders = new Map();
     processedFillOrderIds = new Set();
     processedFillClientOrderIds = new Set();
@@ -1177,13 +1182,18 @@ class StrategyEngine {
                 else {
                     console.error(`[EXCHANGE_SL_ENGINE][PLACEMENT_FAILED] [${this.config.symbol}:${slotId}] Failed to place replacement SL @ $${currentTargetPrice}.`);
                 }
-                // If a subsequent ratchet target was queued while the network request was in-flight, process it immediately
+                // If a subsequent ratchet target was queued while the network request was in-flight, process it only if delta is significant
                 if (this.pendingSlSyncTargets.has(slotId)) {
                     const queued = this.pendingSlSyncTargets.get(slotId);
-                    if (queued.price !== currentTargetPrice || queued.quantity !== currentQty) {
+                    const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(this.config.symbol);
+                    const minDelta = tickSize * 2;
+                    const hasSignificantChange = Math.abs(queued.price - currentTargetPrice) >= minDelta || Math.abs(queued.quantity - currentQty) > 1e-6;
+                    if (hasSignificantChange) {
                         currentTargetPrice = queued.price;
                         currentQty = queued.quantity;
                         currentSide = queued.side;
+                        // Macro-task yield: Allow event loop to process I/O and timers before next drain cycle
+                        await new Promise((resolve) => setImmediate(resolve));
                         continue;
                     }
                 }
@@ -1202,27 +1212,44 @@ class StrategyEngine {
      * Closed-Loop Zero-Naked Invariant Guard.
      * Continuously verifies that 100% of the active aggregated position is protected by an active exchange-native stop loss order.
      * If any unhedged exposure is detected, auto-dispatches an emergency position-level SL.
+     * Lock-aware: In-flight SL sync operations within the 2500ms SLA are treated as IN_TRANSIT and bypassed.
      */
     auditActivePositionRiskClosedLoop() {
+        const now = Date.now();
+        this.lastRiskAuditTimestamp = now;
         const longSummary = this.hedgeLedger.getAggregatedSideSummary("LONG");
         if (longSummary.isOccupied && longSummary.totalQuantity > 0) {
-            const audit = this.riskGuard.auditAggregatedPositionRisk(this.config.symbol, "LONG", longSummary.totalQuantity, longSummary.activeStopLossOrderId);
-            if (!audit.isProtected) {
-                console.warn(`[RiskGuard][CLOSED_LOOP_AUDIT_FAIL] [${this.config.symbol}:LONG] ${audit.reason} Auto-dispatching emergency position-level SL...`);
-                this.syncExchangeStopLossOrder("CORE_LONG", longSummary.totalQuantity, "LONG", longSummary.stopLossPrice).catch((err) => {
-                    console.error(`[RiskGuard][CLOSED_LOOP_EMERGENCY_SL_FAIL] Long SL emergency sync failed: ${err instanceof Error ? err.message : String(err)}`);
-                });
+            const existingLock = this.slSyncLocks.get("CORE_LONG");
+            const isLockInFlight = existingLock && now - existingLock.acquiredAt < StrategyEngine.MAX_SL_LOCK_HOLD_MS;
+            if (!isLockInFlight) {
+                const audit = this.riskGuard.auditAggregatedPositionRisk(this.config.symbol, "LONG", longSummary.totalQuantity, longSummary.activeStopLossOrderId);
+                if (!audit.isProtected) {
+                    console.warn(`[RiskGuard][CLOSED_LOOP_AUDIT_FAIL] [${this.config.symbol}:LONG] ${audit.reason} Auto-dispatching emergency position-level SL...`);
+                    this.syncExchangeStopLossOrder("CORE_LONG", longSummary.totalQuantity, "LONG", longSummary.stopLossPrice).catch((err) => {
+                        console.error(`[RiskGuard][CLOSED_LOOP_EMERGENCY_SL_FAIL] Long SL emergency sync failed: ${err instanceof Error ? err.message : String(err)}`);
+                    });
+                }
             }
         }
         const shortSummary = this.hedgeLedger.getAggregatedSideSummary("SHORT");
         if (shortSummary.isOccupied && shortSummary.totalQuantity > 0) {
-            const audit = this.riskGuard.auditAggregatedPositionRisk(this.config.symbol, "SHORT", shortSummary.totalQuantity, shortSummary.activeStopLossOrderId);
-            if (!audit.isProtected) {
-                const targetSlot = shortSummary.slotIds[0] || "SHORT_SLOT_0";
-                console.warn(`[RiskGuard][CLOSED_LOOP_AUDIT_FAIL] [${this.config.symbol}:SHORT] ${audit.reason} Auto-dispatching emergency position-level SL...`);
-                this.syncExchangeStopLossOrder(targetSlot, shortSummary.totalQuantity, "SHORT", shortSummary.stopLossPrice).catch((err) => {
-                    console.error(`[RiskGuard][CLOSED_LOOP_EMERGENCY_SL_FAIL] Short SL emergency sync failed: ${err instanceof Error ? err.message : String(err)}`);
-                });
+            const targetSlot = shortSummary.slotIds[0] || "SHORT_SLOT_0";
+            let isShortLockInFlight = false;
+            for (const sId of shortSummary.slotIds) {
+                const lock = this.slSyncLocks.get(sId);
+                if (lock && now - lock.acquiredAt < StrategyEngine.MAX_SL_LOCK_HOLD_MS) {
+                    isShortLockInFlight = true;
+                    break;
+                }
+            }
+            if (!isShortLockInFlight) {
+                const audit = this.riskGuard.auditAggregatedPositionRisk(this.config.symbol, "SHORT", shortSummary.totalQuantity, shortSummary.activeStopLossOrderId);
+                if (!audit.isProtected) {
+                    console.warn(`[RiskGuard][CLOSED_LOOP_AUDIT_FAIL] [${this.config.symbol}:SHORT] ${audit.reason} Auto-dispatching emergency position-level SL...`);
+                    this.syncExchangeStopLossOrder(targetSlot, shortSummary.totalQuantity, "SHORT", shortSummary.stopLossPrice).catch((err) => {
+                        console.error(`[RiskGuard][CLOSED_LOOP_EMERGENCY_SL_FAIL] Short SL emergency sync failed: ${err instanceof Error ? err.message : String(err)}`);
+                    });
+                }
             }
         }
     }
@@ -1586,13 +1613,22 @@ class StrategyEngine {
                 const activeTriggers = sotaTriggers.length > 0 ? sotaTriggers : hedgeTriggers;
                 if (hasActivePos) {
                     // Closed-Loop Zero-Naked Invariant Audit: Verify 100% of aggregated active positions are protected by resting exchange-native SL
-                    this.auditActivePositionRiskClosedLoop();
+                    // Cadence-throttled to 1000ms to eliminate microtask loop event loop starvation
+                    if (nowMs - this.lastRiskAuditTimestamp >= StrategyEngine.RISK_AUDIT_CADENCE_MS) {
+                        this.auditActivePositionRiskClosedLoop();
+                    }
                     // Check for Stop-Loss Ratchet Shifts that require Exchange-Native STOP_MARKET cancel-replace sync
                     if (activeTriggers.length === 0) {
                         const aggLong = this.hedgeLedger.getAggregatedSideSummary("LONG");
                         if (aggLong.isOccupied && aggLong.totalQuantity > 0 && aggLong.stopLossPrice > 0) {
                             const coreLong = this.hedgeLedger.getCoreLong();
-                            if (coreLong.lastSyncedSlPrice === undefined || coreLong.lastSyncedSlPrice === 0 || aggLong.stopLossPrice > coreLong.lastSyncedSlPrice) {
+                            const lastSynced = coreLong.lastSyncedSlPrice || 0;
+                            const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(this.config.symbol);
+                            const minSlDelta = tickSize * 2;
+                            const isSignificantImprovement = lastSynced === 0 || aggLong.stopLossPrice - lastSynced >= minSlDelta;
+                            const isTimeAllowed = nowMs - this.lastLongSlRatchetTimestamp >= StrategyEngine.SL_RATCHET_MIN_INTERVAL_MS;
+                            if (isSignificantImprovement && (lastSynced === 0 || isTimeAllowed)) {
+                                this.lastLongSlRatchetTimestamp = nowMs;
                                 this.syncExchangeStopLossOrder("CORE_LONG", aggLong.totalQuantity, "LONG", aggLong.stopLossPrice).catch((err) => {
                                     console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Core Long SL ratchet sync failed: ${err instanceof Error ? err.message : String(err)}`);
                                 });
@@ -1601,16 +1637,22 @@ class StrategyEngine {
                         const aggShort = this.hedgeLedger.getAggregatedSideSummary("SHORT");
                         if (aggShort.isOccupied && aggShort.totalQuantity > 0 && aggShort.stopLossPrice > 0) {
                             const primarySlotId = aggShort.slotIds[0] || "SHORT_SLOT_0";
+                            const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(this.config.symbol);
                             let needsSync = false;
                             for (const s of this.hedgeLedger.getShortSlots()) {
                                 if (s.isOccupied && s.quantity > 0) {
-                                    if (s.lastSyncedSlPrice === undefined || s.lastSyncedSlPrice === 0 || aggShort.stopLossPrice < s.lastSyncedSlPrice) {
+                                    const lastSynced = s.lastSyncedSlPrice || 0;
+                                    const minSlDelta = tickSize * 2;
+                                    const isSignificantImprovement = lastSynced === 0 || lastSynced - aggShort.stopLossPrice >= minSlDelta;
+                                    const isTimeAllowed = nowMs - this.lastShortSlRatchetTimestamp >= StrategyEngine.SL_RATCHET_MIN_INTERVAL_MS;
+                                    if (isSignificantImprovement && (lastSynced === 0 || isTimeAllowed)) {
                                         needsSync = true;
                                         break;
                                     }
                                 }
                             }
                             if (needsSync) {
+                                this.lastShortSlRatchetTimestamp = nowMs;
                                 this.syncExchangeStopLossOrder(primarySlotId, aggShort.totalQuantity, "SHORT", aggShort.stopLossPrice).catch((err) => {
                                     console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Aggregated Short SL ratchet sync failed: ${err instanceof Error ? err.message : String(err)}`);
                                 });
