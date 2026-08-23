@@ -118,7 +118,8 @@ class BinanceExecutionClient {
                 }
             }
             catch (err) {
-                console.error(`[BinanceExecutionClient] Failed to sync Binance server time: ${err.message}`);
+                const errMsg = err instanceof Error ? err.message : String(err);
+                console.error(`[BinanceExecutionClient] Failed to sync Binance server time: ${errMsg}`);
             }
             finally {
                 this.timeSyncPromise = null;
@@ -310,11 +311,12 @@ class BinanceExecutionClient {
             return true;
         }
         catch (err) {
-            if (err.message && err.message.includes("-4059")) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            if (errMsg.includes("-4059")) {
                 console.log(`[BinanceExecutionClient] Dual-side Hedge Mode is already set to ${enable}.`);
                 return true;
             }
-            console.warn(`[BinanceExecutionClient] Unable to set Hedge Mode: ${err.message}`);
+            console.warn(`[BinanceExecutionClient] Unable to set Hedge Mode: ${errMsg}`);
             return false;
         }
     }
@@ -328,7 +330,8 @@ class BinanceExecutionClient {
             return res;
         }
         catch (err) {
-            console.warn(`[BinanceExecutionClient] Unable to set leverage for ${symbol} to ${leverage}x: ${err?.message || String(err)}`);
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.warn(`[BinanceExecutionClient] Unable to set leverage for ${symbol} to ${leverage}x: ${errMsg}`);
             return null;
         }
     }
@@ -425,7 +428,7 @@ class BinanceExecutionClient {
                     const algoRes = await this.request("POST", "/fapi/v1/algoOrder", algoPayload, true, false, signal);
                     if (algoRes && (algoRes.algoId || algoRes.orderId)) {
                         return {
-                            orderId: algoRes.algoId || algoRes.orderId,
+                            orderId: Number(algoRes.algoId || algoRes.orderId),
                             symbol: algoRes.symbol || params.symbol,
                             status: algoRes.algoStatus || algoRes.status || "NEW",
                             clientOrderId: algoRes.clientAlgoId || algoRes.clientOrderId || "",
@@ -592,11 +595,13 @@ class BinanceExecutionClient {
     async cancelAllOrders(symbol) {
         try {
             await this.request("DELETE", "/fapi/v1/algoOpenOrders", { symbol }, true).catch((err) => {
-                console.log(`[BinanceExecutionClient] Notice during algoOpenOrders cancellation: ${err?.message || String(err)}`);
+                const errMsg = err instanceof Error ? err.message : String(err);
+                console.log(`[BinanceExecutionClient] Notice during algoOpenOrders cancellation: ${errMsg}`);
             });
         }
         catch (err) {
-            console.log(`[BinanceExecutionClient] Notice during algoOpenOrders dispatch: ${err?.message || String(err)}`);
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.log(`[BinanceExecutionClient] Notice during algoOpenOrders dispatch: ${errMsg}`);
         }
         return this.request("DELETE", "/fapi/v1/allOpenOrders", { symbol }, true);
     }
@@ -626,7 +631,8 @@ class BinanceExecutionClient {
             return true;
         }
         catch (err) {
-            console.error(`[BinanceExecutionClient] flattenPositions error: ${err.message}`);
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.error(`[BinanceExecutionClient] flattenPositions error: ${errMsg}`);
             return false;
         }
     }
@@ -636,7 +642,8 @@ class BinanceExecutionClient {
             params.symbol = symbol;
         return this.request("GET", "/fapi/v3/positionRisk", params, true).catch(async (err) => {
             // Graceful fallback to /fapi/v2/positionRisk if /fapi/v3/positionRisk is unavailable
-            if (err?.message?.includes("404") || err?.message?.includes("-4120")) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            if (errMsg.includes("404") || errMsg.includes("-4120")) {
                 return this.request("GET", "/fapi/v2/positionRisk", params, true);
             }
             throw err;
@@ -645,7 +652,8 @@ class BinanceExecutionClient {
     async getAccountInfo() {
         return this.request("GET", "/fapi/v3/account", {}, true).catch(async (err) => {
             // Graceful fallback to /fapi/v2/account if /fapi/v3/account is unavailable
-            if (err?.message?.includes("404") || err?.message?.includes("-4120")) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            if (errMsg.includes("404") || errMsg.includes("-4120")) {
                 return this.request("GET", "/fapi/v2/account", {}, true);
             }
             throw err;
@@ -808,7 +816,8 @@ class BinanceExecutionClient {
             }
         }
         catch (err) {
-            console.warn(`[BinanceExecutionClient] Reconciled account balance fetch notice: ${err?.message || String(err)}`);
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.warn(`[BinanceExecutionClient] Reconciled account balance fetch notice: ${errMsg}`);
         }
         return {
             totalWalletBalance: this.cachedReconciledWalletBalance,
@@ -867,7 +876,8 @@ class BinanceExecutionClient {
         if (!this.incomeSyncTimer) {
             this.incomeSyncTimer = setInterval(() => {
                 this.syncIncomeBackground(symbols).catch((err) => {
-                    console.warn(`[BinanceExecutionClient] Background income sync notice: ${err?.message || String(err)}`);
+                    const errMsg = err instanceof Error ? err.message : String(err);
+                    console.warn(`[BinanceExecutionClient] Background income sync notice: ${errMsg}`);
                 });
                 this.fetchReconciledAccountBalanceAsync().catch(() => { });
             }, incomeIntervalMs);
@@ -876,7 +886,8 @@ class BinanceExecutionClient {
         if (!this.userTradesSyncTimer) {
             this.userTradesSyncTimer = setInterval(() => {
                 this.syncUserTradesBackground(symbols).catch((err) => {
-                    console.warn(`[BinanceExecutionClient] Background userTrades sync notice: ${err?.message || String(err)}`);
+                    const errMsg = err instanceof Error ? err.message : String(err);
+                    console.warn(`[BinanceExecutionClient] Background userTrades sync notice: ${errMsg}`);
                 });
             }, tradeIntervalMs);
         }
@@ -916,7 +927,8 @@ class BinanceExecutionClient {
                     cb(incomes);
                 }
                 catch (err) {
-                    console.error(`[BinanceExecutionClient] Error in income callback: ${err?.message || String(err)}`);
+                    const errMsg = err instanceof Error ? err.message : String(err);
+                    console.error(`[BinanceExecutionClient] Error in income callback: ${errMsg}`);
                 }
             }
         }
@@ -937,7 +949,8 @@ class BinanceExecutionClient {
                         cb(trades);
                     }
                     catch (err) {
-                        console.error(`[BinanceExecutionClient] Error in userTrade callback for ${sym}: ${err?.message || String(err)}`);
+                        const errMsg = err instanceof Error ? err.message : String(err);
+                        console.error(`[BinanceExecutionClient] Error in userTrade callback for ${sym}: ${errMsg}`);
                     }
                 }
             }

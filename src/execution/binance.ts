@@ -65,6 +65,44 @@ export interface BinanceCancelAllResponse {
   msg: string;
 }
 
+export interface BinanceAlgoOrderResponse {
+  algoId?: number;
+  orderId?: number;
+  symbol?: string;
+  algoStatus?: string;
+  status?: string;
+  clientAlgoId?: string;
+  clientOrderId?: string;
+  price?: string;
+  avgPrice?: string;
+  quantity?: string;
+  executedQty?: string;
+  cumQuote?: string;
+  timeInForce?: string;
+  orderType?: string;
+  type?: string;
+  side?: string;
+  positionSide?: string;
+  triggerPrice?: string;
+  stopPrice?: string;
+  workingType?: string;
+  updateTime?: number;
+  code?: number;
+  msg?: string;
+}
+
+export interface BinanceAlgoCancelResponse {
+  algoId?: number;
+  orderId?: number;
+  symbol?: string;
+  algoStatus?: string;
+  status?: string;
+  clientAlgoId?: string;
+  clientOrderId?: string;
+  code?: number;
+  msg?: string;
+}
+
 export interface BinancePositionRisk {
   symbol: string;
   positionAmt: string;
@@ -249,8 +287,9 @@ export class BinanceExecutionClient {
           console.log(`[BinanceExecutionClient] Time synced with Binance Server. Server Time: ${res.serverTime}, Local Time: ${Date.now()}, Offset: ${this.timeOffset}ms (RTT: ${rtt}ms)`);
           return this.timeOffset;
         }
-      } catch (err: any) {
-        console.error(`[BinanceExecutionClient] Failed to sync Binance server time: ${err.message}`);
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[BinanceExecutionClient] Failed to sync Binance server time: ${errMsg}`);
       } finally {
         this.timeSyncPromise = null;
       }
@@ -468,12 +507,13 @@ export class BinanceExecutionClient {
       );
       console.log(`[BinanceExecutionClient] Dual-side Hedge Mode set to ${enable} (Response: ${JSON.stringify(res)})`);
       return true;
-    } catch (err: any) {
-      if (err.message && err.message.includes("-4059")) {
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes("-4059")) {
         console.log(`[BinanceExecutionClient] Dual-side Hedge Mode is already set to ${enable}.`);
         return true;
       }
-      console.warn(`[BinanceExecutionClient] Unable to set Hedge Mode: ${err.message}`);
+      console.warn(`[BinanceExecutionClient] Unable to set Hedge Mode: ${errMsg}`);
       return false;
     }
   }
@@ -493,8 +533,9 @@ export class BinanceExecutionClient {
       );
       console.log(`[BinanceExecutionClient] Exchange Leverage for ${symbol} set to ${res.leverage}x (MaxNotional: $${res.maxNotionalValue})`);
       return res;
-    } catch (err: any) {
-      console.warn(`[BinanceExecutionClient] Unable to set leverage for ${symbol} to ${leverage}x: ${err?.message || String(err)}`);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[BinanceExecutionClient] Unable to set leverage for ${symbol} to ${leverage}x: ${errMsg}`);
       return null;
     }
   }
@@ -599,10 +640,10 @@ export class BinanceExecutionClient {
             delete algoPayload.newClientOrderId;
           }
           delete algoPayload.reduceOnly;
-          const algoRes = await this.request<any>("POST", "/fapi/v1/algoOrder", algoPayload, true, false, signal);
+          const algoRes = await this.request<BinanceAlgoOrderResponse>("POST", "/fapi/v1/algoOrder", algoPayload, true, false, signal);
           if (algoRes && (algoRes.algoId || algoRes.orderId)) {
             return {
-              orderId: algoRes.algoId || algoRes.orderId,
+              orderId: Number(algoRes.algoId || algoRes.orderId),
               symbol: algoRes.symbol || params.symbol,
               status: algoRes.algoStatus || algoRes.status || "NEW",
               clientOrderId: algoRes.clientAlgoId || algoRes.clientOrderId || "",
@@ -757,7 +798,7 @@ export class BinanceExecutionClient {
       if (errMsg.includes("-2011") || errMsg.includes("-4120") || errMsg.includes("Unknown order") || errMsg.includes("not found")) {
         // Fallback to /fapi/v1/algoOrder cancellation
         try {
-          const algoCancel = await this.request<any>(
+          const algoCancel = await this.request<BinanceAlgoCancelResponse>(
             "DELETE",
             "/fapi/v1/algoOrder",
             { symbol, algoId: orderId },
@@ -794,11 +835,13 @@ export class BinanceExecutionClient {
 
   public async cancelAllOrders(symbol: string): Promise<BinanceCancelAllResponse> {
     try {
-      await this.request<any>("DELETE", "/fapi/v1/algoOpenOrders", { symbol }, true).catch((err) => {
-        console.log(`[BinanceExecutionClient] Notice during algoOpenOrders cancellation: ${err?.message || String(err)}`);
+      await this.request<BinanceCancelAllResponse | Record<string, unknown>>("DELETE", "/fapi/v1/algoOpenOrders", { symbol }, true).catch((err: unknown) => {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.log(`[BinanceExecutionClient] Notice during algoOpenOrders cancellation: ${errMsg}`);
       });
-    } catch (err: any) {
-      console.log(`[BinanceExecutionClient] Notice during algoOpenOrders dispatch: ${err?.message || String(err)}`);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.log(`[BinanceExecutionClient] Notice during algoOpenOrders dispatch: ${errMsg}`);
     }
     return this.request<BinanceCancelAllResponse>(
       "DELETE",
@@ -832,8 +875,9 @@ export class BinanceExecutionClient {
         }
       }
       return true;
-    } catch (err: any) {
-      console.error(`[BinanceExecutionClient] flattenPositions error: ${err.message}`);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[BinanceExecutionClient] flattenPositions error: ${errMsg}`);
       return false;
     }
   }
@@ -841,9 +885,10 @@ export class BinanceExecutionClient {
   public async getPositionRisk(symbol?: string): Promise<BinancePositionRisk[]> {
     const params: Record<string, string> = {};
     if (symbol) params.symbol = symbol;
-    return this.request<BinancePositionRisk[]>("GET", "/fapi/v3/positionRisk", params, true).catch(async (err: any) => {
+    return this.request<BinancePositionRisk[]>("GET", "/fapi/v3/positionRisk", params, true).catch(async (err: unknown) => {
       // Graceful fallback to /fapi/v2/positionRisk if /fapi/v3/positionRisk is unavailable
-      if (err?.message?.includes("404") || err?.message?.includes("-4120")) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes("404") || errMsg.includes("-4120")) {
         return this.request<BinancePositionRisk[]>("GET", "/fapi/v2/positionRisk", params, true);
       }
       throw err;
@@ -851,9 +896,10 @@ export class BinanceExecutionClient {
   }
 
   public async getAccountInfo(): Promise<BinanceAccountInfo> {
-    return this.request<BinanceAccountInfo>("GET", "/fapi/v3/account", {}, true).catch(async (err: any) => {
+    return this.request<BinanceAccountInfo>("GET", "/fapi/v3/account", {}, true).catch(async (err: unknown) => {
       // Graceful fallback to /fapi/v2/account if /fapi/v3/account is unavailable
-      if (err?.message?.includes("404") || err?.message?.includes("-4120")) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes("404") || errMsg.includes("-4120")) {
         return this.request<BinanceAccountInfo>("GET", "/fapi/v2/account", {}, true);
       }
       throw err;
@@ -1091,8 +1137,9 @@ export class BinanceExecutionClient {
           unrealizedProfit: this.cachedTotalUnrealizedProfit,
         };
       }
-    } catch (err: any) {
-      console.warn(`[BinanceExecutionClient] Reconciled account balance fetch notice: ${err?.message || String(err)}`);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[BinanceExecutionClient] Reconciled account balance fetch notice: ${errMsg}`);
     }
     return {
       totalWalletBalance: this.cachedReconciledWalletBalance,
@@ -1162,8 +1209,9 @@ export class BinanceExecutionClient {
     // 2. Start periodic income sync
     if (!this.incomeSyncTimer) {
       this.incomeSyncTimer = setInterval(() => {
-        this.syncIncomeBackground(symbols).catch((err: any) => {
-          console.warn(`[BinanceExecutionClient] Background income sync notice: ${err?.message || String(err)}`);
+        this.syncIncomeBackground(symbols).catch((err: unknown) => {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.warn(`[BinanceExecutionClient] Background income sync notice: ${errMsg}`);
         });
         this.fetchReconciledAccountBalanceAsync().catch(() => {});
       }, incomeIntervalMs);
@@ -1172,8 +1220,9 @@ export class BinanceExecutionClient {
     // 3. Start periodic userTrades sync
     if (!this.userTradesSyncTimer) {
       this.userTradesSyncTimer = setInterval(() => {
-        this.syncUserTradesBackground(symbols).catch((err: any) => {
-          console.warn(`[BinanceExecutionClient] Background userTrades sync notice: ${err?.message || String(err)}`);
+        this.syncUserTradesBackground(symbols).catch((err: unknown) => {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.warn(`[BinanceExecutionClient] Background userTrades sync notice: ${errMsg}`);
         });
       }, tradeIntervalMs);
     }
@@ -1214,8 +1263,9 @@ export class BinanceExecutionClient {
       for (const cb of this.incomeCallbacks) {
         try {
           cb(incomes);
-        } catch (err: any) {
-          console.error(`[BinanceExecutionClient] Error in income callback: ${err?.message || String(err)}`);
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.error(`[BinanceExecutionClient] Error in income callback: ${errMsg}`);
         }
       }
     }
@@ -1235,8 +1285,9 @@ export class BinanceExecutionClient {
         for (const cb of this.userTradeCallbacks) {
           try {
             cb(trades);
-          } catch (err: any) {
-            console.error(`[BinanceExecutionClient] Error in userTrade callback for ${sym}: ${err?.message || String(err)}`);
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.error(`[BinanceExecutionClient] Error in userTrade callback for ${sym}: ${errMsg}`);
           }
         }
       }

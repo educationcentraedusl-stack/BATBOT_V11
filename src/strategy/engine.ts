@@ -1044,8 +1044,8 @@ export class StrategyEngine {
             this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch((err) => {
               console.error(`[BinanceExecution][UNTRACKED_TP_DISPATCH_ERROR] [${this.config.symbol}:CORE_LONG] ${err?.message || String(err)}`);
             });
-            this.dispatchExchangeStopLossOrder("CORE_LONG", execPx, execQty, "LONG", slot.stopLossPrice).catch((err) => {
-              console.error(`[BinanceExecution][UNTRACKED_SL_DISPATCH_ERROR] [${this.config.symbol}:CORE_LONG] ${err?.message || String(err)}`);
+            this.syncExchangeStopLossOrder("CORE_LONG", execQty, "LONG", slot.stopLossPrice).catch((err: unknown) => {
+              console.error(`[BinanceExecution][UNTRACKED_SL_DISPATCH_ERROR] [${this.config.symbol}:CORE_LONG] ${err instanceof Error ? err.message : String(err)}`);
             });
           } else {
             const slotIdx = this.hedgeLedger.getAvailableShortSlotIndex();
@@ -1057,8 +1057,8 @@ export class StrategyEngine {
               console.error(`[BinanceExecution][UNTRACKED_TP_DISPATCH_ERROR] [${this.config.symbol}:${slotId}] ${err?.message || String(err)}`);
             });
             if (slot) {
-              this.dispatchExchangeStopLossOrder(slotId, execPx, execQty, "SHORT", slot.stopLossPrice).catch((err) => {
-                console.error(`[BinanceExecution][UNTRACKED_SL_DISPATCH_ERROR] [${this.config.symbol}:${slotId}] ${err?.message || String(err)}`);
+              this.syncExchangeStopLossOrder(slotId, execQty, "SHORT", slot.stopLossPrice).catch((err: unknown) => {
+                console.error(`[BinanceExecution][UNTRACKED_SL_DISPATCH_ERROR] [${this.config.symbol}:${slotId}] ${err instanceof Error ? err.message : String(err)}`);
               });
             }
           }
@@ -1300,8 +1300,7 @@ export class StrategyEngine {
       );
 
       if (res && res.orderId) {
-        this.hedgeLedger.registerActiveStopLossOrderId(slotId, res.orderId);
-        console.log(`[EXCHANGE_SL_ENGINE][SUCCESS] [${this.config.symbol}:${slotId}] Registered position-level Exchange STOP_MARKET OrderId #${res.orderId} (ClId: ${res.clientOrderId || clientOrderId})`);
+        console.log(`[EXCHANGE_SL_ENGINE][SUCCESS] [${this.config.symbol}:${slotId}] Dispatched position-level Exchange STOP_MARKET OrderId #${res.orderId} (ClId: ${res.clientOrderId || clientOrderId})`);
         return res.orderId;
       }
     } catch (err: unknown) {

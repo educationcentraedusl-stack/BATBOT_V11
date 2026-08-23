@@ -97,16 +97,23 @@ async function runOptimisticLedgerMutexTestSuite() {
 
   // Simulate mock dispatch: placeOrder should register CID in inFlightClientOrderIds
   (client as any).inFlightClientOrderIds.add(testCid);
-  const duplicateBlocked = await client.placeOrder({
-    symbol,
-    side: "BUY",
-    type: "LIMIT",
-    quantity: 0.05,
-    price: 2600.0,
-    positionSide: "LONG",
-    clientOrderId: testCid,
-  });
-  assert(duplicateBlocked === null, "placeOrder with duplicate in-flight CID must be blocked and return null");
+  let caughtDeduplicationError = false;
+  try {
+    await client.placeOrder({
+      symbol,
+      side: "BUY",
+      type: "LIMIT",
+      quantity: 0.05,
+      price: 2600.0,
+      positionSide: "LONG",
+      clientOrderId: testCid,
+    });
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message.includes("DEDUPLICATION_BARRIER")) {
+      caughtDeduplicationError = true;
+    }
+  }
+  assert(caughtDeduplicationError, "placeOrder with duplicate in-flight CID must be blocked by DEDUPLICATION_BARRIER");
   console.log("  ✓ BinanceExecutionClient correctly rejected duplicate in-flight ClientOrderId dispatch");
 
   (client as any).inFlightClientOrderIds.delete(testCid);

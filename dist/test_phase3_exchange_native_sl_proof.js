@@ -79,13 +79,13 @@ async function runPhase3Proof() {
     // 1. Dispatch Initial Exchange STOP_MARKET Order via StrategyEngine
     console.log("\n------------------------------------------------------------------------------------------");
     console.log("[TEST 1] Dispatching Initial Exchange-Native STOP_MARKET Order via StrategyEngine");
-    const orderId = await engine.dispatchExchangeStopLossOrder("CORE_LONG", entryPrice, qty, "LONG", initialSl);
+    await engine.syncExchangeStopLossOrder("CORE_LONG", qty, "LONG", initialSl);
     const trackedSlId = ledger.getActiveStopLossOrderId("CORE_LONG");
-    console.log(`  dispatchExchangeStopLossOrder() Response -> OrderId: #${orderId}`);
     console.log(`  PositionLedger Registered activeStopLossOrderId: #${trackedSlId}`);
-    if (trackedSlId !== orderId || !orderId) {
-        throw new Error(`❌ PROOF FAILED: activeStopLossOrderId #${trackedSlId} does not match placed order #${orderId}`);
+    if (!trackedSlId || trackedSlId <= 0) {
+        throw new Error(`❌ PROOF FAILED: activeStopLossOrderId #${trackedSlId} was not registered`);
     }
+    const orderId = trackedSlId;
     console.log("  ✅ TEST 1 PASSED: Exchange-Native STOP_MARKET Order placed & ID tracked!");
     // 2. Test Cancel-Replace Ratchet Sync via StrategyEngine
     console.log("\n------------------------------------------------------------------------------------------");
