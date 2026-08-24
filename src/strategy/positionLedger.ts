@@ -1276,6 +1276,28 @@ export class HedgePositionLedger {
   }
 
   /**
+   * ZERO-RETREAT MONOTONIC HARD LOCK (Zero-Retreat Invariant)
+   * A ratcheted Stop Loss must NEVER move away from profit:
+   * - LONG:  stopLossPrice can ONLY strictly increase (Math.max).
+   * - SHORT: stopLossPrice can ONLY strictly decrease (Math.min).
+   * - Initial assignment (slot.stopLossPrice === 0 or undefined) accepts calculatedSl.
+   */
+  public applyMonotonicStopLoss(slot: PositionSlot, calculatedSl: number): number {
+    if (calculatedSl <= 0 || !Number.isFinite(calculatedSl)) return slot.stopLossPrice || 0;
+    const formattedSl = SymbolPrecisionRegistry.formatPrice(this.symbol, calculatedSl);
+    if (!slot.stopLossPrice || slot.stopLossPrice <= 0) {
+      slot.stopLossPrice = formattedSl;
+      return slot.stopLossPrice;
+    }
+    const isLong = slot.side === "LONG";
+    slot.stopLossPrice = isLong
+      ? Math.max(slot.stopLossPrice, formattedSl)
+      : Math.min(slot.stopLossPrice, formattedSl);
+    slot.stopLossPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, slot.stopLossPrice);
+    return slot.stopLossPrice;
+  }
+
+  /**
    * Processes a filled WebSocket POST_ONLY limit TP order update.
    * Advances tpStageReached, records realized exit accounting, and updates fee-adjusted Break-Even / Trailing Stop-Loss price.
    */
@@ -1325,18 +1347,18 @@ export class HedgePositionLedger {
 
     if (currentStage === 1) {
       slot.breakEvenLocked = true;
-      slot.stopLossPrice = slot.breakEvenPrice;
+      this.applyMonotonicStopLoss(slot, slot.breakEvenPrice);
     } else if (currentStage === 2 && slot.tpStagePrices && slot.tpStagePrices.length >= 1) {
-      slot.stopLossPrice = isLong
+      const targetSl = isLong
         ? Math.max(slot.tpStagePrices[0], slot.breakEvenPrice)
         : Math.min(slot.tpStagePrices[0], slot.breakEvenPrice);
+      this.applyMonotonicStopLoss(slot, targetSl);
     } else if (currentStage >= 3 && slot.tpStagePrices && slot.tpStagePrices.length >= 2) {
-      slot.stopLossPrice = isLong
+      const targetSl = isLong
         ? Math.max(slot.tpStagePrices[1], slot.breakEvenPrice)
         : Math.min(slot.tpStagePrices[1], slot.breakEvenPrice);
+      this.applyMonotonicStopLoss(slot, targetSl);
     }
-
-    slot.stopLossPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, slot.stopLossPrice);
 
     const isClosed = slot.quantity <= 0;
     if (isClosed) {
@@ -1540,7 +1562,8 @@ export class HedgePositionLedger {
       const feeMultiplier = (makerFee + takerFee) * 2.5;
       this.coreLong.breakEvenPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1.0 + feeMultiplier));
       this.coreLong.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tpPercent / 100));
-      this.coreLong.stopLossPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - slPercent / 100));
+      const rawSl = entryPrice * (1 - slPercent / 100);
+      this.applyMonotonicStopLoss(this.coreLong, rawSl);
       this.coreLong.lastSyncedSlPrice = this.coreLong.stopLossPrice;
       const tp1Pct = Math.min(2.0, tpPercent * 1.0);
       const tp2Pct = Math.min(3.0, tpPercent * 2.0);
@@ -1577,7 +1600,8 @@ export class HedgePositionLedger {
       const feeMultiplier = (makerFee + takerFee) * 2.5;
       this.coreLong.breakEvenPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1.0 + feeMultiplier));
       this.coreLong.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + tpPercent / 100));
-      this.coreLong.stopLossPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - slPercent / 100));
+      const rawSl = newAvgEntry * (1 - slPercent / 100);
+      this.applyMonotonicStopLoss(this.coreLong, rawSl);
       this.coreLong.lastSyncedSlPrice = this.coreLong.stopLossPrice;
 
       const tp1Pct = Math.min(2.0, tpPercent * 1.0);
@@ -1619,7 +1643,8 @@ export class HedgePositionLedger {
     const feeMultiplier = (makerFee + takerFee) * 2.5; // Fee-adjusted zero-loss buffer loaded from .env
     this.coreLong.breakEvenPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1.0 + feeMultiplier));
     this.coreLong.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tpPercent / 100));
-    this.coreLong.stopLossPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - slPercent / 100));
+    const rawSl = entryPrice * (1 - slPercent / 100);
+    this.applyMonotonicStopLoss(this.coreLong, rawSl);
     this.coreLong.lastSyncedSlPrice = this.coreLong.stopLossPrice;
 
     // 5-Stage TP Micro-Ladder Targets: 0.25%, 0.50%, 1.00%, 1.50%, 2.50% price moves (tpPercent * 1.0, 2.0, 4.0, 6.0, 10.0)
@@ -1829,7 +1854,8 @@ export class HedgePositionLedger {
       const feeMultiplier = (makerFee + takerFee) * 2.5;
       slot.breakEvenPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1.0 - feeMultiplier));
       slot.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tpPercent / 100));
-      slot.stopLossPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + slPercent / 100));
+      const rawSl = entryPrice * (1 + slPercent / 100);
+      this.applyMonotonicStopLoss(slot, rawSl);
       slot.lastSyncedSlPrice = slot.stopLossPrice;
       const tp1Pct = Math.min(2.0, tpPercent * 1.0);
       const tp2Pct = Math.min(3.0, tpPercent * 2.0);
@@ -1866,7 +1892,8 @@ export class HedgePositionLedger {
       const feeMultiplier = (makerFee + takerFee) * 2.5;
       slot.breakEvenPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1.0 - feeMultiplier));
       slot.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - tpPercent / 100));
-      slot.stopLossPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + slPercent / 100));
+      const rawSl = newAvgEntry * (1 + slPercent / 100);
+      this.applyMonotonicStopLoss(slot, rawSl);
       slot.lastSyncedSlPrice = slot.stopLossPrice;
 
       const tp1Pct = Math.min(2.0, tpPercent * 1.0);
@@ -1908,7 +1935,8 @@ export class HedgePositionLedger {
     const feeMultiplier = (makerFee + takerFee) * 2.5; // Fee-adjusted zero-loss buffer loaded from .env
     slot.breakEvenPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1.0 - feeMultiplier));
     slot.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tpPercent / 100));
-    slot.stopLossPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + slPercent / 100));
+    const rawSl = entryPrice * (1 + slPercent / 100);
+    this.applyMonotonicStopLoss(slot, rawSl);
     slot.lastSyncedSlPrice = slot.stopLossPrice;
 
     const tp1Pct = Math.min(2.0, tpPercent * 1.0);
@@ -2139,9 +2167,7 @@ export class HedgePositionLedger {
         slot.breakEvenLocked = true;
         slot.breakEvenPrice = targetTier1Sl;
       }
-      slot.stopLossPrice = isLong
-        ? Math.max(slot.stopLossPrice, targetTier1Sl)
-        : (slot.stopLossPrice === 0 ? targetTier1Sl : Math.min(slot.stopLossPrice, targetTier1Sl));
+      this.applyMonotonicStopLoss(slot, targetTier1Sl);
     }
 
     // Tier 2: +15.0% Net ROE -> Lock +10.0% ROE
@@ -2153,9 +2179,7 @@ export class HedgePositionLedger {
         slot.stepCollarTier = 2;
         slot.breakEvenLocked = true;
       }
-      slot.stopLossPrice = isLong
-        ? Math.max(slot.stopLossPrice, targetTier2Sl)
-        : Math.min(slot.stopLossPrice, targetTier2Sl);
+      this.applyMonotonicStopLoss(slot, targetTier2Sl);
     }
 
     // Tier 3: >= +25.0% Net ROE -> Aggressive 70% Trailing Profit Collar
@@ -2168,9 +2192,7 @@ export class HedgePositionLedger {
         slot.stepCollarTier = 3;
         slot.breakEvenLocked = true;
       }
-      slot.stopLossPrice = isLong
-        ? Math.max(slot.stopLossPrice, targetTier3Sl)
-        : Math.min(slot.stopLossPrice, targetTier3Sl);
+      this.applyMonotonicStopLoss(slot, targetTier3Sl);
     }
 
     // Terminal Lifespan Harvest (30 Minutes Max Horizon)
@@ -2245,10 +2267,7 @@ export class HedgePositionLedger {
           );
         }
 
-        slot.stopLossPrice = SymbolPrecisionRegistry.formatPrice(
-          this.symbol,
-          isLong ? Math.max(slot.stopLossPrice, emergencyTargetSl) : Math.min(slot.stopLossPrice, emergencyTargetSl)
-        );
+        this.applyMonotonicStopLoss(slot, emergencyTargetSl);
       }
     }
 
@@ -2259,9 +2278,7 @@ export class HedgePositionLedger {
         slot.tpStageReached = 1;
         slot.breakEvenLocked = true;
         if (slot.breakEvenPrice && slot.breakEvenPrice > 0) {
-          slot.stopLossPrice = isLong
-            ? Math.max(slot.stopLossPrice, slot.breakEvenPrice)
-            : (slot.stopLossPrice === 0 ? slot.breakEvenPrice : Math.min(slot.stopLossPrice, slot.breakEvenPrice));
+          this.applyMonotonicStopLoss(slot, slot.breakEvenPrice);
         }
 
         const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
@@ -2283,9 +2300,7 @@ export class HedgePositionLedger {
       // TP2 (+30% ROI Target) -> Trail SL to TP1 price
       if (stage < 2 && ((isLong && markPrice >= tpPrices[1]) || (!isLong && markPrice <= tpPrices[1]))) {
         slot.tpStageReached = 2;
-        slot.stopLossPrice = isLong
-          ? Math.max(slot.stopLossPrice, tpPrices[0])
-          : (slot.stopLossPrice === 0 ? tpPrices[0] : Math.min(slot.stopLossPrice, tpPrices[0]));
+        this.applyMonotonicStopLoss(slot, tpPrices[0]);
 
         const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
         if (chunk > 0) {
@@ -2306,9 +2321,7 @@ export class HedgePositionLedger {
       // TP3 (+50% ROI Target) -> Trail SL to TP2 price
       if (stage < 3 && ((isLong && markPrice >= tpPrices[2]) || (!isLong && markPrice <= tpPrices[2]))) {
         slot.tpStageReached = 3;
-        slot.stopLossPrice = isLong
-          ? Math.max(slot.stopLossPrice, tpPrices[1])
-          : (slot.stopLossPrice === 0 ? tpPrices[1] : Math.min(slot.stopLossPrice, tpPrices[1]));
+        this.applyMonotonicStopLoss(slot, tpPrices[1]);
 
         const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
         if (chunk > 0) {
@@ -2329,9 +2342,7 @@ export class HedgePositionLedger {
       // TP4 (+80% ROI Target) -> Trail SL to TP3 price
       if (stage < 4 && ((isLong && markPrice >= tpPrices[3]) || (!isLong && markPrice <= tpPrices[3]))) {
         slot.tpStageReached = 4;
-        slot.stopLossPrice = isLong
-          ? Math.max(slot.stopLossPrice, tpPrices[2])
-          : (slot.stopLossPrice === 0 ? tpPrices[2] : Math.min(slot.stopLossPrice, tpPrices[2]));
+        this.applyMonotonicStopLoss(slot, tpPrices[2]);
 
         const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
         if (chunk > 0) {
@@ -2652,9 +2663,7 @@ export class HedgePositionLedger {
         slot.breakEvenLocked = true;
         slot.breakEvenPrice = targetTier1Sl;
       }
-      slot.stopLossPrice = isLong
-        ? Math.max(slot.stopLossPrice, targetTier1Sl)
-        : (slot.stopLossPrice === 0 ? targetTier1Sl : Math.min(slot.stopLossPrice, targetTier1Sl));
+      this.applyMonotonicStopLoss(slot, targetTier1Sl);
     }
 
     // Tier 2: +15.0% Net ROE -> Lock +10.0% ROE
@@ -2666,9 +2675,7 @@ export class HedgePositionLedger {
         slot.stepCollarTier = 2;
         slot.breakEvenLocked = true;
       }
-      slot.stopLossPrice = isLong
-        ? Math.max(slot.stopLossPrice, targetTier2Sl)
-        : Math.min(slot.stopLossPrice, targetTier2Sl);
+      this.applyMonotonicStopLoss(slot, targetTier2Sl);
     }
 
     // Tier 3: >= +25.0% Net ROE -> Aggressive 70% Trailing Profit Collar
@@ -2682,9 +2689,7 @@ export class HedgePositionLedger {
         slot.stepCollarTier = 3;
         slot.breakEvenLocked = true;
       }
-      slot.stopLossPrice = isLong
-        ? Math.max(slot.stopLossPrice, targetTier3Sl)
-        : Math.min(slot.stopLossPrice, targetTier3Sl);
+      this.applyMonotonicStopLoss(slot, targetTier3Sl);
     }
 
     // Phase 4B: Hard Terminal Horizon Timeout (duration >= 1800s / 30 Minutes Max Lifespan)
@@ -2769,9 +2774,7 @@ export class HedgePositionLedger {
         if (slot.peakPrice >= minProfitFloorLong) {
           const collarOffsetUsdt = slot.peakPrice * collarDistancePct;
           const msSopcStopPrice = this.formatPriceFast(slot.peakPrice - collarOffsetUsdt);
-          if (msSopcStopPrice > slot.stopLossPrice) {
-            slot.stopLossPrice = msSopcStopPrice;
-          }
+          this.applyMonotonicStopLoss(slot, msSopcStopPrice);
         }
       }
     } else {
@@ -2786,9 +2789,7 @@ export class HedgePositionLedger {
         if (slot.troughPrice <= minProfitFloorShort) {
           const collarOffsetUsdt = slot.troughPrice * collarDistancePct;
           const msSopcStopPrice = this.formatPriceFast(slot.troughPrice + collarOffsetUsdt);
-          if (slot.stopLossPrice === 0 || msSopcStopPrice < slot.stopLossPrice) {
-            slot.stopLossPrice = msSopcStopPrice;
-          }
+          this.applyMonotonicStopLoss(slot, msSopcStopPrice);
         }
       }
     }
