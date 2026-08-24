@@ -440,7 +440,7 @@ impl MultiAssetLOBManager {
     pub fn spawn_unblocked_processor(
         self: Arc<Self>,
         queues: Vec<LockFreeSpscQueue>,
-    ) -> std::thread::JoinHandle<()> {
+    ) -> std::io::Result<std::thread::JoinHandle<()>> {
         self.is_running.store(true, Ordering::Relaxed);
         std::thread::Builder::new()
             .name("batbot-hft-l2-processor".to_string())
@@ -461,7 +461,7 @@ impl MultiAssetLOBManager {
                 }
                 println!("[MultiAssetLOBManager] Synchronous L2 processor thread terminated cleanly.");
             })
-            .expect("Failed to spawn dedicated synchronous L2 processor thread")
     }
 }
+
 

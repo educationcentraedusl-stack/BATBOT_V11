@@ -102,7 +102,7 @@ impl StrategyOrchestrator {
     pub fn start_synchronous_orchestrator(
         self: Arc<Self>,
         queues: Vec<LockFreeSpscQueue>,
-    ) -> std::thread::JoinHandle<()> {
+    ) -> std::io::Result<std::thread::JoinHandle<()>> {
         self.is_running.store(true, Ordering::Relaxed);
         let orchestrator = self.clone();
 
@@ -257,6 +257,5 @@ impl StrategyOrchestrator {
 
                 println!("[StrategyOrchestrator] Synchronous orchestrator thread shutdown cleanly.");
             })
-            .expect("Failed to spawn dedicated strategy orchestrator thread")
     }
 }

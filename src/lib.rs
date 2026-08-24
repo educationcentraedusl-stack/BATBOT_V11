@@ -786,7 +786,10 @@ pub fn start_phase5_orchestrator_napi(symbols: Vec<String>) -> bool {
     GLOBAL_STRATEGY_ORCHESTRATOR.store(Some(orchestrator.clone()));
 
     let queues = stream_mgr.queues().to_vec();
-    orchestrator.start_synchronous_orchestrator(queues);
+    if let Err(e) = orchestrator.start_synchronous_orchestrator(queues) {
+        eprintln!("[BATBOT_V11] Failed to start orchestrator thread: {}", e);
+        return false;
+    }
 
     let stream_mgr_clone = stream_mgr.clone();
     GLOBAL_RUNTIME.spawn(async move {

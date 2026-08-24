@@ -21,9 +21,28 @@ async function runSotaRestingOrderSpreadAnnihilationTests() {
   let placedOrders: BinanceOrderParams[] = [];
 
   mockExecutionClient.isConfigured = () => true;
-  mockExecutionClient.cancelOrder = async (symbol: string, orderId: number) => {
-    cancelledOrderIds.push(orderId);
-    return { symbol, orderId, status: "CANCELED" } as any;
+  mockExecutionClient.cancelOrder = async (symbol: string, orderId: number | string): Promise<BinanceOrderResponse> => {
+    const numericId = typeof orderId === "number" ? orderId : parseInt(orderId, 10);
+    cancelledOrderIds.push(numericId);
+    return {
+      symbol,
+      orderId: numericId,
+      clientOrderId: "CANCEL_CID",
+      price: "0",
+      avgPrice: "0",
+      origQty: "0",
+      executedQty: "0",
+      cumQuote: "0",
+      status: "CANCELED",
+      timeInForce: "GTC",
+      type: "LIMIT",
+      reduceOnly: false,
+      side: "BUY",
+      positionSide: "SHORT",
+      stopPrice: "0",
+      workingType: "CONTRACT_PRICE",
+      updateTime: Date.now(),
+    };
   };
   mockExecutionClient.placeOrder = async (params: BinanceOrderParams): Promise<BinanceOrderResponse> => {
     placedOrders.push(params);
@@ -122,13 +141,24 @@ async function runSotaRestingOrderSpreadAnnihilationTests() {
   // ============================================================================
   console.log("\n[STAGE 3] Testing Tier-3 Transport-Level Pre-Flight Spread Barrier...");
   bigIntView[92] = 3n;
-  // Restore tight spread to generate signal
-  client.writeAtomicFloat64Asset(0, 4, 79050.0);
-  client.writeAtomicFloat64Asset(0, 6, 79050.30);
   placedOrders = [];
   cancelledOrderIds = [];
 
-  // Artificially simulate spread blowout happening directly during pre-flight write
+  // Reset cooldown locks and provide fresh timestamp for Stage 3 evaluation
+  client.setShortCooldownLock(0, 0);
+  client.setLongCooldownLock(0, 0);
+  const stage3Now = Date.now();
+  bigIntView[0] = BigInt(stage3Now) * 1000000n;
+
+  // Set tight initial spread ($0.20 spread) to trigger SELL entry signal
+  client.writeAtomicFloat64Asset(0, 4, 79050.0);
+  client.writeAtomicFloat64Asset(0, 6, 79050.20);
+  client.writeAtomicFloat64Asset(0, 93, -0.95);  // AI Dir (-0.95 Bearish)
+  client.writeAtomicFloat64Asset(0, 94, 0.90);   // AI Conf (90%)
+  client.writeAtomicFloat64Asset(0, 1, -0.50);   // OBI (-0.50)
+  client.writeAtomicFloat64Asset(0, 2, -5.0);    // CVD
+
+  const preflightLedger = new HedgePositionLedger("BTCUSDT", 3);
   const preflightEngine = new StrategyEngine(
     client,
     riskGuard,
@@ -137,23 +167,44 @@ async function runSotaRestingOrderSpreadAnnihilationTests() {
       symbol: "BTCUSDT",
       assetIndex: 0,
       minAiConfidence: 0.60,
+      aggressiveConfidenceThreshold: 0.70,
       maxSpreadBtc: 1.50,
       orderQuantity: 0.001,
       tradeSizeUsdt: 60.0,
       obiBuyThreshold: 0.10,
       obiSellThreshold: -0.10,
     },
-    hedgeLedger.getLegacyLedger(),
-    hedgeLedger
+    preflightLedger.getLegacyLedger(),
+    preflightLedger
   );
 
-  // Set blowout spread right before dispatch
-  client.writeAtomicFloat64Asset(0, 4, 78900.0);
-  client.writeAtomicFloat64Asset(0, 6, 79000.0); // $100 spread blowout
+  // Hook getBestAskPrice to simulate concurrent Rust WebSocket ingestion mutating SAB right at the pre-flight check
+  let askReadCount = 0;
+  const originalGetBestAsk = client.getBestAskPrice.bind(client);
+  client.getBestAskPrice = (assetIdx: number) => {
+    askReadCount++;
+    if (askReadCount > 1) {
+      // Simulate concurrent Rust WebSocket ingestion blowing out spread to $40.0 right before socket write
+      client.writeAtomicFloat64Asset(0, 6, 79090.0);
+      return 79090.0;
+    }
+    return originalGetBestAsk(assetIdx);
+  };
 
   const res3 = preflightEngine.evaluateTick();
-  assert.strictEqual(res3.signalType, "NONE", "Stage 3: Pre-flight must block signal under blowout");
-  console.log("  ✅ STAGE 3 PASSED: Pre-flight spread barrier blocked execution.");
+  // Restore original getter
+  client.getBestAskPrice = originalGetBestAsk;
+
+  assert.strictEqual(res3.signalType, "SELL", "Stage 3: Signal must be generated under initial tight spread");
+  assert.ok(res3.executionPromise, "Stage 3: executionPromise must be instantiated");
+
+  // Await pre-flight promise resolution
+  const preflightOrderRes = await res3.executionPromise;
+  assert.strictEqual(preflightOrderRes, null, "Stage 3: Pre-flight barrier MUST return null on blowout");
+  assert.strictEqual(placedOrders.length, 0, "Stage 3: mockExecutionClient.placeOrder must NEVER be called!");
+  assert.strictEqual(preflightLedger.getShortSlots()[0].lifecycleState, "FLAT", "Stage 3: Slot reservation must be rolled back to FLAT");
+  assert.strictEqual(preflightLedger.getShortSlots()[0].isOccupied, false, "Stage 3: Slot must remain unoccupied");
+  console.log("  ✅ STAGE 3 PASSED: Pre-flight barrier intercepted blowout ($40.0 > $1.50), blocked socket write, and rolled back slot to FLAT.");
 
   // ============================================================================
   // STAGE 4: TIER-4 DYNAMIC GRID SPREAD GATING IN POSITION LEDGER
