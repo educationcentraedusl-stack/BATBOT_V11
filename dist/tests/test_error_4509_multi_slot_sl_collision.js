@@ -31,6 +31,7 @@ async function runError4509MultiSlotVerification() {
     let cancelledOrderIds = [];
     let orderIdCounter = 900000;
     const mockExecutionClient = new binance_js_1.BinanceExecutionClient();
+    mockExecutionClient.getOpenOrders = async () => [];
     // Mock placeOrder
     mockExecutionClient.placeOrder = async (params) => {
         placedOrders.push({ ...params });
@@ -113,32 +114,34 @@ async function runError4509MultiSlotVerification() {
     const recoveryClient = new binance_js_1.BinanceExecutionClient();
     let attemptCount = 0;
     const sweepCancelledIds = [];
+    let recoveryOpenOrders = [
+        {
+            orderId: 777888,
+            symbol,
+            status: "NEW",
+            clientOrderId: "CONFLICTING_STALE_SL",
+            price: "0",
+            avgPrice: "0",
+            origQty: "0",
+            executedQty: "0",
+            cumQuote: "0",
+            timeInForce: "GTC",
+            type: "STOP_MARKET",
+            reduceOnly: false,
+            side: "BUY",
+            positionSide: "SHORT",
+            stopPrice: "5.30",
+            workingType: "CONTRACT_PRICE",
+            updateTime: Date.now(),
+        },
+    ];
     // Mock getOpenOrders returning conflicting conditional order
     recoveryClient.getOpenOrders = async (_sym) => {
-        return [
-            {
-                orderId: 777888,
-                symbol,
-                status: "NEW",
-                clientOrderId: "CONFLICTING_STALE_SL",
-                price: "0",
-                avgPrice: "0",
-                origQty: "0",
-                executedQty: "0",
-                cumQuote: "0",
-                timeInForce: "GTC",
-                type: "STOP_MARKET",
-                reduceOnly: false,
-                side: "BUY",
-                positionSide: "SHORT",
-                stopPrice: "5.30",
-                workingType: "CONTRACT_PRICE",
-                updateTime: Date.now(),
-            },
-        ];
+        return [...recoveryOpenOrders];
     };
     recoveryClient.cancelOrder = async (_sym, orderId) => {
         sweepCancelledIds.push(orderId);
+        recoveryOpenOrders = recoveryOpenOrders.filter((o) => o.orderId !== orderId);
         return {
             orderId: Number(orderId),
             symbol,

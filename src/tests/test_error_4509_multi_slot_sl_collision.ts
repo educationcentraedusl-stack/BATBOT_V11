@@ -32,6 +32,7 @@ async function runError4509MultiSlotVerification(): Promise<void> {
   let orderIdCounter = 900000;
 
   const mockExecutionClient = new BinanceExecutionClient();
+  mockExecutionClient.getOpenOrders = async () => [];
 
   // Mock placeOrder
   mockExecutionClient.placeOrder = async (params: BinanceOrderParams): Promise<BinanceOrderResponse> => {
@@ -132,34 +133,36 @@ async function runError4509MultiSlotVerification(): Promise<void> {
   const recoveryClient = new BinanceExecutionClient();
   let attemptCount = 0;
   const sweepCancelledIds: (number | string)[] = [];
+  let recoveryOpenOrders: BinanceOrderResponse[] = [
+    {
+      orderId: 777888,
+      symbol,
+      status: "NEW",
+      clientOrderId: "CONFLICTING_STALE_SL",
+      price: "0",
+      avgPrice: "0",
+      origQty: "0",
+      executedQty: "0",
+      cumQuote: "0",
+      timeInForce: "GTC",
+      type: "STOP_MARKET",
+      reduceOnly: false,
+      side: "BUY",
+      positionSide: "SHORT",
+      stopPrice: "5.30",
+      workingType: "CONTRACT_PRICE",
+      updateTime: Date.now(),
+    },
+  ];
 
   // Mock getOpenOrders returning conflicting conditional order
   (recoveryClient as any).getOpenOrders = async (_sym: string): Promise<BinanceOrderResponse[]> => {
-    return [
-      {
-        orderId: 777888,
-        symbol,
-        status: "NEW",
-        clientOrderId: "CONFLICTING_STALE_SL",
-        price: "0",
-        avgPrice: "0",
-        origQty: "0",
-        executedQty: "0",
-        cumQuote: "0",
-        timeInForce: "GTC",
-        type: "STOP_MARKET",
-        reduceOnly: false,
-        side: "BUY",
-        positionSide: "SHORT",
-        stopPrice: "5.30",
-        workingType: "CONTRACT_PRICE",
-        updateTime: Date.now(),
-      },
-    ];
+    return [...recoveryOpenOrders];
   };
 
   (recoveryClient as any).cancelOrder = async (_sym: string, orderId: number | string): Promise<BinanceOrderResponse> => {
     sweepCancelledIds.push(orderId);
+    recoveryOpenOrders = recoveryOpenOrders.filter((o) => o.orderId !== orderId);
     return {
       orderId: Number(orderId),
       symbol,

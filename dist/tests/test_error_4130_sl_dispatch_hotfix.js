@@ -19,9 +19,13 @@ async function runHotfixTests() {
     console.log("[TEST 1] Verifying placePositionStopLoss strict direction and payload sanitization...");
     const capturedPayloads = [];
     const mockClient = new binance_1.BinanceExecutionClient();
-    mockClient.request = async (_method, _path, payload) => {
-        if (payload)
+    mockClient.request = async (_method, path, payload) => {
+        if (path === "/fapi/v1/openOrders") {
+            return [];
+        }
+        if (path === "/fapi/v1/order" && payload) {
             capturedPayloads.push({ ...payload });
+        }
         return {
             orderId: 987654321,
             symbol: payload?.symbol || "XRPUSDT",
@@ -88,31 +92,33 @@ async function runHotfixTests() {
     let attemptCount = 0;
     const cancelledOrderIds = [];
     const recoveryClient = new binance_1.BinanceExecutionClient();
+    let recoveryOpenOrders = [
+        {
+            orderId: 111222,
+            symbol: "XRPUSDT",
+            status: "NEW",
+            clientOrderId: "OLD_STALE_SL",
+            price: "0",
+            avgPrice: "0",
+            origQty: "0",
+            executedQty: "0",
+            cumQuote: "0",
+            timeInForce: "GTC",
+            type: "STOP_MARKET",
+            reduceOnly: false,
+            side: "BUY",
+            positionSide: "SHORT",
+            stopPrice: "1.5200",
+            workingType: "CONTRACT_PRICE",
+            updateTime: Date.now() - 10000,
+        },
+    ];
     recoveryClient.getOpenOrders = async (_sym) => {
-        return [
-            {
-                orderId: 111222,
-                symbol: "XRPUSDT",
-                status: "NEW",
-                clientOrderId: "OLD_STALE_SL",
-                price: "0",
-                avgPrice: "0",
-                origQty: "0",
-                executedQty: "0",
-                cumQuote: "0",
-                timeInForce: "GTC",
-                type: "STOP_MARKET",
-                reduceOnly: false,
-                side: "BUY",
-                positionSide: "SHORT",
-                stopPrice: "1.5200",
-                workingType: "CONTRACT_PRICE",
-                updateTime: Date.now() - 10000,
-            },
-        ];
+        return [...recoveryOpenOrders];
     };
     recoveryClient.cancelOrder = async (_sym, orderId) => {
         cancelledOrderIds.push(orderId);
+        recoveryOpenOrders = recoveryOpenOrders.filter((o) => o.orderId !== orderId);
         return {
             orderId: Number(orderId),
             symbol: "XRPUSDT",

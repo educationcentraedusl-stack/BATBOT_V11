@@ -1667,8 +1667,12 @@ class HedgePositionLedger {
         }
         const maxLongSl = this.formatPriceFast(markPrice - this.priceTickSize * 2);
         const minShortSl = this.formatPriceFast(markPrice + this.priceTickSize * 2);
+        // =========================================================================
+        // LAYER 1: STANDARD STEP-COLLAR RATCHETS (MANDATORY >= +8.0% NET ROE GATE)
+        // =========================================================================
+        const currentPeakRoe = slot.peakRoe ?? rawRoePct;
         // Tier 1: +8.0% Net ROE -> Lock Entry + Round-Trip Fees
-        if (rawRoePct >= 8.0) {
+        if (rawRoePct >= 8.0 || currentPeakRoe >= 8.0) {
             const beOffset = feeBuffer + 0.0002;
             const rawTier1 = isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset);
             const targetTier1Sl = isLong ? Math.min(maxLongSl, this.formatPriceFast(rawTier1)) : Math.max(minShortSl, this.formatPriceFast(rawTier1));
@@ -1682,7 +1686,7 @@ class HedgePositionLedger {
                 : (slot.stopLossPrice === 0 ? targetTier1Sl : Math.min(slot.stopLossPrice, targetTier1Sl));
         }
         // Tier 2: +15.0% Net ROE -> Lock +10.0% ROE
-        if (rawRoePct >= 15.0) {
+        if (rawRoePct >= 15.0 || currentPeakRoe >= 15.0) {
             const lockOffset = (10.0 / 100.0) / effectiveLev;
             const rawTier2 = isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset);
             const targetTier2Sl = isLong ? Math.min(maxLongSl, this.formatPriceFast(rawTier2)) : Math.max(minShortSl, this.formatPriceFast(rawTier2));
@@ -1695,8 +1699,7 @@ class HedgePositionLedger {
                 : Math.min(slot.stopLossPrice, targetTier2Sl);
         }
         // Tier 3: >= +25.0% Net ROE -> Aggressive 70% Trailing Profit Collar
-        if (rawRoePct >= 25.0 || (slot.peakRoe && slot.peakRoe >= 25.0)) {
-            const currentPeakRoe = slot.peakRoe ?? rawRoePct;
+        if (rawRoePct >= 25.0 || currentPeakRoe >= 25.0) {
             const trailRoe = currentPeakRoe * 0.70;
             const trailOffset = (trailRoe / 100.0) / effectiveLev;
             const rawTier3 = isLong ? slot.entryPrice * (1.0 + trailOffset) : slot.entryPrice * (1.0 - trailOffset);
@@ -1743,26 +1746,31 @@ class HedgePositionLedger {
             });
             return;
         }
-        // 0C. VPIN Toxicity & Hawkes Microstructure Breakeven Ratchet (100% Dynamic - Zero Timers)
-        const isToxicFlow = vpin >= 0.80 || (isLong ? ofi < -0.3 : ofi > 0.3);
-        const isHawkesBurst = hawkes > 2.5;
-        if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
-            slot.breakEvenPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + feeBuffer) : slot.entryPrice * (1.0 - feeBuffer));
-        }
-        const isVerifiedProfit = (slot.peakRoe && slot.peakRoe >= 5.0) || rawRoePct >= 5.0;
-        if (isVerifiedProfit && slot.breakEvenPrice && slot.breakEvenPrice > 0 && (isToxicFlow || isHawkesBurst)) {
-            let targetSl = slot.breakEvenPrice;
-            if (isToxicFlow) {
-                // Ratchet SL to Breakeven + 0.05% offset to lock profit under toxicity
-                const offset = feeBuffer + 0.0005;
-                targetSl = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset));
+        // =========================================================================
+        // LAYER 2: MICROSTRUCTURE EMERGENCY RATCHETS (VPIN / HAWKES)
+        // HARD GATE: peakRoe < +5.0% COMPLETELY DISABLES AND BYPASSES THIS SECTION
+        // =========================================================================
+        const isEmergencyGateOpen = currentPeakRoe >= 5.0;
+        if (isEmergencyGateOpen) {
+            const isToxicFlow = vpin >= 0.80 || (isLong ? ofi < -0.3 : ofi > 0.3);
+            const isHawkesBurst = hawkes > 2.5;
+            if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
+                slot.breakEvenPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + feeBuffer) : slot.entryPrice * (1.0 - feeBuffer));
             }
-            else if (isHawkesBurst) {
-                // Ratchet SL under order arrival velocity spike
-                const offset = feeBuffer + 0.0010;
-                targetSl = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset));
+            if (slot.breakEvenPrice && slot.breakEvenPrice > 0 && (isToxicFlow || isHawkesBurst)) {
+                let emergencyTargetSl = slot.breakEvenPrice;
+                if (isToxicFlow) {
+                    // Ratchet SL to Breakeven + 0.05% offset to lock profit under toxicity
+                    const offset = feeBuffer + 0.0005;
+                    emergencyTargetSl = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset));
+                }
+                else if (isHawkesBurst) {
+                    // Ratchet SL under order arrival velocity spike
+                    const offset = feeBuffer + 0.0010;
+                    emergencyTargetSl = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset));
+                }
+                slot.stopLossPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? Math.max(slot.stopLossPrice, emergencyTargetSl) : Math.min(slot.stopLossPrice, emergencyTargetSl));
             }
-            slot.stopLossPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? Math.max(slot.stopLossPrice, targetSl) : Math.min(slot.stopLossPrice, targetSl));
         }
         // 1. Symmetrical Immediate Take-Profit Evaluation (Zero Holding Time Hysteresis - Symmetrical to SL)
         if (!hasActiveLimitOrders && tpPrices.length === 5) {

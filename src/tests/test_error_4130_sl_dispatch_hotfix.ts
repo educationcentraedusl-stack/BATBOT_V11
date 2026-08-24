@@ -18,8 +18,13 @@ async function runHotfixTests(): Promise<void> {
   const capturedPayloads: Record<string, unknown>[] = [];
   const mockClient = new BinanceExecutionClient();
 
-  (mockClient as any).request = async (_method: string, _path: string, payload?: any): Promise<BinanceOrderResponse> => {
-    if (payload) capturedPayloads.push({ ...payload });
+  (mockClient as any).request = async (_method: string, path: string, payload?: any): Promise<any> => {
+    if (path === "/fapi/v1/openOrders") {
+      return [];
+    }
+    if (path === "/fapi/v1/order" && payload) {
+      capturedPayloads.push({ ...payload });
+    }
     return {
       orderId: 987654321,
       symbol: payload?.symbol || "XRPUSDT",
@@ -99,33 +104,35 @@ async function runHotfixTests(): Promise<void> {
   let attemptCount = 0;
   const cancelledOrderIds: (number | string)[] = [];
   const recoveryClient = new BinanceExecutionClient();
+  let recoveryOpenOrders: BinanceOrderResponse[] = [
+    {
+      orderId: 111222,
+      symbol: "XRPUSDT",
+      status: "NEW",
+      clientOrderId: "OLD_STALE_SL",
+      price: "0",
+      avgPrice: "0",
+      origQty: "0",
+      executedQty: "0",
+      cumQuote: "0",
+      timeInForce: "GTC",
+      type: "STOP_MARKET",
+      reduceOnly: false,
+      side: "BUY",
+      positionSide: "SHORT",
+      stopPrice: "1.5200",
+      workingType: "CONTRACT_PRICE",
+      updateTime: Date.now() - 10000,
+    },
+  ];
 
   (recoveryClient as any).getOpenOrders = async (_sym: string): Promise<BinanceOrderResponse[]> => {
-    return [
-      {
-        orderId: 111222,
-        symbol: "XRPUSDT",
-        status: "NEW",
-        clientOrderId: "OLD_STALE_SL",
-        price: "0",
-        avgPrice: "0",
-        origQty: "0",
-        executedQty: "0",
-        cumQuote: "0",
-        timeInForce: "GTC",
-        type: "STOP_MARKET",
-        reduceOnly: false,
-        side: "BUY",
-        positionSide: "SHORT",
-        stopPrice: "1.5200",
-        workingType: "CONTRACT_PRICE",
-        updateTime: Date.now() - 10000,
-      },
-    ];
+    return [...recoveryOpenOrders];
   };
 
   (recoveryClient as any).cancelOrder = async (_sym: string, orderId: number | string): Promise<BinanceOrderResponse> => {
     cancelledOrderIds.push(orderId);
+    recoveryOpenOrders = recoveryOpenOrders.filter((o) => o.orderId !== orderId);
     return {
       orderId: Number(orderId),
       symbol: "XRPUSDT",

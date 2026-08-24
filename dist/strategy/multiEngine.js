@@ -244,15 +244,35 @@ class MultiAssetStrategyEngine {
             const hurst = this.client.getHurst(assetIdx);
             const vpin = this.client.getVPIN(assetIdx);
             const hawkes = this.client.getHawkesIntensity(assetIdx);
+            const engine = this.engines.get(symbol);
+            const bidPrice = this.client.getBestBidPrice(assetIdx);
+            const askPrice = this.client.getBestAskPrice(assetIdx);
+            const isTickValid = askPrice > 0 && bidPrice > 0 && askPrice >= bidPrice;
+            const currentSpread = isTickValid ? askPrice - bidPrice : Infinity;
+            const currentMidPrice = isTickValid ? (bidPrice + askPrice) * 0.5 : 0;
+            const currentSpreadBps = currentMidPrice > 0 ? (currentSpread / currentMidPrice) * 10000 : Infinity;
+            let maxEntrySpreadAllowed;
+            if (symbol.includes("BTC")) {
+                maxEntrySpreadAllowed = Math.min(engine?.getConfig().maxSpreadBtc || 1.50, Math.max(0.10, currentMidPrice * 0.0005));
+            }
+            else if (symbol.includes("ETH")) {
+                maxEntrySpreadAllowed = Math.min(engine?.getConfig().maxSpreadEth || 0.40, Math.max(0.01, currentMidPrice * 0.0005));
+            }
+            else {
+                maxEntrySpreadAllowed = Math.min(engine?.getConfig().maxSpreadAlt || 0.20, Math.max(0.0001, currentMidPrice * 0.0005));
+            }
+            const isSpreadBlowout = !isTickValid || currentSpread > maxEntrySpreadAllowed || currentSpreadBps > 5.0;
             let signalType = "NONE";
             let confidence = this.client.getAIPredictionConfidence(assetIdx);
             let isApproved = false;
             let rejectReason = undefined;
-            const engine = this.engines.get(symbol);
             const minConfidence = engine ? engine.getConfig().minAiConfidence : parseFloat(process.env.MIN_AI_CONFIDENCE || "0.700");
             const obiBuyThresh = engine ? engine.getConfig().obiBuyThreshold : parseFloat(process.env.OBI_BUY_THRESHOLD || "0.30");
             const obiSellThresh = engine ? engine.getConfig().obiSellThreshold : parseFloat(process.env.OBI_SELL_THRESHOLD || "-0.30");
-            if (vpin > 0.75) {
+            if (isSpreadBlowout) {
+                rejectReason = "REJECTED_SPREAD_BLOWOUT";
+            }
+            else if (vpin > 0.75) {
                 rejectReason = "REJECTED_TOXIC_FLOW";
             }
             else if (hurst < 0.45) {

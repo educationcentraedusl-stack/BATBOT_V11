@@ -1970,6 +1970,36 @@ class StrategyEngine {
                 isBuySignal = false;
                 isSellSignal = false;
             }
+            // ============================================================================
+            // SOTA LEVEL-1 SPREAD BLOWOUT ENTRY GUARD (NON-BYPASSABLE)
+            // ============================================================================
+            const entrySpread = askPrice > 0 && bidPrice > 0 ? askPrice - bidPrice : Infinity;
+            const entryMidPrice = askPrice > 0 && bidPrice > 0 ? (bidPrice + askPrice) * 0.5 : 0;
+            const entrySpreadBps = entryMidPrice > 0 ? (entrySpread / entryMidPrice) * 10000 : Infinity;
+            let maxEntrySpreadAllowed;
+            if (this.config.symbol.includes("BTC")) {
+                // BTC Hard Ceiling: Min($1.50, 5.0 bps of mid price)
+                maxEntrySpreadAllowed = Math.min(this.config.maxSpreadBtc || 1.50, Math.max(0.10, entryMidPrice * 0.0005));
+            }
+            else if (this.config.symbol.includes("ETH")) {
+                // ETH Hard Ceiling: Min($0.40, 5.0 bps of mid price)
+                maxEntrySpreadAllowed = Math.min(this.config.maxSpreadEth || 0.40, Math.max(0.01, entryMidPrice * 0.0005));
+            }
+            else {
+                // ALT Hard Ceiling: Min(config.maxSpreadAlt, 5.0 bps of mid price)
+                maxEntrySpreadAllowed = Math.min(this.config.maxSpreadAlt || 0.20, Math.max(0.0001, entryMidPrice * 0.0005));
+            }
+            const isSpreadBlowout = entrySpread > maxEntrySpreadAllowed || entrySpreadBps > 5.0;
+            if (isSpreadBlowout) {
+                if (isBuySignal || isSellSignal || seq % 1000n === 0n) {
+                    console.warn(`[StrategyEngine][${this.config.symbol}][REJECTED_SPREAD_BLOWOUT] Seq #${seq} | ` +
+                        `Spread $${entrySpread.toFixed(4)} (${entrySpreadBps.toFixed(1)} bps) > ` +
+                        `Ceiling $${maxEntrySpreadAllowed.toFixed(4)} (5.0 bps limit) | Entry Signal Blocked.`);
+                }
+                // Zero Tolerance: Strip entry signals unconditionally (AI Confidence CANNOT override)
+                isBuySignal = false;
+                isSellSignal = false;
+            }
             // BUY -> Core Long Entry (allowed if Core Long is FLAT, not PENDING_ENTRY, & temporal cooldown expired)
             const coreLongSlot = this.hedgeLedger.getCoreLong();
             const isCoreLongOccupied = coreLongSlot.isOccupied || coreLongSlot.lifecycleState === "PENDING_ENTRY";
@@ -1979,6 +2009,7 @@ class StrategyEngine {
                 console.log(`[StrategyEngine][${this.config.symbol}][COOLDOWN_BLOCK] Seq #${seq} | nowMs: ${nowMs}, longCooldownLock: ${longCooldownLock}, diff: ${longCooldownLock - nowMs}ms`);
             }
             if (isBuySignal &&
+                !isSpreadBlowout &&
                 (isHighConfidenceAi || spreadVelocity < this.config.maxSpreadVelocity) &&
                 askPrice > 0 &&
                 !isCoreLongOccupied &&
@@ -1993,6 +2024,7 @@ class StrategyEngine {
             }
             // SELL -> Short Slot Entry (Evaluated via Tier-1 Dynamic Slot Dispersion Engine)
             else if (isSellSignal &&
+                !isSpreadBlowout &&
                 (isHighConfidenceAi || spreadVelocity < this.config.maxSpreadVelocity) &&
                 bidPrice > 0) {
                 const slotEval = this.hedgeLedger.evaluateDispersedShortSlotAllocation(bidPrice, this.config.tickSize, realizedVol, hawkesIntensity, shortCooldownLock, nowMs);
