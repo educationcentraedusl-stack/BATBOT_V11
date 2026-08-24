@@ -23,16 +23,22 @@ async function runPhase2Proof() {
         throw new Error(`❌ PROOF FAILED: Static timer exit triggered! Position should stay open when AI is neutral.`);
     }
     console.log("  ✅ TEST 1 PASSED: Position remains open indefinitely with ZERO time-based forced closures!");
-    // TEST 2: AI Direction Conviction Hard-Reversal Exit
+    // TEST 2: AI Direction Conviction Hard-Reversal Exit (SOTA Schmitt Trigger Debounced Exit)
     console.log("\n------------------------------------------------------------------------------------------");
-    console.log("[TEST 2] Testing AI Conviction Hard-Reversal Exit (aiDirection = -0.20, confidence = 0.85)");
-    const reversalTriggers = ledger.evaluateHedgeDynamicTpSl(entryPrice, -0.20, 0.85, 0.30, 1.0, 0.0001, 0.0);
-    console.log(`  Evaluating Tick: Triggers Count = ${reversalTriggers.length}`);
+    console.log("[TEST 2] Testing SOTA AI Schmitt Trigger Debounced Reversal Exit (aiDirection = -0.75, confidence = 0.85, 15 ticks)");
+    // Advance beyond 3000ms quarantine window
+    const startTime = Date.now() + 3500;
+    let reversalTriggers = [];
+    for (let tick = 0; tick < 15; tick++) {
+        const currentTickTime = startTime + tick * 100;
+        reversalTriggers = ledger.evaluateHedgeDynamicTpSl(entryPrice - 10.0, -0.75, 0.85, 0.30, 1.0, 0.0001, 0.0, currentTickTime);
+    }
+    console.log(`  Evaluating Tick 15: Triggers Count = ${reversalTriggers.length}`);
     if (reversalTriggers.length === 0 || reversalTriggers[0].reason !== "AI_REVERSAL_EXIT_LONG") {
-        throw new Error(`❌ PROOF FAILED: AI Reversal Exit failed to trigger!`);
+        throw new Error(`❌ PROOF FAILED: AI Reversal Exit failed to trigger after 15 debounced ticks!`);
     }
     console.log(`  📌 Exit Reason: ${reversalTriggers[0].reason} | Qty: ${reversalTriggers[0].quantity} | Mark: $${reversalTriggers[0].markPrice}`);
-    console.log("  ✅ TEST 2 PASSED: AI Hard-Reversal Exit correctly triggered by AI Direction & Conviction!");
+    console.log("  ✅ TEST 2 PASSED: SOTA AI Schmitt Trigger Reversal Exit correctly triggered after 15 debounced ticks!");
     // TEST 3: VPIN Toxicity & Hawkes Burst Profit-Locking Breakeven Ratchet
     console.log("\n------------------------------------------------------------------------------------------");
     console.log("[TEST 3] Testing VPIN Toxicity (0.85) & Hawkes Burst (3.2) Breakeven SL Ratchet");

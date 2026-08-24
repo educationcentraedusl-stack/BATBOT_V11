@@ -29,18 +29,25 @@ async function runPhase2Proof() {
   }
   console.log("  ✅ TEST 1 PASSED: Position remains open indefinitely with ZERO time-based forced closures!");
 
-  // TEST 2: AI Direction Conviction Hard-Reversal Exit
+  // TEST 2: AI Direction Conviction Hard-Reversal Exit (SOTA Schmitt Trigger Debounced Exit)
   console.log("\n------------------------------------------------------------------------------------------");
-  console.log("[TEST 2] Testing AI Conviction Hard-Reversal Exit (aiDirection = -0.20, confidence = 0.85)");
+  console.log("[TEST 2] Testing SOTA AI Schmitt Trigger Debounced Reversal Exit (aiDirection = -0.75, confidence = 0.85, 15 ticks)");
 
-  const reversalTriggers = ledger.evaluateHedgeDynamicTpSl(entryPrice, -0.20, 0.85, 0.30, 1.0, 0.0001, 0.0);
-  console.log(`  Evaluating Tick: Triggers Count = ${reversalTriggers.length}`);
+  // Advance beyond 3000ms quarantine window
+  const startTime = Date.now() + 3500;
+  let reversalTriggers: ReturnType<typeof ledger.evaluateHedgeDynamicTpSl> = [];
+
+  for (let tick = 0; tick < 16; tick++) {
+    const currentTickTime = startTime + tick * 100;
+    reversalTriggers = ledger.evaluateHedgeDynamicTpSl(entryPrice - 10.0, -0.75, 0.85, 0.30, 1.0, 0.0001, 0.0, currentTickTime);
+  }
+  console.log(`  Evaluating Tick 16 (1500ms): Triggers Count = ${reversalTriggers.length}`);
 
   if (reversalTriggers.length === 0 || reversalTriggers[0].reason !== "AI_REVERSAL_EXIT_LONG") {
-    throw new Error(`❌ PROOF FAILED: AI Reversal Exit failed to trigger!`);
+    throw new Error(`❌ PROOF FAILED: AI Reversal Exit failed to trigger after 15 debounced ticks / 1500ms!`);
   }
   console.log(`  📌 Exit Reason: ${reversalTriggers[0].reason} | Qty: ${reversalTriggers[0].quantity} | Mark: $${reversalTriggers[0].markPrice}`);
-  console.log("  ✅ TEST 2 PASSED: AI Hard-Reversal Exit correctly triggered by AI Direction & Conviction!");
+  console.log("  ✅ TEST 2 PASSED: SOTA AI Schmitt Trigger Reversal Exit correctly triggered after 15 debounced ticks!");
 
   // TEST 3: VPIN Toxicity & Hawkes Burst Profit-Locking Breakeven Ratchet
   console.log("\n------------------------------------------------------------------------------------------");
@@ -50,7 +57,7 @@ async function runPhase2Proof() {
   const ledger2 = new HedgePositionLedger(symbol);
   ledger2.occupyCoreLong(qty, entryPrice, 0.40, 0.20);
 
-  const profitPrice = 60100.0; // In profit (+0.16%)
+  const profitPrice = 60350.0; // In profit (+0.58% / +5.8% ROE >= 5.0% emergency gate)
   console.log(`  Mark Price in Profit: $${profitPrice} (Above fee-adjusted breakeven)`);
 
   // Evaluate tick with high VPIN toxicity (vpin = 0.85, ofi = -0.45)

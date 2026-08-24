@@ -1307,6 +1307,8 @@ class HedgePositionLedger {
         this.coreLong.stepCollarTier = 0;
         this.coreLong.peakRoe = 0;
         this.coreLong.peakPrice = entryPrice;
+        this.coreLong.reversalTickCounter = 0;
+        this.coreLong.reversalStartTs = 0;
         const makerFee = this.sizingCalc.getMakerFeeRate();
         const takerFee = this.sizingCalc.getTakerFeeRate();
         const feeMultiplier = (makerFee + takerFee) * 2.5; // Fee-adjusted zero-loss buffer loaded from .env
@@ -1350,6 +1352,8 @@ class HedgePositionLedger {
         this.coreLong.breakEvenPrice = 0;
         this.coreLong.stepCollarTier = 0;
         this.coreLong.peakRoe = 0;
+        this.coreLong.reversalTickCounter = 0;
+        this.coreLong.reversalStartTs = 0;
         this.coreLong.tpPrices = [];
         for (let i = 0; i < this.maxShortSlots; i++) {
             const slot = this.shortSlots[i];
@@ -1368,6 +1372,8 @@ class HedgePositionLedger {
             slot.breakEvenPrice = 0;
             slot.stepCollarTier = 0;
             slot.peakRoe = 0;
+            slot.reversalTickCounter = 0;
+            slot.reversalStartTs = 0;
             slot.tpPrices = [];
         }
         this.shortAggregatedStopLossOrderId = 0;
@@ -1467,6 +1473,8 @@ class HedgePositionLedger {
         this.coreLong.activeStopLossOrderId = 0;
         this.coreLong.activeTpOrderIds = [];
         this.coreLong.lastSyncedSlPrice = 0;
+        this.coreLong.reversalTickCounter = 0;
+        this.coreLong.reversalStartTs = 0;
         this.coreLong.tpPrices = [];
     }
     occupyShortSlot(slotIndex, quantity, entryPrice, tpPercent, slPercent, isAuthoritativeSnapshot = false) {
@@ -1492,6 +1500,8 @@ class HedgePositionLedger {
             const rawSl = entryPrice * (1 + slPercent / 100);
             this.applyMonotonicStopLoss(slot, rawSl);
             slot.lastSyncedSlPrice = slot.stopLossPrice;
+            slot.reversalTickCounter = 0;
+            slot.reversalStartTs = 0;
             const tp1Pct = Math.min(2.0, tpPercent * 1.0);
             const tp2Pct = Math.min(3.0, tpPercent * 2.0);
             const tp3Pct = Math.min(5.0, tpPercent * 4.0);
@@ -1519,6 +1529,8 @@ class HedgePositionLedger {
             slot.lifecycleState = "OCCUPIED";
             slot.pendingClientOrderId = undefined;
             slot.pendingOrderTimestamp = undefined;
+            slot.reversalTickCounter = 0;
+            slot.reversalStartTs = 0;
             const makerFee = this.sizingCalc.getMakerFeeRate();
             const takerFee = this.sizingCalc.getTakerFeeRate();
             const feeMultiplier = (makerFee + takerFee) * 2.5;
@@ -1557,6 +1569,8 @@ class HedgePositionLedger {
         slot.stepCollarTier = 0;
         slot.peakRoe = 0;
         slot.troughPrice = entryPrice;
+        slot.reversalTickCounter = 0;
+        slot.reversalStartTs = 0;
         const makerFee = this.sizingCalc.getMakerFeeRate();
         const takerFee = this.sizingCalc.getTakerFeeRate();
         const feeMultiplier = (makerFee + takerFee) * 2.5; // Fee-adjusted zero-loss buffer loaded from .env
@@ -1611,6 +1625,8 @@ class HedgePositionLedger {
         slot.activeStopLossOrderId = 0;
         slot.activeTpOrderIds = [];
         slot.lastSyncedSlPrice = 0;
+        slot.reversalTickCounter = 0;
+        slot.reversalStartTs = 0;
         slot.tpPrices = [];
         let hasRemainingOccupied = false;
         for (let i = 0; i < this.maxShortSlots; i++) {
@@ -1758,11 +1774,38 @@ class HedgePositionLedger {
                 return;
             }
         }
-        // 0B. AI Conviction Hard-Reversal Exit Signal (100% Dynamic - Zero Timers)
-        const isAiHardReversal = isLong
-            ? (aiDirection <= -0.15 && aiConfidence >= 0.70)
-            : (aiDirection >= 0.15 && aiConfidence >= 0.70);
-        if (isAiHardReversal) {
+        // =========================================================================
+        // 0B. SOTA AUGUST 2026 SCHMITT TRIGGER & DEBOUNCED AI REVERSAL WITH IMMUNITY
+        // =========================================================================
+        // Rule 1: Minimum Holding Quarantine Window (3000ms)
+        // Suppresses premature noise exits during initial trade alpha maturation horizon.
+        const isQuarantineActive = durationMs < 3000.0;
+        // Rule 2: In-Profit Immunity (rawRoePct >= +1.5% or breakEvenLocked === true)
+        // Strictly suppresses AI reversal market liquidations to prevent Maker TP cannibalization.
+        // Sovereign authority is delegated entirely to the Maker TP Ladder and Monotonic Step-Collar SL.
+        const isInProfitImmunityActive = rawRoePct >= 1.5 || slot.breakEvenLocked === true;
+        // Rule 3: Stateful Schmitt Trigger Conviction Threshold (|aiDirection| >= 0.65, aiConfidence >= 0.80)
+        const isOpposingConviction = isLong
+            ? (aiDirection <= -0.65 && aiConfidence >= 0.80)
+            : (aiDirection >= 0.65 && aiConfidence >= 0.80);
+        const isResetCondition = isLong
+            ? (aiDirection > -0.50 || aiConfidence < 0.70)
+            : (aiDirection < 0.50 || aiConfidence < 0.70);
+        if (isResetCondition) {
+            slot.reversalTickCounter = 0;
+            slot.reversalStartTs = 0;
+        }
+        else if (isOpposingConviction) {
+            slot.reversalTickCounter = (slot.reversalTickCounter || 0) + 1;
+            if (!slot.reversalStartTs || slot.reversalStartTs <= 0) {
+                slot.reversalStartTs = actualNowMs;
+            }
+        }
+        const reversalDurationMs = slot.reversalStartTs && slot.reversalStartTs > 0
+            ? Math.max(0, actualNowMs - slot.reversalStartTs)
+            : 0;
+        const isDebouncedReversal = (slot.reversalTickCounter || 0) >= 15 && reversalDurationMs >= 1500.0;
+        if (!isQuarantineActive && !isInProfitImmunityActive && isDebouncedReversal) {
             triggers.push({
                 slotId: slot.slotId,
                 side: slot.side,
