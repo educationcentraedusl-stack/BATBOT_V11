@@ -371,7 +371,7 @@ class StrategyEngine {
                 console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
             });
             // Position-Level Stop Loss: Submits native STOP_MARKET with closePosition=true covering 100% of aggregated position
-            this.syncExchangeStopLossOrder("CORE_LONG", aggLong.totalQuantity, "LONG", aggLong.stopLossPrice).catch((err) => {
+            this.syncExchangeStopLossOrder("LONG", aggLong.totalQuantity, aggLong.stopLossPrice).catch((err) => {
                 console.error(`[EXCHANGE_SL_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
             });
         }
@@ -387,7 +387,7 @@ class StrategyEngine {
                 console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
             });
             // Position-Level Stop Loss: Submits native STOP_MARKET with closePosition=true covering 100% of aggregated position
-            this.syncExchangeStopLossOrder(targetSlotId, aggShort.totalQuantity, "SHORT", aggShort.stopLossPrice).catch((err) => {
+            this.syncExchangeStopLossOrder("SHORT", aggShort.totalQuantity, aggShort.stopLossPrice).catch((err) => {
                 console.error(`[EXCHANGE_SL_ENGINE][UNHANDLED_DISPATCH_ERR] ${err?.message || String(err)}`);
             });
         }
@@ -666,7 +666,7 @@ class StrategyEngine {
                         this.reconcileFlatPositionWithUserTrades("SHORT", 0);
                     }
                     const aggLong = this.hedgeLedger.getAggregatedSideSummary("LONG");
-                    this.syncExchangeStopLossOrder("CORE_LONG", aggLong.totalQuantity, "LONG", aggLong.stopLossPrice).catch((err) => {
+                    this.syncExchangeStopLossOrder("LONG", aggLong.totalQuantity, aggLong.stopLossPrice).catch((err) => {
                         console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Long SL desync sync failed: ${err.message}`);
                     });
                 }
@@ -678,8 +678,7 @@ class StrategyEngine {
                         this.reconcileFlatPositionWithUserTrades("LONG", 0);
                     }
                     const aggShort = this.hedgeLedger.getAggregatedSideSummary("SHORT");
-                    const targetSlotId = `SHORT_SLOT_${slotIdx}`;
-                    this.syncExchangeStopLossOrder(targetSlotId, aggShort.totalQuantity, "SHORT", aggShort.stopLossPrice).catch((err) => {
+                    this.syncExchangeStopLossOrder("SHORT", aggShort.totalQuantity, aggShort.stopLossPrice).catch((err) => {
                         console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Short SL desync sync failed: ${err.message}`);
                     });
                 }
@@ -742,18 +741,19 @@ class StrategyEngine {
                     console.log(`[MAKER_TP_ENGINE][WS_FILL_NOTIFIED] [${this.config.symbol}:${targetSlotId}] OrderId #${order.orderId} (ClId: ${order.clientOrderId || "N/A"}) filled as ${order.isMaker ? "MAKER" : "TAKER"}. Qty: ${order.lastFilledQuantity} @ $${order.lastFilledPrice}`);
                     const res = this.hedgeLedger.processTpLimitFill(targetSlotId, order.orderId, order.lastFilledQuantity, order.lastFilledPrice, order.isMaker);
                     console.log(`[MAKER_TP_ENGINE][RECONCILED] [${this.config.symbol}:${targetSlotId}] Slot updated. Closed: ${res.isPositionClosed}, RemQty: ${res.remainingQuantity}, NewSL: $${res.newStopLossPrice}`);
-                    if (res.isPositionClosed) {
-                        const slId = this.hedgeLedger.getActiveStopLossOrderId(targetSlotId);
+                    const sideSummary = this.hedgeLedger.getAggregatedSideSummary(posSide);
+                    if (!sideSummary.isOccupied || sideSummary.totalQuantity <= 0) {
+                        const slId = this.hedgeLedger.getActiveStopLossOrderId(posSide);
                         if (slId) {
                             this.executionClient.cancelOrder(this.config.symbol, slId).catch((err) => {
-                                console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] [${this.config.symbol}:${targetSlotId}] Unable to cancel resting SL on position close #${slId}: ${err.message}`);
+                                console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] [${this.config.symbol}:${posSide}] Unable to cancel resting SL on position close #${slId}: ${err instanceof Error ? err.message : String(err)}`);
                             });
-                            this.hedgeLedger.registerActiveStopLossOrderId(targetSlotId, 0);
+                            this.hedgeLedger.registerActiveStopLossOrderId(posSide, 0);
                         }
                     }
-                    else if (res.remainingQuantity > 0 && res.newStopLossPrice > 0) {
-                        this.syncExchangeStopLossOrder(targetSlotId, res.remainingQuantity, posSide, res.newStopLossPrice).catch((err) => {
-                            console.error(`[EXCHANGE_SL_ENGINE][RATCHET_ERR] [${this.config.symbol}:${targetSlotId}] ${err?.message || String(err)}`);
+                    else if (sideSummary.totalQuantity > 0 && res.newStopLossPrice > 0) {
+                        this.syncExchangeStopLossOrder(posSide, sideSummary.totalQuantity, res.newStopLossPrice).catch((err) => {
+                            console.error(`[EXCHANGE_SL_ENGINE][RATCHET_ERR] [${this.config.symbol}:${posSide}] ${err instanceof Error ? err.message : String(err)}`);
                         });
                     }
                     let realizedPnl = 0;
@@ -858,11 +858,11 @@ class StrategyEngine {
                     const dynamicTpPercent = dynamicSlPercent * 2.50;
                     if (targetPosSide === "LONG") {
                         this.hedgeLedger.occupyCoreLong(execQty, execPx, dynamicTpPercent, dynamicSlPercent);
-                        const slot = this.hedgeLedger.getCoreLong();
+                        const aggLong = this.hedgeLedger.getAggregatedSideSummary("LONG");
                         this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch((err) => {
                             console.error(`[BinanceExecution][UNTRACKED_TP_DISPATCH_ERROR] [${this.config.symbol}:CORE_LONG] ${err?.message || String(err)}`);
                         });
-                        this.syncExchangeStopLossOrder("CORE_LONG", execQty, "LONG", slot.stopLossPrice).catch((err) => {
+                        this.syncExchangeStopLossOrder("LONG", aggLong.totalQuantity, aggLong.stopLossPrice).catch((err) => {
                             console.error(`[BinanceExecution][UNTRACKED_SL_DISPATCH_ERROR] [${this.config.symbol}:CORE_LONG] ${err instanceof Error ? err.message : String(err)}`);
                         });
                     }
@@ -871,15 +871,13 @@ class StrategyEngine {
                         const targetIdx = slotIdx >= 0 ? slotIdx : 0;
                         const slotId = `SHORT_SLOT_${targetIdx}`;
                         this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, dynamicTpPercent, dynamicSlPercent);
-                        const slot = this.hedgeLedger.getShortSlots()[targetIdx];
+                        const aggShort = this.hedgeLedger.getAggregatedSideSummary("SHORT");
                         this.dispatchBatchPostOnlyTpOrders(slotId, execPx, execQty, "SHORT").catch((err) => {
                             console.error(`[BinanceExecution][UNTRACKED_TP_DISPATCH_ERROR] [${this.config.symbol}:${slotId}] ${err?.message || String(err)}`);
                         });
-                        if (slot) {
-                            this.syncExchangeStopLossOrder(slotId, execQty, "SHORT", slot.stopLossPrice).catch((err) => {
-                                console.error(`[BinanceExecution][UNTRACKED_SL_DISPATCH_ERROR] [${this.config.symbol}:${slotId}] ${err instanceof Error ? err.message : String(err)}`);
-                            });
-                        }
+                        this.syncExchangeStopLossOrder("SHORT", aggShort.totalQuantity, aggShort.stopLossPrice).catch((err) => {
+                            console.error(`[BinanceExecution][UNTRACKED_SL_DISPATCH_ERROR] [${this.config.symbol}:SHORT] ${err instanceof Error ? err.message : String(err)}`);
+                        });
                     }
                     this.onExecutionCompleted({
                         symbol: this.config.symbol,
@@ -1083,7 +1081,7 @@ class StrategyEngine {
             }
         }
     }
-    async dispatchExchangeStopLossOrder(slotId, entryPrice, quantity, side, stopLossPrice, signal) {
+    async dispatchExchangeStopLossOrder(side, entryPrice, quantity, stopLossPrice, signal) {
         if (stopLossPrice <= 0)
             return undefined;
         // Strict Zero-Trust Direction Mapping:
@@ -1099,52 +1097,53 @@ class StrategyEngine {
             throw new Error(`[EXCHANGE_SL_ENGINE][CRITICAL_DIRECTION_MISMATCH] LONG position mapped to invalid exit side: ${exitSide}`);
         }
         const formattedSlPx = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.config.symbol, stopLossPrice);
-        const clientOrderId = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(this.config.symbol, slotId, "SL");
+        const clientOrderId = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(this.config.symbol, side === "LONG" ? "CORE_LONG" : "SHORT_AGG", "SL");
         try {
-            console.log(`[EXCHANGE_SL_ENGINE][DISPATCHING] [${this.config.symbol}:${slotId}] Submitting position-level STOP_MARKET order on Binance: ${exitSide} (positionSide: ${positionSide}, closePosition: true) @ stopPrice $${formattedSlPx} (ClId: ${clientOrderId})...`);
-            const res = await this.executionClient.placePositionStopLoss(this.config.symbol, exitSide, positionSide, stopLossPrice, clientOrderId, signal);
+            console.log(`[EXCHANGE_SL_ENGINE][DISPATCHING] [${this.config.symbol}:${side}] Submitting sovereign position-level STOP_MARKET order on Binance: ${exitSide} (positionSide: ${positionSide}, closePosition: true) @ stopPrice $${formattedSlPx} (ClId: ${clientOrderId})...`);
+            const res = await this.executionClient.placePositionStopLoss(this.config.symbol, exitSide, positionSide, stopLossPrice, clientOrderId, signal, quantity);
             if (res && res.orderId) {
-                console.log(`[EXCHANGE_SL_ENGINE][SUCCESS] [${this.config.symbol}:${slotId}] Dispatched position-level Exchange STOP_MARKET OrderId #${res.orderId} (ClId: ${res.clientOrderId || clientOrderId})`);
+                console.log(`[EXCHANGE_SL_ENGINE][SUCCESS] [${this.config.symbol}:${side}] Dispatched sovereign position-level Exchange STOP_MARKET OrderId #${res.orderId} (ClId: ${res.clientOrderId || clientOrderId})`);
                 return res.orderId;
             }
         }
         catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err);
-            console.error(`[EXCHANGE_SL_ENGINE][ERROR] [${this.config.symbol}:${slotId}] Failed to dispatch exchange STOP_MARKET order: ${errorMessage}`);
+            console.error(`[EXCHANGE_SL_ENGINE][ERROR] [${this.config.symbol}:${side}] Failed to dispatch exchange STOP_MARKET order: ${errorMessage}`);
         }
         return undefined;
     }
-    async syncExchangeStopLossOrder(slotId, quantity, side, newStopLossPrice) {
-        const existingLock = this.slSyncLocks.get(slotId);
+    async syncExchangeStopLossOrder(side, quantity, newStopLossPrice) {
+        const lockKey = side;
+        const existingLock = this.slSyncLocks.get(lockKey);
         const now = timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs();
         if (existingLock) {
             const lockAge = now - existingLock.acquiredAt;
             if (lockAge > StrategyEngine.MAX_SL_LOCK_HOLD_MS) {
                 // Auto-Eviction: Evict stale lock and abort previous zombie request
-                console.warn(`[EXCHANGE_SL_ENGINE][LOCK_EVICTED] [${this.config.symbol}:${slotId}] Stale SL sync lock detected (Age: ${lockAge}ms > ${StrategyEngine.MAX_SL_LOCK_HOLD_MS}ms, Epoch: #${existingLock.epoch}). Auto-evicting zombie lock and aborting stalled operation...`);
+                console.warn(`[EXCHANGE_SL_ENGINE][LOCK_EVICTED] [${this.config.symbol}:${side}] Stale SL sync lock detected (Age: ${lockAge}ms > ${StrategyEngine.MAX_SL_LOCK_HOLD_MS}ms, Epoch: #${existingLock.epoch}). Auto-evicting zombie lock and aborting stalled operation...`);
                 try {
                     existingLock.abortController.abort();
                 }
                 catch (_) {
                     // Ignore AbortController errors
                 }
-                this.slSyncLocks.delete(slotId);
+                this.slSyncLocks.delete(lockKey);
             }
             else {
                 // Active In-Flight Worker: Coalesce latest target in LVCQ
-                this.pendingSlSyncTargets.set(slotId, {
+                this.pendingSlSyncTargets.set(lockKey, {
                     quantity,
                     side,
                     price: newStopLossPrice,
                     timestamp: now,
                 });
-                console.log(`[EXCHANGE_SL_ENGINE][LOCKED] [${this.config.symbol}:${slotId}] Sync is already in-flight (Epoch: #${existingLock.epoch}, Age: ${lockAge}ms). Coalesced latest target SL $${newStopLossPrice}.`);
+                console.log(`[EXCHANGE_SL_ENGINE][LOCKED] [${this.config.symbol}:${side}] Sync is already in-flight (Epoch: #${existingLock.epoch}, Age: ${lockAge}ms). Coalesced latest target SL $${newStopLossPrice}.`);
                 return;
             }
         }
         const currentEpoch = ++this.globalSlEpochSequence;
         const abortController = new AbortController();
-        this.slSyncLocks.set(slotId, {
+        this.slSyncLocks.set(lockKey, {
             epoch: currentEpoch,
             acquiredAt: timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs(),
             abortController,
@@ -1152,66 +1151,66 @@ class StrategyEngine {
         try {
             let currentTargetPrice = newStopLossPrice;
             let currentQty = quantity;
-            let currentSide = side;
             let drainIterations = 0;
             const maxDrainIterations = 3;
             while (drainIterations < maxDrainIterations) {
                 drainIterations++;
-                this.pendingSlSyncTargets.delete(slotId);
+                this.pendingSlSyncTargets.delete(lockKey);
                 // Epoch Fencing Barrier: Verify this worker has not been superseded or evicted
-                if (this.slSyncLocks.get(slotId)?.epoch !== currentEpoch) {
-                    console.warn(`[EXCHANGE_SL_ENGINE][EPOCH_FENCED] [${this.config.symbol}:${slotId}] Worker Epoch #${currentEpoch} was evicted (Active Epoch: #${this.slSyncLocks.get(slotId)?.epoch}). Terminating stale worker.`);
+                if (this.slSyncLocks.get(lockKey)?.epoch !== currentEpoch) {
+                    console.warn(`[EXCHANGE_SL_ENGINE][EPOCH_FENCED] [${this.config.symbol}:${side}] Worker Epoch #${currentEpoch} was evicted (Active Epoch: #${this.slSyncLocks.get(lockKey)?.epoch}). Terminating stale worker.`);
                     return;
                 }
-                const slot = slotId === "CORE_LONG" ? this.hedgeLedger.getCoreLong() : this.hedgeLedger.getShortSlots().find((s) => s.slotId === slotId);
-                if (!slot || !slot.isOccupied || slot.quantity <= 0) {
-                    console.log(`[EXCHANGE_SL_ENGINE][SKIP] [${this.config.symbol}:${slotId}] Slot is not occupied. Skipping SL placement.`);
+                const aggSummary = this.hedgeLedger.getAggregatedSideSummary(side);
+                if (!aggSummary.isOccupied || aggSummary.totalQuantity <= 0) {
+                    console.log(`[EXCHANGE_SL_ENGINE][SKIP] [${this.config.symbol}:${side}] Position is not occupied. Skipping SL placement.`);
                     return;
                 }
-                const existingSlId = this.hedgeLedger.getActiveStopLossOrderId(slotId);
+                // Sovereign Order Registry Check
+                const existingSlId = this.hedgeLedger.getActiveStopLossOrderId(side);
                 if (existingSlId && existingSlId > 0) {
                     try {
-                        console.log(`[EXCHANGE_SL_ENGINE][RATCHET_CANCEL] [${this.config.symbol}:${slotId}] Cancelling previous resting Exchange STOP_MARKET OrderId #${existingSlId}...`);
+                        console.log(`[EXCHANGE_SL_ENGINE][RATCHET_CANCEL] [${this.config.symbol}:${side}] Cancelling previous resting Exchange STOP_MARKET OrderId #${existingSlId}...`);
                         await this.executionClient.cancelOrder(this.config.symbol, existingSlId, abortController.signal);
                     }
                     catch (err) {
                         const errorMessage = err instanceof Error ? err.message : String(err);
-                        console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] [${this.config.symbol}:${slotId}] Unable to cancel previous SL order #${existingSlId}: ${errorMessage}`);
+                        console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] [${this.config.symbol}:${side}] Unable to cancel previous SL order #${existingSlId}: ${errorMessage}`);
                     }
                 }
                 // Epoch Fencing Barrier: Re-check after cancellation await
-                if (this.slSyncLocks.get(slotId)?.epoch !== currentEpoch) {
-                    console.warn(`[EXCHANGE_SL_ENGINE][EPOCH_FENCED] [${this.config.symbol}:${slotId}] Worker Epoch #${currentEpoch} evicted after cancelOrder. Aborting.`);
+                if (this.slSyncLocks.get(lockKey)?.epoch !== currentEpoch) {
+                    console.warn(`[EXCHANGE_SL_ENGINE][EPOCH_FENCED] [${this.config.symbol}:${side}] Worker Epoch #${currentEpoch} evicted after cancelOrder. Aborting.`);
                     return;
                 }
-                // Re-verify slot is still occupied after awaiting order cancellation
-                if (!slot.isOccupied || slot.quantity <= 0) {
-                    console.log(`[EXCHANGE_SL_ENGINE][SKIP] [${this.config.symbol}:${slotId}] Slot closed during cancellation. Skipping new SL order.`);
+                // Re-verify position is still occupied after awaiting order cancellation
+                const recheckSummary = this.hedgeLedger.getAggregatedSideSummary(side);
+                if (!recheckSummary.isOccupied || recheckSummary.totalQuantity <= 0) {
+                    console.log(`[EXCHANGE_SL_ENGINE][SKIP] [${this.config.symbol}:${side}] Position closed during cancellation. Skipping new SL order.`);
                     return;
                 }
-                const placedOrderId = await this.dispatchExchangeStopLossOrder(slotId, slot.entryPrice, currentQty, currentSide, currentTargetPrice, abortController.signal);
+                const placedOrderId = await this.dispatchExchangeStopLossOrder(side, recheckSummary.vwapEntryPrice, recheckSummary.totalQuantity, currentTargetPrice, abortController.signal);
                 // Epoch Fencing Barrier: Re-check after placement await
-                if (this.slSyncLocks.get(slotId)?.epoch !== currentEpoch) {
-                    console.warn(`[EXCHANGE_SL_ENGINE][EPOCH_FENCED] [${this.config.symbol}:${slotId}] Worker Epoch #${currentEpoch} evicted after order placement. Aborting.`);
+                if (this.slSyncLocks.get(lockKey)?.epoch !== currentEpoch) {
+                    console.warn(`[EXCHANGE_SL_ENGINE][EPOCH_FENCED] [${this.config.symbol}:${side}] Worker Epoch #${currentEpoch} evicted after order placement. Aborting.`);
                     return;
                 }
                 if (placedOrderId) {
-                    this.hedgeLedger.registerActiveStopLossOrderId(slotId, placedOrderId);
-                    this.hedgeLedger.updateLastSyncedSlPrice(slotId, currentTargetPrice);
+                    this.hedgeLedger.registerActiveStopLossOrderId(side, placedOrderId);
+                    this.hedgeLedger.updateLastSyncedSlPrice(side, currentTargetPrice);
                 }
                 else {
-                    console.error(`[EXCHANGE_SL_ENGINE][PLACEMENT_FAILED] [${this.config.symbol}:${slotId}] Failed to place replacement SL @ $${currentTargetPrice}.`);
+                    console.error(`[EXCHANGE_SL_ENGINE][PLACEMENT_FAILED] [${this.config.symbol}:${side}] Failed to place replacement SL @ $${currentTargetPrice}.`);
                 }
                 // If a subsequent ratchet target was queued while the network request was in-flight, process it only if delta is significant
-                if (this.pendingSlSyncTargets.has(slotId)) {
-                    const queued = this.pendingSlSyncTargets.get(slotId);
+                if (this.pendingSlSyncTargets.has(lockKey)) {
+                    const queued = this.pendingSlSyncTargets.get(lockKey);
                     const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(this.config.symbol);
                     const minDelta = tickSize * 2;
                     const hasSignificantChange = Math.abs(queued.price - currentTargetPrice) >= minDelta || Math.abs(queued.quantity - currentQty) > 1e-6;
                     if (hasSignificantChange) {
                         currentTargetPrice = queued.price;
                         currentQty = queued.quantity;
-                        currentSide = queued.side;
                         // Macro-task yield: Allow event loop to process I/O and timers before next drain cycle
                         await new Promise((resolve) => setImmediate(resolve));
                         continue;
@@ -1222,9 +1221,9 @@ class StrategyEngine {
         }
         finally {
             // Guaranteed Lock Release with Epoch Invariant: Only release if lock belongs to THIS epoch
-            const activeLock = this.slSyncLocks.get(slotId);
+            const activeLock = this.slSyncLocks.get(lockKey);
             if (activeLock && activeLock.epoch === currentEpoch) {
-                this.slSyncLocks.delete(slotId);
+                this.slSyncLocks.delete(lockKey);
             }
         }
     }
@@ -1239,13 +1238,13 @@ class StrategyEngine {
         this.lastRiskAuditTimestamp = now;
         const longSummary = this.hedgeLedger.getAggregatedSideSummary("LONG");
         if (longSummary.isOccupied && longSummary.totalQuantity > 0) {
-            const existingLock = this.slSyncLocks.get("CORE_LONG");
+            const existingLock = this.slSyncLocks.get("LONG");
             const isLockInFlight = existingLock && now - existingLock.acquiredAt < StrategyEngine.MAX_SL_LOCK_HOLD_MS;
             if (!isLockInFlight) {
                 const audit = this.riskGuard.auditAggregatedPositionRisk(this.config.symbol, "LONG", longSummary.totalQuantity, longSummary.activeStopLossOrderId);
                 if (!audit.isProtected) {
                     console.warn(`[RiskGuard][CLOSED_LOOP_AUDIT_FAIL] [${this.config.symbol}:LONG] ${audit.reason} Auto-dispatching emergency position-level SL...`);
-                    this.syncExchangeStopLossOrder("CORE_LONG", longSummary.totalQuantity, "LONG", longSummary.stopLossPrice).catch((err) => {
+                    this.syncExchangeStopLossOrder("LONG", longSummary.totalQuantity, longSummary.stopLossPrice).catch((err) => {
                         console.error(`[RiskGuard][CLOSED_LOOP_EMERGENCY_SL_FAIL] Long SL emergency sync failed: ${err instanceof Error ? err.message : String(err)}`);
                     });
                 }
@@ -1253,20 +1252,13 @@ class StrategyEngine {
         }
         const shortSummary = this.hedgeLedger.getAggregatedSideSummary("SHORT");
         if (shortSummary.isOccupied && shortSummary.totalQuantity > 0) {
-            const targetSlot = shortSummary.slotIds[0] || "SHORT_SLOT_0";
-            let isShortLockInFlight = false;
-            for (const sId of shortSummary.slotIds) {
-                const lock = this.slSyncLocks.get(sId);
-                if (lock && now - lock.acquiredAt < StrategyEngine.MAX_SL_LOCK_HOLD_MS) {
-                    isShortLockInFlight = true;
-                    break;
-                }
-            }
+            const existingLock = this.slSyncLocks.get("SHORT");
+            const isShortLockInFlight = existingLock && now - existingLock.acquiredAt < StrategyEngine.MAX_SL_LOCK_HOLD_MS;
             if (!isShortLockInFlight) {
                 const audit = this.riskGuard.auditAggregatedPositionRisk(this.config.symbol, "SHORT", shortSummary.totalQuantity, shortSummary.activeStopLossOrderId);
                 if (!audit.isProtected) {
                     console.warn(`[RiskGuard][CLOSED_LOOP_AUDIT_FAIL] [${this.config.symbol}:SHORT] ${audit.reason} Auto-dispatching emergency position-level SL...`);
-                    this.syncExchangeStopLossOrder(targetSlot, shortSummary.totalQuantity, "SHORT", shortSummary.stopLossPrice).catch((err) => {
+                    this.syncExchangeStopLossOrder("SHORT", shortSummary.totalQuantity, shortSummary.stopLossPrice).catch((err) => {
                         console.error(`[RiskGuard][CLOSED_LOOP_EMERGENCY_SL_FAIL] Short SL emergency sync failed: ${err instanceof Error ? err.message : String(err)}`);
                     });
                 }
@@ -1384,10 +1376,10 @@ class StrategyEngine {
                     await this.dispatchBatchPostOnlyTpOrders(slotId, entryPx, qty, posSide);
                     // 2. Explicitly dispatch LIVE STOP_MARKET Stop-Loss order to Binance exchange
                     try {
-                        const slOrder = await this.executionClient.placePositionStopLoss(this.config.symbol, exitSide, posSide, slPrice);
+                        const slOrder = await this.executionClient.placePositionStopLoss(this.config.symbol, exitSide, posSide, slPrice, undefined, undefined, qty);
                         if (slOrder && slOrder.orderId) {
-                            this.hedgeLedger.registerActiveStopLossOrderId(slotId, slOrder.orderId);
-                            this.hedgeLedger.updateLastSyncedSlPrice(slotId, slPrice);
+                            this.hedgeLedger.registerActiveStopLossOrderId(posSide, slOrder.orderId);
+                            this.hedgeLedger.updateLastSyncedSlPrice(posSide, slPrice);
                             console.log(`[ORPHAN_GUARD][DISPATCHED] Live STOP_MARKET order #${slOrder.orderId} confirmed on Binance for ${this.config.symbol} ${posSide}: stopPrice=$${formattedSlPrice}`);
                         }
                     }
@@ -1647,39 +1639,28 @@ class StrategyEngine {
                     if (activeTriggers.length === 0) {
                         const aggLong = this.hedgeLedger.getAggregatedSideSummary("LONG");
                         if (aggLong.isOccupied && aggLong.totalQuantity > 0 && aggLong.stopLossPrice > 0) {
-                            const coreLong = this.hedgeLedger.getCoreLong();
-                            const lastSynced = coreLong.lastSyncedSlPrice || 0;
+                            const lastSynced = this.hedgeLedger.getLastSyncedSlPrice("LONG");
                             const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(this.config.symbol);
                             const minSlDelta = tickSize * 2;
                             const isSignificantImprovement = lastSynced === 0 || aggLong.stopLossPrice - lastSynced >= minSlDelta;
                             const isTimeAllowed = nowMs - this.lastLongSlRatchetTimestamp >= StrategyEngine.SL_RATCHET_MIN_INTERVAL_MS;
                             if (isSignificantImprovement && (lastSynced === 0 || isTimeAllowed)) {
                                 this.lastLongSlRatchetTimestamp = nowMs;
-                                this.syncExchangeStopLossOrder("CORE_LONG", aggLong.totalQuantity, "LONG", aggLong.stopLossPrice).catch((err) => {
+                                this.syncExchangeStopLossOrder("LONG", aggLong.totalQuantity, aggLong.stopLossPrice).catch((err) => {
                                     console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Core Long SL ratchet sync failed: ${err instanceof Error ? err.message : String(err)}`);
                                 });
                             }
                         }
                         const aggShort = this.hedgeLedger.getAggregatedSideSummary("SHORT");
                         if (aggShort.isOccupied && aggShort.totalQuantity > 0 && aggShort.stopLossPrice > 0) {
-                            const primarySlotId = aggShort.slotIds[0] || "SHORT_SLOT_0";
+                            const lastSynced = this.hedgeLedger.getLastSyncedSlPrice("SHORT");
                             const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(this.config.symbol);
-                            let needsSync = false;
-                            for (const s of this.hedgeLedger.getShortSlots()) {
-                                if (s.isOccupied && s.quantity > 0) {
-                                    const lastSynced = s.lastSyncedSlPrice || 0;
-                                    const minSlDelta = tickSize * 2;
-                                    const isSignificantImprovement = lastSynced === 0 || lastSynced - aggShort.stopLossPrice >= minSlDelta;
-                                    const isTimeAllowed = nowMs - this.lastShortSlRatchetTimestamp >= StrategyEngine.SL_RATCHET_MIN_INTERVAL_MS;
-                                    if (isSignificantImprovement && (lastSynced === 0 || isTimeAllowed)) {
-                                        needsSync = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if (needsSync) {
+                            const minSlDelta = tickSize * 2;
+                            const isSignificantImprovement = lastSynced === 0 || lastSynced - aggShort.stopLossPrice >= minSlDelta;
+                            const isTimeAllowed = nowMs - this.lastShortSlRatchetTimestamp >= StrategyEngine.SL_RATCHET_MIN_INTERVAL_MS;
+                            if (isSignificantImprovement && (lastSynced === 0 || isTimeAllowed)) {
                                 this.lastShortSlRatchetTimestamp = nowMs;
-                                this.syncExchangeStopLossOrder(primarySlotId, aggShort.totalQuantity, "SHORT", aggShort.stopLossPrice).catch((err) => {
+                                this.syncExchangeStopLossOrder("SHORT", aggShort.totalQuantity, aggShort.stopLossPrice).catch((err) => {
                                     console.error(`[EXCHANGE_SL_ENGINE][SYNC_ERR] Aggregated Short SL ratchet sync failed: ${err instanceof Error ? err.message : String(err)}`);
                                 });
                             }
@@ -2221,7 +2202,7 @@ class StrategyEngine {
                                     console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err instanceof Error ? err.message : String(err)}`);
                                 });
                                 // Position-Level Stop Loss: Submits native STOP_MARKET with closePosition=true covering 100% of aggregated position
-                                this.syncExchangeStopLossOrder("CORE_LONG", aggLong.totalQuantity, "LONG", aggLong.stopLossPrice).catch((err) => {
+                                this.syncExchangeStopLossOrder("LONG", aggLong.totalQuantity, aggLong.stopLossPrice).catch((err) => {
                                     console.error(`[EXCHANGE_SL_ENGINE][UNHANDLED_DISPATCH_ERR] ${err instanceof Error ? err.message : String(err)}`);
                                 });
                             }
@@ -2236,7 +2217,7 @@ class StrategyEngine {
                                     console.error(`[MAKER_TP_ENGINE][UNHANDLED_DISPATCH_ERR] ${err instanceof Error ? err.message : String(err)}`);
                                 });
                                 // Position-Level Stop Loss: Submits native STOP_MARKET with closePosition=true covering 100% of aggregated position
-                                this.syncExchangeStopLossOrder(slotId, aggShort.totalQuantity, "SHORT", aggShort.stopLossPrice).catch((err) => {
+                                this.syncExchangeStopLossOrder("SHORT", aggShort.totalQuantity, aggShort.stopLossPrice).catch((err) => {
                                     console.error(`[EXCHANGE_SL_ENGINE][UNHANDLED_DISPATCH_ERR] ${err instanceof Error ? err.message : String(err)}`);
                                 });
                             }

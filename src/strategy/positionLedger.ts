@@ -681,6 +681,9 @@ export class HedgePositionLedger {
     slotIds: [],
   };
 
+  private shortAggregatedStopLossOrderId: number = 0;
+  private shortAggregatedLastSyncedSlPrice: number = 0;
+
   constructor(symbol: string = "BTCUSDT", maxShortSlots: number = 3) {
     this.symbol = symbol;
     this.maxShortSlots = maxShortSlots;
@@ -1208,7 +1211,7 @@ export class HedgePositionLedger {
       res.stopLossPrice = isOcc ? resolvedSlPx : 0;
       res.takeProfitPrice = tpPx;
       res.breakEvenPrice = bePx;
-      res.activeStopLossOrderId = isOcc ? primarySlOrderId : 0;
+      res.activeStopLossOrderId = isOcc ? (this.shortAggregatedStopLossOrderId || primarySlOrderId) : 0;
       return res;
     }
   }
@@ -1228,28 +1231,48 @@ export class HedgePositionLedger {
     return slot?.activeTpOrderIds ? [...slot.activeTpOrderIds] : [];
   }
 
-  public registerActiveStopLossOrderId(slotId: string, orderId: number): void {
-    const slot = slotId === "CORE_LONG" ? this.coreLong : this.shortSlots.find((s) => s.slotId === slotId);
-    if (slot) {
-      slot.activeStopLossOrderId = orderId;
+  public registerActiveStopLossOrderId(sideOrSlotId: "LONG" | "SHORT" | string, orderId: number): void {
+    if (sideOrSlotId === "LONG" || sideOrSlotId === "CORE_LONG") {
+      this.coreLong.activeStopLossOrderId = orderId;
+    } else if (sideOrSlotId === "SHORT" || sideOrSlotId.startsWith("SHORT_SLOT")) {
+      this.shortAggregatedStopLossOrderId = orderId;
+      for (const s of this.shortSlots) {
+        if (s.isOccupied) {
+          s.activeStopLossOrderId = orderId;
+        }
+      }
     }
   }
 
-  public getActiveStopLossOrderId(slotId: string): number | undefined {
-    const slot = slotId === "CORE_LONG" ? this.coreLong : this.shortSlots.find((s) => s.slotId === slotId);
-    return slot?.activeStopLossOrderId;
+  public getActiveStopLossOrderId(sideOrSlotId: "LONG" | "SHORT" | string): number | undefined {
+    if (sideOrSlotId === "LONG" || sideOrSlotId === "CORE_LONG") {
+      return this.coreLong.activeStopLossOrderId;
+    } else if (sideOrSlotId === "SHORT" || sideOrSlotId.startsWith("SHORT_SLOT")) {
+      return this.shortAggregatedStopLossOrderId;
+    }
+    return undefined;
   }
 
-  public updateLastSyncedSlPrice(slotId: string, price: number): void {
-    if (slotId === "CORE_LONG") {
+  public updateLastSyncedSlPrice(sideOrSlotId: "LONG" | "SHORT" | string, price: number): void {
+    if (sideOrSlotId === "LONG" || sideOrSlotId === "CORE_LONG") {
       this.coreLong.lastSyncedSlPrice = price;
-    } else {
+    } else if (sideOrSlotId === "SHORT" || sideOrSlotId.startsWith("SHORT_SLOT")) {
+      this.shortAggregatedLastSyncedSlPrice = price;
       for (const s of this.shortSlots) {
         if (s.isOccupied) {
           s.lastSyncedSlPrice = price;
         }
       }
     }
+  }
+
+  public getLastSyncedSlPrice(sideOrSlotId: "LONG" | "SHORT" | string): number {
+    if (sideOrSlotId === "LONG" || sideOrSlotId === "CORE_LONG") {
+      return this.coreLong.lastSyncedSlPrice || 0;
+    } else if (sideOrSlotId === "SHORT" || sideOrSlotId.startsWith("SHORT_SLOT")) {
+      return this.shortAggregatedLastSyncedSlPrice || 0;
+    }
+    return 0;
   }
 
   /**
@@ -1657,6 +1680,8 @@ export class HedgePositionLedger {
       slot.peakRoe = 0;
       slot.tpPrices = [];
     }
+    this.shortAggregatedStopLossOrderId = 0;
+    this.shortAggregatedLastSyncedSlPrice = 0;
     this.legacyLedger.reset();
   }
 
@@ -1942,6 +1967,18 @@ export class HedgePositionLedger {
     slot.activeTpOrderIds = [];
     slot.lastSyncedSlPrice = 0;
     slot.tpPrices = [];
+
+    let hasRemainingOccupied = false;
+    for (let i = 0; i < this.maxShortSlots; i++) {
+      if (this.shortSlots[i].isOccupied && this.shortSlots[i].quantity > 0) {
+        hasRemainingOccupied = true;
+        break;
+      }
+    }
+    if (!hasRemainingOccupied) {
+      this.shortAggregatedStopLossOrderId = 0;
+      this.shortAggregatedLastSyncedSlPrice = 0;
+    }
   }
 
   public deductCoreLongQuantity(qty: number, exitPrice?: number, feeRate?: number, exitReason: string = "PARTIAL_EXIT"): void {

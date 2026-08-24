@@ -706,10 +706,11 @@ export class BinanceExecutionClient {
     positionSide: "LONG" | "SHORT",
     stopPrice: number,
     clientOrderId?: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    quantity?: number
   ): Promise<BinanceOrderResponse> {
     const formattedSlPx = SymbolPrecisionRegistry.formatPrice(symbol, stopPrice);
-    const cid = clientOrderId || ClientOrderIdGenerator.generate(symbol, positionSide === "LONG" ? "CORE_LONG" : "SHORT_SLOT_0", "SL");
+    const cid = clientOrderId || ClientOrderIdGenerator.generate(symbol, positionSide === "LONG" ? "CORE_LONG" : "SHORT_AGG", "SL");
     
     // Strict Zero-Trust Assertion:
     // SHORT position -> side MUST be "BUY"
@@ -727,6 +728,7 @@ export class BinanceExecutionClient {
       stopPrice: formattedSlPx,
       positionSide,
       closePosition: true,
+      quantity: quantity && quantity > 0 ? quantity : undefined,
       clientOrderId: cid,
       workingType: "CONTRACT_PRICE",
     };
@@ -837,15 +839,19 @@ export class BinanceExecutionClient {
           return algoRes as BinanceOrderResponse;
         }
 
-        if (
-          (errMsg.includes("-4130") ||
-            errMsg.includes("4130") ||
-            errMsg.includes("would trigger immediately") ||
-            errMsg.includes("closePosition in the direction is existing")) &&
-          retryCount < 2
-        ) {
+        const isConflictOrGteError =
+          errMsg.includes("-4509") ||
+          errMsg.includes("4509") ||
+          errMsg.includes("TIF GTE") ||
+          errMsg.includes("Time in Force (TIF) GTE can only be used with open positions") ||
+          errMsg.includes("-4130") ||
+          errMsg.includes("4130") ||
+          errMsg.includes("would trigger immediately") ||
+          errMsg.includes("closePosition in the direction is existing");
+
+        if (isConflictOrGteError && retryCount < 2) {
           console.warn(
-            `[BinanceExecutionClient][-4130 AUTO_RECOVERY] Binance rejected closePosition order on ${params.symbol} (${params.positionSide || "BOTH"} ${params.side}): ${errMsg}. Purging conflicting conditional orders and retrying...`
+            `[BinanceExecutionClient][-4509/-4130 AUTO_RECOVERY] Binance rejected closePosition order on ${params.symbol} (${params.positionSide || "BOTH"} ${params.side}): ${errMsg}. Purging conflicting conditional orders, applying micro-settlement backoff, and retrying...`
           );
 
           // 1. Actively query and cancel all open conditional / STOP_MARKET / TAKE_PROFIT orders for this symbol & positionSide
@@ -865,7 +871,7 @@ export class BinanceExecutionClient {
 
             if (conflictingOrders.length > 0) {
               console.log(
-                `[BinanceExecutionClient][-4130 RECOVERY] Found ${conflictingOrders.length} conflicting conditional order(s) on ${params.symbol}. Purging from exchange...`
+                `[BinanceExecutionClient][-4509/-4130 RECOVERY] Found ${conflictingOrders.length} conflicting conditional order(s) on ${params.symbol}. Purging from exchange...`
               );
               for (const ord of conflictingOrders) {
                 try {
@@ -877,13 +883,16 @@ export class BinanceExecutionClient {
             }
           } catch (queryErr: unknown) {
             console.warn(
-              `[BinanceExecutionClient][-4130 RECOVERY] Open orders sweep notice: ${
+              `[BinanceExecutionClient][-4509/-4130 RECOVERY] Open orders sweep notice: ${
                 queryErr instanceof Error ? queryErr.message : String(queryErr)
               }`
             );
           }
 
-          // Generate a fresh unique clientOrderId for the retry to prevent deduplication barriers
+          // 2. 50ms Micro-settlement Backoff to allow Binance margin ledger state stabilization
+          await new Promise((resolve) => setTimeout(resolve, 50));
+
+          // 3. Generate a fresh unique clientOrderId for the retry to prevent deduplication barriers
           const nextCid = params.clientOrderId ? `${params.clientOrderId}_R${retryCount + 1}` : undefined;
           return await this.placeOrder(
             {
@@ -893,6 +902,37 @@ export class BinanceExecutionClient {
             retryCount + 1,
             signal
           );
+        }
+
+        // Secondary SOTA Fallback: If closePosition: true is rejected after retries, execute a deterministic Quantity-Based STOP_MARKET
+        if (isConflictOrGteError && retryCount >= 2 && isClosePosition) {
+          let fallbackQty = params.quantity;
+          if (!fallbackQty || fallbackQty <= 0) {
+            try {
+              const posRisks = await this.getPositionRisk(params.symbol);
+              const targetPosSide = params.positionSide || "BOTH";
+              const matchPos = posRisks.find((p) => p.positionSide === targetPosSide || (targetPosSide === "BOTH" && parseFloat(p.positionAmt) !== 0));
+              if (matchPos) {
+                const amt = Math.abs(parseFloat(matchPos.positionAmt || "0"));
+                if (amt > 0) fallbackQty = amt;
+              }
+            } catch (posErr: unknown) {
+              // Ignore position risk query error in fallback
+            }
+          }
+
+          if (fallbackQty && fallbackQty > 0) {
+            console.warn(
+              `[BinanceExecutionClient][SOTA_SL_FALLBACK] closePosition=true rejected after retries on ${params.symbol} (${params.positionSide}). Executing deterministic Quantity-Based STOP_MARKET fallback (Qty: ${fallbackQty})...`
+            );
+            const fallbackParams: BinanceOrderParams = {
+              ...params,
+              closePosition: false,
+              quantity: fallbackQty,
+              clientOrderId: params.clientOrderId ? `${params.clientOrderId}_FALLBACK` : undefined,
+            };
+            return await this.placeOrder(fallbackParams, 0, signal);
+          }
         }
 
         if ((errMsg.includes("-5022") || errMsg.includes("5022")) && retryCount < 2) {

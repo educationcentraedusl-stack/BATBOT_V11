@@ -98,7 +98,7 @@ async function runLvcqMicrotaskLoopTest() {
   const initialLong = ledger.getAggregatedSideSummary("LONG");
 
   // Dispatch initial SL asynchronously
-  const slPromise = engine.syncExchangeStopLossOrder("CORE_LONG", initialLong.totalQuantity, "LONG", initialLong.stopLossPrice);
+  const slPromise = engine.syncExchangeStopLossOrder("LONG", initialLong.totalQuantity, initialLong.stopLossPrice);
 
   // Fire 1,000 ticks while the network request is in flight (40ms window)
   let auditCallCount = 0;
@@ -124,11 +124,11 @@ async function runLvcqMicrotaskLoopTest() {
   const initialPlaceCount = placeOrderCount;
   
   // Set tiny change in target price and call sync
-  await engine.syncExchangeStopLossOrder("CORE_LONG", initialLong.totalQuantity, "LONG", currentSynced + 0.01);
+  await engine.syncExchangeStopLossOrder("LONG", initialLong.totalQuantity, currentSynced + 0.01);
   console.log(`  Micro-Fluctuation ($0.01) Dispatches: ${placeOrderCount - initialPlaceCount}`);
 
   // Test significant ratchet move ($60,000 -> $60,100)
-  await engine.syncExchangeStopLossOrder("CORE_LONG", initialLong.totalQuantity, "LONG", 60100);
+  await engine.syncExchangeStopLossOrder("LONG", initialLong.totalQuantity, 60100);
   console.log(`  Significant Ratchet ($60,100) Dispatches: ${placeOrderCount - initialPlaceCount}`);
 
   if (placeOrderCount - initialPlaceCount < 1) {

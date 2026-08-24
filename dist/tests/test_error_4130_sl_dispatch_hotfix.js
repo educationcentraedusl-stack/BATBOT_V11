@@ -77,7 +77,7 @@ async function runHotfixTests() {
     const riskGuard = new risk_1.RiskGuard();
     const hedgeLedger = new positionLedger_1.HedgePositionLedger("XRPUSDT");
     const engine = new engine_1.StrategyEngine(mdClient, riskGuard, mockClient, { symbol: "XRPUSDT" }, undefined, hedgeLedger);
-    const engineSlOrderId = await engine.dispatchExchangeStopLossOrder("SHORT_SLOT_0", 1.5014, 29.9, "SHORT", 1.5164);
+    const engineSlOrderId = await engine.dispatchExchangeStopLossOrder("SHORT", 1.5014, 29.9, 1.5164);
     assert_1.default.strictEqual(engineSlOrderId, 987654321, "Engine SL orderId must match mock response");
     const enginePayload = capturedPayloads[3];
     assert_1.default.strictEqual(enginePayload.side, "BUY", "Engine SHORT SL MUST pass side: BUY");

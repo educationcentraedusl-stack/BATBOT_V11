@@ -148,8 +148,8 @@ async function runSotaDeadlockRecoveryTestSuite() {
     // STAGE 1: Initial SL Placement
     console.log("\n------------------------------------------------------------------------------------------");
     console.log("[STAGE 1] Testing Initial Stop Loss Placement & Non-Destructive Ledger Registration");
-    await engine.syncExchangeStopLossOrder("SHORT_SLOT_0", 30.3, "SHORT", 1.4988);
-    const initialSlId = hedgeLedger.getActiveStopLossOrderId("SHORT_SLOT_0");
+    await engine.syncExchangeStopLossOrder("SHORT", 30.3, 1.4988);
+    const initialSlId = hedgeLedger.getActiveStopLossOrderId("SHORT");
     console.log(`  Registered Stop Loss OrderId: #${initialSlId}`);
     if (!initialSlId || initialSlId <= 0) {
         throw new Error(`[FAIL] Expected active Stop Loss OrderId to be registered, got: ${initialSlId}`);
@@ -165,7 +165,7 @@ async function runSotaDeadlockRecoveryTestSuite() {
     console.log("  Arming mock client to hang next placement request indefinitely (Simulating TCP socket drop)...");
     mockClient.shouldHangNextOrder = true;
     // Trigger a ratchet that will get stuck in the hung promise
-    const hangingPromise = engine.syncExchangeStopLossOrder("SHORT_SLOT_0", 30.3, "SHORT", 1.4950);
+    const hangingPromise = engine.syncExchangeStopLossOrder("SHORT", 30.3, 1.4950);
     hangingPromise.catch(() => {
         // Expected abort error when evicted
     });
@@ -174,16 +174,16 @@ async function runSotaDeadlockRecoveryTestSuite() {
     await sleep(50);
     // Subsequent ratchet attempt at t=100ms should detect lock in-flight and coalesce in LVCQ
     console.log("  Dispatching subsequent SL ratchet @ $1.4920 at t = 100ms (should coalesce)...");
-    await engine.syncExchangeStopLossOrder("SHORT_SLOT_0", 30.3, "SHORT", 1.4920);
+    await engine.syncExchangeStopLossOrder("SHORT", 30.3, 1.4920);
     // Wait 2550ms so lock age exceeds MAX_SL_LOCK_HOLD_MS (2500ms)
     console.log("  Waiting 2550ms for lock to exceed 2500ms SLA threshold...");
     await sleep(2550);
     // Now trigger emergency closed-loop audit or new ratchet: MUST trigger auto-eviction!
     console.log("  Dispatching new SL ratchet @ $1.4900 (should AUTO-EVICT stale lock)...");
     const evictionStartTime = Date.now();
-    await engine.syncExchangeStopLossOrder("SHORT_SLOT_0", 30.3, "SHORT", 1.4900);
+    await engine.syncExchangeStopLossOrder("SHORT", 30.3, 1.4900);
     const evictionElapsed = Date.now() - evictionStartTime;
-    const newActiveSlId = hedgeLedger.getActiveStopLossOrderId("SHORT_SLOT_0");
+    const newActiveSlId = hedgeLedger.getActiveStopLossOrderId("SHORT");
     console.log(`  Auto-Eviction & Recovery completed in ${evictionElapsed}ms.`);
     console.log(`  New Active Stop Loss OrderId: #${newActiveSlId}`);
     if (!newActiveSlId || newActiveSlId === initialSlId) {
@@ -202,7 +202,7 @@ async function runSotaDeadlockRecoveryTestSuite() {
         mockClient.hangPromiseResolver();
     }
     await sleep(100);
-    const postZombieSlId = hedgeLedger.getActiveStopLossOrderId("SHORT_SLOT_0");
+    const postZombieSlId = hedgeLedger.getActiveStopLossOrderId("SHORT");
     console.log(`  Active Stop Loss OrderId after zombie resolution: #${postZombieSlId}`);
     if (postZombieSlId !== newActiveSlId) {
         throw new Error(`[FAIL] Zombie promise overwritten active SL ID! Expected #${newActiveSlId}, got #${postZombieSlId}`);
@@ -216,12 +216,12 @@ async function runSotaDeadlockRecoveryTestSuite() {
     const promises = [];
     for (let i = 0; i < 10; i++) {
         const price = 1.4880 - (i * 0.0010);
-        promises.push(engine.syncExchangeStopLossOrder("SHORT_SLOT_0", 30.3, "SHORT", price));
+        promises.push(engine.syncExchangeStopLossOrder("SHORT", 30.3, price));
     }
     await Promise.all(promises);
     const postBurstCount = mockClient.placedOrders.length;
     const burstOrdersPlaced = postBurstCount - preBurstCount;
-    const finalSlId = hedgeLedger.getActiveStopLossOrderId("SHORT_SLOT_0");
+    const finalSlId = hedgeLedger.getActiveStopLossOrderId("SHORT");
     const finalPlacedOrder = mockClient.placedOrders[mockClient.placedOrders.length - 1];
     console.log(`  Microburst Results: 10 Dispatches -> Placed Orders: ${burstOrdersPlaced} (Queue Coalesced)`);
     console.log(`  Final Active SL OrderId: #${finalSlId} @ stopPrice $${finalPlacedOrder.stopPrice}`);

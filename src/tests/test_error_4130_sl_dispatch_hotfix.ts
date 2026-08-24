@@ -87,7 +87,7 @@ async function runHotfixTests(): Promise<void> {
     hedgeLedger
   );
 
-  const engineSlOrderId = await engine.dispatchExchangeStopLossOrder("SHORT_SLOT_0", 1.5014, 29.9, "SHORT", 1.5164);
+  const engineSlOrderId = await engine.dispatchExchangeStopLossOrder("SHORT", 1.5014, 29.9, 1.5164);
   assert.strictEqual(engineSlOrderId, 987654321, "Engine SL orderId must match mock response");
   const enginePayload = capturedPayloads[3];
   assert.strictEqual(enginePayload.side, "BUY", "Engine SHORT SL MUST pass side: BUY");

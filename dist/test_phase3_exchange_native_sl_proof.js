@@ -79,7 +79,7 @@ async function runPhase3Proof() {
     // 1. Dispatch Initial Exchange STOP_MARKET Order via StrategyEngine
     console.log("\n------------------------------------------------------------------------------------------");
     console.log("[TEST 1] Dispatching Initial Exchange-Native STOP_MARKET Order via StrategyEngine");
-    await engine.syncExchangeStopLossOrder("CORE_LONG", qty, "LONG", initialSl);
+    await engine.syncExchangeStopLossOrder("LONG", qty, initialSl);
     const trackedSlId = ledger.getActiveStopLossOrderId("CORE_LONG");
     console.log(`  PositionLedger Registered activeStopLossOrderId: #${trackedSlId}`);
     if (!trackedSlId || trackedSlId <= 0) {
@@ -91,7 +91,7 @@ async function runPhase3Proof() {
     console.log("\n------------------------------------------------------------------------------------------");
     console.log("[TEST 2] Testing AI Breakeven SL Ratchet Cancel-Replace Sync (Target SL: $60124.50)");
     const newSlPrice = 60124.50;
-    await engine.syncExchangeStopLossOrder("CORE_LONG", qty, "LONG", newSlPrice);
+    await engine.syncExchangeStopLossOrder("LONG", qty, newSlPrice);
     const updatedSlId = ledger.getActiveStopLossOrderId("CORE_LONG");
     console.log(`  PositionLedger Active SL ID Updated: #${updatedSlId}`);
     if (mockClient.cancelledOrderIds[0] !== orderId) {
@@ -105,12 +105,12 @@ async function runPhase3Proof() {
     console.log("\n------------------------------------------------------------------------------------------");
     console.log("[TEST 3] Testing Concurrency Lock & Debounce Defense on Simultaneous Ratchet Dispatches");
     const preConcurrentCount = mockClient.placedOrders.length;
-    // Trigger 5 concurrent simultaneous sync calls for CORE_LONG
+    // Trigger 4 concurrent simultaneous sync calls for LONG
     await Promise.all([
-        engine.syncExchangeStopLossOrder("CORE_LONG", qty, "LONG", 60130.0),
-        engine.syncExchangeStopLossOrder("CORE_LONG", qty, "LONG", 60135.0),
-        engine.syncExchangeStopLossOrder("CORE_LONG", qty, "LONG", 60140.0),
-        engine.syncExchangeStopLossOrder("CORE_LONG", qty, "LONG", 60145.0),
+        engine.syncExchangeStopLossOrder("LONG", qty, 60130.0),
+        engine.syncExchangeStopLossOrder("LONG", qty, 60135.0),
+        engine.syncExchangeStopLossOrder("LONG", qty, 60140.0),
+        engine.syncExchangeStopLossOrder("LONG", qty, 60145.0),
     ]);
     const postConcurrentCount = mockClient.placedOrders.length;
     const newOrdersPlaced = postConcurrentCount - preConcurrentCount;
