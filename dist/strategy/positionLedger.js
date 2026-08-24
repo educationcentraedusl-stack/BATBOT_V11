@@ -1154,7 +1154,13 @@ class HedgePositionLedger {
      * Evaluates slot allocation eligibility using Volatility-Adjusted Dynamic Grid Spacing (VADGS)
      * and Time-Weighted Cooldown Hysteresis Lockouts (TWCHL).
      */
-    evaluateDispersedShortSlotAllocation(currentPrice, tickSize = 0.1, realizedVol = 0.001, hawkesIntensity = 0, cooldownLockMs = 0, nowMs = Date.now()) {
+    evaluateDispersedShortSlotAllocation(currentPrice, tickSize = 0.1, realizedVol = 0.001, hawkesIntensity = 0, cooldownLockMs = 0, nowMs = Date.now(), currentSpread, maxSpreadAllowed) {
+        // 0. Enforce Spread Blowout Gate
+        if (currentSpread !== undefined &&
+            maxSpreadAllowed !== undefined &&
+            (currentSpread > maxSpreadAllowed || !Number.isFinite(currentSpread))) {
+            return null;
+        }
         // 1. Enforce Temporal Cooldown Hysteresis Lockout
         if (nowMs < cooldownLockMs) {
             return null;

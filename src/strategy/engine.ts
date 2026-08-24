@@ -356,6 +356,39 @@ export class StrategyEngine {
   }
 
   /**
+   * SOTA Tier-1 AROS-CA: Active Resting Order Sweep & Continuous Annihilation.
+   * Immediately iterates over pendingEntryOrders, dispatches emergency REST cancellations to Binance,
+   * rolls back optimistic ledger reservations to FLAT, and clears pending state.
+   */
+  public annihilateRestingEntryOrders(reason: string): number {
+    const count = this.pendingEntryOrders.size;
+    if (count === 0) return 0;
+
+    console.warn(
+      `[AROS_CA][SPREAD_BLOWOUT_ANNIHILATION] [${this.config.symbol}] ${reason}! Annihilating ${count} resting/pending entry order(s) to prevent adverse selection fill...`
+    );
+
+    for (const [orderKey, pending] of this.pendingEntryOrders.entries()) {
+      if (pending.timeoutTimer) {
+        clearTimeout(pending.timeoutTimer);
+      }
+      if (orderKey > 0) {
+        // Positive key is real exchange OrderId: asynchronously dispatch cancel to exchange
+        this.executionClient.cancelOrder(this.config.symbol, orderKey).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`[AROS_CA][CANCEL_NOTICE] [${this.config.symbol}] Failed to cancel resting entry order #${orderKey}: ${msg}`);
+        });
+      }
+      // Rollback optimistic ledger reservation to FLAT immediately
+      this.hedgeLedger.rollbackPendingSlot(pending.slotId, `AROS_CA_${reason}`);
+    }
+
+    this.pendingEntryOrders.clear();
+    this.isOrderInFlight = false;
+    return count;
+  }
+
+  /**
    * Centralized fill lifecycle observer for both ENTRY and EXIT executions.  /**
    * Enforces dual-tier cooldown synchronization across RiskGuard (software state)
    * and SharedArrayBuffer (zero-copy shared memory state).
@@ -1888,6 +1921,13 @@ export class StrategyEngine {
       }
 
       if (!isTickValid || isStale || currentSpread > maxSpreadAllowed) {
+        // SOTA Tier-1 AROS-CA: Annihilate resting entry orders immediately upon spread blowout or invalid orderbook
+        if (currentSpread > maxSpreadAllowed || !isTickValid) {
+          this.annihilateRestingEntryOrders(
+            !isTickValid ? "INVALID_TICK_PRICES" : `SPREAD_BLOWOUT_${currentSpread.toFixed(4)}_GT_${maxSpreadAllowed.toFixed(4)}`
+          );
+        }
+
         const reasonCode: RiskCheckResult["reasonCode"] = !isTickValid
           ? "INVALID_TICK_DATA"
           : isStale
@@ -2458,6 +2498,9 @@ export class StrategyEngine {
       const isSpreadBlowout = entrySpread > maxEntrySpreadAllowed || entrySpreadBps > 5.0;
 
       if (isSpreadBlowout) {
+        // SOTA Tier-1 AROS-CA: Annihilate resting entry orders immediately
+        this.annihilateRestingEntryOrders(`ENTRY_GATE_BLOWOUT_${entrySpread.toFixed(4)}_GT_${maxEntrySpreadAllowed.toFixed(4)}`);
+
         if (isBuySignal || isSellSignal || seq % 1000n === 0n) {
           console.warn(
             `[StrategyEngine][${this.config.symbol}][REJECTED_SPREAD_BLOWOUT] Seq #${seq} | ` +
@@ -2509,7 +2552,9 @@ export class StrategyEngine {
           realizedVol,
           hawkesIntensity,
           shortCooldownLock,
-          nowMs
+          nowMs,
+          entrySpread,
+          maxEntrySpreadAllowed
         );
 
         if (slotEval !== null) {
@@ -2724,8 +2769,36 @@ export class StrategyEngine {
           orderParams.timeInForce = timeInForce;
         }
 
-        executionPromise = this.executionClient
-          .placeOrder(orderParams)
+        executionPromise = (async () => {
+          // SOTA TIER 3: TRANSPORT-LEVEL PRE-FLIGHT SPREAD VALIDATION BARRIER
+          const pfBid = this.client.getBestBidPrice(this.assetIndex);
+          const pfAsk = this.client.getBestAskPrice(this.assetIndex);
+          const isPfValid = pfBid > 0 && pfAsk > 0 && pfAsk >= pfBid;
+          const pfSpread = isPfValid ? pfAsk - pfBid : Infinity;
+          const pfMid = isPfValid ? (pfBid + pfAsk) * 0.5 : 0;
+          const pfSpreadBps = pfMid > 0 ? (pfSpread / pfMid) * 10000 : Infinity;
+
+          let maxPfSpread: number;
+          if (this.config.symbol.includes("BTC")) {
+            maxPfSpread = Math.min(this.config.maxSpreadBtc || 1.50, Math.max(0.10, pfMid * 0.0005));
+          } else if (this.config.symbol.includes("ETH")) {
+            maxPfSpread = Math.min(this.config.maxSpreadEth || 0.40, Math.max(0.01, pfMid * 0.0005));
+          } else {
+            maxPfSpread = Math.min(this.config.maxSpreadAlt || 0.20, Math.max(0.0001, pfMid * 0.0005));
+          }
+
+          if (!isPfValid || pfSpread > maxPfSpread || pfSpreadBps > 5.0) {
+            console.warn(
+              `[PREFLIGHT_SPREAD_BARRIER][BLOCKED] [${this.config.symbol}:${entrySlotId}] Pre-flight spread blowout intercepted before socket write! Spread: $${pfSpread.toFixed(4)} (${pfSpreadBps.toFixed(1)} bps) > Ceiling: $${maxPfSpread.toFixed(4)}. Aborting order dispatch.`
+            );
+            this.pendingEntryOrders.delete(preFlightKey);
+            this.hedgeLedger.rollbackPendingSlot(entrySlotId, "PREFLIGHT_SPREAD_BLOWOUT_INTERCEPTED");
+            this.isOrderInFlight = false;
+            return null;
+          }
+
+          return this.executionClient.placeOrder(orderParams);
+        })()
           .then((res) => {
             // Remove preflight temporary pending key
             this.pendingEntryOrders.delete(preFlightKey);

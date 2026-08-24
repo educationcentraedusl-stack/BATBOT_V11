@@ -28,6 +28,13 @@ impl Default for PriceLevel {
 
 #[derive(Debug, Clone)]
 pub enum MarketUpdateEvent {
+    BookTickerUpdate {
+        best_bid: f64,
+        best_bid_qty: f64,
+        best_ask: f64,
+        best_ask_qty: f64,
+        timestamp_ns: u64,
+    },
     DepthUpdate {
         bids: [(f64, f64); LOB_DEPTH],
         asks: [(f64, f64); LOB_DEPTH],
@@ -273,8 +280,49 @@ impl LimitOrderBook {
         self.metrics.hawkes_asymmetry = self.analyzer.get_hawkes_asymmetry();
     }
 
+    pub fn update_book_ticker(
+        &mut self,
+        best_bid: f64,
+        best_bid_qty: f64,
+        best_ask: f64,
+        best_ask_qty: f64,
+        timestamp_ns: u64,
+    ) {
+        if best_bid > 0.0 && best_ask > 0.0 {
+            self.bids[0] = (best_bid, best_bid_qty);
+            self.asks[0] = (best_ask, best_ask_qty);
+
+            let previous_spread = self.metrics.last_spread;
+            let current_spread = if best_ask >= best_bid { best_ask - best_bid } else { 0.0 };
+
+            let elapsed_seconds = if self.last_update_ns > 0 && timestamp_ns > self.last_update_ns {
+                (timestamp_ns - self.last_update_ns) as f64 / 1_000_000_000.0
+            } else {
+                0.0
+            };
+
+            let spread_vel = calculate_spread_velocity(current_spread, previous_spread, elapsed_seconds);
+            let obi_val = calculate_obi(&self.bids, &self.asks);
+
+            self.metrics.obi = obi_val;
+            self.metrics.spread_velocity = spread_vel;
+            self.metrics.last_spread = current_spread;
+            self.metrics.last_timestamp_ns = timestamp_ns;
+            self.last_update_ns = timestamp_ns;
+        }
+    }
+
     pub fn process_event(&mut self, event: MarketUpdateEvent) {
         match event {
+            MarketUpdateEvent::BookTickerUpdate {
+                best_bid,
+                best_bid_qty,
+                best_ask,
+                best_ask_qty,
+                timestamp_ns,
+            } => {
+                self.update_book_ticker(best_bid, best_bid_qty, best_ask, best_ask_qty, timestamp_ns);
+            }
             MarketUpdateEvent::DepthUpdate {
                 bids,
                 asks,

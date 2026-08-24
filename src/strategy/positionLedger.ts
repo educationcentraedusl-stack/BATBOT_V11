@@ -1466,8 +1466,19 @@ export class HedgePositionLedger {
     realizedVol: number = 0.001,
     hawkesIntensity: number = 0,
     cooldownLockMs: number = 0,
-    nowMs: number = Date.now()
+    nowMs: number = Date.now(),
+    currentSpread?: number,
+    maxSpreadAllowed?: number
   ): { slotIndex: number; requiredMinSpacing: number; sizeDecayCoeff: number } | null {
+    // 0. Enforce Spread Blowout Gate
+    if (
+      currentSpread !== undefined &&
+      maxSpreadAllowed !== undefined &&
+      (currentSpread > maxSpreadAllowed || !Number.isFinite(currentSpread))
+    ) {
+      return null;
+    }
+
     // 1. Enforce Temporal Cooldown Hysteresis Lockout
     if (nowMs < cooldownLockMs) {
       return null;

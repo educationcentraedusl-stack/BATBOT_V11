@@ -14,6 +14,20 @@ struct BinanceCombinedStream<'a> {
 }
 
 #[derive(Deserialize)]
+struct BinanceBookTickerPayload<'a> {
+    #[serde(borrow)]
+    b: &'a str,
+    #[serde(borrow)]
+    #[serde(rename = "B")]
+    bid_qty: &'a str,
+    #[serde(borrow)]
+    a: &'a str,
+    #[serde(borrow)]
+    #[serde(rename = "A")]
+    ask_qty: &'a str,
+}
+
+#[derive(Deserialize)]
 struct BinanceDepthPayload<'a> {
     #[serde(borrow)]
     b: Vec<[&'a str; 2]>,
@@ -68,10 +82,10 @@ impl BinanceWsStream {
             "fstream.binance.com"
         };
 
-        // Combined stream URL for depth20@100ms, aggTrade, forceOrder
+        // Combined stream URL for bookTicker, depth20@100ms, aggTrade, forceOrder
         let url_str = format!(
-            "wss://{}/stream?streams={}@depth20@100ms/{}@aggTrade/{}@forceOrder",
-            host, sym_lower, sym_lower, sym_lower
+            "wss://{}/stream?streams={}@bookTicker/{}@depth20@100ms/{}@aggTrade/{}@forceOrder",
+            host, sym_lower, sym_lower, sym_lower, sym_lower
         );
         println!("[Binance WS] Initialized WebSocket URL: {}", url_str);
 
@@ -191,7 +205,34 @@ impl BinanceWsStream {
             return;
         }
 
-        if combined.stream.contains("@depth20") {
+        if combined.stream.contains("@bookTicker") {
+            match serde_json::from_str::<BinanceBookTickerPayload>(combined.data.get()) {
+                Ok(ticker) => {
+                    let Ok(best_bid) = fast_float::parse::<f64, _>(ticker.b.as_bytes()) else { return; };
+                    let Ok(best_bid_qty) = fast_float::parse::<f64, _>(ticker.bid_qty.as_bytes()) else { return; };
+                    let Ok(best_ask) = fast_float::parse::<f64, _>(ticker.a.as_bytes()) else { return; };
+                    let Ok(best_ask_qty) = fast_float::parse::<f64, _>(ticker.ask_qty.as_bytes()) else { return; };
+
+                    if self.shutdown_requested.load(Ordering::Relaxed) {
+                        return;
+                    }
+
+                    if let Err(_) = queue.push(MarketUpdateEvent::BookTickerUpdate {
+                        best_bid,
+                        best_bid_qty,
+                        best_ask,
+                        best_ask_qty,
+                        timestamp_ns,
+                    }) {
+                        eprintln!(
+                            "[Binance WS Warning] SPSC queue full! Dropped bookTicker event. Total dropped: {}",
+                            LockFreeSpscQueue::dropped_count()
+                        );
+                    }
+                }
+                Err(e) => eprintln!("[Binance WS Error] Failed to deserialize bookTicker payload: {}", e),
+            }
+        } else if combined.stream.contains("@depth20") {
             match serde_json::from_str::<BinanceDepthPayload>(combined.data.get()) {
                 Ok(depth) => {
                     let mut bids = [(0.0, 0.0); LOB_DEPTH];
