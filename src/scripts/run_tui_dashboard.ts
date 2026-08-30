@@ -125,6 +125,8 @@ export async function runProductionTuiLauncher(): Promise<void> {
   try {
     await SymbolPrecisionRegistry.initializeFromBinance(binanceClient);
   } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`  ⚠️ [SymbolPrecisionRegistry] Initialization notice: ${msg}. Pre-seeding offline defaults.`);
     SymbolPrecisionRegistry.preseedOfflineDefaults(activeSymbols);
   }
 
@@ -200,17 +202,20 @@ export async function runProductionTuiLauncher(): Promise<void> {
       if (nativeModule && typeof nativeModule.getIcStatus === "function") {
         try {
           const rawJson = nativeModule.getIcStatus();
-          const parsed = JSON.parse(rawJson);
-          if (typeof parsed.ic === "number" && !isNaN(parsed.ic)) {
+          const parsed = JSON.parse(rawJson) as Record<string, unknown>;
+          if (parsed && typeof parsed.ic === "number" && Number.isFinite(parsed.ic)) {
             rollingIc = parsed.ic;
           }
-          if (typeof parsed.is_drifted === "boolean") {
+          if (parsed && typeof parsed.is_drifted === "boolean") {
             isDrifted = parsed.is_drifted;
           }
-          if (typeof parsed.sample_count === "number") {
+          if (parsed && typeof parsed.sample_count === "number" && Number.isFinite(parsed.sample_count)) {
             sampleCount = parsed.sample_count;
           }
-        } catch {}
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[TUI] Native IC status JSON parse notice: ${msg}`);
+        }
       }
 
       // Physical Hard Gate: Clamp drift to false during warm-up period (< 1000 pairs)

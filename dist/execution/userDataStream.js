@@ -21,8 +21,10 @@ class BinanceUserDataStream {
     maxReconnectRetries;
     constructor(client) {
         this.client = client;
-        this.keepAliveIntervalMs = parseInt(process.env.WEBSOCKET_KEEP_ALIVE_INTERVAL_MS || "1800000", 10);
-        this.maxReconnectRetries = parseInt(process.env.WEBSOCKET_RECONNECT_MAX_RETRIES || "10", 10);
+        const parsedKeepAlive = parseInt(process.env.WEBSOCKET_KEEP_ALIVE_INTERVAL_MS || "1800000", 10);
+        this.keepAliveIntervalMs = Number.isFinite(parsedKeepAlive) && parsedKeepAlive > 0 ? parsedKeepAlive : 1800000;
+        const parsedRetries = parseInt(process.env.WEBSOCKET_RECONNECT_MAX_RETRIES || "10", 10);
+        this.maxReconnectRetries = Number.isFinite(parsedRetries) && parsedRetries > 0 ? parsedRetries : 10;
     }
     subscribeOrderUpdates(callback) {
         this.orderCallbacks.add(callback);
@@ -55,7 +57,8 @@ class BinanceUserDataStream {
             return true;
         }
         catch (err) {
-            console.error(`[BinanceUserDataStream] Failed to start User Data Stream: ${err.message}`);
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error(`[BinanceUserDataStream] Failed to start User Data Stream: ${msg}`);
             return false;
         }
     }
@@ -117,7 +120,8 @@ class BinanceUserDataStream {
                                 cb(parsedUpdate);
                             }
                             catch (err) {
-                                console.error(`[BinanceUserDataStream] Error in order callback handler: ${err.message}`);
+                                const msg = err instanceof Error ? err.message : String(err);
+                                console.error(`[BinanceUserDataStream] Error in order callback handler: ${msg}`);
                             }
                         }
                     }
@@ -140,7 +144,7 @@ class BinanceUserDataStream {
                         }));
                         // Immediately mutate BinanceExecutionClient cached balance via zero-weight WebSocket push
                         const usdtItem = balances.find((b) => b.asset === "USDT");
-                        if (usdtItem && !isNaN(usdtItem.crossWalletBalance) && usdtItem.crossWalletBalance > 0) {
+                        if (usdtItem && Number.isFinite(usdtItem.crossWalletBalance) && usdtItem.crossWalletBalance >= 0) {
                             this.client.updateBalancesFromWs(usdtItem.crossWalletBalance, usdtItem.walletBalance);
                         }
                         const accountUpdate = {
@@ -156,13 +160,15 @@ class BinanceUserDataStream {
                                 cb(accountUpdate);
                             }
                             catch (err) {
-                                console.error(`[BinanceUserDataStream] Error in account callback handler: ${err.message}`);
+                                const msg = err instanceof Error ? err.message : String(err);
+                                console.error(`[BinanceUserDataStream] Error in account callback handler: ${msg}`);
                             }
                         }
                     }
                 }
                 catch (err) {
-                    console.error(`[BinanceUserDataStream] Failed to parse WebSocket message: ${err.message}`);
+                    const msg = err instanceof Error ? err.message : String(err);
+                    console.error(`[BinanceUserDataStream] Failed to parse WebSocket message: ${msg}`);
                 }
             });
             this.ws.on("error", (err) => {
@@ -180,7 +186,8 @@ class BinanceUserDataStream {
         }
         catch (err) {
             if (!this.isDisposed) {
-                console.error(`[BinanceUserDataStream] Failed to initiate WebSocket: ${err.message}`);
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`[BinanceUserDataStream] Failed to initiate WebSocket: ${msg}`);
             }
         }
     }
@@ -208,7 +215,8 @@ class BinanceUserDataStream {
                 this.connectWebSocket(wsUrl);
             }
             catch (err) {
-                console.error(`[BinanceUserDataStream] Failed to renew listenKey on reconnect: ${err.message}`);
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`[BinanceUserDataStream] Failed to renew listenKey on reconnect: ${msg}`);
                 this.handleReconnect();
             }
         }, backoffMs);
@@ -226,7 +234,8 @@ class BinanceUserDataStream {
                 }
             }
             catch (err) {
-                console.error(`[BinanceUserDataStream] Keep-alive ping failed: ${err.message}`);
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`[BinanceUserDataStream] Keep-alive ping failed: ${msg}`);
             }
         }, this.keepAliveIntervalMs);
     }

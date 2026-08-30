@@ -3106,7 +3106,7 @@ export class MultiAssetPositionLedger {
   }
 
   public updateAccountBalance(balanceUsdt: number): void {
-    if (balanceUsdt > 0) {
+    if (Number.isFinite(balanceUsdt) && balanceUsdt >= 0) {
       this.accountBalanceUsdt = balanceUsdt;
     }
   }

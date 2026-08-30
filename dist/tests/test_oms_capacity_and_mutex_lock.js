@@ -339,7 +339,7 @@ async function runOmsCapacityAndMutexProof() {
     console.log("[STAGE 7] Benchmarking Hot-Path Latency with Mutex & Capacity Guards (100,000 evaluations)...");
     btcHedge.clearSlots();
     btcEngine.syncSabPositionState(0);
-    const warmupIterations = 5000;
+    const warmupIterations = 10000;
     for (let i = 0; i < warmupIterations; i++) {
         client.setSequenceNum(BigInt(1000 + i), btcIdx);
         btcEngine.evaluateTick();

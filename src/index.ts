@@ -156,7 +156,7 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
       case "AI_HOT_SWAP":
         return { success: true, message: `Model Hot-Swap Triggered for: ${cmd.modelPath || "default"}` };
       default: {
-        const unknownAction = (cmd as { action?: string }).action ?? "UNKNOWN";
+        const unknownAction = typeof cmd.action === "string" ? cmd.action : "UNKNOWN";
         return { success: false, message: `Unknown command action: ${unknownAction}` };
       }
     }
@@ -165,7 +165,7 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
   // Try loading native Rust N-API module and starting zero-copy data ingestion
   try {
     const nativePath = path.resolve(__dirname, "../index.js");
-    const native = require(nativePath);
+    const native = require(nativePath) as { startIngestion?: (sabBuffer: Buffer, symbols?: string[]) => boolean } | null;
     if (native && typeof native.startIngestion === "function") {
       const started = native.startIngestion(Buffer.from(sab));
       if (started) {
@@ -222,7 +222,7 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
             const finalQty = execQty > 0 ? execQty : (origQty > 0 ? origQty : strategyEngine.getConfig().orderQuantity);
             const px = parseFloat(orderRes.price || orderRes.avgPrice || "0") || (tickResult.signalType === "BUY" ? tickResult.askPrice : tickResult.bidPrice);
             const fee = (px * finalQty) * DEFAULT_TAKER_FEE_RATE;
-            const fillSide = (orderRes.side as "BUY" | "SELL") || tickResult.signalType;
+            const fillSide: "BUY" | "SELL" = orderRes.side === "BUY" || orderRes.side === "SELL" ? orderRes.side : (tickResult.signalType === "BUY" || tickResult.signalType === "SELL" ? tickResult.signalType : "BUY");
             const symbol = orderRes.symbol || strategyEngine.getConfig().symbol;
 
             // Route fill execution through zero-GC PositionLedger FIFO engine

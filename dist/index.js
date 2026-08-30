@@ -80,7 +80,7 @@ async function syncStateOnStartup(executionClient, strategyEngine, riskGuard) {
             if (strategyEngine instanceof multiEngine_1.MultiAssetStrategyEngine) {
                 await strategyEngine.syncLeverageWithExchange(envLeverage);
             }
-            else if ("getConfig" in strategyEngine && typeof strategyEngine.getConfig === "function") {
+            else if (strategyEngine instanceof engine_1.StrategyEngine) {
                 const symbol = strategyEngine.getConfig().symbol;
                 await executionClient.setLeverage(symbol, envLeverage);
             }
@@ -92,25 +92,20 @@ async function syncStateOnStartup(executionClient, strategyEngine, riskGuard) {
             riskGuard.updateAccountBalance(balance);
         }
         // 4. State Hydration & Orphaned Position Guard SL/TP Injection
-        if ("syncExchangeState" in strategyEngine && typeof strategyEngine.syncExchangeState === "function") {
+        if (strategyEngine instanceof multiEngine_1.MultiAssetStrategyEngine) {
             await strategyEngine.syncExchangeState();
         }
-        else if ("getConfig" in strategyEngine && typeof strategyEngine.getConfig === "function") {
+        else if (strategyEngine instanceof engine_1.StrategyEngine) {
             const symbol = strategyEngine.getConfig().symbol;
             const positions = await executionClient.getDualPositionRisk(symbol);
             if (Array.isArray(positions)) {
                 strategyEngine.reconcileStartupPositions(positions);
             }
         }
-        else if (strategyEngine instanceof multiEngine_1.MultiAssetStrategyEngine) {
-            const positions = await executionClient.getDualPositionRisk();
-            if (Array.isArray(positions)) {
-                strategyEngine.reconcileStartupPositions(positions);
-            }
-        }
     }
     catch (err) {
-        console.warn(`[StateSync Warning] Temporary issue during startup state sync: ${err.message}. System starting in resilient mode.`);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[StateSync Warning] Temporary issue during startup state sync: ${msg}. System starting in resilient mode.`);
     }
 }
 async function initializeSystem() {
@@ -157,14 +152,17 @@ async function initializeSystem() {
                         await executionClient.flattenPositions(strategyEngine.getConfig().symbol);
                     }
                     catch (err) {
-                        console.error(`[EMERGENCY_KILL] Flattening error: ${err.message}`);
+                        const msg = err instanceof Error ? err.message : String(err);
+                        console.error(`[EMERGENCY_KILL] Flattening error: ${msg}`);
                     }
                 }
                 return { success: true, message: "EMERGENCY KILL EXECUTED: Engine Halted & Position Flattened" };
             case "AI_HOT_SWAP":
                 return { success: true, message: `Model Hot-Swap Triggered for: ${cmd.modelPath || "default"}` };
-            default:
-                return { success: false, message: `Unknown command action: ${cmd.action}` };
+            default: {
+                const unknownAction = typeof cmd.action === "string" ? cmd.action : "UNKNOWN";
+                return { success: false, message: `Unknown command action: ${unknownAction}` };
+            }
         }
     });
     // Try loading native Rust N-API module and starting zero-copy data ingestion
@@ -213,7 +211,7 @@ async function initializeSystem() {
                     const finalQty = execQty > 0 ? execQty : (origQty > 0 ? origQty : strategyEngine.getConfig().orderQuantity);
                     const px = parseFloat(orderRes.price || orderRes.avgPrice || "0") || (tickResult.signalType === "BUY" ? tickResult.askPrice : tickResult.bidPrice);
                     const fee = (px * finalQty) * exports.DEFAULT_TAKER_FEE_RATE;
-                    const fillSide = orderRes.side || tickResult.signalType;
+                    const fillSide = orderRes.side === "BUY" || orderRes.side === "SELL" ? orderRes.side : (tickResult.signalType === "BUY" || tickResult.signalType === "SELL" ? tickResult.signalType : "BUY");
                     const symbol = orderRes.symbol || strategyEngine.getConfig().symbol;
                     // Route fill execution through zero-GC PositionLedger FIFO engine
                     const ledgerResult = positionLedger.processFill(symbol, fillSide, px, finalQty, fee, tickResult.exitReason);
@@ -228,7 +226,8 @@ async function initializeSystem() {
                 }
             })
                 .catch((err) => {
-                console.error(`[Execution] Order placement execution error: ${err.message}`);
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`[Execution] Order placement execution error: ${msg}`);
             });
         }
         const posSummary = positionLedger.getSummary(tickResult.askPrice || tickResult.bidPrice);

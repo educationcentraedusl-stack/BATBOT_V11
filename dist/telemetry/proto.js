@@ -225,8 +225,15 @@ function decodeControlCommand(buffer) {
         initProtobuf();
     const message = ControlCommandMsg.decode(buffer);
     const object = ControlCommandMsg.toObject(message, { enums: String, defaults: true });
+    const rawAction = typeof object.action === "string" ? object.action : "ENGINE_PAUSE";
+    const validAction = rawAction === "ENGINE_START" ||
+        rawAction === "ENGINE_PAUSE" ||
+        rawAction === "EMERGENCY_KILL" ||
+        rawAction === "AI_HOT_SWAP"
+        ? rawAction
+        : "ENGINE_PAUSE";
     return {
-        action: object.action,
+        action: validAction,
         modelPath: object.modelPath,
         timestamp: object.timestamp,
     };

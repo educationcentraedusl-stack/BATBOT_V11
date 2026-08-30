@@ -80,7 +80,7 @@ class MultiAssetStrategyEngine {
             // 1. Mutate live account balance reactively via WebSocket push (zero REST calls)
             if (accUpdate.balances && accUpdate.balances.length > 0) {
                 const usdtBal = accUpdate.balances.find((b) => b.asset === "USDT");
-                if (usdtBal && !isNaN(usdtBal.crossWalletBalance) && usdtBal.crossWalletBalance > 0) {
+                if (usdtBal && Number.isFinite(usdtBal.crossWalletBalance) && usdtBal.crossWalletBalance >= 0) {
                     this.riskGuard.updateAccountBalance(usdtBal.crossWalletBalance);
                     this.client.setAvailableBalance(usdtBal.crossWalletBalance);
                 }

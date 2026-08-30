@@ -2431,7 +2431,7 @@ class MultiAssetPositionLedger {
         return ledger;
     }
     updateAccountBalance(balanceUsdt) {
-        if (balanceUsdt > 0) {
+        if (Number.isFinite(balanceUsdt) && balanceUsdt >= 0) {
             this.accountBalanceUsdt = balanceUsdt;
         }
     }

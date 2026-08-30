@@ -584,7 +584,7 @@ export class MultiAssetRiskGuard extends RiskGuard {
   }
 
   public updateAccountBalance(balanceUsdt: number): void {
-    if (balanceUsdt > 0) {
+    if (Number.isFinite(balanceUsdt) && balanceUsdt >= 0) {
       this.accountBalanceUsdt = balanceUsdt;
     }
   }
@@ -618,7 +618,9 @@ export class MultiAssetRiskGuard extends RiskGuard {
   }
 
   public getPortfolioLeverage(): number {
-    if (this.accountBalanceUsdt <= 0) return 0;
+    if (this.accountBalanceUsdt <= 0) {
+      return this.getGrossPortfolioNotional() > 0 ? Infinity : 0;
+    }
     return this.getGrossPortfolioNotional() / this.accountBalanceUsdt;
   }
 
@@ -672,6 +674,15 @@ export class MultiAssetRiskGuard extends RiskGuard {
     const currentGross = this.getGrossPortfolioNotional();
     const existingSymbolNotional = this.activeSymbolNotionals.get(intent.symbol) ?? 0;
     const newGross = currentGross - existingSymbolNotional + proposedNotional;
+
+    if (this.accountBalanceUsdt <= 0 && newGross > 0) {
+      return {
+        passed: false,
+        reasonCode: "EXCEEDS_MAX_POSITION",
+        message: `Order rejected: Account balance is zero or non-positive ($${this.accountBalanceUsdt.toFixed(2)} USDT). Cannot open new positions.`,
+      };
+    }
+
     const proposedLeverage = this.accountBalanceUsdt > 0 ? newGross / this.accountBalanceUsdt : 0;
 
     if (proposedLeverage > this.maxPortfolioLeverage + 1e-4) {

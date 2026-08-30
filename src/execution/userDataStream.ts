@@ -95,8 +95,11 @@ export class BinanceUserDataStream {
 
   constructor(client: BinanceExecutionClient) {
     this.client = client;
-    this.keepAliveIntervalMs = parseInt(process.env.WEBSOCKET_KEEP_ALIVE_INTERVAL_MS || "1800000", 10);
-    this.maxReconnectRetries = parseInt(process.env.WEBSOCKET_RECONNECT_MAX_RETRIES || "10", 10);
+    const parsedKeepAlive = parseInt(process.env.WEBSOCKET_KEEP_ALIVE_INTERVAL_MS || "1800000", 10);
+    this.keepAliveIntervalMs = Number.isFinite(parsedKeepAlive) && parsedKeepAlive > 0 ? parsedKeepAlive : 1800000;
+
+    const parsedRetries = parseInt(process.env.WEBSOCKET_RECONNECT_MAX_RETRIES || "10", 10);
+    this.maxReconnectRetries = Number.isFinite(parsedRetries) && parsedRetries > 0 ? parsedRetries : 10;
   }
 
   public subscribeOrderUpdates(callback: OrderTradeUpdateCallback): () => void {
