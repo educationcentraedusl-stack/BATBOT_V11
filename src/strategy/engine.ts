@@ -518,10 +518,22 @@ export class StrategyEngine {
     realizedPnl?: number;
     fillTimestampMs?: number;
     netRoe?: number;
+    remainingGrossNotional?: number;
   }): void {
     const fillTime = params.fillTimestampMs ?? timeSynchronizer.getAdjustedNowMs();
     const notionalUsdt = params.executedQty * params.executedPrice;
     let cooldownDurationMs = this.config.cooldownMs;
+
+    // SOTA Audit 22.0: Dynamically calculate remaining gross notional from hedgeLedger
+    let remainingNotional = params.remainingGrossNotional;
+    if (remainingNotional === undefined) {
+      const summary = this.hedgeLedger.getSummary(params.executedPrice > 0 ? params.executedPrice : 0);
+      if (summary.side === "FLAT" || summary.grossQuantity <= 1e-6) {
+        remainingNotional = 0;
+      } else {
+        remainingNotional = summary.grossQuantity * (summary.averageEntryPrice > 0 ? summary.averageEntryPrice : params.executedPrice);
+      }
+    }
 
     // 1. Tier 1: RiskGuard Software State & Realized PnL / Consecutive Loss Synchronization
     if (params.isCloseOrder) {
@@ -549,14 +561,16 @@ export class StrategyEngine {
         notionalUsdt,
         params.side,
         params.symbol,
-        params.isCloseOrder
+        params.isCloseOrder,
+        remainingNotional
       );
     } else {
       this.riskGuard.recordExecutionSuccess(
         notionalUsdt,
         params.side,
         params.symbol,
-        params.isCloseOrder
+        params.isCloseOrder,
+        remainingNotional
       );
     }
 
@@ -583,7 +597,7 @@ export class StrategyEngine {
     console.log(
       `[COOLDOWN_SYNC][${params.isCloseOrder ? (isCircuitBreaker ? "CIRCUIT_BREAKER_HALT" : "EXIT_BACKOFF") : "ENTRY"}] Completed ${params.positionSide} ${params.side} on ${params.symbol}. Qty: ${params.executedQty} @ $${params.executedPrice.toFixed(
         2
-      )}. Cooldown: ${cooldownDurationMs}ms (until ${cooldownExpiry}). PnL: $${(params.realizedPnl ?? 0).toFixed(2)}${params.isCloseOrder ? ` (Consecutive Losses: ${this.riskGuard.getConsecutiveLosses(params.symbol)})` : ""}`
+      )}. RemainingNotional: $${remainingNotional.toFixed(2)}. Cooldown: ${cooldownDurationMs}ms (until ${cooldownExpiry}). PnL: $${(params.realizedPnl ?? 0).toFixed(2)}${params.isCloseOrder ? ` (Consecutive Losses: ${this.riskGuard.getConsecutiveLosses(params.symbol)})` : ""}`
     );
   }
 
@@ -2981,18 +2995,6 @@ export class StrategyEngine {
                 if (numericOrderId > 0) this.processedFillOrderIds.add(numericOrderId);
                 if (resCid) this.processedFillClientOrderIds.add(resCid);
 
-                // Confirmed Fill on REST Response! Occupy slot immediately
-                this.onExecutionCompleted({
-                  symbol: this.config.symbol,
-                  assetIndex: this.assetIndex,
-                  side: res.side as "BUY" | "SELL",
-                  positionSide: targetPosSide!,
-                  isCloseOrder: false,
-                  executedQty: executedQty > 0 ? executedQty : finalQuantity,
-                  executedPrice: execPx,
-                  fillTimestampMs: timeSynchronizer.getAdjustedNowMs(),
-                });
-
                 const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
                 const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
                 const baseSlPercent = targetPosSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
@@ -3031,6 +3033,18 @@ export class StrategyEngine {
                     console.error(`[EXCHANGE_SL_ENGINE][UNHANDLED_DISPATCH_ERR] ${err instanceof Error ? err.message : String(err)}`);
                   });
                 }
+
+                // Confirmed Fill on REST Response! Notify execution completed with synchronized ledger state
+                this.onExecutionCompleted({
+                  symbol: this.config.symbol,
+                  assetIndex: this.assetIndex,
+                  side: res.side as "BUY" | "SELL",
+                  positionSide: targetPosSide!,
+                  isCloseOrder: false,
+                  executedQty: executedQty > 0 ? executedQty : finalQuantity,
+                  executedPrice: execPx,
+                  fillTimestampMs: timeSynchronizer.getAdjustedNowMs(),
+                });
               } else if (isPending && res.orderId) {
                 // Pending Limit / Post-Only Order placed on Binance orderbook
                 const numericOrderId = typeof res.orderId === "number" ? res.orderId : parseInt(String(res.orderId), 10);

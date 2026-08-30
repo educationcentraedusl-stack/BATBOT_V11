@@ -455,7 +455,8 @@ export class RiskGuard {
     notionalUsdt: number,
     side: "BUY" | "SELL" = "BUY",
     symbol?: string,
-    isCloseOrder: boolean = false
+    isCloseOrder: boolean = false,
+    remainingGrossNotional?: number
   ): void {
     const now = Date.now();
     this.lastExecutionTimestampMs = now;
@@ -473,9 +474,10 @@ export class RiskGuard {
     realizedPnl: number = 0,
     side: "BUY" | "SELL" = "BUY",
     symbol?: string,
-    netRoePercent?: number
+    netRoePercent?: number,
+    remainingGrossNotional?: number
   ): number {
-    this.recordExecutionSuccess(notionalUsdt, side, symbol, true);
+    this.recordExecutionSuccess(notionalUsdt, side, symbol, true, remainingGrossNotional);
     if (realizedPnl !== 0) {
       this.recordRealizedPnl(realizedPnl);
     }
@@ -555,15 +557,24 @@ export class MultiAssetRiskGuard extends RiskGuard {
     notionalUsdt: number,
     side: "BUY" | "SELL" = "BUY",
     symbol?: string,
-    isCloseOrder: boolean = false
+    isCloseOrder: boolean = false,
+    remainingGrossNotional?: number
   ): void {
-    super.recordExecutionSuccess(notionalUsdt, side, symbol, isCloseOrder);
+    super.recordExecutionSuccess(notionalUsdt, side, symbol, isCloseOrder, remainingGrossNotional);
     if (symbol) {
       this.symbolExecutionTimestamps.set(symbol, Date.now());
-      if (isCloseOrder) {
-        this.activeSymbolNotionals.delete(symbol);
-      } else if (notionalUsdt > 0) {
-        this.activeSymbolNotionals.set(symbol, notionalUsdt);
+      if (remainingGrossNotional !== undefined) {
+        if (remainingGrossNotional <= 1e-6) {
+          this.activeSymbolNotionals.delete(symbol);
+        } else {
+          this.activeSymbolNotionals.set(symbol, remainingGrossNotional);
+        }
+      } else {
+        if (isCloseOrder) {
+          this.activeSymbolNotionals.delete(symbol);
+        } else if (notionalUsdt > 0) {
+          this.activeSymbolNotionals.set(symbol, notionalUsdt);
+        }
       }
     }
   }

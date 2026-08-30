@@ -197,6 +197,7 @@ class StrategyEngine {
                 this.syncSabPositionState();
             });
         }
+        StrategyEngine.registerEngine(this);
     }
     /**
      * Pure Zero-GC Mutator Method for reusableOrderIntent.
@@ -270,14 +271,82 @@ class StrategyEngine {
     hasAnyPendingEntry() {
         return this.pendingEntryOrders.size > 0;
     }
+    static registeredEngines = [];
+    static registerEngine(engine) {
+        const existingIdx = StrategyEngine.registeredEngines.findIndex((e) => e.getConfig().symbol === engine.getConfig().symbol);
+        if (existingIdx >= 0) {
+            StrategyEngine.registeredEngines[existingIdx] = engine;
+        }
+        else {
+            StrategyEngine.registeredEngines.push(engine);
+        }
+    }
+    static resetRegisteredEngines() {
+        StrategyEngine.registeredEngines = [];
+    }
+    static getRegisteredEngines() {
+        return StrategyEngine.registeredEngines;
+    }
     getGlobalActivePositionCount() {
         let count = 0;
+        let occupiedAssetMask = 0;
+        let checkedAssetMask = 0;
+        const registered = StrategyEngine.registeredEngines;
+        const len = registered.length;
+        for (let i = 0; i < len; i++) {
+            const eng = registered[i];
+            if (!eng)
+                continue;
+            const aIdx = eng.assetIndex;
+            if (aIdx >= 0 && aIdx < 32) {
+                checkedAssetMask |= (1 << aIdx);
+            }
+            // 1. Check local ledger active OR in-flight PENDING_ENTRY state
+            const hl = eng.hedgeLedger;
+            const coreLong = hl.getCoreLong();
+            const isLongActiveOrPending = coreLong.isOccupied || coreLong.lifecycleState === "PENDING_ENTRY";
+            let isShortActiveOrPending = false;
+            const shortSlots = hl.getShortSlots();
+            for (let s = 0; s < shortSlots.length; s++) {
+                if (shortSlots[s].isOccupied || shortSlots[s].lifecycleState === "PENDING_ENTRY") {
+                    isShortActiveOrPending = true;
+                    break;
+                }
+            }
+            // 2. Check engine in-flight pending entry orders
+            const hasPendingEntry = eng.hasAnyPendingEntry();
+            // 3. Check SAB confirmed position
+            let hasSabPos = false;
+            if (aIdx >= 0 && aIdx < this.client.maxAssets) {
+                const lQty = this.client.getOmsLongPositionQty(aIdx);
+                const sQty = this.client.getOmsShortPositionQty(aIdx);
+                const nQty = Math.abs(this.client.getOmsPositionQty(aIdx));
+                if (lQty > 1e-6 || sQty > 1e-6 || nQty > 1e-6) {
+                    hasSabPos = true;
+                }
+            }
+            if (isLongActiveOrPending || isShortActiveOrPending || hasPendingEntry || hasSabPos) {
+                if (aIdx >= 0 && aIdx < 32) {
+                    if ((occupiedAssetMask & (1 << aIdx)) === 0) {
+                        occupiedAssetMask |= (1 << aIdx);
+                        count++;
+                    }
+                }
+                else {
+                    count++;
+                }
+            }
+        }
+        // Check any remaining SAB slots for standalone/unregistered asset indices
         for (let i = 0; i < this.client.maxAssets; i++) {
-            const lQty = this.client.getOmsLongPositionQty(i);
-            const sQty = this.client.getOmsShortPositionQty(i);
-            const nQty = Math.abs(this.client.getOmsPositionQty(i));
-            if (lQty > 1e-6 || sQty > 1e-6 || nQty > 1e-6) {
-                count++;
+            if ((checkedAssetMask & (1 << i)) === 0 && (occupiedAssetMask & (1 << i)) === 0) {
+                const lQty = this.client.getOmsLongPositionQty(i);
+                const sQty = this.client.getOmsShortPositionQty(i);
+                const nQty = Math.abs(this.client.getOmsPositionQty(i));
+                if (lQty > 1e-6 || sQty > 1e-6 || nQty > 1e-6) {
+                    occupiedAssetMask |= (1 << i);
+                    count++;
+                }
             }
         }
         return count;
@@ -338,6 +407,17 @@ class StrategyEngine {
         const fillTime = params.fillTimestampMs ?? timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs();
         const notionalUsdt = params.executedQty * params.executedPrice;
         let cooldownDurationMs = this.config.cooldownMs;
+        // SOTA Audit 22.0: Dynamically calculate remaining gross notional from hedgeLedger
+        let remainingNotional = params.remainingGrossNotional;
+        if (remainingNotional === undefined) {
+            const summary = this.hedgeLedger.getSummary(params.executedPrice > 0 ? params.executedPrice : 0);
+            if (summary.side === "FLAT" || summary.grossQuantity <= 1e-6) {
+                remainingNotional = 0;
+            }
+            else {
+                remainingNotional = summary.grossQuantity * (summary.averageEntryPrice > 0 ? summary.averageEntryPrice : params.executedPrice);
+            }
+        }
         // 1. Tier 1: RiskGuard Software State & Realized PnL / Consecutive Loss Synchronization
         if (params.isCloseOrder) {
             const realizedPnl = params.realizedPnl ?? 0;
@@ -353,10 +433,10 @@ class StrategyEngine {
             this.riskGuard.setSymbolCooldownExpiry(params.symbol, fillTime + cooldownDurationMs);
         }
         if (this.riskGuard instanceof risk_1.MultiAssetRiskGuard) {
-            this.riskGuard.recordExecutionSuccess(notionalUsdt, params.side, params.symbol, params.isCloseOrder);
+            this.riskGuard.recordExecutionSuccess(notionalUsdt, params.side, params.symbol, params.isCloseOrder, remainingNotional);
         }
         else {
-            this.riskGuard.recordExecutionSuccess(notionalUsdt, params.side, params.symbol, params.isCloseOrder);
+            this.riskGuard.recordExecutionSuccess(notionalUsdt, params.side, params.symbol, params.isCloseOrder, remainingNotional);
         }
         if (params.realizedPnl && params.realizedPnl !== 0) {
             this.riskGuard.recordRealizedPnl(params.realizedPnl);
@@ -375,7 +455,7 @@ class StrategyEngine {
         // 3. Tier 3: Immediate Zero-Latency SAB Position State Sync
         this.syncSabPositionState(0);
         const isCircuitBreaker = params.isCloseOrder && (this.riskGuard.getConsecutiveLosses(params.symbol) >= 5);
-        console.log(`[COOLDOWN_SYNC][${params.isCloseOrder ? (isCircuitBreaker ? "CIRCUIT_BREAKER_HALT" : "EXIT_BACKOFF") : "ENTRY"}] Completed ${params.positionSide} ${params.side} on ${params.symbol}. Qty: ${params.executedQty} @ $${params.executedPrice.toFixed(2)}. Cooldown: ${cooldownDurationMs}ms (until ${cooldownExpiry}). PnL: $${(params.realizedPnl ?? 0).toFixed(2)}${params.isCloseOrder ? ` (Consecutive Losses: ${this.riskGuard.getConsecutiveLosses(params.symbol)})` : ""}`);
+        console.log(`[COOLDOWN_SYNC][${params.isCloseOrder ? (isCircuitBreaker ? "CIRCUIT_BREAKER_HALT" : "EXIT_BACKOFF") : "ENTRY"}] Completed ${params.positionSide} ${params.side} on ${params.symbol}. Qty: ${params.executedQty} @ $${params.executedPrice.toFixed(2)}. RemainingNotional: $${remainingNotional.toFixed(2)}. Cooldown: ${cooldownDurationMs}ms (until ${cooldownExpiry}). PnL: $${(params.realizedPnl ?? 0).toFixed(2)}${params.isCloseOrder ? ` (Consecutive Losses: ${this.riskGuard.getConsecutiveLosses(params.symbol)})` : ""}`);
     }
     async initUserDataStream() {
         if (!this.executionClient.isConfigured())
@@ -2327,17 +2407,6 @@ class StrategyEngine {
                                 this.processedFillOrderIds.add(numericOrderId);
                             if (resCid)
                                 this.processedFillClientOrderIds.add(resCid);
-                            // Confirmed Fill on REST Response! Occupy slot immediately
-                            this.onExecutionCompleted({
-                                symbol: this.config.symbol,
-                                assetIndex: this.assetIndex,
-                                side: res.side,
-                                positionSide: targetPosSide,
-                                isCloseOrder: false,
-                                executedQty: executedQty > 0 ? executedQty : finalQuantity,
-                                executedPrice: execPx,
-                                fillTimestampMs: timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs(),
-                            });
                             const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
                             const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
                             const baseSlPercent = targetPosSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
@@ -2372,6 +2441,17 @@ class StrategyEngine {
                                     console.error(`[EXCHANGE_SL_ENGINE][UNHANDLED_DISPATCH_ERR] ${err instanceof Error ? err.message : String(err)}`);
                                 });
                             }
+                            // Confirmed Fill on REST Response! Notify execution completed with synchronized ledger state
+                            this.onExecutionCompleted({
+                                symbol: this.config.symbol,
+                                assetIndex: this.assetIndex,
+                                side: res.side,
+                                positionSide: targetPosSide,
+                                isCloseOrder: false,
+                                executedQty: executedQty > 0 ? executedQty : finalQuantity,
+                                executedPrice: execPx,
+                                fillTimestampMs: timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs(),
+                            });
                         }
                         else if (isPending && res.orderId) {
                             // Pending Limit / Post-Only Order placed on Binance orderbook

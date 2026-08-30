@@ -192,9 +192,9 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   console.log("  ✅ STAGE 3 PASSED: In-flight PENDING_ENTRY orders strictly block opposing entry signals.\n");
 
   // ============================================================================
-  // STAGE 4: 10-Slot Portfolio Hard-Cap Barrier & In-Flight Concurrency Lock
+  // STAGE 4: 10-Slot Portfolio Hard-Cap Barrier & Partial TP Notional Synchronicity
   // ============================================================================
-  console.log("[STAGE 4] Testing 10-Slot Portfolio Hard-Cap Barrier & In-Flight Concurrency Lock...");
+  console.log("[STAGE 4] Testing 10-Slot Portfolio Hard-Cap Barrier & Partial TP Notional Synchronicity...");
 
   // Reset all engines to known flat state
   for (const sym of symbols) {
@@ -212,7 +212,7 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
     const eng = multiEngine.getEngineForSymbol(sym)!;
     eng.getHedgeLedger().occupyCoreLong(1.0, 100.0, 1.5, 0.8, false);
     eng.syncSabPositionState(100.0);
-    riskGuard.recordExecutionSuccess(100.0, "BUY", sym, false);
+    riskGuard.recordExecutionSuccess(100.0, "BUY", sym, false, 100.0);
   }
 
   assert(riskGuard.getActiveSymbolCount() === 9, `RiskGuard active symbols must equal 9 (got: ${riskGuard.getActiveSymbolCount()})`);
@@ -234,9 +234,10 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
     `Global active positions with in-flight pending must equal 10 (got: ${globalPosCountWithPending})`
   );
 
-  // Verify RiskGuard rejects 11th symbol entry once 10th symbol execution is recorded
-  riskGuard.recordExecutionSuccess(100.0, "BUY", sym9, false);
+  // Verify RiskGuard registers 10th symbol execution success with $100.0 notional
+  riskGuard.recordExecutionSuccess(100.0, "BUY", sym9, false, 100.0);
   assert(riskGuard.getActiveSymbolCount() === 10, "RiskGuard must report exactly 10 active symbols");
+  assert(riskGuard.getSymbolNotional(sym9) === 100.0, "Symbol notional must equal $100.0");
 
   const order11Intent = {
     symbol: "NEW_11TH_SYMBOL",
@@ -248,25 +249,132 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   assert(riskRes11.passed === false, "RiskGuard must reject 11th position entry");
   assert(riskRes11.reasonCode === "EXCEEDS_MAX_POSITION", `Expected EXCEEDS_MAX_POSITION, got: ${riskRes11.reasonCode}`);
 
-  console.log("  - 9 confirmed + 1 in-flight pending. 11th asset entry rejected by Portfolio Capacity Lock & RiskGuard.");
+  // PARTIAL TAKE-PROFIT (TP) SYNCHRONICITY (DEF-2102 REMEDIATION PROOF):
+  // Simulate partial TP fill of 30% on Asset #9 ($30 notional executed, $70 remaining active notional)
+  riskGuard.recordExecutionSuccess(30.0, "SELL", sym9, true, 70.0);
+  assert(riskGuard.getActiveSymbolCount() === 10, "RiskGuard active symbol count must REMAIN 10 on partial TP fill (no premature deletion)");
+  assert(riskGuard.getSymbolNotional(sym9) === 70.0, "RiskGuard symbol notional must update to remaining $70.0");
 
-  // Rollback Asset #9 from PENDING_ENTRY to FLAT
+  // 11th symbol must STILL be blocked because 10 symbols remain active
+  const riskRes11DuringPartial = riskGuard.validateMultiAssetOrder(order11Intent, true);
+  assert(riskRes11DuringPartial.passed === false, "RiskGuard must continue to reject 11th position while 10 assets have open notional");
+
+  // Final exit fill of remaining 70% ($70 notional executed, $0 remaining)
   eng9.getHedgeLedger().rollbackPendingSlot("CORE_LONG", "TEST_CLEANUP");
-  riskGuard.recordExecutionSuccess(100.0, "SELL", sym9, true); // Dynamic removal on close
+  riskGuard.recordExecutionSuccess(70.0, "SELL", sym9, true, 0.0); // 0 remaining notional triggers physical deletion
   eng9.syncSabPositionState(0);
 
   const updatedCount = btcEngine.getGlobalActivePositionCount();
-  assert(updatedCount === 9, `Global active positions after rollback must equal 9 (got: ${updatedCount})`);
-  assert(riskGuard.getActiveSymbolCount() === 9, `RiskGuard active symbols after rollback must equal 9 (got: ${riskGuard.getActiveSymbolCount()})`);
+  assert(updatedCount === 9, `Global active positions after full close must equal 9 (got: ${updatedCount})`);
+  assert(riskGuard.getActiveSymbolCount() === 9, `RiskGuard active symbols after full close must equal 9 (got: ${riskGuard.getActiveSymbolCount()})`);
+  assert(riskGuard.getSymbolNotional(sym9) === 0.0, "RiskGuard symbol notional must be 0 after full close");
 
   const riskResAfterClose = riskGuard.validateMultiAssetOrder(order11Intent, true);
   assert(riskResAfterClose.passed === true, "RiskGuard must approve new position when active count < 10");
-  console.log("  ✅ STAGE 4 PASSED: 10-slot portfolio hard ceiling strictly enforced with in-flight concurrency lock.\n");
+  console.log("  ✅ STAGE 4 PASSED: 10-slot hard ceiling & partial TP notional synchronicity strictly verified.\n");
 
   // ============================================================================
-  // STAGE 5: Clean Release & Flip Authorization
+  // STAGE 5: Asynchronous Promise.all Concurrent Tick Race & Serialization Proof
   // ============================================================================
-  console.log("[STAGE 5] Testing Clean Position Release & Directional Flip Authorization...");
+  console.log("[STAGE 5] Testing Asynchronous Promise.all Concurrent Tick Race & Capacity Serialization...");
+
+  // Setup 9 active confirmed positions on Symbols 0..8
+  for (let i = 0; i < 9; i++) {
+    const sym = symbols[i];
+    const eng = multiEngine.getEngineForSymbol(sym)!;
+    eng.getHedgeLedger().clearSlots();
+    eng.getHedgeLedger().occupyCoreLong(1.0, 100.0, 1.5, 0.8, false);
+    eng.syncSabPositionState(100.0);
+    riskGuard.recordExecutionSuccess(100.0, "BUY", sym, false, 100.0);
+  }
+  assert(btcEngine.getGlobalActivePositionCount() === 9, "9 active positions must be active before concurrent race");
+
+  // Release LINKUSDT & DOTUSDT to FLAT so exactly 8 are occupied, 2 are FLAT
+  const linkEng = multiEngine.getEngineForSymbol("LINKUSDT")!;
+  const dotEng = multiEngine.getEngineForSymbol("DOTUSDT")!;
+  linkEng.getHedgeLedger().clearSlots();
+  linkEng.syncSabPositionState(0);
+  riskGuard.recordExecutionSuccess(100.0, "SELL", "LINKUSDT", true, 0.0);
+  dotEng.getHedgeLedger().clearSlots();
+  dotEng.syncSabPositionState(0);
+  riskGuard.recordExecutionSuccess(100.0, "SELL", "DOTUSDT", true, 0.0);
+
+  // Exactly 8 positions confirmed active
+  assert(btcEngine.getGlobalActivePositionCount() === 8, "Portfolio must have 8 active positions (2 available slots)");
+
+  // Re-occupy LINKUSDT so exactly 9 are active (only 1 available slot remaining before 10-slot cap)
+  linkEng.getHedgeLedger().occupyCoreLong(1.0, 100.0, 1.5, 0.8, false);
+  linkEng.syncSabPositionState(100.0);
+  riskGuard.recordExecutionSuccess(100.0, "BUY", "LINKUSDT", false, 100.0);
+  assert(btcEngine.getGlobalActivePositionCount() === 9, "Portfolio must have exactly 9 active positions (1 available slot left)");
+
+  // Instantiate 11th candidate engine (NEARUSDT) to compete simultaneously with DOTUSDT
+  const test11Hedge = new HedgePositionLedger("NEARUSDT", 3);
+  const nearEngine = new StrategyEngine(
+    client,
+    riskGuard,
+    executionClient,
+    { symbol: "NEARUSDT", assetIndex: 0 },
+    test11Hedge.getLegacyLedger(),
+    test11Hedge
+  );
+
+  // Feed simultaneous strong BUY signals to both DOTUSDT and NEARUSDT
+  const dotIdx = symbols.indexOf("DOTUSDT");
+  client.writeAtomicFloat64Asset(dotIdx, 1, 0.80);
+  client.setCVD(10.0, dotIdx);
+  client.setAIPredictionDirection(0.85, dotIdx);
+  client.setAIPredictionConfidence(0.90, dotIdx);
+  client.setShortCooldownLock(0, dotIdx);
+  client.setLongCooldownLock(0, dotIdx);
+  client.setSequenceNum(701n, dotIdx);
+
+  // Setup NEAR tick data on BTC asset index 0 (clean state)
+  client.writeAtomicFloat64Asset(0, 1, 0.80);
+  client.setCVD(10.0, 0);
+  client.setAIPredictionDirection(0.85, 0);
+  client.setAIPredictionConfidence(0.90, 0);
+  client.setShortCooldownLock(0, 0);
+  client.setLongCooldownLock(0, 0);
+  client.setSequenceNum(801n, 0);
+
+  // Fire concurrent Promise.all evaluations for both candidate engines
+  const [dotEval, nearEval] = await Promise.all([
+    Promise.resolve().then(() => dotEng.evaluateTick()),
+    Promise.resolve().then(() => nearEngine.evaluateTick()),
+  ]);
+
+  // Assert: Exactly ONE engine succeeded in generating an actionable BUY signal, while the other was blocked
+  const dotApproved = dotEval.signalType === "BUY";
+  const nearApproved = nearEval.signalType === "BUY";
+
+  assert(
+    (dotApproved && !nearApproved) || (!dotApproved && nearApproved),
+    `Exactly one engine must win the race (DOT: ${dotEval.signalType}, NEAR: ${nearEval.signalType})`
+  );
+
+  const finalGlobalCount = btcEngine.getGlobalActivePositionCount();
+  assert(
+    finalGlobalCount === 10,
+    `Global active position count must remain capped at exactly 10 (got: ${finalGlobalCount})`
+  );
+
+  // Clean up candidate reservations & restore registered engines
+  dotEng.clearPendingEntryOrders();
+  dotEng.getHedgeLedger().clearSlots();
+  nearEngine.clearPendingEntryOrders();
+  nearEngine.getHedgeLedger().clearSlots();
+  StrategyEngine.resetRegisteredEngines();
+  for (const eng of multiEngine.getAllEngines().values()) {
+    StrategyEngine.registerEngine(eng);
+  }
+
+  console.log("  ✅ STAGE 5 PASSED: Asynchronous Promise.all tick race serialized with zero capacity breach.\n");
+
+  // ============================================================================
+  // STAGE 6: Clean Release & Flip Authorization
+  // ============================================================================
+  console.log("[STAGE 6] Testing Clean Position Release & Directional Flip Authorization...");
   btcHedge.clearSlots();
   btcEngine.syncSabPositionState(0);
   assert(btcHedge.getCoreLong().isOccupied === false, "BTC Core Long must be FLAT");
@@ -311,12 +419,12 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   const btcFlipBuyEval = btcEngine.evaluateTick();
   assert(btcFlipBuyEval.signalType === "BUY", `BTC must approve BUY signal when FLAT after Short release (got: ${btcFlipBuyEval.signalType})`);
   assert(btcFlipBuyEval.slotId === "CORE_LONG", `Target slot must be CORE_LONG (got: ${btcFlipBuyEval.slotId})`);
-  console.log("  ✅ STAGE 5 PASSED: Releasing position immediately restores flip authorization.\n");
+  console.log("  ✅ STAGE 6 PASSED: Releasing position immediately restores flip authorization.\n");
 
   // ============================================================================
-  // STAGE 6: Sub-Microsecond Hot-Path Latency Benchmark (< 1.500 µs / tick)
+  // STAGE 7: Sub-Microsecond Hot-Path Latency Benchmark (< 1.500 µs / tick)
   // ============================================================================
-  console.log("[STAGE 6] Benchmarking Hot-Path Latency with Mutex & Capacity Guards (100,000 evaluations)...");
+  console.log("[STAGE 7] Benchmarking Hot-Path Latency with Mutex & Capacity Guards (100,000 evaluations)...");
   btcHedge.clearSlots();
   btcEngine.syncSabPositionState(0);
 
@@ -341,10 +449,10 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   console.log(`  - 100,000 tick evaluations completed in: ${totalMs.toFixed(2)} ms`);
   console.log(`  - Average hot-path evaluation latency  : ${avgUsPerTick.toFixed(4)} µs / tick`);
   assert(avgUsPerTick < 1.500, `Latency must be < 1.500 µs (got: ${avgUsPerTick.toFixed(4)} µs)`);
-  console.log(`  ✅ STAGE 6 PASSED: Sub-microsecond latency (${avgUsPerTick.toFixed(4)} µs < 1.500 µs HFT SLA).\n`);
+  console.log(`  ✅ STAGE 7 PASSED: Sub-microsecond latency (${avgUsPerTick.toFixed(4)} µs < 1.500 µs HFT SLA).\n`);
 
   console.log("=========================================================================");
-  console.log("  ALL 6 STAGES PASSED: OMS CAPACITY & MUTEX LOCK 100% VERIFIED           ");
+  console.log("  ALL 7 STAGES PASSED: OMS CAPACITY & MUTEX LOCK 100% VERIFIED           ");
   console.log("=========================================================================");
 }
 

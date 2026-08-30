@@ -348,7 +348,7 @@ class RiskGuard {
         }
         return exports.RISK_PASSED;
     }
-    recordExecutionSuccess(notionalUsdt, side = "BUY", symbol, isCloseOrder = false) {
+    recordExecutionSuccess(notionalUsdt, side = "BUY", symbol, isCloseOrder = false, remainingGrossNotional) {
         const now = Date.now();
         this.lastExecutionTimestampMs = now;
         if (symbol && !isCloseOrder) {
@@ -359,8 +359,8 @@ class RiskGuard {
             this.symbolExecutionHistory.set(symbol, updated);
         }
     }
-    recordExitExecution(notionalUsdt, realizedPnl = 0, side = "BUY", symbol, netRoePercent) {
-        this.recordExecutionSuccess(notionalUsdt, side, symbol, true);
+    recordExitExecution(notionalUsdt, realizedPnl = 0, side = "BUY", symbol, netRoePercent, remainingGrossNotional) {
+        this.recordExecutionSuccess(notionalUsdt, side, symbol, true, remainingGrossNotional);
         if (realizedPnl !== 0) {
             this.recordRealizedPnl(realizedPnl);
         }
@@ -417,10 +417,26 @@ class MultiAssetRiskGuard extends RiskGuard {
         this.maxAssetCorrelation = config?.maxAssetCorrelation ?? 0.85;
         this.maxActivePositions = config?.maxActivePositions ?? 10;
     }
-    recordExecutionSuccess(notionalUsdt, side = "BUY", symbol, isCloseOrder = false) {
-        super.recordExecutionSuccess(notionalUsdt, side, symbol, isCloseOrder);
+    recordExecutionSuccess(notionalUsdt, side = "BUY", symbol, isCloseOrder = false, remainingGrossNotional) {
+        super.recordExecutionSuccess(notionalUsdt, side, symbol, isCloseOrder, remainingGrossNotional);
         if (symbol) {
             this.symbolExecutionTimestamps.set(symbol, Date.now());
+            if (remainingGrossNotional !== undefined) {
+                if (remainingGrossNotional <= 1e-6) {
+                    this.activeSymbolNotionals.delete(symbol);
+                }
+                else {
+                    this.activeSymbolNotionals.set(symbol, remainingGrossNotional);
+                }
+            }
+            else {
+                if (isCloseOrder) {
+                    this.activeSymbolNotionals.delete(symbol);
+                }
+                else if (notionalUsdt > 0) {
+                    this.activeSymbolNotionals.set(symbol, notionalUsdt);
+                }
+            }
         }
     }
     getSymbolExecutionTimestamp(symbol) {
