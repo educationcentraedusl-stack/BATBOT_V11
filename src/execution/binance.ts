@@ -446,7 +446,7 @@ export class BinanceExecutionClient {
   }
 
   public setUsdtAvailableBalance(val: number): void {
-    if (Number.isFinite(val) && val >= 0) {
+    if (Number.isFinite(val)) {
       this.cachedUsdtAvailableBalance = val;
     }
   }
@@ -456,10 +456,10 @@ export class BinanceExecutionClient {
    * Zero REST API calls and zero rate limit consumption.
    */
   public updateBalancesFromWs(availableBalance: number, walletBalance?: number): void {
-    if (Number.isFinite(availableBalance) && availableBalance >= 0) {
+    if (Number.isFinite(availableBalance)) {
       this.cachedUsdtAvailableBalance = availableBalance;
     }
-    if (walletBalance !== undefined && Number.isFinite(walletBalance) && walletBalance >= 0) {
+    if (walletBalance !== undefined && Number.isFinite(walletBalance)) {
       this.cachedReconciledWalletBalance = walletBalance;
     }
   }

@@ -15,6 +15,9 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-08-31 - Audit 27.0 Forensic Remediation (DEF-2701 Execution Client Negative Equity Cache Eradication) Completed & 100% QA Verified:
+  - DEF-2701 Execution Client Cache Loophole Eradicated (`src/execution/binance.ts`): Removed restrictive `>= 0` bounds from `setUsdtAvailableBalance` and `updateBalancesFromWs`. Enforced strict `Number.isFinite()` across all balance setters, ensuring negative equity states (liquidations, margin deficits) mutate execution client cached state and seamlessly propagate to downstream SharedArrayBuffer telemetry and risk guards.
+  - Zero-Warning TypeScript Compilation: Verified 100% pass via `npx tsc --noEmit` with 0 errors and 0 warnings.
 * 2026-08-31 - Audit 26.0 Forensic Remediation (Negative Equity Protection, IEEE 754 Infinity Invariant, Throttled Hot-Path I/O & Hermetic Benchmark Isolation) Completed & 100% QA Verified:
   - Negative Equity & Deficit Insolvent Halting (`src/strategy/risk.ts`, `src/strategy/positionLedger.ts`, `src/execution/userDataStream.ts`, `src/strategy/multiEngine.ts`): Enabled `updateAccountBalance` and WebSocket balance ingestion across all finite numbers (`Number.isFinite(bal)`). Liquidated or negative margin balances ($B \le 0$) mutate internal state and strictly halt new position entries with `EXCEEDS_MAX_POSITION`.
   - IEEE 754 Leverage Infinity Invariant (`src/strategy/positionLedger.ts`): Unified `MultiAssetPositionLedger.getPortfolioSnapshot()` to calculate `leverage = Infinity` when `accountBalanceUsdt <= 0` and `totalGrossNotional > 0`, aligning 100% with `MultiAssetRiskGuard`.
