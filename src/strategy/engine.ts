@@ -264,6 +264,8 @@ export class StrategyEngine {
         this.syncSabPositionState();
       });
     }
+
+    StrategyEngine.registerEngine(this);
   }
 
   /**
@@ -355,16 +357,95 @@ export class StrategyEngine {
     return this.pendingEntryOrders.size > 0;
   }
 
+  private static registeredEngines: StrategyEngine[] = [];
+
+  public static registerEngine(engine: StrategyEngine): void {
+    const existingIdx = StrategyEngine.registeredEngines.findIndex(
+      (e) => e.getConfig().symbol === engine.getConfig().symbol
+    );
+    if (existingIdx >= 0) {
+      StrategyEngine.registeredEngines[existingIdx] = engine;
+    } else {
+      StrategyEngine.registeredEngines.push(engine);
+    }
+  }
+
+  public static resetRegisteredEngines(): void {
+    StrategyEngine.registeredEngines = [];
+  }
+
+  public static getRegisteredEngines(): ReadonlyArray<StrategyEngine> {
+    return StrategyEngine.registeredEngines;
+  }
+
   public getGlobalActivePositionCount(): number {
     let count = 0;
-    for (let i = 0; i < this.client.maxAssets; i++) {
-      const lQty = this.client.getOmsLongPositionQty(i);
-      const sQty = this.client.getOmsShortPositionQty(i);
-      const nQty = Math.abs(this.client.getOmsPositionQty(i));
-      if (lQty > 1e-6 || sQty > 1e-6 || nQty > 1e-6) {
-        count++;
+    let occupiedAssetMask = 0;
+    let checkedAssetMask = 0;
+
+    const registered = StrategyEngine.registeredEngines;
+    const len = registered.length;
+    for (let i = 0; i < len; i++) {
+      const eng = registered[i];
+      if (!eng) continue;
+
+      const aIdx = eng.assetIndex;
+      if (aIdx >= 0 && aIdx < 32) {
+        checkedAssetMask |= (1 << aIdx);
+      }
+
+      // 1. Check local ledger active OR in-flight PENDING_ENTRY state
+      const hl = eng.hedgeLedger;
+      const coreLong = hl.getCoreLong();
+      const isLongActiveOrPending = coreLong.isOccupied || coreLong.lifecycleState === "PENDING_ENTRY";
+      let isShortActiveOrPending = false;
+      const shortSlots = hl.getShortSlots();
+      for (let s = 0; s < shortSlots.length; s++) {
+        if (shortSlots[s].isOccupied || shortSlots[s].lifecycleState === "PENDING_ENTRY") {
+          isShortActiveOrPending = true;
+          break;
+        }
+      }
+
+      // 2. Check engine in-flight pending entry orders
+      const hasPendingEntry = eng.hasAnyPendingEntry();
+
+      // 3. Check SAB confirmed position
+      let hasSabPos = false;
+      if (aIdx >= 0 && aIdx < this.client.maxAssets) {
+        const lQty = this.client.getOmsLongPositionQty(aIdx);
+        const sQty = this.client.getOmsShortPositionQty(aIdx);
+        const nQty = Math.abs(this.client.getOmsPositionQty(aIdx));
+        if (lQty > 1e-6 || sQty > 1e-6 || nQty > 1e-6) {
+          hasSabPos = true;
+        }
+      }
+
+      if (isLongActiveOrPending || isShortActiveOrPending || hasPendingEntry || hasSabPos) {
+        if (aIdx >= 0 && aIdx < 32) {
+          if ((occupiedAssetMask & (1 << aIdx)) === 0) {
+            occupiedAssetMask |= (1 << aIdx);
+            count++;
+          }
+        } else {
+          count++;
+        }
       }
     }
+
+    // Check any remaining SAB slots for standalone/unregistered asset indices
+    for (let i = 0; i < this.client.maxAssets; i++) {
+      if ((checkedAssetMask & (1 << i)) === 0 && (occupiedAssetMask & (1 << i)) === 0) {
+        const lQty = this.client.getOmsLongPositionQty(i);
+        const sQty = this.client.getOmsShortPositionQty(i);
+        const nQty = Math.abs(this.client.getOmsPositionQty(i));
+        if (lQty > 1e-6 || sQty > 1e-6 || nQty > 1e-6) {
+          occupiedAssetMask |= (1 << i);
+          count++;
+        }
+      }
+    }
+
     return count;
   }
 

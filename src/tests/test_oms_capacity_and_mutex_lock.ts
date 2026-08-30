@@ -192,9 +192,9 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   console.log("  ✅ STAGE 3 PASSED: In-flight PENDING_ENTRY orders strictly block opposing entry signals.\n");
 
   // ============================================================================
-  // STAGE 4: 10-Slot Portfolio Hard-Cap Barrier (Active Pos <= 10)
+  // STAGE 4: 10-Slot Portfolio Hard-Cap Barrier & In-Flight Concurrency Lock
   // ============================================================================
-  console.log("[STAGE 4] Testing 10-Slot Portfolio Hard-Cap Barrier (Active Pos <= 10)...");
+  console.log("[STAGE 4] Testing 10-Slot Portfolio Hard-Cap Barrier & In-Flight Concurrency Lock...");
 
   // Reset all engines to known flat state
   for (const sym of symbols) {
@@ -206,20 +206,38 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   }
   riskGuard.resetSymbolNotionals();
 
-  // Populate exactly 10 distinct asset slots with positions (1 per symbol)
-  for (let i = 0; i < maxAssets; i++) {
+  // Populate exactly 9 distinct asset slots with confirmed positions via real hot-path execution success
+  for (let i = 0; i < 9; i++) {
     const sym = symbols[i];
     const eng = multiEngine.getEngineForSymbol(sym)!;
     eng.getHedgeLedger().occupyCoreLong(1.0, 100.0, 1.5, 0.8, false);
     eng.syncSabPositionState(100.0);
-    riskGuard.updateSymbolNotional(sym, 100.0);
+    riskGuard.recordExecutionSuccess(100.0, "BUY", sym, false);
   }
 
-  const globalPosCount = btcEngine.getGlobalActivePositionCount();
-  assert(globalPosCount === 10, `Global active positions must equal 10 (got: ${globalPosCount})`);
-  assert(riskGuard.getActiveSymbolCount() === 10, `RiskGuard active symbols must equal 10 (got: ${riskGuard.getActiveSymbolCount()})`);
+  assert(riskGuard.getActiveSymbolCount() === 9, `RiskGuard active symbols must equal 9 (got: ${riskGuard.getActiveSymbolCount()})`);
+  assert(btcEngine.getGlobalActivePositionCount() === 9, `Global active positions must equal 9 before in-flight entry`);
 
-  // Verify RiskGuard rejects 11th symbol entry
+  // CONCURRENCY LEAK (DEF-2101) VERIFICATION:
+  // Asset #9 (the 10th symbol) enters PENDING_ENTRY (in-flight dispatch awaiting Binance execution).
+  // Its SAB position quantity is still 0.0 during the await window!
+  const sym9 = symbols[9];
+  const eng9 = multiEngine.getEngineForSymbol(sym9)!;
+  const reservePendingRes = eng9.getHedgeLedger().reserveCoreLongPending("PENDING_CID_ASSET_9", 100.0, 1.0);
+  assert(reservePendingRes === true, "Asset #9 reserveCoreLongPending must succeed on flat slot");
+  assert(eng9.getHedgeLedger().getCoreLong().lifecycleState === "PENDING_ENTRY", "Asset #9 must be PENDING_ENTRY");
+
+  // Global active position count MUST now equal 10 (9 SAB confirmed + 1 in-flight PENDING_ENTRY)
+  const globalPosCountWithPending = btcEngine.getGlobalActivePositionCount();
+  assert(
+    globalPosCountWithPending === 10,
+    `Global active positions with in-flight pending must equal 10 (got: ${globalPosCountWithPending})`
+  );
+
+  // Verify RiskGuard rejects 11th symbol entry once 10th symbol execution is recorded
+  riskGuard.recordExecutionSuccess(100.0, "BUY", sym9, false);
+  assert(riskGuard.getActiveSymbolCount() === 10, "RiskGuard must report exactly 10 active symbols");
+
   const order11Intent = {
     symbol: "NEW_11TH_SYMBOL",
     side: "BUY" as const,
@@ -230,21 +248,20 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   assert(riskRes11.passed === false, "RiskGuard must reject 11th position entry");
   assert(riskRes11.reasonCode === "EXCEEDS_MAX_POSITION", `Expected EXCEEDS_MAX_POSITION, got: ${riskRes11.reasonCode}`);
 
-  console.log("  - 10/10 slots occupied. 11th asset entry rejected by Portfolio Risk Guard.");
+  console.log("  - 9 confirmed + 1 in-flight pending. 11th asset entry rejected by Portfolio Capacity Lock & RiskGuard.");
 
-  // Close 1 asset (Asset #9)
-  const sym9 = symbols[9];
-  const eng9 = multiEngine.getEngineForSymbol(sym9)!;
-  eng9.getHedgeLedger().releaseCoreLong(100.0, 0.0004, "PROFIT_EXIT", 100.0);
+  // Rollback Asset #9 from PENDING_ENTRY to FLAT
+  eng9.getHedgeLedger().rollbackPendingSlot("CORE_LONG", "TEST_CLEANUP");
+  riskGuard.recordExecutionSuccess(100.0, "SELL", sym9, true); // Dynamic removal on close
   eng9.syncSabPositionState(0);
-  riskGuard.updateSymbolNotional(sym9, 0);
 
   const updatedCount = btcEngine.getGlobalActivePositionCount();
-  assert(updatedCount === 9, `Global active positions after release must equal 9 (got: ${updatedCount})`);
+  assert(updatedCount === 9, `Global active positions after rollback must equal 9 (got: ${updatedCount})`);
+  assert(riskGuard.getActiveSymbolCount() === 9, `RiskGuard active symbols after rollback must equal 9 (got: ${riskGuard.getActiveSymbolCount()})`);
 
   const riskResAfterClose = riskGuard.validateMultiAssetOrder(order11Intent, true);
   assert(riskResAfterClose.passed === true, "RiskGuard must approve new position when active count < 10");
-  console.log("  ✅ STAGE 4 PASSED: 10-slot portfolio hard ceiling strictly enforced. 11/10 breach is mathematically impossible.\n");
+  console.log("  ✅ STAGE 4 PASSED: 10-slot portfolio hard ceiling strictly enforced with in-flight concurrency lock.\n");
 
   // ============================================================================
   // STAGE 5: Clean Release & Flip Authorization

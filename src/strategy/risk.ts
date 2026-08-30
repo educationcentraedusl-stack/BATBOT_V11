@@ -560,6 +560,11 @@ export class MultiAssetRiskGuard extends RiskGuard {
     super.recordExecutionSuccess(notionalUsdt, side, symbol, isCloseOrder);
     if (symbol) {
       this.symbolExecutionTimestamps.set(symbol, Date.now());
+      if (isCloseOrder) {
+        this.activeSymbolNotionals.delete(symbol);
+      } else if (notionalUsdt > 0) {
+        this.activeSymbolNotionals.set(symbol, notionalUsdt);
+      }
     }
   }
 
