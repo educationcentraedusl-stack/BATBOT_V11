@@ -532,6 +532,7 @@ export interface MultiAssetRiskConfig extends RiskConfig {
   maxPortfolioLeverage: number;
   maxAssetCorrelation: number;
   accountBalanceUsdt: number;
+  maxActivePositions?: number;
 }
 
 export class MultiAssetRiskGuard extends RiskGuard {
@@ -540,12 +541,14 @@ export class MultiAssetRiskGuard extends RiskGuard {
   private accountBalanceUsdt: number;
   private maxPortfolioLeverage: number;
   private maxAssetCorrelation: number;
+  private maxActivePositions: number;
 
   constructor(config?: Partial<MultiAssetRiskConfig>) {
     super(config);
     this.accountBalanceUsdt = config?.accountBalanceUsdt ?? 100_000.0;
     this.maxPortfolioLeverage = config?.maxPortfolioLeverage ?? 3.0;
     this.maxAssetCorrelation = config?.maxAssetCorrelation ?? 0.85;
+    this.maxActivePositions = config?.maxActivePositions ?? 10;
   }
 
   public override recordExecutionSuccess(
@@ -576,6 +579,10 @@ export class MultiAssetRiskGuard extends RiskGuard {
 
   public getSymbolNotional(symbol: string): number {
     return this.activeSymbolNotionals.get(symbol) ?? 0;
+  }
+
+  public getActiveSymbolCount(): number {
+    return this.activeSymbolNotionals.size;
   }
 
   public updateSymbolNotional(symbol: string, notionalUsdt: number): void {
@@ -633,6 +640,16 @@ export class MultiAssetRiskGuard extends RiskGuard {
 
     if (intent.isCloseOrder || intent.isHardStop) {
       return RISK_PASSED;
+    }
+
+    // SOTA 10-SLOT PORTFOLIO HARD CAP: Block new asset entry if portfolio reached max capacity
+    const isNewSymbolEntry = !this.activeSymbolNotionals.has(intent.symbol);
+    if (isNewSymbolEntry && this.activeSymbolNotionals.size >= this.maxActivePositions) {
+      return {
+        passed: false,
+        reasonCode: "EXCEEDS_MAX_POSITION",
+        message: `Order rejected: Maximum portfolio capacity of ${this.maxActivePositions} active positions reached (${this.activeSymbolNotionals.size}/${this.maxActivePositions}).`,
+      };
     }
 
     const proposedNotional = intent.price * intent.quantity;

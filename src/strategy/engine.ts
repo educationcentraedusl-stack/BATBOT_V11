@@ -342,6 +342,32 @@ export class StrategyEngine {
     return false;
   }
 
+  public hasPendingEntryForSide(side: "LONG" | "SHORT"): boolean {
+    for (const pending of this.pendingEntryOrders.values()) {
+      if (pending.posSide === side) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public hasAnyPendingEntry(): boolean {
+    return this.pendingEntryOrders.size > 0;
+  }
+
+  public getGlobalActivePositionCount(): number {
+    let count = 0;
+    for (let i = 0; i < this.client.maxAssets; i++) {
+      const lQty = this.client.getOmsLongPositionQty(i);
+      const sQty = this.client.getOmsShortPositionQty(i);
+      const nQty = Math.abs(this.client.getOmsPositionQty(i));
+      if (lQty > 1e-6 || sQty > 1e-6 || nQty > 1e-6) {
+        count++;
+      }
+    }
+    return count;
+  }
+
   public clearPendingEntryOrders(): void {
     for (const pending of this.pendingEntryOrders.values()) {
       if (pending.timeoutTimer) {
@@ -349,6 +375,7 @@ export class StrategyEngine {
       }
     }
     this.pendingEntryOrders.clear();
+    this.isOrderInFlight = false;
     for (const timer of this.settlementTimers.values()) {
       clearTimeout(timer);
     }
@@ -2513,10 +2540,56 @@ export class StrategyEngine {
         isSellSignal = false;
       }
 
-      // BUY -> Core Long Entry (allowed if Core Long is FLAT, not PENDING_ENTRY, & temporal cooldown expired)
+      // ============================================================================
+      // SOTA UNIDIRECTIONAL ASSET MUTEX & 10-SLOT PORTFOLIO HARD CAP (August 2026)
+      // ============================================================================
       const coreLongSlot = this.hedgeLedger.getCoreLong();
       const isCoreLongOccupied = coreLongSlot.isOccupied || coreLongSlot.lifecycleState === "PENDING_ENTRY";
-      const hasPendingCoreLong = this.hasPendingEntryForSlot("CORE_LONG");
+      const hasPendingCoreLong = this.hasPendingEntryForSlot("CORE_LONG") || this.hasPendingEntryForSide("LONG");
+      const isLongActiveOrPending = isCoreLongOccupied || hasPendingCoreLong;
+
+      const hasActiveShortSlot = this.hedgeLedger.getShortSlots().some(
+        (s) => s.isOccupied || s.lifecycleState === "PENDING_ENTRY"
+      );
+      const hasPendingShort = this.hasPendingEntryForSide("SHORT");
+      const isShortActiveOrPending = hasActiveShortSlot || hasPendingShort;
+
+      const globalActivePositions = this.getGlobalActivePositionCount();
+      const isPortfolioCapacityReached = globalActivePositions >= this.client.maxAssets;
+      const hasExistingPositionForThisSymbol = isLongActiveOrPending || isShortActiveOrPending;
+
+      // 1. Capacity Lock: If portfolio capacity (10/10) is reached and this symbol is FLAT, block entries
+      if (isPortfolioCapacityReached && !hasExistingPositionForThisSymbol) {
+        if ((isBuySignal || isSellSignal) && seq % 1000n === 0n) {
+          console.warn(
+            `[PORTFOLIO_CAPACITY_LOCK][BLOCKED] [${this.config.symbol}] Portfolio hard cap reached (${globalActivePositions}/${this.client.maxAssets} active positions). Entry blocked.`
+          );
+        }
+        isBuySignal = false;
+        isSellSignal = false;
+      }
+
+      // 2. Unidirectional Mutex Lock:
+      // If ANY Short position/pending order exists on this symbol, BUY is 100% blocked
+      if (isShortActiveOrPending && isBuySignal) {
+        if (seq % 1000n === 0n) {
+          console.warn(
+            `[UNIDIRECTIONAL_MUTEX][BLOCKED] [${this.config.symbol}] BUY signal rejected: Active/Pending SHORT position exists on this asset.`
+          );
+        }
+        isBuySignal = false;
+      }
+
+      // If ANY Long position/pending order exists on this symbol, SELL is 100% blocked
+      if (isLongActiveOrPending && isSellSignal) {
+        if (seq % 1000n === 0n) {
+          console.warn(
+            `[UNIDIRECTIONAL_MUTEX][BLOCKED] [${this.config.symbol}] SELL signal rejected: Active/Pending LONG position exists on this asset.`
+          );
+        }
+        isSellSignal = false;
+      }
+
       const isCooldownCleared = nowMs >= longCooldownLock;
 
       if (!isCoreLongOccupied && !hasPendingCoreLong && !isCooldownCleared && seq % 10000n === 0n) {
@@ -2526,6 +2599,8 @@ export class StrategyEngine {
       if (
         isBuySignal &&
         !isSpreadBlowout &&
+        !isShortActiveOrPending &&
+        (!isPortfolioCapacityReached || hasExistingPositionForThisSymbol) &&
         (isHighConfidenceAi || spreadVelocity < this.config.maxSpreadVelocity) &&
         askPrice > 0 &&
         !isCoreLongOccupied &&
@@ -2543,6 +2618,8 @@ export class StrategyEngine {
       else if (
         isSellSignal &&
         !isSpreadBlowout &&
+        !isLongActiveOrPending &&
+        (!isPortfolioCapacityReached || hasExistingPositionForThisSymbol) &&
         (isHighConfidenceAi || spreadVelocity < this.config.maxSpreadVelocity) &&
         bidPrice > 0
       ) {
@@ -2559,7 +2636,7 @@ export class StrategyEngine {
 
         if (slotEval !== null) {
           const slotId = `SHORT_SLOT_${slotEval.slotIndex}`;
-          if (!this.hasPendingEntryForSlot(slotId)) {
+          if (!this.hasPendingEntryForSlot(slotId) && !this.hasPendingEntryForSide("SHORT")) {
             signalType = "SELL";
             targetPosSide = "SHORT";
             targetSlotIndex = slotEval.slotIndex;

@@ -409,11 +409,13 @@ class MultiAssetRiskGuard extends RiskGuard {
     accountBalanceUsdt;
     maxPortfolioLeverage;
     maxAssetCorrelation;
+    maxActivePositions;
     constructor(config) {
         super(config);
         this.accountBalanceUsdt = config?.accountBalanceUsdt ?? 100_000.0;
         this.maxPortfolioLeverage = config?.maxPortfolioLeverage ?? 3.0;
         this.maxAssetCorrelation = config?.maxAssetCorrelation ?? 0.85;
+        this.maxActivePositions = config?.maxActivePositions ?? 10;
     }
     recordExecutionSuccess(notionalUsdt, side = "BUY", symbol, isCloseOrder = false) {
         super.recordExecutionSuccess(notionalUsdt, side, symbol, isCloseOrder);
@@ -434,6 +436,9 @@ class MultiAssetRiskGuard extends RiskGuard {
     }
     getSymbolNotional(symbol) {
         return this.activeSymbolNotionals.get(symbol) ?? 0;
+    }
+    getActiveSymbolCount() {
+        return this.activeSymbolNotionals.size;
     }
     updateSymbolNotional(symbol, notionalUsdt) {
         if (notionalUsdt <= 0) {
@@ -478,6 +483,15 @@ class MultiAssetRiskGuard extends RiskGuard {
         }
         if (intent.isCloseOrder || intent.isHardStop) {
             return exports.RISK_PASSED;
+        }
+        // SOTA 10-SLOT PORTFOLIO HARD CAP: Block new asset entry if portfolio reached max capacity
+        const isNewSymbolEntry = !this.activeSymbolNotionals.has(intent.symbol);
+        if (isNewSymbolEntry && this.activeSymbolNotionals.size >= this.maxActivePositions) {
+            return {
+                passed: false,
+                reasonCode: "EXCEEDS_MAX_POSITION",
+                message: `Order rejected: Maximum portfolio capacity of ${this.maxActivePositions} active positions reached (${this.activeSymbolNotionals.size}/${this.maxActivePositions}).`,
+            };
         }
         const proposedNotional = intent.price * intent.quantity;
         const currentGross = this.getGrossPortfolioNotional();

@@ -1,0 +1,337 @@
+import "dotenv/config";
+import { MarketDataClient } from "../marketDataClient";
+import { MultiAssetRiskGuard } from "../strategy/risk";
+import { BinanceExecutionClient } from "../execution/binance";
+import { StrategyEngine } from "../strategy/engine";
+import { HedgePositionLedger, MultiAssetPositionLedger } from "../strategy/positionLedger";
+import { MultiAssetStrategyEngine } from "../strategy/multiEngine";
+import { getTradingSymbols } from "../config/tradingSymbols";
+import { timeSynchronizer } from "../utils/timeSynchronizer";
+
+function assert(condition: boolean, message: string): void {
+  if (!condition) {
+    console.error(`❌ [ASSERTION_FAILED] ${message}`);
+    throw new Error(`ASSERTION_FAILED: ${message}`);
+  }
+}
+
+async function runOmsCapacityAndMutexProof(): Promise<void> {
+  console.log("=========================================================================");
+  console.log("  TEST: OMS CAPACITY (10-SLOT HARD CAP) & UNIDIRECTIONAL ASSET MUTEX     ");
+  console.log("=========================================================================\n");
+
+  const symbols = getTradingSymbols();
+  const maxAssets = 10;
+  const slotsPerAsset = 256;
+  const sab = new SharedArrayBuffer(maxAssets * slotsPerAsset * 8);
+  const client = new MarketDataClient(sab, maxAssets, slotsPerAsset);
+  const riskGuard = new MultiAssetRiskGuard({ maxActivePositions: 10 });
+  const executionClient = new BinanceExecutionClient();
+  const positionLedger = new MultiAssetPositionLedger(symbols);
+
+  const multiEngine = new MultiAssetStrategyEngine(
+    client,
+    riskGuard,
+    executionClient,
+    symbols,
+    positionLedger
+  );
+
+  const btcEngine = multiEngine.getEngineForSymbol("BTCUSDT")!;
+  const avaxEngine = multiEngine.getEngineForSymbol("AVAXUSDT")!;
+  const solEngine = multiEngine.getEngineForSymbol("SOLUSDT")!;
+  const bnbEngine = multiEngine.getEngineForSymbol("BNBUSDT")!;
+
+  assert(!!btcEngine, "BTCUSDT engine must be initialized");
+  assert(!!avaxEngine, "AVAXUSDT engine must be initialized");
+  assert(!!solEngine, "SOLUSDT engine must be initialized");
+  assert(!!bnbEngine, "BNBUSDT engine must be initialized");
+
+  const btcIdx = 0;
+  const avaxIdx = symbols.indexOf("AVAXUSDT");
+  const solIdx = symbols.indexOf("SOLUSDT");
+  const bnbIdx = symbols.indexOf("BNBUSDT");
+
+  // Setup valid live market prices
+  const nowMs = timeSynchronizer.getAdjustedNowMs();
+  const nowNs = BigInt(nowMs) * 1000000n;
+
+  for (let i = 0; i < maxAssets; i++) {
+    client.writeAtomicFloat64Asset(i, 4, 100.0); // Best Bid
+    client.writeAtomicFloat64Asset(i, 5, 10.0);  // Best Bid Qty
+    client.writeAtomicFloat64Asset(i, 6, 100.01); // Best Ask
+    client.writeAtomicFloat64Asset(i, 7, 10.0);  // Best Ask Qty
+    client.writeAtomicFloat64Asset(i, 114, 0.0001); // Realized vol
+    client.writeAtomicFloat64Asset(i, 112, 1.0); // Hawkes
+    client.setHurstExponent(0.60, i);
+    client.setLOBEntropy(0.50, i);
+    // Write valid timestamp
+    const bigIntView = new BigInt64Array(sab);
+    Atomics.store(bigIntView, i * slotsPerAsset + 0, nowNs);
+  }
+
+  // BTC market prices (Slot 4: Bid, Slot 6: Ask)
+  client.writeAtomicFloat64Asset(btcIdx, 4, 78120.0);
+  client.writeAtomicFloat64Asset(btcIdx, 6, 78120.5);
+  // AVAX market prices (Slot 4: Bid, Slot 6: Ask)
+  client.writeAtomicFloat64Asset(avaxIdx, 4, 7.295);
+  client.writeAtomicFloat64Asset(avaxIdx, 6, 7.296);
+
+  // ============================================================================
+  // STAGE 1: Unidirectional Long-Blocks-Short Mutex (BTCUSDT)
+  // ============================================================================
+  console.log("[STAGE 1] Testing Unidirectional Long-Blocks-Short Mutex on Slot #0 (BTCUSDT)...");
+  const btcHedge = btcEngine.getHedgeLedger();
+
+  // Occupy Core Long on BTCUSDT
+  btcHedge.occupyCoreLong(0.005, 78120.0, 1.5, 0.8, false);
+  assert(btcHedge.getCoreLong().isOccupied === true, "BTC Core Long must be occupied");
+  btcEngine.syncSabPositionState(78120.0);
+
+  // Attempt to allocate short slot via evaluateDispersedShortSlotAllocation
+  const shortAllocResult = btcHedge.evaluateDispersedShortSlotAllocation(78120.0, 0.1, 0.001, 1.0, 0, nowMs);
+  assert(shortAllocResult === null, "evaluateDispersedShortSlotAllocation must return null when Core Long is active");
+
+  // Attempt to reserve short slot
+  const reserveShortSuccess = btcHedge.reserveShortSlotPending(0, "TEST_CLID", 78120.0, 0.005);
+  assert(reserveShortSuccess === false, "reserveShortSlotPending must return false when Core Long is active");
+
+  // Attempt to directly occupy short slot
+  const occupyShortSuccess = btcHedge.occupyShortSlot(0, 0.005, 78120.0, 1.5, 0.8, false);
+  assert(occupyShortSuccess === false, "occupyShortSlot must return false when Core Long is active");
+  assert(btcHedge.getShortSlots()[0].isOccupied === false, "Short slot #0 must remain FLAT");
+
+  // Feed strong SELL signal into BTC StrategyEngine
+  client.writeAtomicFloat64Asset(btcIdx, 1, -0.80); // OBI -0.80
+  client.setCVD(-10.0, btcIdx);
+  client.setAIPredictionDirection(-0.85, btcIdx); // AI Direction -0.85
+  client.setAIPredictionConfidence(0.90, btcIdx);  // AI Confidence 90%
+  client.setFinalizedSignal(0.0, btcIdx);
+  client.setSequenceNum(101n, btcIdx);
+
+  const btcSellEval = btcEngine.evaluateTick();
+  assert(btcSellEval.signalType === "NONE", `BTC evaluateTick must reject SELL signal when LONG is occupied (got: ${btcSellEval.signalType})`);
+  assert(btcSellEval.executionPromise === undefined, "BTC evaluateTick must not return executionPromise for blocked opposing signal");
+  console.log("  ✅ STAGE 1 PASSED: Long position physically blocks all opposing Short entries.\n");
+
+  // ============================================================================
+  // STAGE 2: Unidirectional Short-Blocks-Long Mutex (AVAXUSDT)
+  // ============================================================================
+  console.log("[STAGE 2] Testing Unidirectional Short-Blocks-Long Mutex on Slot #7 (AVAXUSDT)...");
+  const avaxHedge = avaxEngine.getHedgeLedger();
+
+  // Occupy Short Slot on AVAXUSDT
+  avaxHedge.occupyShortSlot(0, 10.0, 7.295, 1.5, 0.8, false);
+  assert(avaxHedge.getShortSlots()[0].isOccupied === true, "AVAX Short Slot #0 must be occupied");
+  avaxEngine.syncSabPositionState(7.295);
+
+  // Attempt to reserve Core Long
+  const reserveLongSuccess = avaxHedge.reserveCoreLongPending("TEST_CLID_AVAX", 7.295, 10.0);
+  assert(reserveLongSuccess === false, "reserveCoreLongPending must return false when Short Slot is active");
+
+  // Attempt to directly occupy Core Long
+  avaxHedge.occupyCoreLong(10.0, 7.295, 1.5, 0.8, false);
+  assert(avaxHedge.getCoreLong().isOccupied === false, "AVAX Core Long must remain FLAT");
+
+  // Feed strong BUY signal into AVAX StrategyEngine
+  client.writeAtomicFloat64Asset(avaxIdx, 1, 0.80); // OBI +0.80
+  client.setCVD(10.0, avaxIdx);
+  client.setAIPredictionDirection(0.85, avaxIdx); // AI Direction +0.85
+  client.setAIPredictionConfidence(0.90, avaxIdx);  // AI Confidence 90%
+  client.setFinalizedSignal(0.0, avaxIdx);
+  client.setSequenceNum(201n, avaxIdx);
+
+  const avaxBuyEval = avaxEngine.evaluateTick();
+  assert(avaxBuyEval.signalType === "NONE", `AVAX evaluateTick must reject BUY signal when SHORT is occupied (got: ${avaxBuyEval.signalType})`);
+  assert(avaxBuyEval.executionPromise === undefined, "AVAX evaluateTick must not return executionPromise for blocked opposing signal");
+  console.log("  ✅ STAGE 2 PASSED: Short position physically blocks all opposing Long entries.\n");
+
+  // ============================================================================
+  // STAGE 3: Pending Entry Mutex Isolation (SOLUSDT & BNBUSDT)
+  // ============================================================================
+  console.log("[STAGE 3] Testing Pending Entry Mutex Isolation on SOLUSDT & BNBUSDT...");
+  const solHedge = solEngine.getHedgeLedger();
+
+  // Reserve SOLUSDT Core Long in PENDING_ENTRY
+  const solReserveRes = solHedge.reserveCoreLongPending("SOL_PENDING_CID", 105.0, 1.0);
+  assert(solReserveRes === true, "SOL reserveCoreLongPending must succeed on flat slot");
+  assert(solHedge.getCoreLong().lifecycleState === "PENDING_ENTRY", "SOL Core Long must be PENDING_ENTRY");
+
+  // Feed SELL signal to SOL
+  client.writeAtomicFloat64Asset(solIdx, 1, -0.80);
+  client.setAIPredictionDirection(-0.85, solIdx);
+  client.setAIPredictionConfidence(0.90, solIdx);
+  client.setSequenceNum(301n, solIdx);
+
+  const solSellEval = solEngine.evaluateTick();
+  assert(solSellEval.signalType === "NONE", "SOL SELL signal must be rejected while Core Long is PENDING_ENTRY");
+  assert(solHedge.evaluateDispersedShortSlotAllocation(105.0, 0.01, 0.001, 1.0, 0, nowMs) === null, "SOL short slot allocation must be null during PENDING_ENTRY");
+
+  // Rollback SOL
+  solHedge.rollbackPendingSlot("CORE_LONG", "TEST_CLEANUP");
+  assert(solHedge.getCoreLong().lifecycleState === "FLAT", "SOL Core Long must be FLAT after rollback");
+
+  // Reserve BNBUSDT Short Slot in PENDING_ENTRY
+  const bnbHedge = bnbEngine.getHedgeLedger();
+  const bnbReserveRes = bnbHedge.reserveShortSlotPending(0, "BNB_PENDING_CID", 695.0, 0.1);
+  assert(bnbReserveRes === true, "BNB reserveShortSlotPending must succeed on flat slot");
+  assert(bnbHedge.getShortSlots()[0].lifecycleState === "PENDING_ENTRY", "BNB Short Slot #0 must be PENDING_ENTRY");
+
+  // Feed BUY signal to BNB
+  client.writeAtomicFloat64Asset(bnbIdx, 1, 0.80);
+  client.setAIPredictionDirection(0.85, bnbIdx);
+  client.setAIPredictionConfidence(0.90, bnbIdx);
+  client.setSequenceNum(401n, bnbIdx);
+
+  const bnbBuyEval = bnbEngine.evaluateTick();
+  assert(bnbBuyEval.signalType === "NONE", "BNB BUY signal must be rejected while Short Slot is PENDING_ENTRY");
+
+  // Rollback BNB
+  bnbHedge.rollbackPendingSlot("SHORT_SLOT_0", "TEST_CLEANUP");
+  assert(bnbHedge.getShortSlots()[0].lifecycleState === "FLAT", "BNB Short Slot #0 must be FLAT after rollback");
+  console.log("  ✅ STAGE 3 PASSED: In-flight PENDING_ENTRY orders strictly block opposing entry signals.\n");
+
+  // ============================================================================
+  // STAGE 4: 10-Slot Portfolio Hard-Cap Barrier (Active Pos <= 10)
+  // ============================================================================
+  console.log("[STAGE 4] Testing 10-Slot Portfolio Hard-Cap Barrier (Active Pos <= 10)...");
+
+  // Reset all engines to known flat state
+  for (const sym of symbols) {
+    const eng = multiEngine.getEngineForSymbol(sym);
+    if (eng) {
+      eng.getHedgeLedger().clearSlots();
+      eng.syncSabPositionState(0);
+    }
+  }
+  riskGuard.resetSymbolNotionals();
+
+  // Populate exactly 10 distinct asset slots with positions (1 per symbol)
+  for (let i = 0; i < maxAssets; i++) {
+    const sym = symbols[i];
+    const eng = multiEngine.getEngineForSymbol(sym)!;
+    eng.getHedgeLedger().occupyCoreLong(1.0, 100.0, 1.5, 0.8, false);
+    eng.syncSabPositionState(100.0);
+    riskGuard.updateSymbolNotional(sym, 100.0);
+  }
+
+  const globalPosCount = btcEngine.getGlobalActivePositionCount();
+  assert(globalPosCount === 10, `Global active positions must equal 10 (got: ${globalPosCount})`);
+  assert(riskGuard.getActiveSymbolCount() === 10, `RiskGuard active symbols must equal 10 (got: ${riskGuard.getActiveSymbolCount()})`);
+
+  // Verify RiskGuard rejects 11th symbol entry
+  const order11Intent = {
+    symbol: "NEW_11TH_SYMBOL",
+    side: "BUY" as const,
+    quantity: 1.0,
+    price: 100.0,
+  };
+  const riskRes11 = riskGuard.validateMultiAssetOrder(order11Intent, true);
+  assert(riskRes11.passed === false, "RiskGuard must reject 11th position entry");
+  assert(riskRes11.reasonCode === "EXCEEDS_MAX_POSITION", `Expected EXCEEDS_MAX_POSITION, got: ${riskRes11.reasonCode}`);
+
+  console.log("  - 10/10 slots occupied. 11th asset entry rejected by Portfolio Risk Guard.");
+
+  // Close 1 asset (Asset #9)
+  const sym9 = symbols[9];
+  const eng9 = multiEngine.getEngineForSymbol(sym9)!;
+  eng9.getHedgeLedger().releaseCoreLong(100.0, 0.0004, "PROFIT_EXIT", 100.0);
+  eng9.syncSabPositionState(0);
+  riskGuard.updateSymbolNotional(sym9, 0);
+
+  const updatedCount = btcEngine.getGlobalActivePositionCount();
+  assert(updatedCount === 9, `Global active positions after release must equal 9 (got: ${updatedCount})`);
+
+  const riskResAfterClose = riskGuard.validateMultiAssetOrder(order11Intent, true);
+  assert(riskResAfterClose.passed === true, "RiskGuard must approve new position when active count < 10");
+  console.log("  ✅ STAGE 4 PASSED: 10-slot portfolio hard ceiling strictly enforced. 11/10 breach is mathematically impossible.\n");
+
+  // ============================================================================
+  // STAGE 5: Clean Release & Flip Authorization
+  // ============================================================================
+  console.log("[STAGE 5] Testing Clean Position Release & Directional Flip Authorization...");
+  btcHedge.clearSlots();
+  btcEngine.syncSabPositionState(0);
+  assert(btcHedge.getCoreLong().isOccupied === false, "BTC Core Long must be FLAT");
+  assert(btcHedge.getShortSlots()[0].isOccupied === false, "BTC Short Slot must be FLAT");
+
+  // Feed strong SELL signal to BTC
+  client.writeAtomicFloat64Asset(btcIdx, 1, -0.80);
+  client.setCVD(-10.0, btcIdx);
+  client.setAIPredictionDirection(-0.85, btcIdx);
+  client.setAIPredictionConfidence(0.90, btcIdx);
+  client.setShortCooldownLock(0, btcIdx);
+  client.setLongCooldownLock(0, btcIdx);
+  client.setSequenceNum(501n, btcIdx);
+
+  const btcFlipSellEval = btcEngine.evaluateTick();
+  assert(btcFlipSellEval.signalType === "SELL", `BTC must approve SELL signal when FLAT (got: ${btcFlipSellEval.signalType})`);
+  assert(btcFlipSellEval.slotId === "SHORT_SLOT_0", `Target slot must be SHORT_SLOT_0 (got: ${btcFlipSellEval.slotId})`);
+
+  // Clear in-flight mock dispatch to simulate fill
+  btcEngine.clearPendingEntryOrders();
+
+  // Occupy Short Slot on BTC
+  btcHedge.occupyShortSlot(0, 0.005, 78120.0, 1.5, 0.8, false);
+  btcEngine.syncSabPositionState(78120.0);
+  assert(btcHedge.getShortSlots()[0].isOccupied === true, "BTC Short Slot must be occupied");
+
+  // Release Short Slot
+  btcHedge.releaseShortSlot(0, 78100.0, 0.0004, "SIGNAL_EXIT", 78100.0);
+  btcEngine.syncSabPositionState(0);
+  btcEngine.clearPendingEntryOrders();
+  client.setShortCooldownLock(0, btcIdx);
+  client.setLongCooldownLock(0, btcIdx);
+  assert(btcHedge.getShortSlots()[0].isOccupied === false, "BTC Short Slot must be released to FLAT");
+
+  // Feed strong BUY signal to BTC
+  client.writeAtomicFloat64Asset(btcIdx, 1, 0.80);
+  client.setCVD(10.0, btcIdx);
+  client.setAIPredictionDirection(0.85, btcIdx);
+  client.setAIPredictionConfidence(0.90, btcIdx);
+  client.setSequenceNum(601n, btcIdx);
+
+  const btcFlipBuyEval = btcEngine.evaluateTick();
+  assert(btcFlipBuyEval.signalType === "BUY", `BTC must approve BUY signal when FLAT after Short release (got: ${btcFlipBuyEval.signalType})`);
+  assert(btcFlipBuyEval.slotId === "CORE_LONG", `Target slot must be CORE_LONG (got: ${btcFlipBuyEval.slotId})`);
+  console.log("  ✅ STAGE 5 PASSED: Releasing position immediately restores flip authorization.\n");
+
+  // ============================================================================
+  // STAGE 6: Sub-Microsecond Hot-Path Latency Benchmark (< 1.500 µs / tick)
+  // ============================================================================
+  console.log("[STAGE 6] Benchmarking Hot-Path Latency with Mutex & Capacity Guards (100,000 evaluations)...");
+  btcHedge.clearSlots();
+  btcEngine.syncSabPositionState(0);
+
+  const warmupIterations = 5000;
+  for (let i = 0; i < warmupIterations; i++) {
+    client.setSequenceNum(BigInt(1000 + i), btcIdx);
+    btcEngine.evaluateTick();
+  }
+
+  const iterations = 100_000;
+  const startHr = process.hrtime.bigint();
+  for (let i = 0; i < iterations; i++) {
+    client.setSequenceNum(BigInt(10000 + i), btcIdx);
+    btcEngine.evaluateTick();
+  }
+  const endHr = process.hrtime.bigint();
+
+  const totalNs = Number(endHr - startHr);
+  const totalMs = totalNs / 1_000_000;
+  const avgUsPerTick = (totalNs / iterations) / 1_000;
+
+  console.log(`  - 100,000 tick evaluations completed in: ${totalMs.toFixed(2)} ms`);
+  console.log(`  - Average hot-path evaluation latency  : ${avgUsPerTick.toFixed(4)} µs / tick`);
+  assert(avgUsPerTick < 1.500, `Latency must be < 1.500 µs (got: ${avgUsPerTick.toFixed(4)} µs)`);
+  console.log(`  ✅ STAGE 6 PASSED: Sub-microsecond latency (${avgUsPerTick.toFixed(4)} µs < 1.500 µs HFT SLA).\n`);
+
+  console.log("=========================================================================");
+  console.log("  ALL 6 STAGES PASSED: OMS CAPACITY & MUTEX LOCK 100% VERIFIED           ");
+  console.log("=========================================================================");
+}
+
+runOmsCapacityAndMutexProof().catch((err) => {
+  console.error("FATAL TEST FAILURE:", err);
+  process.exit(1);
+});

@@ -253,14 +253,26 @@ export class MarketDataClient {
     return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 92));
   }
 
+  public setSequenceNum(seq: bigint | number, assetIdx: number = 0): void {
+    Atomics.store(this.bigIntView, this.getGlobalSlot(assetIdx, 92), BigInt(seq));
+  }
+
   // --- Slots 93 to 104: AI Prediction & Latency Metrics ---
 
   public getAIPredictionDirection(assetIdx: number = 0): number {
     return this.readAtomicFloat64Asset(assetIdx, 93);
   }
 
+  public setAIPredictionDirection(dir: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 93, dir);
+  }
+
   public getAIPredictionConfidence(assetIdx: number = 0): number {
     return this.readAtomicFloat64Asset(assetIdx, 94);
+  }
+
+  public setAIPredictionConfidence(conf: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 94, conf);
   }
 
   public getAIPredictionHorizonMs(assetIdx: number = 0): number {

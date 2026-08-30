@@ -1101,6 +1101,12 @@ class HedgePositionLedger {
         if (this.coreLong.isOccupied || this.coreLong.lifecycleState === "PENDING_ENTRY") {
             return false;
         }
+        // SOTA UNIDIRECTIONAL ASSET MUTEX: Block LONG reservation if ANY short slot is occupied or pending
+        for (let i = 0; i < this.maxShortSlots; i++) {
+            if (this.shortSlots[i].isOccupied || this.shortSlots[i].lifecycleState === "PENDING_ENTRY") {
+                return false;
+            }
+        }
         this.coreLong.lifecycleState = "PENDING_ENTRY";
         this.coreLong.pendingClientOrderId = clientOrderId;
         this.coreLong.pendingOrderTimestamp = Date.now();
@@ -1111,6 +1117,10 @@ class HedgePositionLedger {
     reserveShortSlotPending(slotIndex, clientOrderId, targetPrice, targetQty) {
         if (slotIndex < 0 || slotIndex >= this.maxShortSlots)
             return false;
+        // SOTA UNIDIRECTIONAL ASSET MUTEX: Block SHORT reservation if Core Long is occupied or pending
+        if (this.coreLong.isOccupied || this.coreLong.lifecycleState === "PENDING_ENTRY") {
+            return false;
+        }
         const slot = this.shortSlots[slotIndex];
         if (slot.isOccupied || slot.lifecycleState === "PENDING_ENTRY") {
             return false;
@@ -1155,6 +1165,10 @@ class HedgePositionLedger {
      * and Time-Weighted Cooldown Hysteresis Lockouts (TWCHL).
      */
     evaluateDispersedShortSlotAllocation(currentPrice, tickSize = 0.1, realizedVol = 0.001, hawkesIntensity = 0, cooldownLockMs = 0, nowMs = Date.now(), currentSpread, maxSpreadAllowed) {
+        // -1. SOTA UNIDIRECTIONAL ASSET MUTEX: If Core Long is occupied or pending, short allocation is strictly forbidden
+        if (this.coreLong.isOccupied || this.coreLong.lifecycleState === "PENDING_ENTRY") {
+            return null;
+        }
         // 0. Enforce Spread Blowout Gate
         if (currentSpread !== undefined &&
             maxSpreadAllowed !== undefined &&
@@ -1223,6 +1237,15 @@ class HedgePositionLedger {
     occupyCoreLong(quantity, entryPrice, tpPercent, slPercent, isAuthoritativeSnapshot = false) {
         if (quantity <= 0 || entryPrice <= 0)
             return;
+        // SOTA UNIDIRECTIONAL ASSET MUTEX: Block occupying CORE_LONG if ANY short slot is active/pending
+        if (!isAuthoritativeSnapshot) {
+            for (let i = 0; i < this.maxShortSlots; i++) {
+                if (this.shortSlots[i].isOccupied || this.shortSlots[i].lifecycleState === "PENDING_ENTRY") {
+                    console.warn(`[UNIDIRECTIONAL_MUTEX][BLOCKED] Cannot occupy CORE_LONG: Short slot #${i} is active/pending for ${this.symbol}.`);
+                    return;
+                }
+            }
+        }
         if (isAuthoritativeSnapshot) {
             this.coreLong.isOccupied = true;
             this.coreLong.lifecycleState = "OCCUPIED";
@@ -1395,7 +1418,7 @@ class HedgePositionLedger {
             if (pos.quantity <= 0 || pos.entryPrice <= 0)
                 continue;
             if (pos.side === "LONG") {
-                this.occupyCoreLong(pos.quantity, pos.entryPrice, longTpPct, longSlPct);
+                this.occupyCoreLong(pos.quantity, pos.entryPrice, longTpPct, longSlPct, true);
                 // Restore original open timestamp for CAD-DTLM clock continuity across restarts
                 if (pos.originalOpenTime && pos.originalOpenTime > 0) {
                     this.coreLong.originalOpenTime = pos.originalOpenTime;
@@ -1409,7 +1432,7 @@ class HedgePositionLedger {
             else if (pos.side === "SHORT") {
                 const slotIdx = this.getAvailableShortSlotIndex();
                 if (slotIdx >= 0) {
-                    this.occupyShortSlot(slotIdx, pos.quantity, pos.entryPrice, shortTpPct, shortSlPct);
+                    this.occupyShortSlot(slotIdx, pos.quantity, pos.entryPrice, shortTpPct, shortSlPct, true);
                     // Restore original open timestamp for CAD-DTLM clock continuity across restarts
                     if (pos.originalOpenTime && pos.originalOpenTime > 0) {
                         this.shortSlots[slotIdx].originalOpenTime = pos.originalOpenTime;
@@ -1480,6 +1503,13 @@ class HedgePositionLedger {
     occupyShortSlot(slotIndex, quantity, entryPrice, tpPercent, slPercent, isAuthoritativeSnapshot = false) {
         if (slotIndex < 0 || slotIndex >= this.maxShortSlots || quantity <= 0 || entryPrice <= 0)
             return false;
+        // SOTA UNIDIRECTIONAL ASSET MUTEX: Block occupying SHORT slot if CORE_LONG is active/pending
+        if (!isAuthoritativeSnapshot) {
+            if (this.coreLong.isOccupied || this.coreLong.lifecycleState === "PENDING_ENTRY") {
+                console.warn(`[UNIDIRECTIONAL_MUTEX][BLOCKED] Cannot occupy SHORT_SLOT_${slotIndex}: CORE_LONG is active/pending for ${this.symbol}.`);
+                return false;
+            }
+        }
         const slot = this.shortSlots[slotIndex];
         if (isAuthoritativeSnapshot) {
             slot.isOccupied = true;

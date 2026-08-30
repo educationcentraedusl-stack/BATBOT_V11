@@ -354,6 +354,10 @@ export class MultiAssetStrategyEngine {
       const obiBuyThresh = engine ? engine.getConfig().obiBuyThreshold : parseFloat(process.env.OBI_BUY_THRESHOLD || "0.30");
       const obiSellThresh = engine ? engine.getConfig().obiSellThreshold : parseFloat(process.env.OBI_SELL_THRESHOLD || "-0.30");
 
+      const hedgeLedger = engine?.getHedgeLedger();
+      const isCoreLongOccupied = hedgeLedger ? (hedgeLedger.getCoreLong().isOccupied || hedgeLedger.getCoreLong().lifecycleState === "PENDING_ENTRY") : false;
+      const isShortOccupied = hedgeLedger ? hedgeLedger.getShortSlots().some(s => s.isOccupied || s.lifecycleState === "PENDING_ENTRY") : false;
+
       if (isSpreadBlowout) {
         rejectReason = "REJECTED_SPREAD_BLOWOUT";
       } else if (vpin > 0.75) {
@@ -363,11 +367,19 @@ export class MultiAssetStrategyEngine {
       } else if (confidence < minConfidence) {
         rejectReason = "REJECTED_LOW_CONFIDENCE";
       } else if (obi >= obiBuyThresh && cvd >= 0.0 && hawkes >= 0.5 && confidence >= minConfidence) {
-        signalType = "BUY";
-        isApproved = true;
+        if (isShortOccupied) {
+          rejectReason = "REJECTED_UNIDIRECTIONAL_MUTEX_SHORT_ACTIVE";
+        } else {
+          signalType = "BUY";
+          isApproved = true;
+        }
       } else if (obi <= obiSellThresh && cvd <= 0.0 && hawkes >= 0.5 && confidence >= minConfidence) {
-        signalType = "SELL";
-        isApproved = true;
+        if (isCoreLongOccupied) {
+          rejectReason = "REJECTED_UNIDIRECTIONAL_MUTEX_LONG_ACTIVE";
+        } else {
+          signalType = "SELL";
+          isApproved = true;
+        }
       }
 
       signals.push({
