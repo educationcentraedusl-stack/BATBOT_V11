@@ -242,6 +242,23 @@ class BinanceExecutionClient {
     getUsdtAvailableBalance() {
         return this.cachedUsdtAvailableBalance;
     }
+    setUsdtAvailableBalance(val) {
+        if (Number.isFinite(val) && val >= 0) {
+            this.cachedUsdtAvailableBalance = val;
+        }
+    }
+    /**
+     * Updates cached USDT available and wallet balances in memory via WebSocket ACCOUNT_UPDATE push.
+     * Zero REST API calls and zero rate limit consumption.
+     */
+    updateBalancesFromWs(availableBalance, walletBalance) {
+        if (Number.isFinite(availableBalance) && availableBalance >= 0) {
+            this.cachedUsdtAvailableBalance = availableBalance;
+        }
+        if (walletBalance !== undefined && Number.isFinite(walletBalance) && walletBalance >= 0) {
+            this.cachedReconciledWalletBalance = walletBalance;
+        }
+    }
     async fetchUsdtBalanceAsync() {
         if (!this.isConfigured())
             return 0;
@@ -264,18 +281,15 @@ class BinanceExecutionClient {
         }
         return this.cachedUsdtAvailableBalance;
     }
-    startBalancePolling(intervalMs = 5000) {
-        if (this.balancePollTimer)
-            return;
-        // Trigger initial fetch asynchronously
+    /**
+     * Seed startup balance asynchronously. Recurring REST polling is physically eradicated
+     * in favor of real-time WebSocket ACCOUNT_UPDATE stream.
+     */
+    startBalancePolling(_intervalMs = 60000) {
+        // Perform initial one-shot balance seed without setting an aggressive polling timer
         this.fetchUsdtBalanceAsync().catch((err) => {
             console.log(`[BinanceExecutionClient] Initial USDT balance fetch notice: ${err instanceof Error ? err.message : String(err)}`);
         });
-        this.balancePollTimer = setInterval(() => {
-            this.fetchUsdtBalanceAsync().catch((err) => {
-                console.log(`[BinanceExecutionClient] Polling USDT balance fetch notice: ${err instanceof Error ? err.message : String(err)}`);
-            });
-        }, intervalMs);
     }
     stopBalancePolling() {
         if (this.balancePollTimer) {
@@ -1214,33 +1228,16 @@ class BinanceExecutionClient {
         };
     }
     /**
-     * Starts background synchronization of /fapi/v1/income and /fapi/v1/userTrades.
+     * Performs initial background synchronization of /fapi/v1/income.
+     * Recurring interval polling is deactivated in favor of real-time WebSocket User Data Stream.
      */
-    startBackgroundSync(symbols = ["BTCUSDT"], incomeIntervalMs = 30000, tradeIntervalMs = 10000) {
+    startBackgroundSync(symbols = ["BTCUSDT"], _incomeIntervalMs = 60000, _tradeIntervalMs = 60000) {
         if (!this.isConfigured())
             return;
-        // 1. Initial immediate reconciliation
+        // 1. Initial one-shot immediate reconciliation
         this.fetchReconciledAccountBalanceAsync().catch(() => { });
         this.syncIncomeBackground(symbols).catch(() => { });
-        // 2. Start periodic income sync
-        if (!this.incomeSyncTimer) {
-            this.incomeSyncTimer = setInterval(() => {
-                this.syncIncomeBackground(symbols).catch((err) => {
-                    const errMsg = err instanceof Error ? err.message : String(err);
-                    console.warn(`[BinanceExecutionClient] Background income sync notice: ${errMsg}`);
-                });
-                this.fetchReconciledAccountBalanceAsync().catch(() => { });
-            }, incomeIntervalMs);
-        }
-        // 3. Start periodic userTrades sync
-        if (!this.userTradesSyncTimer) {
-            this.userTradesSyncTimer = setInterval(() => {
-                this.syncUserTradesBackground(symbols).catch((err) => {
-                    const errMsg = err instanceof Error ? err.message : String(err);
-                    console.warn(`[BinanceExecutionClient] Background userTrades sync notice: ${errMsg}`);
-                });
-            }, tradeIntervalMs);
-        }
+        // Polling intervals deactivated: trades and balance mutations are processed via WebSocket stream
     }
     stopBackgroundSync() {
         if (this.incomeSyncTimer) {

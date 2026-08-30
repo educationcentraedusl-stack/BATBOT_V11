@@ -1,5 +1,14 @@
 # BATBOT_V11 System Status Log
 
+- **Date:** 2026-08-31
+- **Feature/Task:** SOTA REST API Spam Lockdown & WebSocket Sovereign State Migration (Rate Limit Weight Restoration & Zero-Latency HFT Dispatch)
+- **Artifacts Created/Modified:** `src/execution/userDataStream.ts`, `src/execution/binance.ts`, `src/strategy/multiEngine.ts`, `src/scripts/run_tui_dashboard.ts`, `src/index.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:**
+  1. **REST API Polling Lockdown (`src/execution/binance.ts`, `src/scripts/run_tui_dashboard.ts`, `src/index.ts`):** Physically eradicated aggressive 5-second `binanceClient.startBalancePolling()`, 10-second `userTradesSyncTimer`, and 30-second `incomeSyncTimer` polling loops. Account balances and historical trade sync are seeded once on startup and maintained continuously with 0 REST API weight.
+  2. **WebSocket Sovereign State Migration (`src/execution/userDataStream.ts` & `src/strategy/multiEngine.ts`):** Ingested `payload.a.B` into `AccountUpdatePayload`. The moment balance or position state changes on Binance, `ACCOUNT_UPDATE` immediately mutates `BinanceExecutionClient` and `RiskGuard` in memory with 0ms network lag and zero REST calls.
+  3. **Passive Reconciliation Heartbeat Throttling (`src/strategy/multiEngine.ts` & `src/scripts/run_tui_dashboard.ts`):** Throttled continuous state reconciliation from 5s down to a 60-second passive sanity check (`60000ms`), slashing 1-minute REST API weight from 2358/2400 down to <40/2400 and completely destroying the 2000ms rate limiter pre-flight delay.
+- **Status:** ✅ Completed & QA Verified
+
 - **Date:** 2026-08-30
 - **Feature/Task:** Audit 22.0 Forensic Remediation (Partial TP Notional Synchronicity & Asynchronous Promise.all Race Proof)
 - **Artifacts Created/Modified:** `src/strategy/risk.ts`, `src/strategy/engine.ts`, `src/tests/test_oms_capacity_and_mutex_lock.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`

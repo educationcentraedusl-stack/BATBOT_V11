@@ -113,8 +113,18 @@ export class MultiAssetStrategyEngine {
       }
     });
 
-    // Multiplex incoming ACCOUNT_UPDATE position events by symbol
+    // Multiplex incoming ACCOUNT_UPDATE position and balance events by symbol
     this.centralizedUserDataStream.subscribeAccountUpdates((accUpdate: AccountUpdatePayload) => {
+      // 1. Mutate live account balance reactively via WebSocket push (zero REST calls)
+      if (accUpdate.balances && accUpdate.balances.length > 0) {
+        const usdtBal = accUpdate.balances.find((b) => b.asset === "USDT");
+        if (usdtBal && !isNaN(usdtBal.crossWalletBalance) && usdtBal.crossWalletBalance > 0) {
+          this.riskGuard.updateAccountBalance(usdtBal.crossWalletBalance);
+          this.client.setAvailableBalance(usdtBal.crossWalletBalance);
+        }
+      }
+
+      // 2. Route position updates to matching symbol StrategyEngine
       for (const pos of accUpdate.positions) {
         const engine = this.engines.get(pos.symbol);
         if (engine) {
@@ -131,12 +141,12 @@ export class MultiAssetStrategyEngine {
   }
 
   /**
-   * Starts a continuous background reconciliation heartbeat auditing live Binance positionRisk
-   * against internal ledgers every N milliseconds to guarantee zero-orphan state integrity.
+   * Starts a passive background reconciliation heartbeat auditing live Binance positionRisk
+   * against internal ledgers every N milliseconds (default 60s) to guarantee zero-orphan state integrity.
    */
-  public startContinuousReconciliation(intervalMs: number = 5000): void {
+  public startContinuousReconciliation(intervalMs: number = 60000): void {
     if (this.reconciliationTimer) return;
-    console.log(`[MultiAssetStrategyEngine][ReconciliationHeartbeat] Continuous ${intervalMs}ms state reconciliation heartbeat online.`);
+    console.log(`[MultiAssetStrategyEngine][ReconciliationHeartbeat] Passive ${intervalMs}ms state reconciliation heartbeat online.`);
     
     this.reconciliationTimer = setInterval(() => {
       this.syncExchangeState().catch((err: unknown) => {

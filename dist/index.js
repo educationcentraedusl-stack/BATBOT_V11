@@ -182,11 +182,8 @@ async function initializeSystem() {
         const msg = err instanceof Error ? err.message : String(err);
         process.stdout.write(`[BATBOT_V11] Ingestion binding notice: ${msg}\n`);
     }
-    // Start Telemetry WebSocket Server & Async Binance Balance Polling (every 30s to respect Binance rate limits)
+    // Start Telemetry WebSocket Server (Real-time balance maintained via WebSocket User Data Stream)
     telemetryServer.start();
-    if (executionClient.isConfigured()) {
-        executionClient.startBalancePolling(30000);
-    }
     // Active HFT tick evaluation & UI refresh loop (10ms tick polling rate)
     tickInterval = setInterval(() => {
         if (!isRunning)

@@ -131,12 +131,25 @@ class BinanceUserDataStream {
                             unrealizedPnl: parseFloat(p.up || "0"),
                             positionSide: p.ps || "BOTH",
                         }));
+                        const rawBalances = Array.isArray(payload.a.B) ? payload.a.B : [];
+                        const balances = rawBalances.map((b) => ({
+                            asset: b.a,
+                            walletBalance: parseFloat(b.wb || "0"),
+                            crossWalletBalance: parseFloat(b.cw || "0"),
+                            balanceChange: parseFloat(b.bc || "0"),
+                        }));
+                        // Immediately mutate BinanceExecutionClient cached balance via zero-weight WebSocket push
+                        const usdtItem = balances.find((b) => b.asset === "USDT");
+                        if (usdtItem && !isNaN(usdtItem.crossWalletBalance) && usdtItem.crossWalletBalance > 0) {
+                            this.client.updateBalancesFromWs(usdtItem.crossWalletBalance, usdtItem.walletBalance);
+                        }
                         const accountUpdate = {
                             eventType: payload.e,
                             eventTime: payload.E,
                             transactionTime: payload.T,
                             reasonType: payload.a.m || "ORDER",
                             positions,
+                            balances,
                         };
                         for (const cb of this.accountCallbacks) {
                             try {

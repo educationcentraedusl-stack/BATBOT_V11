@@ -43,12 +43,20 @@ export interface AccountPositionUpdatePayload {
   positionSide: "LONG" | "SHORT" | "BOTH";
 }
 
+export interface AccountBalanceUpdatePayload {
+  asset: string;
+  walletBalance: number;
+  crossWalletBalance: number;
+  balanceChange: number;
+}
+
 export interface AccountUpdatePayload {
   eventType: string; // "ACCOUNT_UPDATE"
   eventTime: number;
   transactionTime: number;
   reasonType: string; // "ORDER", "FUNDING_FEE", "DEPOSIT", "WITHDRAW", etc.
   positions: AccountPositionUpdatePayload[];
+  balances?: AccountBalanceUpdatePayload[];
 }
 
 export type OrderTradeUpdateCallback = (update: OrderTradeUpdatePayload) => void;
@@ -190,12 +198,27 @@ export class BinanceUserDataStream {
               positionSide: p.ps || "BOTH",
             }));
 
+            const rawBalances = Array.isArray(payload.a.B) ? payload.a.B : [];
+            const balances: AccountBalanceUpdatePayload[] = rawBalances.map((b: any) => ({
+              asset: b.a,
+              walletBalance: parseFloat(b.wb || "0"),
+              crossWalletBalance: parseFloat(b.cw || "0"),
+              balanceChange: parseFloat(b.bc || "0"),
+            }));
+
+            // Immediately mutate BinanceExecutionClient cached balance via zero-weight WebSocket push
+            const usdtItem = balances.find((b) => b.asset === "USDT");
+            if (usdtItem && !isNaN(usdtItem.crossWalletBalance) && usdtItem.crossWalletBalance > 0) {
+              this.client.updateBalancesFromWs(usdtItem.crossWalletBalance, usdtItem.walletBalance);
+            }
+
             const accountUpdate: AccountUpdatePayload = {
               eventType: payload.e,
               eventTime: payload.E,
               transactionTime: payload.T,
               reasonType: payload.a.m || "ORDER",
               positions,
+              balances,
             };
 
             for (const cb of this.accountCallbacks) {

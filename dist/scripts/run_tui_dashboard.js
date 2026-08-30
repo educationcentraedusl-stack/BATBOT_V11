@@ -144,8 +144,7 @@ async function runProductionTuiLauncher() {
     }
     const multiEngine = new multiEngine_1.MultiAssetStrategyEngine(client, riskGuard, binanceClient, activeSymbols);
     if (binanceClient.isConfigured()) {
-        binanceClient.startBalancePolling(5000);
-        dashboard.pushNotification("✅ Binance API credentials verified. Balance polling active.");
+        dashboard.pushNotification("✅ Binance API credentials verified. WebSocket User Data Stream active.");
         // SOTA Centralized Account-Level User Data Stream Initialization
         multiEngine.initUserDataStream()
             .then((started) => {
@@ -161,9 +160,9 @@ async function runProductionTuiLauncher() {
         (0, index_1.syncStateOnStartup)(binanceClient, multiEngine, riskGuard)
             .then(() => {
             dashboard.pushNotification(`✅ Multi-Asset state synchronized with Binance API for ${activeSymbols.length} coins.`);
-            // SOTA Continuous 5-Second Active Reconciliation Heartbeat (Anti-Orphan Guard)
-            multiEngine.startContinuousReconciliation(5000);
-            dashboard.pushNotification("✅ 5-Second Continuous Reconciliation Heartbeat active.");
+            // SOTA Passive 60-Second Continuous Reconciliation Heartbeat (Anti-Orphan Guard)
+            multiEngine.startContinuousReconciliation(60000);
+            dashboard.pushNotification("✅ 60-Second Passive Continuous Reconciliation Heartbeat active.");
         })
             .catch((err) => {
             const msg = err instanceof Error ? err.message : String(err);
