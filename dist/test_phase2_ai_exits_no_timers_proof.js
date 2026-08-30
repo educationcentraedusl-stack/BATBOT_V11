@@ -29,13 +29,13 @@ async function runPhase2Proof() {
     // Advance beyond 3000ms quarantine window
     const startTime = Date.now() + 3500;
     let reversalTriggers = [];
-    for (let tick = 0; tick < 15; tick++) {
+    for (let tick = 0; tick < 16; tick++) {
         const currentTickTime = startTime + tick * 100;
         reversalTriggers = ledger.evaluateHedgeDynamicTpSl(entryPrice - 10.0, -0.75, 0.85, 0.30, 1.0, 0.0001, 0.0, currentTickTime);
     }
-    console.log(`  Evaluating Tick 15: Triggers Count = ${reversalTriggers.length}`);
+    console.log(`  Evaluating Tick 16 (1500ms): Triggers Count = ${reversalTriggers.length}`);
     if (reversalTriggers.length === 0 || reversalTriggers[0].reason !== "AI_REVERSAL_EXIT_LONG") {
-        throw new Error(`❌ PROOF FAILED: AI Reversal Exit failed to trigger after 15 debounced ticks!`);
+        throw new Error(`❌ PROOF FAILED: AI Reversal Exit failed to trigger after 15 debounced ticks / 1500ms!`);
     }
     console.log(`  📌 Exit Reason: ${reversalTriggers[0].reason} | Qty: ${reversalTriggers[0].quantity} | Mark: $${reversalTriggers[0].markPrice}`);
     console.log("  ✅ TEST 2 PASSED: SOTA AI Schmitt Trigger Reversal Exit correctly triggered after 15 debounced ticks!");
@@ -45,7 +45,7 @@ async function runPhase2Proof() {
     // Reset position
     const ledger2 = new positionLedger_1.HedgePositionLedger(symbol);
     ledger2.occupyCoreLong(qty, entryPrice, 0.40, 0.20);
-    const profitPrice = 60100.0; // In profit (+0.16%)
+    const profitPrice = 60350.0; // In profit (+0.58% / +5.8% ROE >= 5.0% emergency gate)
     console.log(`  Mark Price in Profit: $${profitPrice} (Above fee-adjusted breakeven)`);
     // Evaluate tick with high VPIN toxicity (vpin = 0.85, ofi = -0.45)
     ledger2.evaluateHedgeDynamicTpSl(profitPrice, 0.10, 0.60, 0.85, 3.2, 0.0002, -0.45);

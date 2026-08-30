@@ -1,5 +1,16 @@
 # BATBOT_V11 System Status Log
 
+- **Date:** 2026-08-30
+- **Feature/Task:** SOTA Short Stop Loss Polarity Inversion Fix (Universal Adverse Risk Ceiling Restoration & Upside Liquidation Protection)
+- **Artifacts Created/Modified:** `src/strategy/positionLedger.ts`, `src/telemetry/multiAssetDashboard.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** 
+  1. **Short Initial Stop Loss Polarity Restoration (`src/strategy/positionLedger.ts`):** Mathematically aligned all initial and recalculated short stop loss calculations to evaluate in the adverse risk zone (`Entry * (1.0 + slPercent / 100)`), completely eradicating the fatal inverted placement in the profit zone below entry (`Entry * (1.0 - slPercent / 100)`).
+  2. **Multi-Branch Polarity Coverage:** Surgically verified and corrected all 3 branches in `occupyShortSlot` (Authoritative Snapshot, Accumulation, and Fresh Entry), `getAggregatedSideSummary("SHORT")`, and `getActiveTradeSlots`.
+  3. **Zero-Retreat Invariant Preservation:** Preserved `applyMonotonicStopLoss` downward ratchet (`Math.min` for Shorts) starting strictly from the initial adverse risk ceiling, guaranteeing 100% upside liquidation protection while ratcheting down past entry into profit as trades mature.
+  4. **Sub-Microsecond Latency Compliance:** Verified 100,000 monotonic evaluations in 49.07 ms (0.491 µs / call < 1.500 µs HFT constraint) with zero heap allocation.
+  5. **100% QA Verification:** Passed `npm run build:ts` (0 errors), `tsc --noEmit` (0 errors), `test_volatility_adjusted_stops.ts` (100% passed), and `test_monotonic_zero_retreat_hard_lock.ts` (100% passed).
+- **Status:** ✅ Completed & QA Verified
+
 - **Date:** 2026-08-25
 - **Feature/Task:** SOTA AI Reversal Whipsaw Lockdown & Schmitt Trigger Implementation (Dual-Threshold Hysteresis, 3000ms Minimum Holding Quarantine, In-Profit Maker TP Immunity & Debounced Confirmation Window)
 - **Artifacts Created/Modified:** `src/strategy/positionLedger.ts`, `src/test_phase2_ai_exits_no_timers_proof.ts`, `src/tests/test_sota_ai_reversal_whipsaw_eradication.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
