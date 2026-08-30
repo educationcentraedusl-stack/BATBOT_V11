@@ -144,7 +144,7 @@ class BinanceUserDataStream {
                         }));
                         // Immediately mutate BinanceExecutionClient cached balance via zero-weight WebSocket push
                         const usdtItem = balances.find((b) => b.asset === "USDT");
-                        if (usdtItem && Number.isFinite(usdtItem.crossWalletBalance) && usdtItem.crossWalletBalance >= 0) {
+                        if (usdtItem && Number.isFinite(usdtItem.crossWalletBalance)) {
                             this.client.updateBalancesFromWs(usdtItem.crossWalletBalance, usdtItem.walletBalance);
                         }
                         const accountUpdate = {

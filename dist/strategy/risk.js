@@ -443,7 +443,7 @@ class MultiAssetRiskGuard extends RiskGuard {
         return this.symbolExecutionTimestamps.get(symbol) ?? 0;
     }
     updateAccountBalance(balanceUsdt) {
-        if (Number.isFinite(balanceUsdt) && balanceUsdt >= 0) {
+        if (Number.isFinite(balanceUsdt)) {
             this.accountBalanceUsdt = balanceUsdt;
         }
     }

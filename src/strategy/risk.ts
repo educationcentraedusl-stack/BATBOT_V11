@@ -584,7 +584,7 @@ export class MultiAssetRiskGuard extends RiskGuard {
   }
 
   public updateAccountBalance(balanceUsdt: number): void {
-    if (Number.isFinite(balanceUsdt) && balanceUsdt >= 0) {
+    if (Number.isFinite(balanceUsdt)) {
       this.accountBalanceUsdt = balanceUsdt;
     }
   }

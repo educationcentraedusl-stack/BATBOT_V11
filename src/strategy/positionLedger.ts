@@ -3106,7 +3106,7 @@ export class MultiAssetPositionLedger {
   }
 
   public updateAccountBalance(balanceUsdt: number): void {
-    if (Number.isFinite(balanceUsdt) && balanceUsdt >= 0) {
+    if (Number.isFinite(balanceUsdt)) {
       this.accountBalanceUsdt = balanceUsdt;
     }
   }
@@ -3129,7 +3129,9 @@ export class MultiAssetPositionLedger {
       totalRealized += summary.cumulativeRealizedPnl;
     }
 
-    const leverage = this.accountBalanceUsdt > 0 ? totalGrossNotional / this.accountBalanceUsdt : 0;
+    const leverage = this.accountBalanceUsdt > 0
+      ? totalGrossNotional / this.accountBalanceUsdt
+      : (totalGrossNotional > 0 ? Infinity : 0);
 
     return {
       timestamp: Date.now(),

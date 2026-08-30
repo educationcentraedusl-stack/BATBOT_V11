@@ -195,6 +195,7 @@ async function runProductionTuiLauncher() {
     });
     // Active High-Frequency 10ms Vectorized Multi-Asset Strategy Engine Tick Loop
     let tickCounter = 0;
+    let lastIcErrorLoggedTs = 0;
     const strategyInterval = setInterval(() => {
         try {
             tickCounter++;
@@ -218,8 +219,12 @@ async function runProductionTuiLauncher() {
                     }
                 }
                 catch (err) {
-                    const msg = err instanceof Error ? err.message : String(err);
-                    console.error(`[TUI] Native IC status JSON parse notice: ${msg}`);
+                    const now = Date.now();
+                    if (now - lastIcErrorLoggedTs >= 5000) {
+                        lastIcErrorLoggedTs = now;
+                        const msg = err instanceof Error ? err.message : String(err);
+                        dashboard.pushNotification(`⚠️ [TUI] Native IC status JSON parse notice: ${msg}`);
+                    }
                 }
             }
             // Physical Hard Gate: Clamp drift to false during warm-up period (< 1000 pairs)

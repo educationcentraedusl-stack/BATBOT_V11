@@ -2431,7 +2431,7 @@ class MultiAssetPositionLedger {
         return ledger;
     }
     updateAccountBalance(balanceUsdt) {
-        if (Number.isFinite(balanceUsdt) && balanceUsdt >= 0) {
+        if (Number.isFinite(balanceUsdt)) {
             this.accountBalanceUsdt = balanceUsdt;
         }
     }
@@ -2450,7 +2450,9 @@ class MultiAssetPositionLedger {
             }
             totalRealized += summary.cumulativeRealizedPnl;
         }
-        const leverage = this.accountBalanceUsdt > 0 ? totalGrossNotional / this.accountBalanceUsdt : 0;
+        const leverage = this.accountBalanceUsdt > 0
+            ? totalGrossNotional / this.accountBalanceUsdt
+            : (totalGrossNotional > 0 ? Infinity : 0);
         return {
             timestamp: Date.now(),
             totalActiveSymbols: this.ledgers.size,

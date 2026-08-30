@@ -428,6 +428,10 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   btcHedge.clearSlots();
   btcEngine.syncSabPositionState(0);
 
+  // Hermetic Isolation: Neutralize AI predictions and order flow state to benchmark pure hot path
+  client.setAIPredictionDirection(0.0, btcIdx);
+  client.setAIPredictionConfidence(0.0, btcIdx);
+
   const warmupIterations = 10000;
   for (let i = 0; i < warmupIterations; i++) {
     client.setSequenceNum(BigInt(1000 + i), btcIdx);

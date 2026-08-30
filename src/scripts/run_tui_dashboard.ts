@@ -189,6 +189,7 @@ export async function runProductionTuiLauncher(): Promise<void> {
 
   // Active High-Frequency 10ms Vectorized Multi-Asset Strategy Engine Tick Loop
   let tickCounter = 0;
+  let lastIcErrorLoggedTs = 0;
   const strategyInterval = setInterval(() => {
     try {
       tickCounter++;
@@ -213,8 +214,12 @@ export async function runProductionTuiLauncher(): Promise<void> {
             sampleCount = parsed.sample_count;
           }
         } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.error(`[TUI] Native IC status JSON parse notice: ${msg}`);
+          const now = Date.now();
+          if (now - lastIcErrorLoggedTs >= 5000) {
+            lastIcErrorLoggedTs = now;
+            const msg = err instanceof Error ? err.message : String(err);
+            dashboard.pushNotification(`⚠️ [TUI] Native IC status JSON parse notice: ${msg}`);
+          }
         }
       }
 
