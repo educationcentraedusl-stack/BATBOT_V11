@@ -50,6 +50,22 @@ export interface AccountBalanceUpdatePayload {
   balanceChange: number;
 }
 
+export interface RawWsPositionPayload {
+  s: string;
+  pa: string;
+  ep: string;
+  cr: string;
+  up: string;
+  ps?: "LONG" | "SHORT" | "BOTH";
+}
+
+export interface RawWsBalancePayload {
+  a: string;
+  wb: string;
+  cw: string;
+  bc: string;
+}
+
 export interface AccountUpdatePayload {
   eventType: string; // "ACCOUNT_UPDATE"
   eventTime: number;
@@ -119,8 +135,9 @@ export class BinanceUserDataStream {
       this.connectWebSocket(wsUrl);
       this.startKeepAliveTimer();
       return true;
-    } catch (err: any) {
-      console.error(`[BinanceUserDataStream] Failed to start User Data Stream: ${err.message}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[BinanceUserDataStream] Failed to start User Data Stream: ${msg}`);
       return false;
     }
   }
@@ -183,13 +200,14 @@ export class BinanceUserDataStream {
             for (const cb of this.orderCallbacks) {
               try {
                 cb(parsedUpdate);
-              } catch (err: any) {
-                console.error(`[BinanceUserDataStream] Error in order callback handler: ${err.message}`);
+              } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`[BinanceUserDataStream] Error in order callback handler: ${msg}`);
               }
             }
           } else if (payload.e === "ACCOUNT_UPDATE" && payload.a) {
-            const rawPositions = Array.isArray(payload.a.P) ? payload.a.P : [];
-            const positions: AccountPositionUpdatePayload[] = rawPositions.map((p: any) => ({
+            const rawPositions: RawWsPositionPayload[] = Array.isArray(payload.a.P) ? payload.a.P : [];
+            const positions: AccountPositionUpdatePayload[] = rawPositions.map((p: RawWsPositionPayload) => ({
               symbol: p.s,
               positionAmt: parseFloat(p.pa || "0"),
               entryPrice: parseFloat(p.ep || "0"),
@@ -198,8 +216,8 @@ export class BinanceUserDataStream {
               positionSide: p.ps || "BOTH",
             }));
 
-            const rawBalances = Array.isArray(payload.a.B) ? payload.a.B : [];
-            const balances: AccountBalanceUpdatePayload[] = rawBalances.map((b: any) => ({
+            const rawBalances: RawWsBalancePayload[] = Array.isArray(payload.a.B) ? payload.a.B : [];
+            const balances: AccountBalanceUpdatePayload[] = rawBalances.map((b: RawWsBalancePayload) => ({
               asset: b.a,
               walletBalance: parseFloat(b.wb || "0"),
               crossWalletBalance: parseFloat(b.cw || "0"),
@@ -208,7 +226,7 @@ export class BinanceUserDataStream {
 
             // Immediately mutate BinanceExecutionClient cached balance via zero-weight WebSocket push
             const usdtItem = balances.find((b) => b.asset === "USDT");
-            if (usdtItem && !isNaN(usdtItem.crossWalletBalance) && usdtItem.crossWalletBalance > 0) {
+            if (usdtItem && Number.isFinite(usdtItem.crossWalletBalance) && usdtItem.crossWalletBalance >= 0) {
               this.client.updateBalancesFromWs(usdtItem.crossWalletBalance, usdtItem.walletBalance);
             }
 
@@ -224,13 +242,15 @@ export class BinanceUserDataStream {
             for (const cb of this.accountCallbacks) {
               try {
                 cb(accountUpdate);
-              } catch (err: any) {
-                console.error(`[BinanceUserDataStream] Error in account callback handler: ${err.message}`);
+              } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`[BinanceUserDataStream] Error in account callback handler: ${msg}`);
               }
             }
           }
-        } catch (err: any) {
-          console.error(`[BinanceUserDataStream] Failed to parse WebSocket message: ${err.message}`);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[BinanceUserDataStream] Failed to parse WebSocket message: ${msg}`);
         }
       });
 
@@ -245,9 +265,10 @@ export class BinanceUserDataStream {
         console.warn(`[BinanceUserDataStream] WebSocket closed [Code: ${code}, Reason: ${reason.toString()}]`);
         this.handleReconnect();
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (!this.isDisposed) {
-        console.error(`[BinanceUserDataStream] Failed to initiate WebSocket: ${err.message}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[BinanceUserDataStream] Failed to initiate WebSocket: ${msg}`);
       }
     }
   }
@@ -276,8 +297,9 @@ export class BinanceUserDataStream {
         const wsBase = this.client.getWsUrl();
         const wsUrl = `${wsBase}/ws/${this.listenKey}`;
         this.connectWebSocket(wsUrl);
-      } catch (err: any) {
-        console.error(`[BinanceUserDataStream] Failed to renew listenKey on reconnect: ${err.message}`);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[BinanceUserDataStream] Failed to renew listenKey on reconnect: ${msg}`);
         this.handleReconnect();
       }
     }, backoffMs);
@@ -292,8 +314,9 @@ export class BinanceUserDataStream {
           await this.client.keepAliveListenKey();
           console.log(`[BinanceUserDataStream] Sent listenKey keep-alive ping.`);
         }
-      } catch (err: any) {
-        console.error(`[BinanceUserDataStream] Keep-alive ping failed: ${err.message}`);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[BinanceUserDataStream] Keep-alive ping failed: ${msg}`);
       }
     }, this.keepAliveIntervalMs);
   }

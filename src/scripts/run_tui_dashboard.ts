@@ -16,6 +16,7 @@ import { timeSynchronizer } from "../utils/timeSynchronizer";
 export interface NativeIngestionModule {
   startIngestion?: (sabBuffer: Buffer, symbols?: string[]) => boolean;
   initCore?: (symbol: string, balance: number) => boolean;
+  getIcStatus?: () => string;
   [key: string]: unknown;
 }
 
@@ -196,9 +197,9 @@ export async function runProductionTuiLauncher(): Promise<void> {
       let isDrifted = client.getIsModelDrifted();
       let sampleCount = 0;
 
-      if (nativeModule && typeof (nativeModule as any).getIcStatus === "function") {
+      if (nativeModule && typeof nativeModule.getIcStatus === "function") {
         try {
-          const rawJson = (nativeModule as any).getIcStatus();
+          const rawJson = nativeModule.getIcStatus();
           const parsed = JSON.parse(rawJson);
           if (typeof parsed.ic === "number" && !isNaN(parsed.ic)) {
             rollingIc = parsed.ic;
@@ -261,7 +262,7 @@ export async function runProductionTuiLauncher(): Promise<void> {
                   const rawQty = parseFloat(res.executedQty || "0") > 0 ? res.executedQty : (res.origQty || "0");
                   const avgPx = parseFloat(res.avgPrice || "0");
                   const px = parseFloat(res.price || "0");
-                  const cumQuote = parseFloat((res as any).cumQuote || "0");
+                  const cumQuote = parseFloat(res.cumQuote || "0");
                   const qtyNum = parseFloat(rawQty);
                   const displayPrice = avgPx > 0 ? avgPx : (px > 0 ? px : (cumQuote > 0 && qtyNum > 0 ? cumQuote / qtyNum : (result.bidPrice || result.askPrice)));
                   

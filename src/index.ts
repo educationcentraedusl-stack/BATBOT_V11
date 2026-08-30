@@ -70,8 +70,8 @@ export async function syncStateOnStartup(
     if (Number.isFinite(envLeverage) && envLeverage > 0) {
       if (strategyEngine instanceof MultiAssetStrategyEngine) {
         await strategyEngine.syncLeverageWithExchange(envLeverage);
-      } else if ("getConfig" in strategyEngine && typeof (strategyEngine as any).getConfig === "function") {
-        const symbol = (strategyEngine as any).getConfig().symbol;
+      } else if (strategyEngine instanceof StrategyEngine) {
+        const symbol = strategyEngine.getConfig().symbol;
         await executionClient.setLeverage(symbol, envLeverage);
       }
     }
@@ -85,22 +85,18 @@ export async function syncStateOnStartup(
     }
 
     // 4. State Hydration & Orphaned Position Guard SL/TP Injection
-    if ("syncExchangeState" in strategyEngine && typeof (strategyEngine as any).syncExchangeState === "function") {
-      await (strategyEngine as any).syncExchangeState();
-    } else if ("getConfig" in strategyEngine && typeof (strategyEngine as any).getConfig === "function") {
-      const symbol = (strategyEngine as any).getConfig().symbol;
+    if (strategyEngine instanceof MultiAssetStrategyEngine) {
+      await strategyEngine.syncExchangeState();
+    } else if (strategyEngine instanceof StrategyEngine) {
+      const symbol = strategyEngine.getConfig().symbol;
       const positions = await executionClient.getDualPositionRisk(symbol);
-      if (Array.isArray(positions)) {
-        (strategyEngine as StrategyEngine).reconcileStartupPositions(positions);
-      }
-    } else if (strategyEngine instanceof MultiAssetStrategyEngine) {
-      const positions = await executionClient.getDualPositionRisk();
       if (Array.isArray(positions)) {
         strategyEngine.reconcileStartupPositions(positions);
       }
     }
-  } catch (err: any) {
-    console.warn(`[StateSync Warning] Temporary issue during startup state sync: ${err.message}. System starting in resilient mode.`);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[StateSync Warning] Temporary issue during startup state sync: ${msg}. System starting in resilient mode.`);
   }
 }
 
@@ -151,15 +147,18 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
         if (executionClient.isConfigured()) {
           try {
             await executionClient.flattenPositions(strategyEngine.getConfig().symbol);
-          } catch (err: any) {
-            console.error(`[EMERGENCY_KILL] Flattening error: ${err.message}`);
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error(`[EMERGENCY_KILL] Flattening error: ${msg}`);
           }
         }
         return { success: true, message: "EMERGENCY KILL EXECUTED: Engine Halted & Position Flattened" };
       case "AI_HOT_SWAP":
         return { success: true, message: `Model Hot-Swap Triggered for: ${cmd.modelPath || "default"}` };
-      default:
-        return { success: false, message: `Unknown command action: ${(cmd as any).action}` };
+      default: {
+        const unknownAction = (cmd as { action?: string }).action ?? "UNKNOWN";
+        return { success: false, message: `Unknown command action: ${unknownAction}` };
+      }
     }
   });
 
@@ -249,8 +248,9 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
             );
           }
         })
-        .catch((err: any) => {
-          console.error(`[Execution] Order placement execution error: ${err.message}`);
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[Execution] Order placement execution error: ${msg}`);
         });
     }
 
