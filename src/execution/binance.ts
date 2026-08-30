@@ -344,6 +344,7 @@ export class BinanceExecutionClient {
   private rateLimiter: BinanceRateLimiter = new BinanceRateLimiter();
   private cachedUsdtAvailableBalance: number = 0;
   private cachedReconciledWalletBalance: number = 0;
+  private hasReconciledWalletBalance: boolean = false;
   private cachedTotalUnrealizedProfit: number = 0;
   private balancePollTimer: NodeJS.Timeout | null = null;
   private incomeSyncTimer: NodeJS.Timeout | null = null;
@@ -461,6 +462,7 @@ export class BinanceExecutionClient {
     }
     if (walletBalance !== undefined && Number.isFinite(walletBalance)) {
       this.cachedReconciledWalletBalance = walletBalance;
+      this.hasReconciledWalletBalance = true;
     }
   }
 
@@ -1059,7 +1061,9 @@ export class BinanceExecutionClient {
               updateTime: algoRes.updateTime || Date.now(),
             };
           }
-          return algoRes as BinanceOrderResponse;
+          throw new Error(
+            `[BinanceExecutionClient][ALGO_ORDER_FAILED] Invalid or rejected algoOrder response: code=${algoRes?.code ?? "UNKNOWN"}, msg=${algoRes?.msg ?? "Missing algoId/orderId"}`
+          );
         }
 
         const isConflictOrGteError =
@@ -1589,7 +1593,10 @@ export class BinanceExecutionClient {
         const available = parseFloat(accountInfo.availableBalance || "0");
         const unrealized = parseFloat(accountInfo.totalUnrealizedProfit || "0");
 
-        if (!isNaN(totalWallet)) this.cachedReconciledWalletBalance = totalWallet;
+        if (!isNaN(totalWallet)) {
+          this.cachedReconciledWalletBalance = totalWallet;
+          this.hasReconciledWalletBalance = true;
+        }
         if (!isNaN(available)) this.cachedUsdtAvailableBalance = available;
         if (!isNaN(unrealized)) this.cachedTotalUnrealizedProfit = unrealized;
 
@@ -1611,7 +1618,10 @@ export class BinanceExecutionClient {
   }
 
   public getReconciledWalletBalance(): number {
-    return this.cachedReconciledWalletBalance > 0 ? this.cachedReconciledWalletBalance : this.cachedUsdtAvailableBalance;
+    if (this.hasReconciledWalletBalance && Number.isFinite(this.cachedReconciledWalletBalance)) {
+      return this.cachedReconciledWalletBalance;
+    }
+    return this.cachedUsdtAvailableBalance;
   }
 
   public getTotalUnrealizedProfit(): number {

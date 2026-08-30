@@ -15,6 +15,10 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-08-31 - Audit 28.0 Forensic Remediation (DEF-2801 Reconciled Balance Zero-Bound Eradication & DEF-2802 Algo Order Type Safety Enforcement) Completed & 100% QA Verified:
+  - DEF-2801 Reconciled Balance Zero-Bound Eradication (`src/execution/binance.ts` & `src/strategy/engine.ts`): Eradicated hidden `> 0` inequality in `BinanceExecutionClient.getReconciledWalletBalance()` by statefully tracking `hasReconciledWalletBalance` and strictly returning `cachedReconciledWalletBalance` across all finite values (including negative equity deficits and $0.00 liquidations). Aligned downstream `StrategyEngine` (line 261) to permit finite numbers (`if (Number.isFinite(reconciledBal))`), ensuring margin deficits and liquidated balances accurately update `hedgeLedger`.
+  - DEF-2802 Algo Order Type Safety Enforcement (`src/execution/binance.ts`): Replaced blind `return algoRes as BinanceOrderResponse` fallback with a structured runtime exception throwing explicit error diagnostics on unmapped or invalid algo order responses.
+  - Zero-Warning TypeScript Compilation: Verified 100% pass via `npx tsc --noEmit` with 0 errors and 0 warnings.
 * 2026-08-31 - Audit 27.0 Forensic Remediation (DEF-2701 Execution Client Negative Equity Cache Eradication) Completed & 100% QA Verified:
   - DEF-2701 Execution Client Cache Loophole Eradicated (`src/execution/binance.ts`): Removed restrictive `>= 0` bounds from `setUsdtAvailableBalance` and `updateBalancesFromWs`. Enforced strict `Number.isFinite()` across all balance setters, ensuring negative equity states (liquidations, margin deficits) mutate execution client cached state and seamlessly propagate to downstream SharedArrayBuffer telemetry and risk guards.
   - Zero-Warning TypeScript Compilation: Verified 100% pass via `npx tsc --noEmit` with 0 errors and 0 warnings.

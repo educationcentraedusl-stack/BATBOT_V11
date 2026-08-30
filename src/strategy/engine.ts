@@ -258,7 +258,7 @@ export class StrategyEngine {
           }
         }
         const reconciledBal = this.executionClient.getReconciledWalletBalance();
-        if (reconciledBal > 0) {
+        if (Number.isFinite(reconciledBal)) {
           this.hedgeLedger.setReconciledWalletBalance(reconciledBal);
         }
         this.syncSabPositionState();
