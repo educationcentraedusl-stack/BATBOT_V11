@@ -11,8 +11,8 @@ try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     nativeAddon = require("../../index.js");
 }
-catch {
-    // Safe fallback
+catch (err) {
+    console.warn(`[PositionLedger] NativeTradingAddon initialization fallback: ${err instanceof Error ? err.message : String(err)}`);
 }
 const DEFAULT_MAX_LOTS = 1024;
 class PositionLedger {
@@ -603,8 +603,8 @@ class HedgePositionLedger {
                 nativeAddon.recordTradeIc(dir, realizedReturn, assetIdx);
             }
         }
-        catch {
-            // Safe non-blocking execution
+        catch (err) {
+            console.warn(`[PositionLedger] Failed to record trade IC telemetry: ${err instanceof Error ? err.message : String(err)}`);
         }
     }
     getSessionDrawdown() {
@@ -2221,7 +2221,7 @@ class HedgePositionLedger {
         if (durationSec >= 1800.0) {
             if (!slot.timeDecayTier || slot.timeDecayTier < 4) {
                 slot.timeDecayTier = 4;
-                this.pushSotaTrigger(slot.slotId, slot.side, "LONG_HOLD_PROFIT_HARVEST", slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "PASSIVE_MAKER", markPrice);
+                this.pushSotaTrigger(slot.slotId, slot.side, "LONG_HOLD_PROFIT_HARVEST", slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "PASSIVE_MAKER");
             }
             return;
         }
@@ -2239,7 +2239,7 @@ class HedgePositionLedger {
         if (hjbEngine && volMetrics) {
             const hjbEval = hjbEngine.getOptimalExitBoundary(slot.side, slot.entryPrice, stoikovMicroPrice, slot.quantity, durationMs, volMetrics.garmanKlass1s);
             if (hjbEval.isLiquidationTriggered) {
-                this.pushSotaTrigger(slot.slotId, slot.side, hjbEval.exitReason, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "PASSIVE_MAKER", markPrice);
+                this.pushSotaTrigger(slot.slotId, slot.side, hjbEval.exitReason, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "PASSIVE_MAKER");
                 return;
             }
         }

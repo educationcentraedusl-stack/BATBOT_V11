@@ -375,7 +375,9 @@ impl StreamingFeaturePipeline {
 pub struct AssetTelemetryTracker {
     pub last_mid_price: AtomicU64,
     pub last_prediction_dir: AtomicU64,
-    pub horizon_history: Mutex<VecDeque<(u64, f64, f64)>>, // (timestamp_ns, mid_price, prediction)
+    pub horizon_5s: Mutex<VecDeque<(u64, f64, f64)>>,   // (timestamp_ns, mid_price, prediction) - 5s Micro-Scalp
+    pub horizon_60s: Mutex<VecDeque<(u64, f64, f64)>>,  // (timestamp_ns, mid_price, prediction) - 60s Tactical Alpha
+    pub horizon_300s: Mutex<VecDeque<(u64, f64, f64)>>, // (timestamp_ns, mid_price, prediction) - 300s Macro-Regime
 }
 
 impl AssetTelemetryTracker {
@@ -383,7 +385,9 @@ impl AssetTelemetryTracker {
         Self {
             last_mid_price: AtomicU64::new(0.0f64.to_bits()),
             last_prediction_dir: AtomicU64::new(0.0f64.to_bits()),
-            horizon_history: Mutex::new(VecDeque::with_capacity(36_000)),
+            horizon_5s: Mutex::new(VecDeque::with_capacity(3_600)),
+            horizon_60s: Mutex::new(VecDeque::with_capacity(18_000)),
+            horizon_300s: Mutex::new(VecDeque::with_capacity(36_000)),
         }
     }
 }
@@ -527,45 +531,93 @@ impl AIEngine {
             pipeline.update_and_normalize_with_snr_asset(sab, lat_us_val, asset_idx)?
         };
 
-        // SOTA Tactical Alpha Horizon Alignment (60.0s observation evaluation):
-        let matured_entries = {
-            let trackers = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
-            if asset_idx < trackers.len() {
-                if let Ok(mut hist) = trackers[asset_idx].horizon_history.lock() {
-                    let horizon_ns = 60_000_000_000u64; // 60.0 seconds tactical horizon
-                    let mut entries = Vec::new();
-                    while let Some(front) = hist.front() {
-                        if start_ns.saturating_sub(front.0) >= horizon_ns {
-                            if let Some(item) = hist.pop_front() {
-                                entries.push(item);
+        // SOTA Triple-Horizon Orthogonal Tensor Evaluation (5s, 60s, 300s) (DEF-3002):
+        let gk_vol = sab.load_f64_asset(asset_idx, 121).max(0.0005);
+        let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
+        if asset_idx < trackers_guard.len() {
+            let tracker = &trackers_guard[asset_idx];
+
+            // 1. Micro-Scalp Horizon: 5.0s (5_000_000_000 ns)
+            if let Ok(mut hist) = tracker.horizon_5s.lock() {
+                let horizon_ns = 5_000_000_000u64;
+                let vol_5s = gk_vol * 1.0;
+                let mut count = 0;
+                while let Some(front) = hist.front() {
+                    if start_ns.saturating_sub(front.0) >= horizon_ns {
+                        if let Some((_, hist_mid, hist_pred)) = hist.pop_front() {
+                            if hist_mid > 0.0 && current_mid > 0.0 && hist_pred != 0.0 {
+                                let ret = (current_mid - hist_mid) / hist_mid;
+                                let target = (ret / (2.0 * vol_5s + 1e-6)).tanh();
+                                let residual = target - hist_pred;
+                                if let Ok(mut ic_guard) = self.ic_tracker.lock() {
+                                    ic_guard.add_observation_asset(hist_pred, ret, Some(sab), asset_idx);
+                                    ic_guard.update_cusum_residual(residual, start_ns, Some(sab), asset_idx);
+                                }
                             }
-                            if entries.len() >= 10 {
-                                break;
-                            }
-                        } else {
+                        }
+                        count += 1;
+                        if count >= 10 {
                             break;
                         }
+                    } else {
+                        break;
                     }
-                    entries
-                } else {
-                    Vec::new()
                 }
-            } else {
-                Vec::new()
             }
-        };
 
-        let gk_vol = sab.load_f64_asset(asset_idx, 121).max(0.0005);
-        let horizon_vol = gk_vol * (60.0f64 / 5.0).sqrt(); // Scale 60s tactical vol
+            // 2. Tactical Alpha Horizon: 60.0s (60_000_000_000 ns)
+            if let Ok(mut hist) = tracker.horizon_60s.lock() {
+                let horizon_ns = 60_000_000_000u64;
+                let vol_60s = gk_vol * (60.0f64 / 5.0).sqrt();
+                let mut count = 0;
+                while let Some(front) = hist.front() {
+                    if start_ns.saturating_sub(front.0) >= horizon_ns {
+                        if let Some((_, hist_mid, hist_pred)) = hist.pop_front() {
+                            if hist_mid > 0.0 && current_mid > 0.0 && hist_pred != 0.0 {
+                                let ret = (current_mid - hist_mid) / hist_mid;
+                                let target = (ret / (2.0 * vol_60s + 1e-6)).tanh();
+                                let residual = target - hist_pred;
+                                if let Ok(mut ic_guard) = self.ic_tracker.lock() {
+                                    ic_guard.add_observation_asset(hist_pred, ret, Some(sab), asset_idx);
+                                    ic_guard.update_cusum_residual(residual, start_ns, Some(sab), asset_idx);
+                                }
+                            }
+                        }
+                        count += 1;
+                        if count >= 10 {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
 
-        for (_, hist_mid, hist_pred) in matured_entries {
-            if hist_mid > 0.0 && current_mid > 0.0 && hist_pred != 0.0 {
-                let realized_horizon_return = (current_mid - hist_mid) / hist_mid;
-                let return_target = (realized_horizon_return / (2.0 * horizon_vol + 1e-6)).tanh();
-                let residual = return_target - hist_pred;
-                if let Ok(mut tracker) = self.ic_tracker.lock() {
-                    tracker.add_observation_asset(hist_pred, realized_horizon_return, Some(sab), asset_idx);
-                    tracker.update_cusum_residual(residual, start_ns, Some(sab), asset_idx);
+            // 3. Macro-Regime Horizon: 300.0s (300_000_000_000 ns)
+            if let Ok(mut hist) = tracker.horizon_300s.lock() {
+                let horizon_ns = 300_000_000_000u64;
+                let vol_300s = gk_vol * (300.0f64 / 5.0).sqrt();
+                let mut count = 0;
+                while let Some(front) = hist.front() {
+                    if start_ns.saturating_sub(front.0) >= horizon_ns {
+                        if let Some((_, hist_mid, hist_pred)) = hist.pop_front() {
+                            if hist_mid > 0.0 && current_mid > 0.0 && hist_pred != 0.0 {
+                                let ret = (current_mid - hist_mid) / hist_mid;
+                                let target = (ret / (2.0 * vol_300s + 1e-6)).tanh();
+                                let residual = target - hist_pred;
+                                if let Ok(mut ic_guard) = self.ic_tracker.lock() {
+                                    ic_guard.add_observation_asset(hist_pred, ret, Some(sab), asset_idx);
+                                    ic_guard.update_cusum_residual(residual, start_ns, Some(sab), asset_idx);
+                                }
+                            }
+                        }
+                        count += 1;
+                        if count >= 10 {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
                 }
             }
         }
@@ -698,7 +750,19 @@ impl AIEngine {
             if let Some(tracker) = trackers_ref.get(asset_idx) {
                 tracker.last_mid_price.store(current_mid.to_bits(), Ordering::Relaxed);
                 tracker.last_prediction_dir.store(direction.to_bits(), Ordering::Relaxed);
-                if let Ok(mut hist) = tracker.horizon_history.lock() {
+                if let Ok(mut hist) = tracker.horizon_5s.lock() {
+                    hist.push_back((start_ns, current_mid, direction));
+                    if hist.len() > 3_600 {
+                        hist.pop_front();
+                    }
+                }
+                if let Ok(mut hist) = tracker.horizon_60s.lock() {
+                    hist.push_back((start_ns, current_mid, direction));
+                    if hist.len() > 18_000 {
+                        hist.pop_front();
+                    }
+                }
+                if let Ok(mut hist) = tracker.horizon_300s.lock() {
                     hist.push_back((start_ns, current_mid, direction));
                     if hist.len() > 36_000 {
                         hist.pop_front();

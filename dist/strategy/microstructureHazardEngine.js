@@ -68,6 +68,26 @@ class MicrostructureHazardEngine {
         this.vpinBucketRing = new Float64Array(vpinBucketCount);
         this.hazardThreshold = hazardThreshold;
     }
+    reset() {
+        this.ofiRingBuffer.fill(0);
+        this.depthRingBuffer.fill(0);
+        this.ofiRingIdx = 0;
+        this.depthSampleCount = 0;
+        this.prevBidPx = 0;
+        this.prevBidQty = 0;
+        this.prevAskPx = 0;
+        this.prevAskQty = 0;
+        this.hasPrevBook = false;
+        this.tradeBuyQtyRing.fill(0);
+        this.tradeSellQtyRing.fill(0);
+        this.tradeRingIdx = 0;
+        this.vpinBucketRing.fill(0);
+        this.vpinRingIdx = 0;
+        this.currentBucketBuyVol = 0;
+        this.currentBucketSellVol = 0;
+        this.currentBucketTotalVol = 0;
+        this.metricsRingIdx = 0;
+    }
     /**
      * Consumes live L2 Order Book snapshot / update and calculates Cont-Kukanov-Stoikov OFI
      */

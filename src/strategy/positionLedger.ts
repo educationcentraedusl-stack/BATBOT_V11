@@ -14,8 +14,8 @@ let nativeAddon: NativeTradingAddon | null = null;
 try {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   nativeAddon = require("../../index.js") as NativeTradingAddon;
-} catch {
-  // Safe fallback
+} catch (err: unknown) {
+  console.warn(`[PositionLedger] NativeTradingAddon initialization fallback: ${err instanceof Error ? err.message : String(err)}`);
 }
 
 
@@ -842,8 +842,8 @@ export class HedgePositionLedger {
         const assetIdx = Math.max(0, syms.indexOf(this.symbol));
         nativeAddon.recordTradeIc(dir, realizedReturn, assetIdx);
       }
-    } catch {
-      // Safe non-blocking execution
+    } catch (err: unknown) {
+      console.warn(`[PositionLedger] Failed to record trade IC telemetry: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -2807,8 +2807,7 @@ export class HedgePositionLedger {
           false,
           slot.activeTpOrderIds,
           slot.activeStopLossOrderId,
-          "PASSIVE_MAKER",
-          markPrice
+          "PASSIVE_MAKER"
         );
       }
       return;
@@ -2858,8 +2857,7 @@ export class HedgePositionLedger {
           false,
           slot.activeTpOrderIds,
           slot.activeStopLossOrderId,
-          "PASSIVE_MAKER",
-          markPrice
+          "PASSIVE_MAKER"
         );
         return;
       }

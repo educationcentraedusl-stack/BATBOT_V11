@@ -2254,9 +2254,17 @@ export class StrategyEngine {
           const isPassiveMakerExit = primaryTrigger.executionStyle === "PASSIVE_MAKER";
           const exitOrderType: "LIMIT" | "MARKET" = isPassiveMakerExit ? "LIMIT" : "MARKET";
           const exitTimeInForce: "GTC" | "IOC" | "GTX" | undefined = isPassiveMakerExit ? "GTX" : undefined;
-          const rawTargetExitPrice = isPassiveMakerExit
-            ? (primaryTrigger.targetPrice ?? (exitSide === "SELL" ? askPrice : bidPrice))
-            : markPrice;
+          let rawTargetExitPrice = markPrice;
+          if (isPassiveMakerExit) {
+            // SOTA Zero-Bypass Maker Clamping (DEF-3001):
+            // Strictly clamp price to the maker side of the book to eradicate Error -5022 GTX taker rejection:
+            // Exiting LONG (exitSide === "SELL") -> must be >= askPrice
+            // Exiting SHORT (exitSide === "BUY") -> must be <= bidPrice
+            const desiredPrice = primaryTrigger.targetPrice ?? (exitSide === "SELL" ? askPrice : bidPrice);
+            rawTargetExitPrice = exitSide === "SELL"
+              ? Math.max(askPrice, desiredPrice)
+              : Math.min(bidPrice, desiredPrice);
+          }
           const formattedExitPrice = SymbolPrecisionRegistry.formatPrice(this.config.symbol, rawTargetExitPrice);
 
           const isHardStopTrigger =
@@ -3180,6 +3188,10 @@ export class StrategyEngine {
       this.stalenessMaxCapMs,
       Math.max(this.stalenessMinFloorMs, this.rollingPacketAgeMs + this.stalenessJitterMultiplier * this.rollingPacketJitterMs)
     );
+  }
+
+  public getHazardEngine(): MicrostructureHazardEngine {
+    return this.hazardEngine;
   }
 }
 
