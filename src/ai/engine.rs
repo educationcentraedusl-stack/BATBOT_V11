@@ -527,12 +527,12 @@ impl AIEngine {
             pipeline.update_and_normalize_with_snr_asset(sab, lat_us_val, asset_idx)?
         };
 
-        // HFT Micro-trend Horizon Alignment (5.0s observation evaluation):
+        // SOTA Tactical Alpha Horizon Alignment (60.0s observation evaluation):
         let matured_entries = {
             let trackers = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
             if asset_idx < trackers.len() {
                 if let Ok(mut hist) = trackers[asset_idx].horizon_history.lock() {
-                    let horizon_ns = 5_000_000_000u64; // 5.0 seconds
+                    let horizon_ns = 60_000_000_000u64; // 60.0 seconds tactical horizon
                     let mut entries = Vec::new();
                     while let Some(front) = hist.front() {
                         if start_ns.saturating_sub(front.0) >= horizon_ns {
@@ -556,7 +556,7 @@ impl AIEngine {
         };
 
         let gk_vol = sab.load_f64_asset(asset_idx, 121).max(0.0005);
-        let horizon_vol = gk_vol * (5.0f64 / 5.0).sqrt(); // Scale 5s micro-vol
+        let horizon_vol = gk_vol * (60.0f64 / 5.0).sqrt(); // Scale 60s tactical vol
 
         for (_, hist_mid, hist_pred) in matured_entries {
             if hist_mid > 0.0 && current_mid > 0.0 && hist_pred != 0.0 {
@@ -616,7 +616,8 @@ impl AIEngine {
             let hawkes_asym = sab.load_f64_asset(asset_idx, 149);
 
             let (mamba_dir, _p_win, horiz_sec) = mamba.evaluate_scalar_heads_with_temp(&heads, temp)?;
-            let composite_logit = mamba_dir + 0.60 * obi + 0.40 * ofi + 0.25 * hawkes_asym;
+            // SOTA August 2026: Balanced microstructure logit modulation (neural mamba primacy)
+            let composite_logit = mamba_dir + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
             let dir = (composite_logit / temp).tanh().clamp(-1.0, 1.0);
             let direction_magnitude = dir.abs();
 

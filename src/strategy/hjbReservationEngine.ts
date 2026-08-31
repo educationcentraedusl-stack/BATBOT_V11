@@ -122,13 +122,17 @@ export class HJBReservationEngine {
       refNotional
     );
 
-    // Fast Volatility-Scaled Avellaneda-Stoikov Optimal Spread Offset:
-    // term1 = safeVol * precalcLogTerm
-    // term2 = (normalizedQty + 0.5) * safeVol * this.precalcSqrtCoeff
+    // SOTA Stoikov-Lehalle Multi-Scale Breathing Boundary (August 2026):
+    // Brownian motion noise protection: Delta_breathing = max(0.0050, k_vol * sigma_GK * sqrt((t + t0) / T), term1 + term2)
+    // Guarantees at least 50 bps breathing room so sub-second micro-ticks cannot panic liquidations.
     const term1 = safeVol * this.precalcLogTerm;
     const term2 = (normalizedQty + 0.5) * safeVol * this.precalcSqrtCoeff;
+    const durationSec = Math.max(0, durationMs * 0.001);
+    const timeScaleFactor = Math.sqrt((durationSec + 10.0) / Math.max(10.0, this.targetHorizonSeconds));
+    const dynamicVolBreathingPct = safeVol * 2.5 * timeScaleFactor;
 
-    const halfSpreadOffsetPct = Math.max(0.001, term1 + term2);
+    // Minimum 50 bps (0.0050) breathing floor prevents noise scratches
+    const halfSpreadOffsetPct = Math.max(0.0050, Math.max(term1 + term2, dynamicVolBreathingPct));
     const offsetUsdt = entryPrice * halfSpreadOffsetPct;
 
     let liquidationBoundary = 0;

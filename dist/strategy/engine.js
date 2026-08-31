@@ -191,7 +191,7 @@ class StrategyEngine {
                     }
                 }
                 const reconciledBal = this.executionClient.getReconciledWalletBalance();
-                if (reconciledBal > 0) {
+                if (Number.isFinite(reconciledBal)) {
                     this.hedgeLedger.setReconciledWalletBalance(reconciledBal);
                 }
                 this.syncSabPositionState();
@@ -1821,17 +1821,18 @@ class StrategyEngine {
                             }
                         }
                     }
-                    const isHardStopTrigger = primaryTrigger.reason.includes("HAZARD") ||
-                        primaryTrigger.reason.includes("HJB") ||
-                        primaryTrigger.reason.includes("MS_SOPC") ||
-                        primaryTrigger.reason.includes("MVA_TS") ||
+                    const isPassiveMakerExit = primaryTrigger.executionStyle === "PASSIVE_MAKER";
+                    const exitOrderType = isPassiveMakerExit ? "LIMIT" : "MARKET";
+                    const exitTimeInForce = isPassiveMakerExit ? "GTX" : undefined;
+                    const rawTargetExitPrice = isPassiveMakerExit
+                        ? (primaryTrigger.targetPrice ?? (exitSide === "SELL" ? askPrice : bidPrice))
+                        : markPrice;
+                    const formattedExitPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.config.symbol, rawTargetExitPrice);
+                    const isHardStopTrigger = !isPassiveMakerExit && (primaryTrigger.reason.includes("HAZARD") ||
                         primaryTrigger.reason === "STOP_LOSS" ||
-                        primaryTrigger.reason === "BREAK_EVEN_STOP_LOSS" ||
-                        primaryTrigger.reason === "LONG_HOLD_PROFIT_HARVEST" ||
-                        primaryTrigger.reason === "CAD_TERMINAL_HORIZON_KILL" ||
-                        primaryTrigger.reason === "TIME_DECAY_PROFIT_LOCK";
-                    console.log(`[HEDGE_DYNAMIC_MONITORING] Slot ${primaryTrigger.slotId} ${primaryTrigger.reason} TRIGGERED! Side: ${primaryTrigger.side}, Executing aggregated exit qty: ${formattedExitQty}, Mark: $${markPrice.toFixed(2)}. Dispatching MARKET close with positionSide: ${primaryTrigger.side}.${isHardStopTrigger ? " [RUTHLESS HARD STOP OVERRIDE ACTIVE]" : ""}`);
-                    this.prepareOrderIntent(exitSide, formattedExitQty, markPrice, primaryTrigger.side, true, isHardStopTrigger);
+                        primaryTrigger.reason === "BREAK_EVEN_STOP_LOSS");
+                    console.log(`[HEDGE_DYNAMIC_MONITORING] Slot ${primaryTrigger.slotId} ${primaryTrigger.reason} TRIGGERED! Side: ${primaryTrigger.side}, Executing aggregated exit qty: ${formattedExitQty}, Mark: $${markPrice.toFixed(2)}. Dispatching ${exitOrderType} (${primaryTrigger.executionStyle ?? "AGGRESSIVE_MARKET"}) close with positionSide: ${primaryTrigger.side}.${isHardStopTrigger ? " [RUTHLESS HARD STOP OVERRIDE ACTIVE]" : ""}`);
+                    this.prepareOrderIntent(exitSide, formattedExitQty, isPassiveMakerExit ? formattedExitPrice : markPrice, primaryTrigger.side, true, isHardStopTrigger);
                     const isConfigured = this.executionClient.isConfigured();
                     const riskResult = (this.riskGuard instanceof risk_1.MultiAssetRiskGuard)
                         ? this.riskGuard.validateMultiAssetOrder(this.reusableOrderIntent, isConfigured)
@@ -1841,7 +1842,7 @@ class StrategyEngine {
                         this.isOrderInFlight = true;
                         executionPromise = (async () => {
                             if (allCancelOrderIds.length > 0) {
-                                console.log(`[MAKER_TP_ENGINE][EMERGENCY_CANCEL] Cancelling ${allCancelOrderIds.length} open POST_ONLY limit TP orders before MARKET SL dispatch...`);
+                                console.log(`[MAKER_TP_ENGINE][EMERGENCY_CANCEL] Cancelling ${allCancelOrderIds.length} open POST_ONLY limit TP orders before exit dispatch...`);
                                 try {
                                     await this.executionClient.cancelBatchOrders(this.config.symbol, allCancelOrderIds);
                                     console.log(`[MAKER_TP_ENGINE][EMERGENCY_CANCEL] Batch order cancellation confirmed by exchange.`);
@@ -1850,45 +1851,49 @@ class StrategyEngine {
                                     console.warn(`[MAKER_TP_ENGINE][CANCEL_WARN] Batch order cancellation warning: ${err instanceof Error ? err.message : String(err)}`);
                                 }
                             }
-                            const exitCid = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(this.config.symbol, primaryTrigger.slotId, "EM");
+                            const exitCid = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(this.config.symbol, primaryTrigger.slotId, isPassiveMakerExit ? "MK" : "EM");
                             return this.executionClient
                                 .placeOrder({
                                 symbol: this.config.symbol,
                                 side: exitSide,
-                                type: "MARKET",
+                                type: exitOrderType,
+                                timeInForce: exitTimeInForce,
+                                price: isPassiveMakerExit ? formattedExitPrice : undefined,
                                 quantity: formattedExitQty,
                                 positionSide: primaryTrigger.side,
                                 clientOrderId: exitCid,
                             })
                                 .then((res) => {
                                 if (res) {
-                                    const execPx = parseFloat(res.price || res.avgPrice || "0") || markPrice;
-                                    const takerFeeRate = this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
+                                    const execPx = parseFloat(res.price || res.avgPrice || "0") || (isPassiveMakerExit ? formattedExitPrice : markPrice);
+                                    const feeRate = isPassiveMakerExit
+                                        ? this.hedgeLedger.getSizingCalculator().getMakerFeeRate()
+                                        : this.hedgeLedger.getSizingCalculator().getTakerFeeRate();
                                     // Capture ledger PnL BEFORE deduct/release
                                     const pnlBefore = this.hedgeLedger.getCumulativeRealizedPnl();
                                     for (const trig of sameSideTriggers) {
                                         if (trig.isPartialClose && trig.quantity > 0) {
                                             if (trig.side === "LONG") {
-                                                this.hedgeLedger.deductCoreLongQuantity(trig.quantity, execPx, takerFeeRate, trig.reason);
+                                                this.hedgeLedger.deductCoreLongQuantity(trig.quantity, execPx, feeRate, trig.reason);
                                             }
                                             else if (trig.slotId.startsWith("SHORT_SLOT_")) {
                                                 const sIdx = parseInt(trig.slotId.replace("SHORT_SLOT_", ""), 10);
-                                                this.hedgeLedger.deductShortSlotQuantity(sIdx, trig.quantity, execPx, takerFeeRate, trig.reason);
+                                                this.hedgeLedger.deductShortSlotQuantity(sIdx, trig.quantity, execPx, feeRate, trig.reason);
                                             }
                                         }
                                         else if (!trig.isPartialClose) {
                                             if (trig.side === "LONG") {
-                                                this.hedgeLedger.releaseCoreLong(execPx, takerFeeRate, trig.reason);
+                                                this.hedgeLedger.releaseCoreLong(execPx, feeRate, trig.reason);
                                             }
                                             else if (trig.slotId.startsWith("SHORT_SLOT_")) {
                                                 const sIdx = parseInt(trig.slotId.replace("SHORT_SLOT_", ""), 10);
-                                                this.hedgeLedger.releaseShortSlot(sIdx, execPx, takerFeeRate, trig.reason);
+                                                this.hedgeLedger.releaseShortSlot(sIdx, execPx, feeRate, trig.reason);
                                             }
                                         }
                                     }
                                     // Delta = exactly what recordRealizedExit recorded
                                     const realizedPnl = this.hedgeLedger.getCumulativeRealizedPnl() - pnlBefore;
-                                    // Dual-tier cooldown & risk sync for dynamic MARKET exit executions
+                                    // Dual-tier cooldown & risk sync for dynamic exit executions
                                     this.onExecutionCompleted({
                                         symbol: this.config.symbol,
                                         assetIndex: this.assetIndex,
@@ -2238,6 +2243,20 @@ class StrategyEngine {
             let orderType = "LIMIT";
             const timeInForce = "GTX";
             let targetPrice = signalType === "BUY" ? bidPrice : askPrice;
+            // SOTA August 2026 Cartea-Jaimungal Drift-Adjusted Quote Placement & Winner's Curse Protection (DEF-06)
+            const alphaDrift = 0.50 * hazardMetrics.ofi + 0.30 * hazardMetrics.tfi + 0.20 * cvdVelocity;
+            if (signalType === "BUY") {
+                if (alphaDrift < -0.10) {
+                    // Fading quote 1 tick deeper into the book to avoid being adversely selected by toxic sell sweeps
+                    targetPrice = Math.max(0, bidPrice - this.config.tickSize);
+                }
+            }
+            else if (signalType === "SELL") {
+                if (alphaDrift > 0.10) {
+                    // Fading quote 1 tick higher into the book to avoid being adversely selected by toxic buy sweeps
+                    targetPrice = askPrice + this.config.tickSize;
+                }
+            }
             // SOTA August 2026 Alpha-Gated Dynamic Kelly Recovery Sizing (AG-DKRS)
             let finalQuantity = 0.001;
             if (basePrice > 0) {

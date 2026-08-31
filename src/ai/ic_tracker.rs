@@ -191,32 +191,21 @@ impl ICTracker {
         let dynamic_thresh = (self.ewma_ic - 2.0 * std_dev).clamp(MODEL_DRIFT_FLOOR, 0.0500);
         self.adaptive_threshold = dynamic_thresh;
 
-        // Unconditional High-IC Alpha Immunity:
-        // If Spearman IC is strong and predictive (>= 0.0500), drift is strictly FALSE.
-        if ic >= 0.0500 {
-            self.is_drifted = false;
-            self.cusum.is_drifted = false;
-            self.cusum.s_pos = 0.0;
-        } else {
-            // Combined Drift Evaluation:
-            // A model is in drift ONLY if IC has decayed below the dynamic floor AND is degraded (< 0.0200),
-            // or if CUSUM flags a structural break while IC is below healthy threshold (< 0.0300).
-            let cusum_drift = self.cusum.is_drifted && ic < 0.0300;
-            let spearman_drift = ic < dynamic_thresh && ic < 0.0200;
+        // SOTA Multi-Factor Continuous Drift & CUSUM Evaluation (August 2026):
+        // Structural drift is triggered if CUSUM flags variance shift OR if rolling IC decays below dynamic threshold
+        let cusum_drift = self.cusum.is_drifted;
+        let spearman_drift = ic < dynamic_thresh && ic < 0.0300;
 
-            if spearman_drift || cusum_drift {
-                if !self.is_drifted {
-                    self.is_drifted = true;
-                    eprintln!(
-                        "[BATBOT_V11][IC Tracker DRIFT] Alert! IC: {:.4} (Thresh: {:.4}), CUSUM: {}, Samples: {}",
-                        ic, dynamic_thresh, cusum_drift, self.pairs.len()
-                    );
-                }
-            } else if ic >= dynamic_thresh + 0.02 || ic >= 0.0300 {
-                self.is_drifted = false;
-                self.cusum.is_drifted = false;
-                self.cusum.s_pos = 0.0;
+        if spearman_drift || cusum_drift {
+            if !self.is_drifted {
+                self.is_drifted = true;
+                eprintln!(
+                    "[BATBOT_V11][IC Tracker DRIFT] Alert! IC: {:.4} (Thresh: {:.4}), CUSUM: {}, Samples: {}",
+                    ic, dynamic_thresh, cusum_drift, self.pairs.len()
+                );
             }
+        } else if ic >= dynamic_thresh + 0.02 && !self.cusum.is_drifted {
+            self.is_drifted = false;
         }
 
         // Broadcast to SAB slots 101 and 102
@@ -235,21 +224,7 @@ impl ICTracker {
     /// Evaluates multi-minute residual and updates CUSUM structural break detector.
     pub fn update_cusum_residual(&mut self, residual: f64, current_ts_ns: u64, sab: Option<&AtomicSharedMemoryBridge>, asset_idx: usize) -> bool {
         let drifted = self.cusum.update(residual, current_ts_ns);
-        // Unconditional High-IC Immunity: never drift if rolling IC >= 0.0500
-        if self.current_ic >= 0.0500 {
-            self.is_drifted = false;
-            self.cusum.is_drifted = false;
-            self.cusum.s_pos = 0.0;
-            if let Some(bridge) = sab {
-                bridge.store_f64_asset(asset_idx, 102, 0.0);
-                if asset_idx != 0 {
-                    bridge.store_f64_asset(0, 102, 0.0);
-                }
-            }
-            return false;
-        }
-
-        if drifted && self.current_ic < 0.0300 {
+        if drifted {
             self.is_drifted = true;
             if let Some(bridge) = sab {
                 bridge.store_f64_asset(asset_idx, 102, 1.0);
@@ -436,12 +411,8 @@ mod tests {
     }
 
     #[test]
-    fn test_high_ic_immunity() {
+    fn test_healthy_ic_clearing() {
         let mut tracker = ICTracker::new(50);
-        // Force CUSUM drift internally
-        tracker.cusum.is_drifted = true;
-        tracker.cusum.s_pos = 50.0;
-
         // Ingest strong predictive pairs (IC ~ +1.0 >= 0.0500)
         for i in 1..=50 {
             let val = i as f64;
@@ -449,7 +420,6 @@ mod tests {
         }
 
         assert!(tracker.current_ic() >= 0.0500, "IC should be high positive");
-        assert!(!tracker.is_drifted(), "High IC (>= 0.0500) MUST unconditionally clear drift");
-        assert!(!tracker.cusum.is_drifted, "CUSUM drift MUST be reset under high IC");
+        assert!(!tracker.is_drifted(), "Healthy IC under normal CUSUM MUST be in-control");
     }
 }

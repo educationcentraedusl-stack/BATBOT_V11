@@ -443,6 +443,8 @@ class HedgePositionLedger {
         markPrice: 0,
         isPartialClose: false,
         cancelOrderIds: undefined,
+        executionStyle: "AGGRESSIVE_MARKET",
+        targetPrice: undefined,
     }));
     priceTickSize;
     invPriceTickSize;
@@ -2215,11 +2217,11 @@ class HedgePositionLedger {
             this.applyMonotonicStopLoss(slot, targetTier3Sl);
         }
         // Phase 4B: Hard Terminal Horizon Timeout (duration >= 1800s / 30 Minutes Max Lifespan)
-        // Idempotency guard: timeDecayTier < 4 prevents multi-tick trigger floods after 30 minutes.
+        // SOTA Passive Maker Unwind at markPrice / queue
         if (durationSec >= 1800.0) {
             if (!slot.timeDecayTier || slot.timeDecayTier < 4) {
                 slot.timeDecayTier = 4;
-                this.pushSotaTrigger(slot.slotId, slot.side, "LONG_HOLD_PROFIT_HARVEST", slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId);
+                this.pushSotaTrigger(slot.slotId, slot.side, "LONG_HOLD_PROFIT_HARVEST", slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "PASSIVE_MAKER", markPrice);
             }
             return;
         }
@@ -2227,16 +2229,17 @@ class HedgePositionLedger {
         // 2. Cox Proportional Hazard Rate Survival Exit
         // -------------------------------------------------------------------------
         if (hazardMetrics && hazardMetrics.isHazardExitTriggered) {
-            this.pushSotaTrigger(slot.slotId, slot.side, `HAZARD_FLUSH_EXIT_${slot.side}`, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId);
+            this.pushSotaTrigger(slot.slotId, slot.side, `HAZARD_FLUSH_EXIT_${slot.side}`, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "AGGRESSIVE_MARKET");
             return;
         }
         // -------------------------------------------------------------------------
         // 3. Avellaneda-Stoikov HJB Optimal Stopping Liquidation Boundary
+        // SOTA Tier-1: Passive Maker Unwind / Scratch Order at Best Mid
         // -------------------------------------------------------------------------
         if (hjbEngine && volMetrics) {
             const hjbEval = hjbEngine.getOptimalExitBoundary(slot.side, slot.entryPrice, stoikovMicroPrice, slot.quantity, durationMs, volMetrics.garmanKlass1s);
             if (hjbEval.isLiquidationTriggered) {
-                this.pushSotaTrigger(slot.slotId, slot.side, hjbEval.exitReason, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId);
+                this.pushSotaTrigger(slot.slotId, slot.side, hjbEval.exitReason, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "PASSIVE_MAKER", markPrice);
                 return;
             }
         }
@@ -2283,7 +2286,7 @@ class HedgePositionLedger {
             const exitReason = slot.timeDecayTier && slot.timeDecayTier >= 1
                 ? "BREAK_EVEN_STOP_LOSS"
                 : `MVA_TRAILING_STOP_${slot.side}`;
-            this.pushSotaTrigger(slot.slotId, slot.side, exitReason, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId);
+            this.pushSotaTrigger(slot.slotId, slot.side, exitReason, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "AGGRESSIVE_MARKET");
         }
     }
     formatPriceFast(rawPrice) {
@@ -2292,7 +2295,7 @@ class HedgePositionLedger {
         const rounded = Math.round(rawPrice / this.priceTickSize) * this.priceTickSize;
         return Math.round(rounded * this.priceFactor) / this.priceFactor;
     }
-    pushSotaTrigger(slotId, side, reason, quantity, entryPrice, markPrice, isPartialClose, activeTpOrderIds, activeStopLossOrderId) {
+    pushSotaTrigger(slotId, side, reason, quantity, entryPrice, markPrice, isPartialClose, activeTpOrderIds, activeStopLossOrderId, executionStyle = "AGGRESSIVE_MARKET", targetPrice) {
         const idx = this.sotaTriggers.length;
         if (idx < this.preallocatedTriggers.length) {
             const trg = this.preallocatedTriggers[idx];
@@ -2303,6 +2306,8 @@ class HedgePositionLedger {
             trg.entryPrice = entryPrice;
             trg.markPrice = markPrice;
             trg.isPartialClose = isPartialClose;
+            trg.executionStyle = executionStyle;
+            trg.targetPrice = targetPrice;
             const cancelIds = [];
             if (activeTpOrderIds && activeTpOrderIds.length > 0) {
                 cancelIds.push(...activeTpOrderIds);

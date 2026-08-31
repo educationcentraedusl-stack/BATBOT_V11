@@ -242,8 +242,9 @@ class MicrostructureHazardEngine {
         const durationFactor = Math.min(10.0, 1.0 + 0.05 * tSec);
         const cumulativeHazard = coxHazardRate * durationFactor;
         const survivalProbability = Math.max(0.001, Math.min(1.0, Math.exp(-cumulativeHazard)));
-        // Hazard Flush ONLY triggers when toxic order flow is actively detected (hazardScore >= threshold) or high hazard + low survival
-        const isHazardExitTriggered = hazardScore >= this.hazardThreshold || (survivalProbability <= 0.15 && hazardScore >= 0.40);
+        // SOTA August 2026: De-noised Toxic Cascade Detection
+        // Hazard Flush ONLY triggers on sustained high toxic order flow (hazardScore >= 0.85) or catastrophic survival collapse
+        const isHazardExitTriggered = hazardScore >= Math.max(0.85, this.hazardThreshold) || (survivalProbability <= 0.05 && hazardScore >= 0.65);
         const res = this.cachedMetricsRing[this.metricsRingIdx];
         this.metricsRingIdx = (this.metricsRingIdx + 1) % 8;
         res.ofi = ofi;

@@ -160,6 +160,7 @@ class BinanceExecutionClient {
     rateLimiter = new BinanceRateLimiter();
     cachedUsdtAvailableBalance = 0;
     cachedReconciledWalletBalance = 0;
+    hasReconciledWalletBalance = false;
     cachedTotalUnrealizedProfit = 0;
     balancePollTimer = null;
     incomeSyncTimer = null;
@@ -243,7 +244,7 @@ class BinanceExecutionClient {
         return this.cachedUsdtAvailableBalance;
     }
     setUsdtAvailableBalance(val) {
-        if (Number.isFinite(val) && val >= 0) {
+        if (Number.isFinite(val)) {
             this.cachedUsdtAvailableBalance = val;
         }
     }
@@ -252,11 +253,12 @@ class BinanceExecutionClient {
      * Zero REST API calls and zero rate limit consumption.
      */
     updateBalancesFromWs(availableBalance, walletBalance) {
-        if (Number.isFinite(availableBalance) && availableBalance >= 0) {
+        if (Number.isFinite(availableBalance)) {
             this.cachedUsdtAvailableBalance = availableBalance;
         }
-        if (walletBalance !== undefined && Number.isFinite(walletBalance) && walletBalance >= 0) {
+        if (walletBalance !== undefined && Number.isFinite(walletBalance)) {
             this.cachedReconciledWalletBalance = walletBalance;
+            this.hasReconciledWalletBalance = true;
         }
     }
     async fetchUsdtBalanceAsync() {
@@ -763,7 +765,7 @@ class BinanceExecutionClient {
                             updateTime: algoRes.updateTime || Date.now(),
                         };
                     }
-                    return algoRes;
+                    throw new Error(`[BinanceExecutionClient][ALGO_ORDER_FAILED] Invalid or rejected algoOrder response: code=${algoRes?.code ?? "UNKNOWN"}, msg=${algoRes?.msg ?? "Missing algoId/orderId"}`);
                 }
                 const isConflictOrGteError = errMsg.includes("-4509") ||
                     errMsg.includes("4509") ||
@@ -1166,8 +1168,10 @@ class BinanceExecutionClient {
                 const totalWallet = parseFloat(accountInfo.totalWalletBalance || "0");
                 const available = parseFloat(accountInfo.availableBalance || "0");
                 const unrealized = parseFloat(accountInfo.totalUnrealizedProfit || "0");
-                if (!isNaN(totalWallet))
+                if (!isNaN(totalWallet)) {
                     this.cachedReconciledWalletBalance = totalWallet;
+                    this.hasReconciledWalletBalance = true;
+                }
                 if (!isNaN(available))
                     this.cachedUsdtAvailableBalance = available;
                 if (!isNaN(unrealized))
@@ -1190,7 +1194,10 @@ class BinanceExecutionClient {
         };
     }
     getReconciledWalletBalance() {
-        return this.cachedReconciledWalletBalance > 0 ? this.cachedReconciledWalletBalance : this.cachedUsdtAvailableBalance;
+        if (this.hasReconciledWalletBalance && Number.isFinite(this.cachedReconciledWalletBalance)) {
+            return this.cachedReconciledWalletBalance;
+        }
+        return this.cachedUsdtAvailableBalance;
     }
     getTotalUnrealizedProfit() {
         return this.cachedTotalUnrealizedProfit;

@@ -34,6 +34,8 @@ class MarketDataClient {
         this.cvdCounts = new Int32Array(this.maxAssets);
         this.lastCvdUpdateTs = new Float64Array(this.maxAssets);
         this.lastCvdRecorded = new Float64Array(this.maxAssets);
+        this.cvdRateMean = new Float64Array(this.maxAssets);
+        this.cvdRateMad = new Float64Array(this.maxAssets);
     }
     /**
      * Dynamically calculates offset slot for (assetIdx, slot).
@@ -83,13 +85,15 @@ class MarketDataClient {
     cvdCounts;
     lastCvdUpdateTs;
     lastCvdRecorded;
+    cvdRateMean;
+    cvdRateMad;
     getCVD(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 2);
     }
     /**
      * Calculates rolling volume-normalized CVD velocity over windowMs (default 5000ms).
-     * Bounded in [-1.0, +1.0] using hyperbolic tangent to eliminate session-cumulative drift.
-     * True rate-of-change velocity: Velocity = (Delta CVD / Delta t_sec) * 0.0005.
+     * SOTA August 2026: Online EWMA Mean and MAD Z-score standardization bounded in [-1.0, +1.0].
+     * Eliminates hard-saturation at +/-1.00 and restores symmetric BUY/SELL signal generation.
      * Zero GC allocation hot-path implementation.
      */
     getCVDVelocity(assetIdx = 0, windowMs = 5000, nowMs = Date.now()) {
@@ -149,7 +153,19 @@ class MarketDataClient {
         }
         const elapsedSec = elapsedMs / 1000.0;
         const ratePerSecond = deltaCvd / elapsedSec;
-        return Math.tanh(ratePerSecond * 0.0005);
+        // SOTA Volume-Synchronized Z-Score Normalized CVD Velocity (August 2026):
+        // Rolling EWMA Mean and Median Absolute Deviation (MAD) standardization
+        const alpha = 0.02; // Smooth tracking over ~50 updates
+        const prevMean = this.cvdRateMean[safeAssetIdx];
+        const prevMad = this.cvdRateMad[safeAssetIdx] > 0.01 ? this.cvdRateMad[safeAssetIdx] : 100.0;
+        const diff = Math.abs(ratePerSecond - prevMean);
+        const newMean = (1 - alpha) * prevMean + alpha * ratePerSecond;
+        const newMad = Math.max(10.0, (1 - alpha) * prevMad + alpha * diff);
+        this.cvdRateMean[safeAssetIdx] = newMean;
+        this.cvdRateMad[safeAssetIdx] = newMad;
+        // Standardized Z-score bounded via tanh(z / 2.5) to [-1.0, 1.0] without hard-saturation
+        const zScore = (ratePerSecond - newMean) / newMad;
+        return Math.tanh(zScore / 2.5);
     }
     getSpreadVelocity(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 3);
@@ -601,6 +617,8 @@ class MarketDataClient {
         this.cvdCounts.fill(0);
         this.lastCvdUpdateTs.fill(0);
         this.lastCvdRecorded.fill(0);
+        this.cvdRateMean.fill(0);
+        this.cvdRateMad.fill(0);
     }
 }
 exports.MarketDataClient = MarketDataClient;
