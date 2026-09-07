@@ -64,6 +64,12 @@ export class OnlineVarianceRatioClassifier {
     const prevPriceIdx = (this.head - 1 + this.windowSize) % this.windowSize;
     const prevPrice = this.priceRing[prevPriceIdx];
 
+    // Filter out zero-return depth updates (DEF-3104): Lo-MacKinlay requires real price increments
+    // to prevent exponential decay of return variances toward zero during quiet orderbook periods.
+    if (Math.abs(midPrice - prevPrice) < 1e-9) {
+      return;
+    }
+
     // Compute 1-period log return: r_1 = ln(p_t / p_{t-1})
     const r1 = Math.log(midPrice / prevPrice);
 

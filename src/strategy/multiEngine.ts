@@ -409,29 +409,6 @@ export class MultiAssetStrategyEngine {
       });
     }
 
-    // DEF-R9: Portfolio-Level Signal Diversity Gate (Prevents Simultaneous 9/10 Entry)
-    const buySignals = signals.filter((s) => s.signalType === "BUY" && s.isApproved);
-    const sellSignals = signals.filter((s) => s.signalType === "SELL" && s.isApproved);
-
-    const MAX_CONCURRENT_SAME_DIRECTION = 3; // Never more than 3 same-direction entries simultaneously
-
-    if (buySignals.length > MAX_CONCURRENT_SAME_DIRECTION) {
-      // Keep only top-3 by confidence, reject the rest
-      buySignals.sort((a, b) => b.confidence - a.confidence);
-      for (let i = MAX_CONCURRENT_SAME_DIRECTION; i < buySignals.length; i++) {
-        buySignals[i].isApproved = false;
-        buySignals[i].rejectReason = "REJECTED_PORTFOLIO_CONCENTRATION_LIMIT";
-      }
-    }
-
-    if (sellSignals.length > MAX_CONCURRENT_SAME_DIRECTION) {
-      sellSignals.sort((a, b) => b.confidence - a.confidence);
-      for (let i = MAX_CONCURRENT_SAME_DIRECTION; i < sellSignals.length; i++) {
-        sellSignals[i].isApproved = false;
-        sellSignals[i].rejectReason = "REJECTED_PORTFOLIO_CONCENTRATION_LIMIT";
-      }
-    }
-
     return {
       timestamp,
       signals,

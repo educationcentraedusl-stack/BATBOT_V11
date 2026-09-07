@@ -51,6 +51,9 @@ export interface RiskCheckResult {
     | "RECALIBRATING_ACTIVE"
     | "ENGINE_PAUSED"
     | "INVALID_TICK_DATA"
+    | "IC_MODEL_BROKEN"
+    | "IC_DEGRADED_LOW_CONFIDENCE"
+    | "PORTFOLIO_CONCENTRATION_LIMIT"
     | "CRITICAL_EVALUATION_EXCEPTION";
   message: string;
 }

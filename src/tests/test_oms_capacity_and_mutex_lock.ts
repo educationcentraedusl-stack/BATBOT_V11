@@ -279,14 +279,54 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   // ============================================================================
   console.log("[STAGE 5] Testing Asynchronous Promise.all Concurrent Tick Race & Capacity Serialization...");
 
-  // Setup 9 active confirmed positions on Symbols 0..8
+  // Setup 9 active confirmed positions on Symbols 0..8 (2 LONGs, 7 SHORTs to respect DEF-3101 directional limits)
   for (let i = 0; i < 9; i++) {
     const sym = symbols[i];
     const eng = multiEngine.getEngineForSymbol(sym)!;
     eng.getHedgeLedger().clearSlots();
-    eng.getHedgeLedger().occupyCoreLong(1.0, 100.0, 1.5, 0.8, false);
-    eng.syncSabPositionState(100.0);
-    riskGuard.recordExecutionSuccess(100.0, "BUY", sym, false, 100.0);
+    if (i < 2) {
+      eng.reconcileStartupPositions([
+        {
+          symbol: sym,
+          positionAmt: "1.0",
+          entryPrice: "100.0",
+          markPrice: "100.0",
+          unRealizedProfit: "0",
+          liquidationPrice: "0",
+          leverage: "10",
+          maxNotionalValue: "1000000",
+          marginType: "cross",
+          isolatedMargin: "0",
+          isAutoAddMargin: "false",
+          positionSide: "LONG",
+          notional: "100.0",
+          isolatedWallet: "0",
+          updateTime: Date.now(),
+        },
+      ]);
+      riskGuard.recordExecutionSuccess(100.0, "BUY", sym, false, 100.0);
+    } else {
+      eng.reconcileStartupPositions([
+        {
+          symbol: sym,
+          positionAmt: "-1.0",
+          entryPrice: "100.0",
+          markPrice: "100.0",
+          unRealizedProfit: "0",
+          liquidationPrice: "0",
+          leverage: "10",
+          maxNotionalValue: "1000000",
+          marginType: "cross",
+          isolatedMargin: "0",
+          isAutoAddMargin: "false",
+          positionSide: "SHORT",
+          notional: "100.0",
+          isolatedWallet: "0",
+          updateTime: Date.now(),
+        },
+      ]);
+      riskGuard.recordExecutionSuccess(100.0, "SELL", sym, false, 100.0);
+    }
   }
   assert(btcEngine.getGlobalActivePositionCount() === 9, "9 active positions must be active before concurrent race");
 
@@ -303,10 +343,27 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   // Exactly 8 positions confirmed active
   assert(btcEngine.getGlobalActivePositionCount() === 8, "Portfolio must have 8 active positions (2 available slots)");
 
-  // Re-occupy LINKUSDT so exactly 9 are active (only 1 available slot remaining before 10-slot cap)
-  linkEng.getHedgeLedger().occupyCoreLong(1.0, 100.0, 1.5, 0.8, false);
-  linkEng.syncSabPositionState(100.0);
-  riskGuard.recordExecutionSuccess(100.0, "BUY", "LINKUSDT", false, 100.0);
+  // Re-occupy LINKUSDT as SHORT so exactly 9 are active (2 LONGs, 7 SHORTs -> exactly 1 available slot remaining before 10-slot cap, and 1 available LONG before 3-LONG cap)
+  linkEng.reconcileStartupPositions([
+    {
+      symbol: "LINKUSDT",
+      positionAmt: "-1.0",
+      entryPrice: "100.0",
+      markPrice: "100.0",
+      unRealizedProfit: "0",
+      liquidationPrice: "0",
+      leverage: "10",
+      maxNotionalValue: "1000000",
+      marginType: "cross",
+      isolatedMargin: "0",
+      isAutoAddMargin: "false",
+      positionSide: "SHORT",
+      notional: "100.0",
+      isolatedWallet: "0",
+      updateTime: Date.now(),
+    },
+  ]);
+  riskGuard.recordExecutionSuccess(100.0, "SELL", "LINKUSDT", false, 100.0);
   assert(btcEngine.getGlobalActivePositionCount() === 9, "Portfolio must have exactly 9 active positions (1 available slot left)");
 
   // Instantiate 11th candidate engine (NEARUSDT) to compete simultaneously with DOTUSDT
@@ -380,6 +437,12 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   // STAGE 6: Clean Release & Flip Authorization
   // ============================================================================
   console.log("[STAGE 6] Testing Clean Position Release & Directional Flip Authorization...");
+  for (const eng of multiEngine.getAllEngines().values()) {
+    eng.getHedgeLedger().clearSlots();
+    eng.syncSabPositionState(0);
+    eng.clearPendingEntryOrders();
+  }
+  riskGuard.resetSymbolNotionals();
   btcHedge.clearSlots();
   btcEngine.syncSabPositionState(0);
   assert(btcHedge.getCoreLong().isOccupied === false, "BTC Core Long must be FLAT");

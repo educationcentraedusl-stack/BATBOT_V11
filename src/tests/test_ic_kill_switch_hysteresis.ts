@@ -3,6 +3,7 @@ import { MarketDataClient } from "../marketDataClient";
 import { RiskGuard } from "../strategy/risk";
 import { BinanceExecutionClient } from "../execution/binance";
 import { StrategyEngine } from "../strategy/engine";
+import { timeSynchronizer } from "../utils/timeSynchronizer";
 
 function assert(condition: boolean, message: string): void {
   if (!condition) {
@@ -34,6 +35,10 @@ async function runICKillSwitchHysteresisTestSuite(): Promise<void> {
     minAiConfidence: 0.70,
     aggressiveConfidenceThreshold: 0.75,
   });
+
+  const bigIntView = new BigInt64Array(sab);
+  let nowMs = timeSynchronizer.getAdjustedNowMs();
+  Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
 
   let simulatedNowMs = 1_000_000.0;
 
@@ -88,7 +93,27 @@ async function runICKillSwitchHysteresisTestSuite(): Promise<void> {
   simulatedNowMs += 5_000;
   engine.updateICKillSwitchState(0.002, true, simulatedNowMs); // isDriftFlagged = true
   assert(engine.getIcState() === "MODEL_BROKEN", `CUSUM drift must immediately force MODEL_BROKEN, got ${engine.getIcState()}`);
-  console.log("  ✓ Structural CUSUM drift immediately trips kill switch to MODEL_BROKEN\n");
+
+  // Physical evaluateTick() proof: even under strong BUY conviction, MODEL_BROKEN must short-circuit and block
+  client.setBestBidPrice(60000.0, 0);
+  client.setBestBidQuantity(25.0, 0);
+  client.setBestAskPrice(60000.5, 0);
+  client.setBestAskQuantity(2.0, 0);
+  client.setOBI(0.85, 0);
+  client.setCVD(100.0, 0);
+  client.setAIPredictionDirection(0.85, 0);
+  client.setAIPredictionConfidence(0.90, 0);
+  client.setHurstExponent(0.65, 0);
+  client.setLOBEntropy(0.50, 0);
+  client.setHawkesIntensity(1.0, 0);
+  client.setGarmanKlassRV(0.002, 0);
+  client.setIsModelDrifted(true, 0);
+
+  const blockedTickSignal = engine.evaluateTick();
+  assert(blockedTickSignal.signalType === "NONE", `Signal must be NONE in MODEL_BROKEN state, got ${blockedTickSignal.signalType}`);
+  assert(blockedTickSignal.riskResult?.reasonCode === "IC_MODEL_BROKEN", `Reason must be IC_MODEL_BROKEN, got ${blockedTickSignal.riskResult?.reasonCode}`);
+  assert(blockedTickSignal.executionPromise === undefined, "Execution promise must be undefined when kill switch trips");
+  console.log("  ✓ Structural CUSUM drift immediately trips kill switch to MODEL_BROKEN & evaluateTick() strictly halts\n");
 
   // --------------------------------------------------------------------------
   // STAGE 4: Recovery from MODEL_BROKEN to DEGRADED (Requires 120s)
@@ -144,7 +169,18 @@ async function runICKillSwitchHysteresisTestSuite(): Promise<void> {
   simulatedNowMs += 10_000;
   engine.updateICKillSwitchState(-0.11, false, simulatedNowMs); // Autopsy condition: IC = -0.11
   assert(engine.getIcState() === "MODEL_BROKEN", `IC = -0.11 must immediately force MODEL_BROKEN, got ${engine.getIcState()}`);
-  console.log("  ✓ Autopsy condition (IC = -0.11) instantly triggers MODEL_BROKEN directly from ALPHA_ACTIVE\n");
+
+  // Physical evaluateTick() proof: catastrophic IC immediately halts engine
+  nowMs = timeSynchronizer.getAdjustedNowMs();
+  Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
+  client.setSequenceNum(2n, 0);
+  client.setRollingIC(-0.11, 0);
+  client.setIsModelDrifted(false, 0);
+  const catastrophicSignal = engine.evaluateTick();
+  assert(catastrophicSignal.signalType === "NONE", `Signal must be NONE after catastrophic IC collapse, got ${catastrophicSignal.signalType}`);
+  assert(catastrophicSignal.riskResult?.reasonCode === "IC_MODEL_BROKEN", `Reason must be IC_MODEL_BROKEN, got ${catastrophicSignal.riskResult?.reasonCode}`);
+  assert(catastrophicSignal.executionPromise === undefined, "Execution promise must be undefined when collapsed");
+  console.log("  ✓ Autopsy condition (IC = -0.11) instantly triggers MODEL_BROKEN & physically halts evaluateTick()\n");
 
   console.log("================================================================================");
   console.log("  ✅ ALL 6 TEST STAGES PASSED (100% SOTA DEF-R7 SPECIFICATION COMPLIANCE)");

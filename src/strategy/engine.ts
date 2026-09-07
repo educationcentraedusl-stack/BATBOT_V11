@@ -14,6 +14,20 @@ import { AutoRecalibrationManager } from "../ai/recalibrationWorker";
 import { timeSynchronizer } from "../utils/timeSynchronizer";
 import { OnlineVarianceRatioClassifier, MarketRegimeState } from "./regimeClassifier";
 
+export interface ExecutionCompletedParams {
+  symbol: string;
+  assetIndex: number;
+  side: "BUY" | "SELL";
+  positionSide: "LONG" | "SHORT";
+  isCloseOrder: boolean;
+  executedQty: number;
+  executedPrice: number;
+  realizedPnl?: number;
+  fillTimestampMs?: number;
+  netRoe?: number;
+  remainingGrossNotional?: number;
+}
+
 export interface StrategyConfig {
   symbol: string;
   orderQuantity: number;
@@ -130,6 +144,7 @@ export class StrategyEngine {
   private prevOBI: number = 0;
   private prevOBIVelocity: number = 0;
   private prevTickMs: number = 0;
+  private isLciInitialized: boolean = false;
 
   // Reusable static result object for NONE signals to achieve zero GC-heap allocation in hot path
   private staticResult: StrategySignalResult = {
@@ -501,6 +516,12 @@ export class StrategyEngine {
     StrategyEngine.registeredEngines = [];
   }
 
+  public static unregisterEngine(engine: StrategyEngine): void {
+    StrategyEngine.registeredEngines = StrategyEngine.registeredEngines.filter(
+      (e) => e.getConfig().symbol !== engine.getConfig().symbol
+    );
+  }
+
   public static getRegisteredEngines(): ReadonlyArray<StrategyEngine> {
     return StrategyEngine.registeredEngines;
   }
@@ -576,6 +597,113 @@ export class StrategyEngine {
     return count;
   }
 
+  /**
+   * Returns total count of active, pending, or SAB-confirmed positions in a specific direction ("LONG" | "SHORT")
+   * across all registered assets in the portfolio. Enforces DEF-3101 directional concentration limit (<= 3).
+   */
+  public getGlobalDirectionalPositionCount(direction: "LONG" | "SHORT"): number {
+    let count = 0;
+    let occupiedAssetMask = 0;
+    let checkedAssetMask = 0;
+
+    const registered = StrategyEngine.registeredEngines;
+    const len = registered.length;
+    for (let i = 0; i < len; i++) {
+      const eng = registered[i];
+      if (!eng) continue;
+
+      const aIdx = eng.assetIndex;
+      if (aIdx >= 0 && aIdx < 32) {
+        checkedAssetMask |= (1 << aIdx);
+      }
+
+      const hl = eng.hedgeLedger;
+      if (direction === "LONG") {
+        const coreLong = hl.getCoreLong();
+        const isLongActiveOrPending = coreLong.isOccupied || coreLong.lifecycleState === "PENDING_ENTRY";
+        const hasPendingLong = eng.hasPendingEntryForSide("LONG") || eng.hasPendingEntryForSlot("CORE_LONG");
+        let hasSabLong = false;
+        if (aIdx >= 0 && aIdx < this.client.maxAssets) {
+          const lQty = this.client.getOmsLongPositionQty(aIdx);
+          if (lQty > 1e-6) hasSabLong = true;
+        }
+
+        if (isLongActiveOrPending || hasPendingLong || hasSabLong) {
+          if (aIdx >= 0 && aIdx < 32) {
+            if ((occupiedAssetMask & (1 << aIdx)) === 0) {
+              occupiedAssetMask |= (1 << aIdx);
+              count++;
+            }
+          } else {
+            count++;
+          }
+        }
+      } else {
+        let isShortActiveOrPending = false;
+        const shortSlots = hl.getShortSlots();
+        for (let s = 0; s < shortSlots.length; s++) {
+          if (shortSlots[s].isOccupied || shortSlots[s].lifecycleState === "PENDING_ENTRY") {
+            isShortActiveOrPending = true;
+            break;
+          }
+        }
+        const hasPendingShort = eng.hasPendingEntryForSide("SHORT");
+        let hasSabShort = false;
+        if (aIdx >= 0 && aIdx < this.client.maxAssets) {
+          const sQty = this.client.getOmsShortPositionQty(aIdx);
+          if (sQty > 1e-6) hasSabShort = true;
+        }
+
+        if (isShortActiveOrPending || hasPendingShort || hasSabShort) {
+          if (aIdx >= 0 && aIdx < 32) {
+            if ((occupiedAssetMask & (1 << aIdx)) === 0) {
+              occupiedAssetMask |= (1 << aIdx);
+              count++;
+            }
+          } else {
+            count++;
+          }
+        }
+      }
+    }
+
+    // Check any remaining SAB slots for standalone/unregistered asset indices
+    for (let i = 0; i < this.client.maxAssets; i++) {
+      if ((checkedAssetMask & (1 << i)) === 0 && (occupiedAssetMask & (1 << i)) === 0) {
+        if (direction === "LONG") {
+          const lQty = this.client.getOmsLongPositionQty(i);
+          if (lQty > 1e-6) {
+            occupiedAssetMask |= (1 << i);
+            count++;
+          }
+        } else {
+          const sQty = this.client.getOmsShortPositionQty(i);
+          if (sQty > 1e-6) {
+            occupiedAssetMask |= (1 << i);
+            count++;
+          }
+        }
+      }
+    }
+
+    return count;
+  }
+
+  public resetInFlightOrderForTesting(): void {
+    this.isOrderInFlight = false;
+  }
+
+  public clearPendingOrdersForTesting(): void {
+    this.clearPendingEntryOrders();
+  }
+
+  public resetLciForTesting(): void {
+    this.prevOBI = 0;
+    this.prevOBIVelocity = 0;
+    this.prevTickMs = 0;
+    this.isLciInitialized = false;
+  }
+
   public clearPendingEntryOrders(): void {
     for (const pending of this.pendingEntryOrders.values()) {
       if (pending.timeoutTimer) {
@@ -634,19 +762,7 @@ export class StrategyEngine {
    * 5+ losses -> 900s (15 min) hard symbol circuit breaker halt
    * Realized winning exit (> +0.20% Net ROE) resets consecutive loss counter to 0.
    */
-  private onExecutionCompleted(params: {
-    symbol: string;
-    assetIndex: number;
-    side: "BUY" | "SELL";
-    positionSide: "LONG" | "SHORT";
-    isCloseOrder: boolean;
-    executedQty: number;
-    executedPrice: number;
-    realizedPnl?: number;
-    fillTimestampMs?: number;
-    netRoe?: number;
-    remainingGrossNotional?: number;
-  }): void {
+  public onExecutionCompleted(params: ExecutionCompletedParams): void {
     const fillTime = params.fillTimestampMs ?? timeSynchronizer.getAdjustedNowMs();
     const notionalUsdt = params.executedQty * params.executedPrice;
     let cooldownDurationMs = this.config.cooldownMs;
@@ -2573,6 +2689,59 @@ export class StrategyEngine {
         }
       }
 
+      // DEF-R7 & DEF-3103: Update & Short-Circuit on 3-State Hysteresis CUSUM-SPRT IC Kill Switch
+      // Positioned ahead of all entry evaluation math to prevent wasteful CPU computation when MODEL_BROKEN
+      const liveIC = this.client.getRollingIC(this.assetIndex);
+      const safeIC = Number.isFinite(liveIC) ? liveIC : 0.0;
+      const isDriftFlagged = this.client.getIsModelDrifted(this.assetIndex);
+      this.updateICKillSwitchState(safeIC, isDriftFlagged, nowMs);
+
+      if (this.icState === "MODEL_BROKEN") {
+        if (seq % 1000n === 0n) {
+          console.warn(
+            `[StrategyEngine][${this.config.symbol}][IC_KILL_SWITCH_BLOCKED] Seq #${seq} | ` +
+            `State: MODEL_BROKEN (IC: ${safeIC.toFixed(4)}, Drift: ${isDriftFlagged}). Entry evaluation short-circuited.`
+          );
+        }
+        this.staticResult.sequenceNum = seq;
+        this.staticResult.signalType = "NONE";
+        this.staticResult.obi = obi;
+        this.staticResult.cvd = cvd;
+        this.staticResult.spreadVelocity = spreadVelocity;
+        this.staticResult.bidPrice = bidPrice;
+        this.staticResult.askPrice = askPrice;
+        this.staticResult.riskResult = {
+          passed: false,
+          reasonCode: "IC_MODEL_BROKEN",
+          message: `Model IC kill switch active (State: MODEL_BROKEN, IC: ${safeIC.toFixed(4)})`,
+        };
+        this.staticResult.executionPromise = undefined;
+        return this.staticResult;
+      }
+
+      if (this.icState === "DEGRADED" && aiConfidence < 0.80) {
+        if (seq % 1000n === 0n) {
+          console.warn(
+            `[StrategyEngine][${this.config.symbol}][IC_DEGRADED_FILTER] Seq #${seq} | ` +
+            `State: DEGRADED (IC: ${safeIC.toFixed(4)}). Confidence ${(aiConfidence * 100).toFixed(1)}% < 80.0% floor.`
+          );
+        }
+        this.staticResult.sequenceNum = seq;
+        this.staticResult.signalType = "NONE";
+        this.staticResult.obi = obi;
+        this.staticResult.cvd = cvd;
+        this.staticResult.spreadVelocity = spreadVelocity;
+        this.staticResult.bidPrice = bidPrice;
+        this.staticResult.askPrice = askPrice;
+        this.staticResult.riskResult = {
+          passed: false,
+          reasonCode: "IC_DEGRADED_LOW_CONFIDENCE",
+          message: `DEGRADED state requires confidence >= 80% (got ${(aiConfidence * 100).toFixed(1)}%)`,
+        };
+        this.staticResult.executionPromise = undefined;
+        return this.staticResult;
+      }
+
       // Read Hawkes & Microburst & Microstructure Metrics from SAB (Slots 112, 114, 119, 120, 121, 123, 124)
       const hawkesIntensity = this.client.getHawkesIntensity(this.assetIndex);
       const realizedVol = this.client.getRealizedVolatility(this.assetIndex);
@@ -2657,11 +2826,7 @@ export class StrategyEngine {
 
       const isHighConfidenceAi = aiConfidence >= Math.max(this.config.aggressiveConfidenceThreshold, effectiveMinConfidence);
 
-      // DEF-R4: Physically replace the meaningless Z-score with the Information Ratio (IR = IC * sqrt(breadth))
-      // Read live IC from SAB (physically written by ic_tracker.rs)
-      const liveIC = this.client.getRollingIC(this.assetIndex);
-      const safeIC = Number.isFinite(liveIC) ? liveIC : 0.0;
-
+      // DEF-R4: Information Ratio Gate (IR = IC * sqrt(breadth))
       // Approximate breadth: ~720 independent 5s predictions per hour
       const breadthPerHour = 720;
       const informationRatio = safeIC * Math.sqrt(breadthPerHour);
@@ -2676,11 +2841,7 @@ export class StrategyEngine {
           && isSignalQualityValid
           && aiConfidence >= effectiveMinConfidence;
 
-      // DEF-R7: Update 3-State Hysteresis CUSUM-SPRT IC Kill Switch
-      const isDriftFlagged = this.client.getIsModelDrifted(this.assetIndex);
-      this.updateICKillSwitchState(safeIC, isDriftFlagged, nowMs);
-
-      // DEF-R8: Composite Leading Confirmation Index (Microprice Deviation + OBI Velocity/Acceleration)
+      // DEF-R8 & DEF-3102: Composite Leading Confirmation Index (Microprice Deviation + OBI Velocity/Acceleration)
       const bidQty = this.client.getBestBidQuantity(this.assetIndex);
       const askQty = this.client.getBestAskQuantity(this.assetIndex);
       const totalBookQty = bidQty + askQty;
@@ -2689,23 +2850,48 @@ export class StrategyEngine {
         : midPrice;
       const micropriceDev = midPrice > 0 ? (microPrice - midPrice) / midPrice : 0;
 
-      // Compute OBI velocity and acceleration
-      const dt = this.prevTickMs > 0 ? Math.max(0.001, (nowMs - this.prevTickMs) / 1000) : 0.01;
-      const obiVelocity = (obi - this.prevOBI) / dt;
-      const obiAccel = (obiVelocity - this.prevOBIVelocity) / dt;
-      this.prevOBI = obi;
-      this.prevOBIVelocity = obiVelocity;
-      this.prevTickMs = nowMs;
+      // Compute OBI velocity and acceleration with proper initialization guard & dt regularization
+      let obiVelocity = 0.0;
+      let obiAccel = 0.0;
+
+      if (!this.isLciInitialized || this.prevTickMs === 0) {
+        this.prevOBI = obi;
+        this.prevOBIVelocity = 0.0;
+        this.prevTickMs = nowMs;
+        this.isLciInitialized = true;
+        // On tick 0 / initialization: velocity and acceleration are strictly 0
+        obiVelocity = 0.0;
+        obiAccel = 0.0;
+      } else {
+        const deltaMs = nowMs - this.prevTickMs;
+        if (deltaMs >= 5) {
+          // Regularized dt clamped between 0.005s (5ms) and 1.0s to avoid high-frequency noise explosion
+          const dt = Math.min(1.0, Math.max(0.005, deltaMs / 1000.0));
+          const rawVelocity = (obi - this.prevOBI) / dt;
+          // Smooth velocity via EWMA (alpha = 0.30) to filter microsecond tick jitter
+          obiVelocity = 0.30 * rawVelocity + 0.70 * this.prevOBIVelocity;
+          obiAccel = (obiVelocity - this.prevOBIVelocity) / dt;
+
+          this.prevOBI = obi;
+          this.prevOBIVelocity = obiVelocity;
+          this.prevTickMs = nowMs;
+        } else {
+          // Sub-5ms tick: retain smoothed velocity and zero acceleration increment
+          obiVelocity = this.prevOBIVelocity;
+          obiAccel = 0.0;
+        }
+      }
 
       // Composite Leading Confirmation Index (LCI)
+      // Multipliers scaled sensibly: micropriceDev (10,000 = bps), velocity (x5.0), acceleration (x2.0)
       const sigmoid = (x: number) => 1 / (1 + Math.exp(-Math.max(-50, Math.min(50, x))));
       const lciBuy = 0.50 * sigmoid(micropriceDev * 10000)
-                   + 0.30 * sigmoid(obiVelocity * 50)
-                   + 0.20 * sigmoid(obiAccel * 100);
+                   + 0.30 * sigmoid(obiVelocity * 5.0)
+                   + 0.20 * sigmoid(obiAccel * 2.0);
 
       const lciSell = 0.50 * sigmoid(-micropriceDev * 10000)
-                    + 0.30 * sigmoid(-obiVelocity * 50)
-                    + 0.20 * sigmoid(-obiAccel * 100);
+                    + 0.30 * sigmoid(-obiVelocity * 5.0)
+                    + 0.20 * sigmoid(-obiAccel * 2.0);
 
       const isLeadingConfirmationBuy = lciBuy >= 0.55;
       const isLeadingConfirmationSell = lciSell >= 0.55;
@@ -2736,29 +2922,6 @@ export class StrategyEngine {
           `Conf: ${confPct}% ${confOp} Floor: ${floorPct}% [${aiConfidence >= effectiveMinConfidence ? "PASS" : "FAIL"}], ` +
           `IR: ${informationRatio.toFixed(2)} ${irOp} ${minIR.toFixed(2)} (IC: ${safeIC.toFixed(4)}) [${isSignalQualityValid ? "PASS" : "FAIL"}]) -> Signals Filtered`
         );
-      }
-
-      // DEF-R7: 3-State Hysteresis CUSUM-SPRT Kill Switch Enforcement
-      if (this.icState === "MODEL_BROKEN") {
-        if (isBuySignal || isSellSignal || seq % 1000n === 0n) {
-          console.warn(
-            `[StrategyEngine][${this.config.symbol}][IC_KILL_SWITCH_BLOCKED] Seq #${seq} | ` +
-            `State: MODEL_BROKEN (IC: ${safeIC.toFixed(4)}, Drift: ${isDriftFlagged}). All entries blocked.`
-          );
-        }
-        isBuySignal = false;
-        isSellSignal = false;
-      } else if (this.icState === "DEGRADED") {
-        if (aiConfidence < 0.80) {
-          if ((isBuySignal || isSellSignal) && seq % 1000n === 0n) {
-            console.warn(
-              `[StrategyEngine][${this.config.symbol}][IC_DEGRADED_FILTER] Seq #${seq} | ` +
-              `State: DEGRADED (IC: ${safeIC.toFixed(4)}). Confidence ${(aiConfidence * 100).toFixed(1)}% < 80.0% floor.`
-            );
-          }
-          isBuySignal = false;
-          isSellSignal = false;
-        }
       }
 
       // DEF-R5 & DEF-R6: Online Lo-MacKinlay Variance Ratio 3-State Regime Classifier & Unconditional Regime Gate
@@ -2883,6 +3046,57 @@ export class StrategyEngine {
           );
         }
         isSellSignal = false;
+      }
+
+      // DEF-3101: Portfolio Same-Direction Concentration Gate (Max 3 concurrent same-direction positions)
+      const MAX_CONCURRENT_SAME_DIRECTION = 3;
+      const globalLongPositions = this.getGlobalDirectionalPositionCount("LONG");
+      const globalShortPositions = this.getGlobalDirectionalPositionCount("SHORT");
+
+      if (isBuySignal && globalLongPositions >= MAX_CONCURRENT_SAME_DIRECTION && !isLongActiveOrPending) {
+        if (seq % 1000n === 0n) {
+          console.warn(
+            `[PORTFOLIO_CONCENTRATION_LIMIT][BLOCKED] [${this.config.symbol}] BUY signal blocked: Portfolio same-direction limit reached (${globalLongPositions}/${MAX_CONCURRENT_SAME_DIRECTION} active/pending LONGs).`
+          );
+        }
+        isBuySignal = false;
+        this.staticResult.sequenceNum = seq;
+        this.staticResult.signalType = "NONE";
+        this.staticResult.obi = obi;
+        this.staticResult.cvd = cvd;
+        this.staticResult.spreadVelocity = spreadVelocity;
+        this.staticResult.bidPrice = bidPrice;
+        this.staticResult.askPrice = askPrice;
+        this.staticResult.riskResult = {
+          passed: false,
+          reasonCode: "PORTFOLIO_CONCENTRATION_LIMIT",
+          message: `Portfolio same-direction limit reached (${globalLongPositions}/${MAX_CONCURRENT_SAME_DIRECTION} active/pending LONGs).`,
+        };
+        this.staticResult.executionPromise = undefined;
+        return this.staticResult;
+      }
+
+      if (isSellSignal && globalShortPositions >= MAX_CONCURRENT_SAME_DIRECTION && !isShortActiveOrPending) {
+        if (seq % 1000n === 0n) {
+          console.warn(
+            `[PORTFOLIO_CONCENTRATION_LIMIT][BLOCKED] [${this.config.symbol}] SELL signal blocked: Portfolio same-direction limit reached (${globalShortPositions}/${MAX_CONCURRENT_SAME_DIRECTION} active/pending SHORTs).`
+          );
+        }
+        isSellSignal = false;
+        this.staticResult.sequenceNum = seq;
+        this.staticResult.signalType = "NONE";
+        this.staticResult.obi = obi;
+        this.staticResult.cvd = cvd;
+        this.staticResult.spreadVelocity = spreadVelocity;
+        this.staticResult.bidPrice = bidPrice;
+        this.staticResult.askPrice = askPrice;
+        this.staticResult.riskResult = {
+          passed: false,
+          reasonCode: "PORTFOLIO_CONCENTRATION_LIMIT",
+          message: `Portfolio same-direction limit reached (${globalShortPositions}/${MAX_CONCURRENT_SAME_DIRECTION} active/pending SHORTs).`,
+        };
+        this.staticResult.executionPromise = undefined;
+        return this.staticResult;
       }
 
       const isCooldownCleared = nowMs >= longCooldownLock;

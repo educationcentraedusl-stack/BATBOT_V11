@@ -248,6 +248,7 @@ async function runPhase3Phase4TestSuite() {
   client.setOBI(0.85, 0);
   Atomics.store(bigIntView, 92, 4n);
 
+  await new Promise((r) => setTimeout(r, 20));
   const trendSignal = engine.evaluateTick();
   if (trendSignal.signalType !== "BUY") {
     throw new Error(`FAIL: Verified trend regime (H=0.65, S_LOB=0.60, Hawkes=1.2) must generate BUY signal! Got: ${trendSignal.signalType}`);
@@ -262,7 +263,7 @@ async function runPhase3Phase4TestSuite() {
   // Simulate fill sequence with 5 consecutive losses via engine internal handler
   // 1st loss exit: -$0.50 PnL -> 15s cooldown
   const now = Date.now();
-  (engine as any).onExecutionCompleted({
+  engine.onExecutionCompleted({
     symbol: "BTCUSDT",
     assetIndex: 0,
     side: "SELL",
@@ -282,7 +283,7 @@ async function runPhase3Phase4TestSuite() {
 
   // Simulate 4 more losses to trigger the 15-minute hard symbol circuit breaker
   for (let i = 2; i <= 5; i++) {
-    (engine as any).onExecutionCompleted({
+    engine.onExecutionCompleted({
       symbol: "BTCUSDT",
       assetIndex: 0,
       side: "SELL",
@@ -302,7 +303,7 @@ async function runPhase3Phase4TestSuite() {
   console.log(`  ✓ 5th loss onExecutionCompleted -> SAB Long cooldown lock set to +900s (15 min Circuit Breaker Halt)`);
 
   // Next tick evaluation must be blocked by cooldown lock
-  (engine as any).isOrderInFlight = false;
+  engine.resetInFlightOrderForTesting();
   Atomics.store(bigIntView, 92, 5n);
   const blockedSignal = engine.evaluateTick();
   if (blockedSignal.signalType !== "NONE") {
@@ -311,7 +312,7 @@ async function runPhase3Phase4TestSuite() {
   console.log(`  ✓ Engine evaluateTick during 15 min circuit breaker -> Signal blocked (NONE)`);
 
   // Realized winning exit (> +0.20% Net ROE) resets consecutive losses to 0
-  (engine as any).onExecutionCompleted({
+  engine.onExecutionCompleted({
     symbol: "BTCUSDT",
     assetIndex: 0,
     side: "SELL",

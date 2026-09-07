@@ -44,14 +44,12 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   client.setRollingIC(0.05, 0);
 
   // --------------------------------------------------------------------------
-  // STAGE 1: Initiation Phase (Breakout Building -> LCI >= 0.55 Approves Entry)
+  // STAGE 0: Tick 0 Initialization Guard (DEF-3102 Verification)
   // --------------------------------------------------------------------------
-  console.log("[STAGE 1] Testing Initiation Phase (Microprice Shift & Surging OBI Velocity)...");
-
-  // Tick 1: Baseline book at $60,000, neutral OBI
+  console.log("[STAGE 0] Testing Tick 0 Initialization Guard (No spurious signal on uninitialized state)...");
   let nowMs = timeSynchronizer.getAdjustedNowMs();
   Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
-  client.setSequenceNum(1n, 0);
+  client.setSequenceNum(0n, 0);
   client.setBestBidPrice(60000.0, 0);
   client.setBestBidQuantity(5.0, 0);
   client.setBestAskPrice(60000.5, 0);
@@ -59,20 +57,28 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   client.setOBI(0.0, 0);
   client.setCVD(0.0, 0);
   client.writeAtomicFloat64Asset(0, SAB_SLOTS.SPREAD_VELOCITY, 0.0);
-  client.writeAtomicFloat64Asset(0, SAB_SLOTS.AI_DIRECTION, 0.80);
-  client.writeAtomicFloat64Asset(0, SAB_SLOTS.AI_CONFIDENCE, 0.85);
+  client.writeAtomicFloat64Asset(0, SAB_SLOTS.AI_DIRECTION, 0.90);
+  client.writeAtomicFloat64Asset(0, SAB_SLOTS.AI_CONFIDENCE, 0.95);
   client.setGarmanKlassRV(0.002, 0);
   client.setHawkesIntensity(1.0, 0);
   client.setHurstExponent(0.65, 0);
   client.setLOBEntropy(0.50, 0);
 
-  // Evaluate baseline tick
-  engine.evaluateTick();
+  const tick0Signal = engine.evaluateTick();
+  console.log(`  Tick 0 Signal Type: ${tick0Signal.signalType}`);
+  assert(tick0Signal.signalType === "NONE", `Tick 0 uninitialized state must produce NONE, got ${tick0Signal.signalType}`);
+  console.log("  ✓ Tick 0 initialization guard verified: baseline established with LCI = 0.50 without spurious signal\n");
 
-  // Tick 2: Sudden strong bid injection: Bid Qty = 25.0, Ask Qty = 2.0 (OBI = +0.85, microprice shifts up)
+  // --------------------------------------------------------------------------
+  // STAGE 1: Initiation Phase (Breakout Building -> LCI >= 0.55 Approves Entry)
+  // --------------------------------------------------------------------------
+  console.log("[STAGE 1] Testing Initiation Phase (Microprice Shift & Surging OBI Velocity)...");
+
+  // Tick 1: Sudden strong bid injection: Bid Qty = 25.0, Ask Qty = 2.0 (OBI = +0.85, microprice shifts up)
+  await new Promise((r) => setTimeout(r, 10));
   nowMs = timeSynchronizer.getAdjustedNowMs();
   Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
-  client.setSequenceNum(2n, 0);
+  client.setSequenceNum(1n, 0);
   client.setBestBidPrice(60000.0, 0);
   client.setBestBidQuantity(25.0, 0);
   client.setBestAskPrice(60000.5, 0);
@@ -91,12 +97,13 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   // --------------------------------------------------------------------------
   console.log("[STAGE 2] Testing Micro-Top Exhaustion Phase (Decelerating / Retreating OBI)...");
 
-  // Tick 3: At the local top, OBI is still positive (+0.60, looks bullish to lagging indicators),
+  // Tick 2: At the local top, OBI is still positive (+0.60, looks bullish to lagging indicators),
   // but bid quantity is evaporating (was 25, now 8) and ask quantity is creeping in (now 4).
   // OBI fell from +0.85 to +0.60 -> OBI velocity is negative, acceleration is negative.
+  await new Promise((r) => setTimeout(r, 10));
   nowMs = timeSynchronizer.getAdjustedNowMs();
   Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
-  client.setSequenceNum(3n, 0);
+  client.setSequenceNum(2n, 0);
   client.setBestBidPrice(60000.0, 0);
   client.setBestBidQuantity(8.0, 0);
   client.setBestAskPrice(60000.5, 0);
@@ -115,14 +122,15 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   console.log("[STAGE 3] Testing Symmetric Breakdown Initiation (Negative Microprice Dev & Negative Velocity)...");
 
   // Reset order in flight flag and slots for clean stage isolation
-  (engine as any).isOrderInFlight = false;
+  engine.resetInFlightOrderForTesting();
   engine.getHedgeLedger().clearSlots();
-  (engine as any).pendingEntryOrders.clear();
+  engine.clearPendingOrdersForTesting();
 
-  // Tick 4: Re-establish neutral baseline
+  // Tick 3: Re-establish neutral baseline
+  await new Promise((r) => setTimeout(r, 10));
   nowMs = timeSynchronizer.getAdjustedNowMs();
   Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
-  client.setSequenceNum(4n, 0);
+  client.setSequenceNum(3n, 0);
   client.setBestBidPrice(60000.0, 0);
   client.setBestBidQuantity(5.0, 0);
   client.setBestAskPrice(60000.5, 0);
@@ -132,15 +140,16 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   client.writeAtomicFloat64Asset(0, SAB_SLOTS.AI_DIRECTION, 0.0); // Neutral baseline
   client.setShortCooldownLock(0, 0);
   engine.evaluateTick();
-  (engine as any).isOrderInFlight = false;
+  engine.resetInFlightOrderForTesting();
   engine.getHedgeLedger().clearSlots();
-  (engine as any).pendingEntryOrders.clear();
+  engine.clearPendingOrdersForTesting();
   client.setShortCooldownLock(0, 0);
 
-  // Tick 5: Toxic ask wall injection: Bid Qty = 2.0, Ask Qty = 30.0 (OBI = -0.875)
+  // Tick 4: Toxic ask wall injection: Bid Qty = 2.0, Ask Qty = 30.0 (OBI = -0.875)
+  await new Promise((r) => setTimeout(r, 10));
   nowMs = timeSynchronizer.getAdjustedNowMs();
   Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
-  client.setSequenceNum(5n, 0);
+  client.setSequenceNum(4n, 0);
   client.setBestBidPrice(60000.0, 0);
   client.setBestBidQuantity(2.0, 0);
   client.setBestAskPrice(60000.5, 0);
@@ -156,7 +165,7 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   console.log("  ✓ Symmetric breakdown correctly confirmed by LCI (SELL triggered at breakdown)\n");
 
   console.log("================================================================================");
-  console.log("  ✅ ALL 3 TEST STAGES PASSED (100% SOTA DEF-R8 SPECIFICATION COMPLIANCE)");
+  console.log("  ✅ ALL 4 TEST STAGES PASSED (100% SOTA DEF-R8 & DEF-3102 SPECIFICATION COMPLIANCE)");
   console.log("================================================================================\n");
 }
 
