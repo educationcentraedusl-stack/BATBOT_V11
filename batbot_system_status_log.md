@@ -1,5 +1,15 @@
 # BATBOT_V11 System Status Log
 
+- **Date:** 2026-09-07
+- **Feature/Task:** SOTA Master Plan Execution (Sep 2026) - Phase 1 Rust Signal Pipeline Overhaul (DEF-R1 Double-tanh Eradication, DEF-R2 Signed Directional Concordance Index & DEF-R3 Adaptive Quantile Calibration)
+- **Artifacts Created/Modified:** `src/ai/mamba.rs`, `src/ai/engine.rs`, `src/ai/weights.rs`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:**
+  1. **DEF-R1 RMS-Normalized Raw Logit Passthrough (`src/ai/mamba.rs` & `src/ai/engine.rs`):** Eradicated double-tanh saturation by replacing inner `tanh` with RMS-normalization ($s = \sqrt{d_{\text{inner}} \times d_{\text{state}}}$), passing raw scaled logits through to composite assembly where a single `tanh` is applied without the temperature divisor.
+  2. **DEF-R2 Signed Directional Concordance Index (`src/ai/engine.rs`):** Replaced absolute z-score SNR with directional concordance across 6 microstructure features (OBI 1.0, OFI 0.6, CVD 0.8, Spread Vel 0.5 with inverted flip, Hawkes 0.6, Micro 0.5). Bounded strictly to $[0.10, 1.50]$, penalizing predictions discordant with order flow.
+  3. **DEF-R3 Online Adaptive Quantile Calibration (`src/ai/engine.rs` & `src/ai/weights.rs`):** Destroyed static 0.45 Platt centering. Integrated per-asset 2000-sample `VecDeque<f64>` rolling histogram, 200-tick conservative 0.50 warm-up, and dynamic empirical percentile rank centering at the 50th percentile.
+  4. **100% Verification & Proof:** Passed `cargo check` (0 errors), `cargo test --lib` (45/45 passed including all 5 dedicated DEF-R1/R2/R3 mathematical verification tests in 9.77s), `npm run build:rust` (clean native N-API release build in 1m 01s), and `npx tsc --noEmit` (0 errors).
+- **Status:** ✅ Completed & QA Verified
+
 - **Date:** 2026-08-31
 - **Feature/Task:** Audit 30.0 Forensic Remediation (DEF-3001 Maker Price-Crossing Clamping, DEF-3002 Rust Triple-Horizon Tensor, DEF-3003 Error Logging & DEF-3004 Physical StrategyEngine Quote Fading Test)
 - **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/strategy/positionLedger.ts`, `src/ai/engine.rs`, `src/strategy/microstructureHazardEngine.ts`, `src/tests/test_sota_asymmetric_quote_fading.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`

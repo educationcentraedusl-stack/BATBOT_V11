@@ -20,7 +20,7 @@ impl Default for CalibrationParams {
     fn default() -> Self {
         Self {
             temperature: 1.0,
-            platt_scale: 1.5,
+            platt_scale: 1.0,
             platt_offset: 0.0,
         }
     }

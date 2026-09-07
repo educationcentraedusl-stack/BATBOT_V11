@@ -33,6 +33,38 @@ fn vec_std(v: &VecDeque<f64>, n: usize) -> f64 {
     variance.sqrt()
 }
 
+/// DEF-R2: Signed Directional Concordance Index (SDCI)
+/// Tracks signed z-score deviations for the 6 key microstructure features.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SignedZScores {
+    pub obi_z: f64,
+    pub cvd_z: f64,
+    pub vel_z: f64,
+    pub micro_z: f64,
+    pub ofi_z: f64,
+    pub hawkes_z: f64,
+}
+
+impl SignedZScores {
+    #[inline(always)]
+    pub fn compute_sdci(&self, dir_raw: f64) -> f64 {
+        let pred_sign = if dir_raw > 0.0 { 1.0 } else if dir_raw < 0.0 { -1.0 } else { 0.0 };
+        // Feature 24 (spread velocity) has INVERTED concordance: negative z (tighter) is bullish
+        let spread_sign_flip = -1.0;
+
+        let sdci = 1.0 * pred_sign * self.obi_z.clamp(-3.0, 3.0)
+                 + 0.8 * pred_sign * self.cvd_z.clamp(-3.0, 3.0)
+                 + 0.5 * pred_sign * spread_sign_flip * self.vel_z.clamp(-3.0, 3.0)
+                 + 0.5 * pred_sign * self.micro_z.clamp(-3.0, 3.0)
+                 + 0.6 * pred_sign * self.ofi_z.clamp(-3.0, 3.0)
+                 + 0.6 * pred_sign * self.hawkes_z.clamp(-3.0, 3.0);
+
+        // Normalize to [0, 1] range: 0 = total discordance, 1 = perfect concordance
+        let sdci_norm = ((sdci / 4.0) + 1.0) * 0.5; // 4.0 = sum of weights (1.0 + 0.8 + 0.5 + 0.5 + 0.6 + 0.6)
+        sdci_norm.clamp(0.10, 1.50)
+    }
+}
+
 pub struct StreamingFeaturePipeline {
     mid_prices: VecDeque<f64>,
     log_ret_1_hist: VecDeque<f64>,
@@ -52,6 +84,7 @@ pub struct StreamingFeaturePipeline {
     feature_windows: Vec<VecDeque<f64>>,
     feature_sums: [f64; 40],
     feature_sum_sqs: [f64; 40],
+    pub signed_z_scores: SignedZScores,
 }
 
 impl StreamingFeaturePipeline {
@@ -77,6 +110,7 @@ impl StreamingFeaturePipeline {
             feature_windows,
             feature_sums: [0.0; 40],
             feature_sum_sqs: [0.0; 40],
+            signed_z_scores: SignedZScores::default(),
         }
     }
 
@@ -105,12 +139,20 @@ impl StreamingFeaturePipeline {
         self.update_and_normalize_with_snr_asset(sab, lat_us_val, asset_idx).map(|(f, _)| f)
     }
 
+    pub fn update_and_normalize_with_snr(
+        &mut self,
+        sab: &AtomicSharedMemoryBridge,
+        lat_us_val: f64,
+    ) -> Result<([f64; 40], SignedZScores)> {
+        self.update_and_normalize_with_snr_asset(sab, lat_us_val, 0)
+    }
+
     pub fn update_and_normalize_with_snr_asset(
         &mut self,
         sab: &AtomicSharedMemoryBridge,
         lat_us_val: f64,
         asset_idx: usize,
-    ) -> Result<([f64; 40], f64)> {
+    ) -> Result<([f64; 40], SignedZScores)> {
         let best_bid = sab.load_f64_asset(asset_idx, 4);
         let best_bid_qty = sab.load_f64_asset(asset_idx, 5);
         let best_ask = sab.load_f64_asset(asset_idx, 6);
@@ -355,19 +397,28 @@ impl StreamingFeaturePipeline {
             let std_dev = variance.sqrt();
             let z = (val - mean) / (std_dev + 1e-8);
 
-            if i == 8 { obi_z = z.abs(); }
-            if i == 17 { ofi_z = z.abs(); }
-            if i == 21 { cvd_z = z.abs(); }
-            if i == 24 { vel_z = z.abs(); }
-            if i == 27 { hawkes_z = z.abs(); }
-            if i == 2 { micro_z = z.abs(); }
+            // DEF-R2: Store signed z-scores (NOT absolute z-scores)
+            if i == 8 { obi_z = z; }
+            if i == 17 { ofi_z = z; }
+            if i == 21 { cvd_z = z; }
+            if i == 24 { vel_z = z; }
+            if i == 27 { hawkes_z = z; }
+            if i == 2 { micro_z = z; }
 
             norm_features[i] = (z / 3.0).tanh();
         }
 
-        let snr_score = 1.0 + 0.5 * (obi_z + 0.8 * cvd_z + 0.5 * vel_z + 0.5 * micro_z + 0.6 * ofi_z + 0.6 * hawkes_z).min(8.0);
+        let signed_z = SignedZScores {
+            obi_z,
+            cvd_z,
+            vel_z,
+            micro_z,
+            ofi_z,
+            hawkes_z,
+        };
+        self.signed_z_scores = signed_z;
 
-        Ok((norm_features, snr_score))
+        Ok((norm_features, signed_z))
     }
 }
 
@@ -378,6 +429,7 @@ pub struct AssetTelemetryTracker {
     pub horizon_5s: Mutex<VecDeque<(u64, f64, f64)>>,   // (timestamp_ns, mid_price, prediction) - 5s Micro-Scalp
     pub horizon_60s: Mutex<VecDeque<(u64, f64, f64)>>,  // (timestamp_ns, mid_price, prediction) - 60s Tactical Alpha
     pub horizon_300s: Mutex<VecDeque<(u64, f64, f64)>>, // (timestamp_ns, mid_price, prediction) - 300s Macro-Regime
+    pub conviction_history: Mutex<VecDeque<f64>>,       // capacity 2000 - DEF-R3 Quantile Calibration
 }
 
 impl AssetTelemetryTracker {
@@ -388,6 +440,7 @@ impl AssetTelemetryTracker {
             horizon_5s: Mutex::new(VecDeque::with_capacity(3_600)),
             horizon_60s: Mutex::new(VecDeque::with_capacity(18_000)),
             horizon_300s: Mutex::new(VecDeque::with_capacity(36_000)),
+            conviction_history: Mutex::new(VecDeque::with_capacity(2000)),
         }
     }
 }
@@ -525,7 +578,19 @@ impl AIEngine {
             }
         }
 
-        let (lob_features, snr_score) = {
+        // Auto-expand asset trackers dynamically if asset_idx exceeds current capacity
+        {
+            let trackers = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
+            if asset_idx >= trackers.len() {
+                drop(trackers);
+                let mut trackers_mut = self.asset_trackers.write().unwrap_or_else(|e| e.into_inner());
+                while trackers_mut.len() <= asset_idx {
+                    trackers_mut.push(AssetTelemetryTracker::new());
+                }
+            }
+        }
+
+        let (lob_features, signed_z) = {
             let pipelines = self.feature_pipelines.read().unwrap_or_else(|e| e.into_inner());
             let mut pipeline = pipelines[asset_idx].lock().unwrap_or_else(|e| e.into_inner());
             pipeline.update_and_normalize_with_snr_asset(sab, lat_us_val, asset_idx)?
@@ -667,11 +732,18 @@ impl AIEngine {
             let ofi = sab.load_f64_asset(asset_idx, 138);
             let hawkes_asym = sab.load_f64_asset(asset_idx, 149);
 
-            let (mamba_dir, _p_win, horiz_sec) = mamba.evaluate_scalar_heads_with_temp(&heads, temp)?;
-            // SOTA August 2026: Balanced microstructure logit modulation (neural mamba primacy)
-            let composite_logit = mamba_dir + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
-            let dir = (composite_logit / temp).tanh().clamp(-1.0, 1.0);
+            let (dir_raw, _p_win, horiz_sec) = mamba.evaluate_scalar_heads_with_temp(&heads, temp)?;
+            // DEF-R1: Balanced microstructure logit modulation & SINGLE outer tanh WITHOUT temperature divisor
+            let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
+            let dir = composite_logit.tanh().clamp(-1.0, 1.0);
             let direction_magnitude = dir.abs();
+
+            // DEF-R2: Signed Directional Concordance Index (SDCI)
+            let snr_score = signed_z.compute_sdci(dir_raw);
+
+            // DEF-R3: Online Adaptive Quantile Calibration
+            let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
+            let mut conv_hist = trackers_guard[asset_idx].conviction_history.lock().unwrap_or_else(|e| e.into_inner());
 
             let conf = compute_calibrated_confidence(
                 direction_magnitude,
@@ -682,6 +754,7 @@ impl AIEngine {
                 temp,
                 scale,
                 offset,
+                &mut *conv_hist,
             );
             (dir, conf, horiz_sec * 1000.0)
         } else if let Some(cell) = &self.cell {
@@ -702,8 +775,13 @@ impl AIEngine {
             let offset = sab_offset.clamp(-2.0, 2.0);
             let obi = sab.load_f64_asset(asset_idx, 1);
 
-            let dir = (raw_direction / (temp * 3.0)).tanh();
+            let dir = (raw_direction / 3.0).tanh().clamp(-1.0, 1.0);
             let direction_magnitude = dir.abs();
+
+            let snr_score = signed_z.compute_sdci(raw_direction);
+
+            let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
+            let mut conv_hist = trackers_guard[asset_idx].conviction_history.lock().unwrap_or_else(|e| e.into_inner());
 
             let conf = compute_calibrated_confidence(
                 direction_magnitude,
@@ -714,6 +792,7 @@ impl AIEngine {
                 temp,
                 scale,
                 offset,
+                &mut *conv_hist,
             );
             (dir, conf, horiz_ms)
         } else {
@@ -792,6 +871,15 @@ impl AIEngine {
             let hs_holder = self.hidden_states.read().unwrap_or_else(|e| e.into_inner());
             if let Some(hs_mutex) = hs_holder.get(0) {
                 if let Ok(mut hidden_guard) = hs_mutex.lock() {
+                    let signed_z = SignedZScores {
+                        obi_z: features[8],
+                        ofi_z: features[17],
+                        cvd_z: features[21],
+                        vel_z: features[24],
+                        hawkes_z: features[27],
+                        micro_z: features[2],
+                    };
+                    let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
                     if let Some(mamba) = &self.mamba {
                         if hidden_guard.dims() != &[1, mamba.d_inner, mamba.d_state] {
                             if let Ok(new_h) = Tensor::zeros((1, mamba.d_inner, mamba.d_state), DType::F32, &Device::Cpu) {
@@ -801,23 +889,29 @@ impl AIEngine {
                         if let Ok((heads, next_h)) = mamba.forward(&tkan_tensor, &*hidden_guard, 0.001) {
                             *hidden_guard = next_h;
                             let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
-                            if let Ok((mamba_dir, _p_win, _)) = mamba.evaluate_scalar_heads_with_temp(&heads, temp) {
+                            if let Ok((dir_raw, _p_win, _)) = mamba.evaluate_scalar_heads_with_temp(&heads, temp) {
                                 let obi = features[8];
                                 let ofi = features[17];
                                 let hawkes_asym = features[27];
-                                let composite_logit = mamba_dir + 0.60 * obi + 0.40 * ofi + 0.25 * hawkes_asym;
-                                let dir = (composite_logit / temp).tanh().clamp(-1.0, 1.0);
-                                let conf = compute_calibrated_confidence(
-                                    dir.abs(),
-                                    1.0,
-                                    0.0010,
-                                    obi,
-                                    dir,
-                                    temp,
-                                    self.calibration_params.platt_scale,
-                                    self.calibration_params.platt_offset,
-                                );
-                                return (dir, conf);
+                                let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
+                                let dir = composite_logit.tanh().clamp(-1.0, 1.0);
+                                let snr_score = signed_z.compute_sdci(dir_raw);
+                                if let Some(tracker) = trackers_guard.get(0) {
+                                    if let Ok(mut conv_hist) = tracker.conviction_history.lock() {
+                                        let conf = compute_calibrated_confidence(
+                                            dir.abs(),
+                                            snr_score,
+                                            0.0010,
+                                            obi,
+                                            dir,
+                                            temp,
+                                            self.calibration_params.platt_scale,
+                                            self.calibration_params.platt_offset,
+                                            &mut *conv_hist,
+                                        );
+                                        return (dir, conf);
+                                    }
+                                }
                             }
                         }
                     } else if let Some(cell) = &self.cell {
@@ -825,25 +919,31 @@ impl AIEngine {
                             *hidden_guard = next_h;
                             if let Ok(flat) = output_tensor.flatten_all() {
                                 let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
-                                let raw_dir = flat.get(0).and_then(|t| t.to_scalar::<f32>()).map(|v| (v as f64 / temp).tanh()).unwrap_or(0.0);
-                                let conf = compute_calibrated_confidence(
-                                    raw_dir.abs(),
-                                    1.0,
-                                    0.0010,
-                                    0.0,
-                                    raw_dir,
-                                    temp,
-                                    self.calibration_params.platt_scale,
-                                    self.calibration_params.platt_offset,
-                                );
-                                return (raw_dir, conf);
+                                let raw_dir = flat.get(0).and_then(|t| t.to_scalar::<f32>()).map(|v| (v as f64 / 3.0).tanh().clamp(-1.0, 1.0)).unwrap_or(0.0);
+                                let snr_score = signed_z.compute_sdci(raw_dir);
+                                if let Some(tracker) = trackers_guard.get(0) {
+                                    if let Ok(mut conv_hist) = tracker.conviction_history.lock() {
+                                        let conf = compute_calibrated_confidence(
+                                            raw_dir.abs(),
+                                            snr_score,
+                                            0.0010,
+                                            0.0,
+                                            raw_dir,
+                                            temp,
+                                            self.calibration_params.platt_scale,
+                                            self.calibration_params.platt_offset,
+                                            &mut *conv_hist,
+                                        );
+                                        return (raw_dir, conf);
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        (0.0, 0.0)
+        (0.0, 0.50)
     }
 
     pub fn run_shadow_inference(&self, sab: &AtomicSharedMemoryBridge) -> Result<(f64, f64, f64, u64, f64)> {
@@ -859,7 +959,7 @@ impl AIEngine {
         }
 
         let lat_us_val = sab.load_f64_asset(0, 98) * 1000.0;
-        let (lob_features, snr_score) = {
+        let (lob_features, signed_z) = {
             let pipelines = self.feature_pipelines.read().unwrap_or_else(|e| e.into_inner());
             let mut pipeline = pipelines[0].lock().unwrap_or_else(|e| e.into_inner());
             pipeline.update_and_normalize_with_snr_asset(sab, lat_us_val, 0)?
@@ -880,14 +980,29 @@ impl AIEngine {
             let norm = next_h.sqr()?.sum_all()?.to_scalar::<f32>()?.sqrt() as f64;
             *hidden_guard = next_h;
             let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
-            let (mamba_dir, _p_win, horiz_sec) = mamba.evaluate_scalar_heads_with_temp(&heads, temp)?;
+            let (dir_raw, _p_win, horiz_sec) = mamba.evaluate_scalar_heads_with_temp(&heads, temp)?;
             let gk_vol = sab.load_f64_asset(0, 121).max(0.0);
             let obi = sab.load_f64_asset(0, 1);
             let ofi = sab.load_f64_asset(0, 138);
             let hawkes_asym = sab.load_f64_asset(0, 149);
-            let composite_logit = mamba_dir + 0.60 * obi + 0.40 * ofi + 0.25 * hawkes_asym;
-            let dir = (composite_logit / temp).tanh().clamp(-1.0, 1.0);
-            let conf = compute_calibrated_confidence(dir.abs(), snr_score, gk_vol, obi, dir, temp, self.calibration_params.platt_scale, self.calibration_params.platt_offset);
+            let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
+            let dir = composite_logit.tanh().clamp(-1.0, 1.0);
+            let snr_score = signed_z.compute_sdci(dir_raw);
+
+            let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
+            let mut conv_hist = trackers_guard[0].conviction_history.lock().unwrap_or_else(|e| e.into_inner());
+
+            let conf = compute_calibrated_confidence(
+                dir.abs(),
+                snr_score,
+                gk_vol,
+                obi,
+                dir,
+                temp,
+                self.calibration_params.platt_scale,
+                self.calibration_params.platt_offset,
+                &mut *conv_hist,
+            );
             (dir, conf, horiz_sec * 1000.0, norm)
         } else if let Some(cell) = &self.cell {
             let (output_tensor, next_h) = cell.forward(&tkan_tensor, &*hidden_guard, 0.001)?;
@@ -897,10 +1012,25 @@ impl AIEngine {
             let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
             let raw_dir = flat_out.get(0)?.to_scalar::<f32>()? as f64;
             let horiz = if flat_out.elem_count() > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
-            let dir = (raw_dir / temp).tanh();
+            let dir = (raw_dir / 3.0).tanh().clamp(-1.0, 1.0);
             let gk_vol = sab.load_f64_asset(0, 121).max(0.0);
             let obi = sab.load_f64_asset(0, 1);
-            let conf = compute_calibrated_confidence(dir.abs(), snr_score, gk_vol, obi, dir, temp, self.calibration_params.platt_scale, self.calibration_params.platt_offset);
+            let snr_score = signed_z.compute_sdci(raw_dir);
+
+            let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
+            let mut conv_hist = trackers_guard[0].conviction_history.lock().unwrap_or_else(|e| e.into_inner());
+
+            let conf = compute_calibrated_confidence(
+                dir.abs(),
+                snr_score,
+                gk_vol,
+                obi,
+                dir,
+                temp,
+                self.calibration_params.platt_scale,
+                self.calibration_params.platt_offset,
+                &mut *conv_hist,
+            );
             (dir, conf, horiz, norm)
         } else {
             return Err(Error::Msg("UNCALIBRATED".to_string()));
@@ -940,7 +1070,7 @@ pub fn compute_dual_regime_volatility_multiplier(gk_vol: f64) -> f64 {
     (psi_high * psi_low).clamp(0.30, 1.00)
 }
 
-/// Decoupled Isotonic Platt-Calibrated Confidence Formulation
+/// Decoupled Isotonic Platt-Calibrated Confidence Formulation with Online Quantile Calibration (DEF-R3)
 #[inline(always)]
 pub fn compute_calibrated_confidence(
     direction_magnitude: f64,
@@ -951,18 +1081,33 @@ pub fn compute_calibrated_confidence(
     temp: f64,
     scale: f64,
     offset: f64,
+    conviction_history: &mut VecDeque<f64>,
 ) -> f64 {
     let psi_vol = compute_dual_regime_volatility_multiplier(gk_vol);
-    let snr_norm = (snr_score / 3.0).clamp(0.50, 1.80);
-    let effective_conviction = direction_magnitude * snr_norm * psi_vol;
+    let effective_conviction = direction_magnitude * snr_score * psi_vol;
+
+    // Update rolling buffer (capacity 2000)
+    if conviction_history.len() >= 2000 {
+        conviction_history.pop_back();
+    }
+    conviction_history.push_front(effective_conviction);
+
+    // Warm-up: During the first 200 ticks (before sufficient history), output a conservative 0.50 confidence (no edge claimed).
+    if conviction_history.len() < 200 {
+        return 0.50;
+    }
+
+    // Compute empirical percentile rank (O(n) where n <= 2000, ~2-4 µs)
+    let count_below = conviction_history.iter().filter(|&&v| v <= effective_conviction).count();
+    let percentile = count_below as f64 / conviction_history.len() as f64;
 
     let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
     let obi_align = obi * direction_sign;
 
-    // Centered Platt calibration: neutral conviction (~0.45) maps to 50% confidence
     let t = temp.clamp(0.5, 5.0);
     let s = scale.clamp(0.5, 3.0);
-    let calibrated_logit: f64 = (s * (effective_conviction - 0.45) * 2.0 + obi_align * 0.40 + offset) / t;
+    // Center at 50th percentile — INVARIANT
+    let calibrated_logit: f64 = (s * (percentile - 0.50) * 2.0 + obi_align * 0.20 + offset) / t;
     1.0f64 / (1.0f64 + (-calibrated_logit).exp())
 }
 
@@ -1109,8 +1254,8 @@ mod tests {
             }
         }
 
-        // Feed 120 bearish ticks (falling price down to 48000, low OBI, crashing CVD)
-        for tick in 0..120 {
+        // Feed 160 bearish ticks (falling price down to 48000, low OBI, crashing CVD)
+        for tick in 0..160 {
             bridge.store_f64(4, 50600.0 - (tick as f64 * 25.0));
             bridge.store_f64(6, 50601.0 - (tick as f64 * 25.0));
             bridge.store_f64(1, -0.90); // Strong Bearish OBI
@@ -1121,11 +1266,150 @@ mod tests {
             bridge.store_f64(149, -0.85); // Negative Hawkes Asymmetry
             let res = engine.run_inference(&bridge);
             assert!(res.is_ok());
-            if tick % 30 == 0 || tick == 119 {
+            if tick % 30 == 0 || tick == 159 {
                 let dir = bridge.load_f64(93);
                 let conf = bridge.load_f64(94);
                 println!("Bearish Stream Tick {:02}: Dir = {:.4}, Conf = {:.4}", tick, dir, conf);
             }
         }
+    }
+
+    #[test]
+    fn test_sdci_chop_produces_low_score() {
+        // In chop / discordance: AI predicted BUY (dir_raw > 0), but order flow is bearish
+        let z_discordant = SignedZScores {
+            obi_z: -2.0,      // Bearish bid pressure
+            cvd_z: -2.5,      // Net selling
+            vel_z: 2.0,       // Spread widening (negative for buy because spread_sign_flip = -1.0)
+            micro_z: -1.5,    // Bearish micro-price
+            ofi_z: -2.0,      // Bearish OFI
+            hawkes_z: -1.8,   // Bearish Hawkes asymmetry
+        };
+
+        let pred_dir_raw = 0.50; // AI says BUY
+        let snr_score = z_discordant.compute_sdci(pred_dir_raw);
+
+        // SDCI strictly bounds to [0.10, 1.50]
+        assert!(snr_score >= 0.10 && snr_score <= 1.50);
+        assert_eq!(snr_score, 0.10, "Discordant / chop features must clamp to minimum floor 0.10");
+
+        // In pure neutral chop (all z ≈ 0)
+        let z_neutral = SignedZScores::default();
+        let snr_neutral = z_neutral.compute_sdci(pred_dir_raw);
+        assert!((snr_neutral - 0.50).abs() < 1e-6, "Zero z-score chop must map to neutral 0.50");
+    }
+
+    #[test]
+    fn test_sdci_trend_produces_high_score() {
+        // In real trend / concordance: AI predicted BUY, and all features strongly confirm
+        let z_concordant = SignedZScores {
+            obi_z: 2.5,       // Strong bid pressure
+            cvd_z: 3.0,       // Heavy net buying
+            vel_z: -2.0,      // Tightening spread (spread_sign_flip * -2.0 = +2.0)
+            micro_z: 2.0,     // Strong upward microprice
+            ofi_z: 2.5,       // High positive OFI
+            hawkes_z: 2.2,    // Positive Hawkes burst
+        };
+
+        let pred_dir_raw = 0.75; // AI says BUY
+        let snr_score = z_concordant.compute_sdci(pred_dir_raw);
+
+        assert!(snr_score >= 0.10 && snr_score <= 1.50);
+        assert!(snr_score >= 1.20, "Concordant trend features must produce high SNR score >= 1.20, got {}", snr_score);
+    }
+
+    #[test]
+    fn test_quantile_calibration_warm_up_returns_0_50() {
+        let mut conv_hist = VecDeque::with_capacity(2000);
+
+        // Warm-up period (< 200 ticks) must return 0.50 unconditionally
+        for i in 0..199 {
+            let conf = compute_calibrated_confidence(
+                0.80,
+                1.20,
+                0.001,
+                0.50,
+                1.0,
+                1.0,
+                1.0,
+                0.0,
+                &mut conv_hist,
+            );
+            assert_eq!(conf, 0.50, "Tick {} during warm-up must return 0.50, got {}", i, conf);
+        }
+        assert_eq!(conv_hist.len(), 199);
+    }
+
+    #[test]
+    fn test_quantile_calibration_invariant_centering() {
+        let mut conv_hist = VecDeque::with_capacity(2000);
+
+        // Seed with 300 uniformly spaced samples in [0.10, 0.90]
+        for i in 0..300 {
+            let val = 0.10 + (i as f64 / 300.0) * 0.80;
+            // Warm-up will finish at tick 200
+            let _ = compute_calibrated_confidence(
+                val,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                1.0,
+                0.0,
+                &mut conv_hist,
+            );
+        }
+
+        assert_eq!(conv_hist.len(), 300);
+
+        // Test median input (50th percentile) with zero OBI alignment and zero offset
+        let median_val = 0.50;
+        let conf_median = compute_calibrated_confidence(
+            median_val,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+            0.0,
+            &mut conv_hist,
+        );
+
+        // Calibrated confidence at median should be centered at ~0.50 (within ±0.03)
+        assert!(
+            (conf_median - 0.50).abs() < 0.03,
+            "Median input must produce ~0.50 calibrated confidence, got {}",
+            conf_median
+        );
+
+        // High conviction input (e.g. 0.95, near top) should yield high confidence > 0.60
+        let conf_high = compute_calibrated_confidence(
+            0.95,
+            1.5,
+            0.001,
+            0.5,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            &mut conv_hist,
+        );
+        assert!(conf_high > 0.60, "High conviction must exceed 0.60, got {}", conf_high);
+
+        // Low conviction input should yield low confidence < 0.40
+        let conf_low = compute_calibrated_confidence(
+            0.05,
+            0.10,
+            0.001,
+            -0.5,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            &mut conv_hist,
+        );
+        assert!(conf_low < 0.40, "Low conviction must be below 0.40, got {}", conf_low);
     }
 }

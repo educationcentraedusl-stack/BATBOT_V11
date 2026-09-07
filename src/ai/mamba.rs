@@ -195,11 +195,12 @@ impl Mamba2Cell {
 
         let t = temperature.clamp(0.5, 10.0);
         let ssm_scale = ((self.d_inner * self.d_state) as f64).sqrt().max(1.0);
-        let direction = (dir_logit / (t * ssm_scale)).tanh().clamp(-1.0, 1.0);
+        // DEF-R1: RMS-Normalized Raw Logit Passthrough (NO inner tanh compression)
+        let direction_raw = dir_logit / ssm_scale;
         let p_win = 1.0 / (1.0 + (-meta_logit / (t * (self.d_inner as f64).sqrt())).exp());
         let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().max(5.0);
 
-        Ok((direction, p_win, horizon_sec))
+        Ok((direction_raw, p_win, horizon_sec))
     }
 }
 
@@ -248,5 +249,38 @@ mod tests {
             println!("Zero Input Loaded Mamba Logits -> dir: {:.4}, meta: {:.4}, horiz: {:.4}",
                 dir_logit, meta_logit, horiz_logit);
         }
+    }
+
+    #[test]
+    fn test_mamba_single_pass_logit_range() -> Result<()> {
+        let device = Device::Cpu;
+        let cell = Mamba2Cell::default_cell(16, 32, 16, &device)?;
+
+        // Extreme positive logit (50.0) -> must NOT be compressed by inner tanh
+        let heads = Tensor::from_slice(&[50.0f32, 1.0f32, 2.0f32], (1, 3), &device)?;
+        let (dir_raw, _p_win, _horiz_sec) = cell.evaluate_scalar_heads_with_temp(&heads, 1.0)?;
+
+        let ssm_scale = ((cell.d_inner * cell.d_state) as f64).sqrt().max(1.0);
+        let expected_dir_raw = 50.0 / ssm_scale;
+
+        assert!((dir_raw - expected_dir_raw).abs() < 1e-5);
+        // Physical proof: dir_raw > 1.0 proves inner tanh is completely eliminated
+        assert!(dir_raw > 1.0, "dir_raw must exceed 1.0 for large logits, proving no inner tanh");
+
+        // Extreme negative logit (-50.0) -> must be < -1.0
+        let neg_heads = Tensor::from_slice(&[-50.0f32, 1.0f32, 2.0f32], (1, 3), &device)?;
+        let (neg_dir_raw, _, _) = cell.evaluate_scalar_heads_with_temp(&neg_heads, 1.0)?;
+        assert!(neg_dir_raw < -1.0, "neg_dir_raw must be < -1.0 for large negative logits");
+
+        // Composite assembly in engine applies single tanh
+        let obi = 0.5;
+        let ofi = 0.3;
+        let hawkes = 0.2;
+        let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes;
+        let dir = composite_logit.tanh().clamp(-1.0, 1.0);
+        assert!(dir >= -1.0 && dir <= 1.0);
+        assert!(dir > 0.90 && dir <= 1.0);
+
+        Ok(())
     }
 }
