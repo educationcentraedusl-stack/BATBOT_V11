@@ -65,6 +65,7 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
     client.writeAtomicFloat64Asset(i, 112, 1.0); // Hawkes
     client.setHurstExponent(0.60, i);
     client.setLOBEntropy(0.50, i);
+    client.setRollingIC(0.05, i);
     // Write valid timestamp
     const bigIntView = new BigInt64Array(sab);
     Atomics.store(bigIntView, i * slotsPerAsset + 0, nowNs);
@@ -321,7 +322,9 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
 
   // Feed simultaneous strong BUY signals to both DOTUSDT and NEARUSDT
   const dotIdx = symbols.indexOf("DOTUSDT");
-  client.writeAtomicFloat64Asset(dotIdx, 1, 0.80);
+  client.setBestBidQuantity(25.0, dotIdx);
+  client.setBestAskQuantity(2.0, dotIdx);
+  client.setOBI(0.85, dotIdx);
   client.setCVD(10.0, dotIdx);
   client.setAIPredictionDirection(0.85, dotIdx);
   client.setAIPredictionConfidence(0.90, dotIdx);
@@ -330,7 +333,9 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   client.setSequenceNum(701n, dotIdx);
 
   // Setup NEAR tick data on BTC asset index 0 (clean state)
-  client.writeAtomicFloat64Asset(0, 1, 0.80);
+  client.setBestBidQuantity(25.0, 0);
+  client.setBestAskQuantity(2.0, 0);
+  client.setOBI(0.85, 0);
   client.setCVD(10.0, 0);
   client.setAIPredictionDirection(0.85, 0);
   client.setAIPredictionConfidence(0.90, 0);
@@ -381,7 +386,9 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   assert(btcHedge.getShortSlots()[0].isOccupied === false, "BTC Short Slot must be FLAT");
 
   // Feed strong SELL signal to BTC
-  client.writeAtomicFloat64Asset(btcIdx, 1, -0.80);
+  client.setBestBidQuantity(2.0, btcIdx);
+  client.setBestAskQuantity(25.0, btcIdx);
+  client.setOBI(-0.85, btcIdx);
   client.setCVD(-10.0, btcIdx);
   client.setAIPredictionDirection(-0.85, btcIdx);
   client.setAIPredictionConfidence(0.90, btcIdx);
@@ -410,7 +417,9 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   assert(btcHedge.getShortSlots()[0].isOccupied === false, "BTC Short Slot must be released to FLAT");
 
   // Feed strong BUY signal to BTC
-  client.writeAtomicFloat64Asset(btcIdx, 1, 0.80);
+  client.setBestBidQuantity(25.0, btcIdx);
+  client.setBestAskQuantity(2.0, btcIdx);
+  client.setOBI(0.85, btcIdx);
   client.setCVD(10.0, btcIdx);
   client.setAIPredictionDirection(0.85, btcIdx);
   client.setAIPredictionConfidence(0.90, btcIdx);

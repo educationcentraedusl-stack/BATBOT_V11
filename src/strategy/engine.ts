@@ -12,6 +12,7 @@ import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
 import { getTradingSymbols } from "../config/tradingSymbols";
 import { AutoRecalibrationManager } from "../ai/recalibrationWorker";
 import { timeSynchronizer } from "../utils/timeSynchronizer";
+import { OnlineVarianceRatioClassifier, MarketRegimeState } from "./regimeClassifier";
 
 export interface StrategyConfig {
   symbol: string;
@@ -116,6 +117,19 @@ export class StrategyEngine {
 
   private reusableOrderIntent!: OrderIntent;
   private lastSabSyncTs: number = 0;
+
+  // DEF-R5 & DEF-R6: Online Lo-MacKinlay Variance Ratio Regime Classifier
+  private vrClassifier: OnlineVarianceRatioClassifier = new OnlineVarianceRatioClassifier();
+
+  // DEF-R7: 3-State Hysteresis CUSUM-SPRT IC Kill Switch
+  public icState: "ALPHA_ACTIVE" | "DEGRADED" | "MODEL_BROKEN" = "ALPHA_ACTIVE";
+  private icStateEnteredAt: number = 0;
+  private icConditionMetSince: number = 0;
+
+  // DEF-R8: Composite Leading Confirmation Index (Microprice + OBI Velocity/Accel)
+  private prevOBI: number = 0;
+  private prevOBIVelocity: number = 0;
+  private prevTickMs: number = 0;
 
   // Reusable static result object for NONE signals to achieve zero GC-heap allocation in hot path
   private staticResult: StrategySignalResult = {
@@ -320,6 +334,119 @@ export class StrategyEngine {
     this.client.setOmsTotalTrades(summary.totalTrades, this.assetIndex);
     this.client.setOmsWinningTrades(summary.winningTrades, this.assetIndex);
     this.client.setOmsLosingTrades(summary.losingTrades, this.assetIndex);
+  }
+
+  /**
+   * SOTA 3-State Hysteresis CUSUM-SPRT IC Kill Switch (DEF-R7)
+   * 
+   * Transition State Machine:
+   * - ALPHA_ACTIVE: Full entries allowed. Transition to DEGRADED if IC < 0.01 for >= 30s.
+   *   Immediate trip to MODEL_BROKEN if IC <= -0.02 or CUSUM drift flag is active.
+   * - DEGRADED: Reduced entries (aiConfidence >= 0.80 only, 0.50x sizing).
+   *   Transition to MODEL_BROKEN if IC <= -0.02 or CUSUM drift flag is active.
+   *   Recovery to ALPHA_ACTIVE if IC >= 0.03 sustained for >= 60s without drift.
+   * - MODEL_BROKEN: ALL entries blocked (0.0x sizing).
+   *   Recovery to DEGRADED if IC >= 0.01 sustained for >= 120s without drift.
+   */
+  public updateICKillSwitchState(ewmaIC: number, isDriftFlagged: boolean, nowMs: number): void {
+    const safeIC = Number.isFinite(ewmaIC) ? ewmaIC : 0.0;
+
+    switch (this.icState) {
+      case "ALPHA_ACTIVE": {
+        if (isDriftFlagged || safeIC <= -0.02) {
+          this.icState = "MODEL_BROKEN";
+          this.icStateEnteredAt = nowMs;
+          this.icConditionMetSince = 0;
+          console.warn(
+            `[StrategyEngine][${this.config.symbol}][IC_KILL_SWITCH] Transition: ALPHA_ACTIVE -> MODEL_BROKEN | ` +
+            `IC: ${safeIC.toFixed(4)}, Drift: ${isDriftFlagged}`
+          );
+        } else if (safeIC < 0.01) {
+          if (this.icConditionMetSince === 0) {
+            this.icConditionMetSince = nowMs;
+          } else if (nowMs - this.icConditionMetSince >= 30000) {
+            this.icState = "DEGRADED";
+            this.icStateEnteredAt = nowMs;
+            this.icConditionMetSince = 0;
+            console.warn(
+              `[StrategyEngine][${this.config.symbol}][IC_KILL_SWITCH] Transition: ALPHA_ACTIVE -> DEGRADED | ` +
+              `IC: ${safeIC.toFixed(4)} sustained < 0.01 for >= 30s`
+            );
+          }
+        } else {
+          this.icConditionMetSince = 0;
+        }
+        break;
+      }
+
+      case "DEGRADED": {
+        if (isDriftFlagged || safeIC <= -0.02) {
+          this.icState = "MODEL_BROKEN";
+          this.icStateEnteredAt = nowMs;
+          this.icConditionMetSince = 0;
+          console.warn(
+            `[StrategyEngine][${this.config.symbol}][IC_KILL_SWITCH] Transition: DEGRADED -> MODEL_BROKEN | ` +
+            `IC: ${safeIC.toFixed(4)}, Drift: ${isDriftFlagged}`
+          );
+        } else if (safeIC >= 0.03 && !isDriftFlagged) {
+          if (this.icConditionMetSince === 0) {
+            this.icConditionMetSince = nowMs;
+          } else if (nowMs - this.icConditionMetSince >= 60000) {
+            this.icState = "ALPHA_ACTIVE";
+            this.icStateEnteredAt = nowMs;
+            this.icConditionMetSince = 0;
+            console.log(
+              `[StrategyEngine][${this.config.symbol}][IC_KILL_SWITCH] Transition: DEGRADED -> ALPHA_ACTIVE | ` +
+              `IC: ${safeIC.toFixed(4)} sustained >= 0.03 for >= 60s without drift`
+            );
+          }
+        } else {
+          this.icConditionMetSince = 0;
+        }
+        break;
+      }
+
+      case "MODEL_BROKEN": {
+        if (safeIC >= 0.01 && !isDriftFlagged) {
+          if (this.icConditionMetSince === 0) {
+            this.icConditionMetSince = nowMs;
+          } else if (nowMs - this.icConditionMetSince >= 120000) {
+            this.icState = "DEGRADED";
+            this.icStateEnteredAt = nowMs;
+            this.icConditionMetSince = 0;
+            console.log(
+              `[StrategyEngine][${this.config.symbol}][IC_KILL_SWITCH] Transition: MODEL_BROKEN -> DEGRADED | ` +
+              `IC: ${safeIC.toFixed(4)} sustained >= 0.01 for >= 120s without drift`
+            );
+          }
+        } else {
+          this.icConditionMetSince = 0;
+        }
+        break;
+      }
+    }
+  }
+
+  public getIcState(): "ALPHA_ACTIVE" | "DEGRADED" | "MODEL_BROKEN" {
+    return this.icState;
+  }
+
+  public setIcStateForTesting(state: "ALPHA_ACTIVE" | "DEGRADED" | "MODEL_BROKEN", enteredAt: number = 0): void {
+    this.icState = state;
+    this.icStateEnteredAt = enteredAt;
+    this.icConditionMetSince = 0;
+  }
+
+  public getVrClassifier(): OnlineVarianceRatioClassifier {
+    return this.vrClassifier;
+  }
+
+  public getLeadingConfirmation(): { prevOBI: number; prevOBIVelocity: number; prevTickMs: number } {
+    return {
+      prevOBI: this.prevOBI,
+      prevOBIVelocity: this.prevOBIVelocity,
+      prevTickMs: this.prevTickMs,
+    };
   }
 
   public setLeverageMultiplier(leverage: number): void {
@@ -2530,44 +2657,69 @@ export class StrategyEngine {
 
       const isHighConfidenceAi = aiConfidence >= Math.max(this.config.aggressiveConfidenceThreshold, effectiveMinConfidence);
 
-      // Volatility-Standardized Z-Score of the signal
-      const safeVol = Number.isFinite(volEstimate) && volEstimate >= 0.0001 ? volEstimate : 0.005;
-      const rawZScore = aiDirectionMag / safeVol;
-      const zScore = Number.isFinite(rawZScore) ? rawZScore : 0.0;
+      // DEF-R4: Physically replace the meaningless Z-score with the Information Ratio (IR = IC * sqrt(breadth))
+      // Read live IC from SAB (physically written by ic_tracker.rs)
+      const liveIC = this.client.getRollingIC(this.assetIndex);
+      const safeIC = Number.isFinite(liveIC) ? liveIC : 0.0;
 
-      // Dynamic Conviction Authorization: Require Alpha-to-Friction Barrier clearance AND Z-Score >= 1.5 (2.0 during drawdown)
-      const minZScoreThreshold = isDrawdown ? 2.0 : 1.5;
+      // Approximate breadth: ~720 independent 5s predictions per hour
+      const breadthPerHour = 720;
+      const informationRatio = safeIC * Math.sqrt(breadthPerHour);
+      const zScore = informationRatio; // Standardized Sharpe-like z-score for downstream sizing
+
+      // Gate: IR must be positive and exceed friction-adjusted minimum
+      const minIR = isDrawdown ? 0.30 : 0.15;
+      const isSignalQualityValid = informationRatio >= minIR;
       const isAlphaFrictionPassed = expectedNetAlpha >= minNetAlpha;
-      const isConvictionValid = isAlphaFrictionPassed && zScore >= minZScoreThreshold && aiConfidence >= effectiveMinConfidence;
 
-      // SOTA August 2026: Adaptive Sigmoidal Confidence-Relaxation Gating (ASCRG)
-      const baseObiMagnitude = Math.abs(this.config.obiBuyThreshold || 0.20);
-      const maxOpposingObi = 0.45; // Strict toxic wall / liquidity sweep trap guard
+      const isConvictionValid = isAlphaFrictionPassed 
+          && isSignalQualityValid
+          && aiConfidence >= effectiveMinConfidence;
 
-      // Continuous confidence relaxation: kappa = 2.5
-      // When AI Confidence increases beyond effective minimum confidence floor, the required directional OBI threshold (0.20)
-      // dynamically relaxes towards 0.0 (neutral), allowing pre-breakdown entry without chasing swept books.
-      const confExcess = Math.max(0.0, (aiConfidence - effectiveMinConfidence) / Math.max(0.01, 1.0 - effectiveMinConfidence));
-      const requiredObiThreshold = baseObiMagnitude * (1.0 - 2.5 * Math.tanh(confExcess));
+      // DEF-R7: Update 3-State Hysteresis CUSUM-SPRT IC Kill Switch
+      const isDriftFlagged = this.client.getIsModelDrifted(this.assetIndex);
+      this.updateICKillSwitchState(safeIC, isDriftFlagged, nowMs);
 
-      // Symmetrical Favorable OBI directional verification with toxic opposing wall protection:
-      // BUY: Requires obi >= +requiredObiThreshold AND obi > -maxOpposingObi
-      // SELL: Requires obi <= -requiredObiThreshold AND obi < +maxOpposingObi
-      const isObiFavorableBuy = obi >= requiredObiThreshold && obi > -maxOpposingObi;
-      const isObiFavorableSell = obi <= -requiredObiThreshold && obi < maxOpposingObi;
+      // DEF-R8: Composite Leading Confirmation Index (Microprice Deviation + OBI Velocity/Acceleration)
+      const bidQty = this.client.getBestBidQuantity(this.assetIndex);
+      const askQty = this.client.getBestAskQuantity(this.assetIndex);
+      const totalBookQty = bidQty + askQty;
+      const microPrice = totalBookQty > 1e-12 
+        ? (askPrice * bidQty + bidPrice * askQty) / totalBookQty 
+        : midPrice;
+      const micropriceDev = midPrice > 0 ? (microPrice - midPrice) / midPrice : 0;
+
+      // Compute OBI velocity and acceleration
+      const dt = this.prevTickMs > 0 ? Math.max(0.001, (nowMs - this.prevTickMs) / 1000) : 0.01;
+      const obiVelocity = (obi - this.prevOBI) / dt;
+      const obiAccel = (obiVelocity - this.prevOBIVelocity) / dt;
+      this.prevOBI = obi;
+      this.prevOBIVelocity = obiVelocity;
+      this.prevTickMs = nowMs;
+
+      // Composite Leading Confirmation Index (LCI)
+      const sigmoid = (x: number) => 1 / (1 + Math.exp(-Math.max(-50, Math.min(50, x))));
+      const lciBuy = 0.50 * sigmoid(micropriceDev * 10000)
+                   + 0.30 * sigmoid(obiVelocity * 50)
+                   + 0.20 * sigmoid(obiAccel * 100);
+
+      const lciSell = 0.50 * sigmoid(-micropriceDev * 10000)
+                    + 0.30 * sigmoid(-obiVelocity * 50)
+                    + 0.20 * sigmoid(-obiAccel * 100);
+
+      const isLeadingConfirmationBuy = lciBuy >= 0.55;
+      const isLeadingConfirmationSell = lciSell >= 0.55;
 
       let isBuySignal = false;
       let isSellSignal = false;
 
       if (isConvictionValid) {
         if (isHighConfidenceAi) {
-          // SOTA ASCRG High-Confidence AI Rule (>70%): Dynamic OBI relaxation allows execution in neutral/pre-breakdown books
-          isBuySignal = aiDirection > 0 && isObiFavorableBuy;
-          isSellSignal = aiDirection < 0 && isObiFavorableSell;
+          isBuySignal = aiDirection > 0 && isLeadingConfirmationBuy;
+          isSellSignal = aiDirection < 0 && isLeadingConfirmationSell;
         } else {
-          // SOTA Composite Gating Rule: Multi-variate composite score with dynamic thresholding
-          isBuySignal = compositeScore > 0.15 && isObiFavorableBuy;
-          isSellSignal = compositeScore < -0.15 && isObiFavorableSell;
+          isBuySignal = compositeScore > 0.15 && isLeadingConfirmationBuy;
+          isSellSignal = compositeScore < -0.15 && isLeadingConfirmationSell;
         }
       } else if (seq % 1000n === 0n) {
         const netAlphaBps = (expectedNetAlpha * 10000).toFixed(1);
@@ -2576,42 +2728,75 @@ export class StrategyEngine {
         const floorPct = (effectiveMinConfidence * 100).toFixed(1);
         const alphaOp = isAlphaFrictionPassed ? ">=" : "<";
         const confOp = aiConfidence >= effectiveMinConfidence ? ">=" : "<";
-        const zOp = zScore >= minZScoreThreshold ? ">=" : "<";
+        const irOp = isSignalQualityValid ? ">=" : "<";
 
         console.log(
           `[StrategyEngine][${this.config.symbol}][CONVICTION_FLOOR_GATE] Seq #${seq} | Dir: ${aiDirection.toFixed(4)} ` +
           `(NetAlpha: ${netAlphaBps} bps ${alphaOp} Hurdle: ${hurdleBps} bps [${isAlphaFrictionPassed ? "PASS" : "FAIL"}], ` +
           `Conf: ${confPct}% ${confOp} Floor: ${floorPct}% [${aiConfidence >= effectiveMinConfidence ? "PASS" : "FAIL"}], ` +
-          `Z: ${zScore.toFixed(2)} ${zOp} ${minZScoreThreshold.toFixed(1)} [${zScore >= minZScoreThreshold ? "PASS" : "FAIL"}]) -> Signals Filtered`
+          `IR: ${informationRatio.toFixed(2)} ${irOp} ${minIR.toFixed(2)} (IC: ${safeIC.toFixed(4)}) [${isSignalQualityValid ? "PASS" : "FAIL"}]) -> Signals Filtered`
         );
       }
 
-      // SOTA Phase 4: Microstructure Chop & LOB Entropy Regime Filter
-      // Extreme Mean-Reverting Noise Chop (H < 0.30 and S_LOB > 0.90 for AI, or H < 0.45 and S_LOB > 0.85 for composite)
-      const isChopRegime = isHighConfidenceAi
-        ? (hurstExponent < 0.30 && lobEntropy > 0.90)
-        : (hurstExponent < 0.45 && lobEntropy > 0.85);
-
-      // Restrict low-conviction directional entries to verified trend regimes ONLY (H >= 0.55, S_LOB <= 0.75, Hawkes <= 2.0)
-      const isVerifiedTrendRegime = hurstExponent >= 0.55 && lobEntropy <= 0.75 && safeHawkes <= 2.0;
-
-      if (isChopRegime) {
-        if (seq % 1000n === 0n || (isBuySignal || isSellSignal)) {
-          console.log(
-            `[StrategyEngine][${this.config.symbol}][REJECTED_CHOP_REGIME] Seq #${seq} | Directional signal filtered: Severe Noise Chop (H: ${hurstExponent.toFixed(3)}, S_LOB: ${lobEntropy.toFixed(3)}).`
+      // DEF-R7: 3-State Hysteresis CUSUM-SPRT Kill Switch Enforcement
+      if (this.icState === "MODEL_BROKEN") {
+        if (isBuySignal || isSellSignal || seq % 1000n === 0n) {
+          console.warn(
+            `[StrategyEngine][${this.config.symbol}][IC_KILL_SWITCH_BLOCKED] Seq #${seq} | ` +
+            `State: MODEL_BROKEN (IC: ${safeIC.toFixed(4)}, Drift: ${isDriftFlagged}). All entries blocked.`
           );
         }
         isBuySignal = false;
         isSellSignal = false;
-      } else if (!isVerifiedTrendRegime && !isHighConfidenceAi) {
-        if (seq % 1000n === 0n && (isBuySignal || isSellSignal)) {
-          console.log(
-            `[StrategyEngine][${this.config.symbol}][TREND_REGIME_GATE] Seq #${seq} | Directional entry restricted: Not a verified trend regime (H: ${hurstExponent.toFixed(3)} [req >= 0.55], S_LOB: ${lobEntropy.toFixed(3)} [req <= 0.75], Hawkes: ${safeHawkes.toFixed(3)} [req <= 2.0]).`
-          );
+      } else if (this.icState === "DEGRADED") {
+        if (aiConfidence < 0.80) {
+          if ((isBuySignal || isSellSignal) && seq % 1000n === 0n) {
+            console.warn(
+              `[StrategyEngine][${this.config.symbol}][IC_DEGRADED_FILTER] Seq #${seq} | ` +
+              `State: DEGRADED (IC: ${safeIC.toFixed(4)}). Confidence ${(aiConfidence * 100).toFixed(1)}% < 80.0% floor.`
+            );
+          }
+          isBuySignal = false;
+          isSellSignal = false;
         }
-        isBuySignal = false;
-        isSellSignal = false;
       }
+
+      // DEF-R5 & DEF-R6: Online Lo-MacKinlay Variance Ratio 3-State Regime Classifier & Unconditional Regime Gate
+      if (midPrice > 0) {
+        this.vrClassifier.updatePrice(midPrice);
+      }
+      const regimeState = this.vrClassifier.getRegimeState();
+      const varianceRatio = this.vrClassifier.getVarianceRatio();
+
+      const isChopRegime = regimeState === "MEAN_REVERT" || (hurstExponent < 0.45 && lobEntropy > 0.85);
+      const isVerifiedTrendRegime = regimeState === "TRENDING" || (hurstExponent >= 0.55 && lobEntropy <= 0.75 && safeHawkes <= 2.0);
+      const isRandomWalk = regimeState === "RANDOM_WALK";
+
+      // DEF-R6: UNCONDITIONAL REGIME GATE — NO CONFIDENCE BYPASS
+      if (isChopRegime) {
+        if (isBuySignal || isSellSignal || seq % 1000n === 0n) {
+          console.log(
+            `[StrategyEngine][${this.config.symbol}][REGIME_GATE][BLOCKED] Seq #${seq} | ` +
+            `VR=${varianceRatio.toFixed(3)} -> MEAN_REVERT. Directional entry annihilated unconditionally (no AI bypass).`
+          );
+        }
+        isBuySignal = false;
+        isSellSignal = false;
+      } else if (!isVerifiedTrendRegime) {
+        // In unverified trend / random walk regime: only ultra-high confidence entries allowed (>= 0.80)
+        const randomWalkConfFloor = 0.80;
+        if (aiConfidence < randomWalkConfFloor) {
+          if ((isBuySignal || isSellSignal) && seq % 1000n === 0n) {
+            console.log(
+              `[StrategyEngine][${this.config.symbol}][REGIME_GATE][BLOCKED] Seq #${seq} | ` +
+              `VR=${varianceRatio.toFixed(3)} (State: ${regimeState}, H: ${hurstExponent.toFixed(3)}, S_LOB: ${lobEntropy.toFixed(3)}). Confidence ${(aiConfidence * 100).toFixed(1)}% < ${randomWalkConfFloor * 100}% floor.`
+            );
+          }
+          isBuySignal = false;
+          isSellSignal = false;
+        }
+      }
+      // Verified TRENDING regime: signals pass through freely
 
       // ============================================================================
       // SOTA LEVEL-1 SPREAD BLOWOUT ENTRY GUARD (NON-BYPASSABLE)
@@ -2821,7 +3006,8 @@ export class StrategyEngine {
           targetNotionalUsdt = maxPosSizeUsdt;
         }
 
-        const rawQty = (targetNotionalUsdt / basePrice) * penaltyCoeff * targetSizeDecayCoeff;
+        const icSizeModifier = this.icState === "DEGRADED" ? 0.50 : 1.0;
+        const rawQty = (targetNotionalUsdt / basePrice) * penaltyCoeff * targetSizeDecayCoeff * icSizeModifier;
         finalQuantity = formatQuantityForSymbol(this.config.symbol, rawQty, false);
 
         // Binance Futures Min Notional Guard: ensure order notional >= effectiveMinNotional using conservative price

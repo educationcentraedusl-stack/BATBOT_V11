@@ -209,12 +209,24 @@ export class MarketDataClient {
     return this.readAtomicFloat64Asset(assetIdx, 4);
   }
 
+  public setBestBidPrice(price: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 4, price);
+  }
+
   public getBestBidQuantity(assetIdx: number = 0): number {
     return this.readAtomicFloat64Asset(assetIdx, 5);
   }
 
+  public setBestBidQuantity(qty: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 5, qty);
+  }
+
   public getBestAskPrice(assetIdx: number = 0): number {
     return this.readAtomicFloat64Asset(assetIdx, 6);
+  }
+
+  public setBestAskPrice(price: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 6, price);
   }
 
   public getMidPrice(assetIdx: number = 0): number {
@@ -225,6 +237,10 @@ export class MarketDataClient {
 
   public getBestAskQuantity(assetIdx: number = 0): number {
     return this.readAtomicFloat64Asset(assetIdx, 7);
+  }
+
+  public setBestAskQuantity(qty: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 7, qty);
   }
 
   public getLiquidationTotalVolume(assetIdx: number = 0): number {

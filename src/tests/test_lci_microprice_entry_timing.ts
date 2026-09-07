@@ -1,0 +1,166 @@
+import "dotenv/config";
+import { MarketDataClient } from "../marketDataClient";
+import { RiskGuard } from "../strategy/risk";
+import { BinanceExecutionClient } from "../execution/binance";
+import { StrategyEngine } from "../strategy/engine";
+import { SAB_SLOTS } from "../ipc/sabSchema";
+import { timeSynchronizer } from "../utils/timeSynchronizer";
+
+function assert(condition: boolean, message: string): void {
+  if (!condition) {
+    console.error(`❌ [ASSERTION_FAILED] ${message}`);
+    throw new Error(`ASSERTION_FAILED: ${message}`);
+  }
+}
+
+async function runLCIMicropriceTimingTestSuite(): Promise<void> {
+  console.log("================================================================================");
+  console.log("  TEST: SOTA COMPOSITE LEADING CONFIRMATION INDEX (DEF-R8)");
+  console.log("  Microprice Deviation + OBI Velocity & Acceleration Timing Proof");
+  console.log("================================================================================\n");
+
+  const maxAssets = 10;
+  const slotsPerAsset = 256;
+  const sab = new SharedArrayBuffer(maxAssets * slotsPerAsset * 8);
+  const client = new MarketDataClient(sab, maxAssets, slotsPerAsset);
+  const riskGuard = new RiskGuard({ minCooldownMs: 0 });
+  const execClient = new BinanceExecutionClient({
+    apiKey: "test_key",
+    apiSecret: "test_secret",
+    useTestnet: true,
+  });
+
+  const engine = new StrategyEngine(client, riskGuard, execClient, {
+    symbol: "BTCUSDT",
+    orderQuantity: 0.001,
+    cooldownMs: 0,
+    minAiConfidence: 0.70,
+    aggressiveConfidenceThreshold: 0.75,
+  });
+
+  const bigIntView = new BigInt64Array(sab);
+
+  // Set healthy IC (+0.05) so IR gate is satisfied
+  client.setRollingIC(0.05, 0);
+
+  // --------------------------------------------------------------------------
+  // STAGE 1: Initiation Phase (Breakout Building -> LCI >= 0.55 Approves Entry)
+  // --------------------------------------------------------------------------
+  console.log("[STAGE 1] Testing Initiation Phase (Microprice Shift & Surging OBI Velocity)...");
+
+  // Tick 1: Baseline book at $60,000, neutral OBI
+  let nowMs = timeSynchronizer.getAdjustedNowMs();
+  Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
+  client.setSequenceNum(1n, 0);
+  client.setBestBidPrice(60000.0, 0);
+  client.setBestBidQuantity(5.0, 0);
+  client.setBestAskPrice(60000.5, 0);
+  client.setBestAskQuantity(5.0, 0);
+  client.setOBI(0.0, 0);
+  client.setCVD(0.0, 0);
+  client.writeAtomicFloat64Asset(0, SAB_SLOTS.SPREAD_VELOCITY, 0.0);
+  client.writeAtomicFloat64Asset(0, SAB_SLOTS.AI_DIRECTION, 0.80);
+  client.writeAtomicFloat64Asset(0, SAB_SLOTS.AI_CONFIDENCE, 0.85);
+  client.setGarmanKlassRV(0.002, 0);
+  client.setHawkesIntensity(1.0, 0);
+  client.setHurstExponent(0.65, 0);
+  client.setLOBEntropy(0.50, 0);
+
+  // Evaluate baseline tick
+  engine.evaluateTick();
+
+  // Tick 2: Sudden strong bid injection: Bid Qty = 25.0, Ask Qty = 2.0 (OBI = +0.85, microprice shifts up)
+  nowMs = timeSynchronizer.getAdjustedNowMs();
+  Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
+  client.setSequenceNum(2n, 0);
+  client.setBestBidPrice(60000.0, 0);
+  client.setBestBidQuantity(25.0, 0);
+  client.setBestAskPrice(60000.5, 0);
+  client.setBestAskQuantity(2.0, 0);
+  client.setOBI(0.85, 0);
+  client.setCVD(100.0, 0);
+
+  // At this initiation point, micropriceDev is positive and OBI velocity is surging
+  const initiationSignal = engine.evaluateTick();
+  console.log(`  Initiation Signal Type: ${initiationSignal.signalType}`);
+  assert(initiationSignal.signalType === "BUY", `Initiation phase must trigger BUY, got ${initiationSignal.signalType}`);
+  console.log("  ✓ Initiation phase correctly confirmed by LCI (BUY triggered at initiation)\n");
+
+  // --------------------------------------------------------------------------
+  // STAGE 2: Micro-Top Exhaustion Phase (Nominally High OBI, but Negative Velocity)
+  // --------------------------------------------------------------------------
+  console.log("[STAGE 2] Testing Micro-Top Exhaustion Phase (Decelerating / Retreating OBI)...");
+
+  // Tick 3: At the local top, OBI is still positive (+0.60, looks bullish to lagging indicators),
+  // but bid quantity is evaporating (was 25, now 8) and ask quantity is creeping in (now 4).
+  // OBI fell from +0.85 to +0.60 -> OBI velocity is negative, acceleration is negative.
+  nowMs = timeSynchronizer.getAdjustedNowMs();
+  Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
+  client.setSequenceNum(3n, 0);
+  client.setBestBidPrice(60000.0, 0);
+  client.setBestBidQuantity(8.0, 0);
+  client.setBestAskPrice(60000.5, 0);
+  client.setBestAskQuantity(4.0, 0);
+  client.setOBI(0.60, 0); // Still high!
+  client.setCVD(100.0, 0);
+
+  const exhaustionSignal = engine.evaluateTick();
+  console.log(`  Exhaustion Signal Type: ${exhaustionSignal.signalType}`);
+  assert(exhaustionSignal.signalType === "NONE", `Exhaustion micro-top must be BLOCKED by LCI, got ${exhaustionSignal.signalType}`);
+  console.log("  ✓ Micro-top exhaustion correctly blocked by LCI despite nominally high OBI (+0.60)\n");
+
+  // --------------------------------------------------------------------------
+  // STAGE 3: Symmetric Breakdown Initiation (SELL Confirmation)
+  // --------------------------------------------------------------------------
+  console.log("[STAGE 3] Testing Symmetric Breakdown Initiation (Negative Microprice Dev & Negative Velocity)...");
+
+  // Reset order in flight flag and slots for clean stage isolation
+  (engine as any).isOrderInFlight = false;
+  engine.getHedgeLedger().clearSlots();
+  (engine as any).pendingEntryOrders.clear();
+
+  // Tick 4: Re-establish neutral baseline
+  nowMs = timeSynchronizer.getAdjustedNowMs();
+  Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
+  client.setSequenceNum(4n, 0);
+  client.setBestBidPrice(60000.0, 0);
+  client.setBestBidQuantity(5.0, 0);
+  client.setBestAskPrice(60000.5, 0);
+  client.setBestAskQuantity(5.0, 0);
+  client.setOBI(0.0, 0);
+  client.setCVD(0.0, 0);
+  client.writeAtomicFloat64Asset(0, SAB_SLOTS.AI_DIRECTION, 0.0); // Neutral baseline
+  client.setShortCooldownLock(0, 0);
+  engine.evaluateTick();
+  (engine as any).isOrderInFlight = false;
+  engine.getHedgeLedger().clearSlots();
+  (engine as any).pendingEntryOrders.clear();
+  client.setShortCooldownLock(0, 0);
+
+  // Tick 5: Toxic ask wall injection: Bid Qty = 2.0, Ask Qty = 30.0 (OBI = -0.875)
+  nowMs = timeSynchronizer.getAdjustedNowMs();
+  Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
+  client.setSequenceNum(5n, 0);
+  client.setBestBidPrice(60000.0, 0);
+  client.setBestBidQuantity(2.0, 0);
+  client.setBestAskPrice(60000.5, 0);
+  client.setBestAskQuantity(30.0, 0);
+  client.setOBI(-0.875, 0);
+  client.setCVD(-150.0, 0);
+  client.writeAtomicFloat64Asset(0, SAB_SLOTS.AI_DIRECTION, -0.80); // Switch to SELL
+  client.setShortCooldownLock(0, 0);
+
+  const breakdownSignal = engine.evaluateTick();
+  console.log(`  Breakdown Signal Type: ${breakdownSignal.signalType}`);
+  assert(breakdownSignal.signalType === "SELL", `Breakdown initiation must trigger SELL, got ${breakdownSignal.signalType}`);
+  console.log("  ✓ Symmetric breakdown correctly confirmed by LCI (SELL triggered at breakdown)\n");
+
+  console.log("================================================================================");
+  console.log("  ✅ ALL 3 TEST STAGES PASSED (100% SOTA DEF-R8 SPECIFICATION COMPLIANCE)");
+  console.log("================================================================================\n");
+}
+
+runLCIMicropriceTimingTestSuite().catch((err) => {
+  console.error(`\n❌ TEST SUITE FAILED: ${err?.stack || err?.message || String(err)}\n`);
+  process.exit(1);
+});

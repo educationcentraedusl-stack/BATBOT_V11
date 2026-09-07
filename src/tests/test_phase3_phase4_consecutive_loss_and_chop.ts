@@ -242,6 +242,10 @@ async function runPhase3Phase4TestSuite() {
   client.setHurstExponent(0.65, 0);
   client.setLOBEntropy(0.60, 0);
   client.setHawkesIntensity(1.2, 0);
+  client.setRollingIC(0.05, 0);
+  client.setBestBidQuantity(25.0, 0);
+  client.setBestAskQuantity(2.0, 0);
+  client.setOBI(0.85, 0);
   Atomics.store(bigIntView, 92, 4n);
 
   const trendSignal = engine.evaluateTick();
@@ -298,6 +302,7 @@ async function runPhase3Phase4TestSuite() {
   console.log(`  ✓ 5th loss onExecutionCompleted -> SAB Long cooldown lock set to +900s (15 min Circuit Breaker Halt)`);
 
   // Next tick evaluation must be blocked by cooldown lock
+  (engine as any).isOrderInFlight = false;
   Atomics.store(bigIntView, 92, 5n);
   const blockedSignal = engine.evaluateTick();
   if (blockedSignal.signalType !== "NONE") {
