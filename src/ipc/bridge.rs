@@ -103,10 +103,19 @@ impl IngestionBridge {
                                 validator.step_shadow(&bridge);
                                 if validator.phase() == PreflightPhase::Passed {
                                     if let Some(promoted_engine) = validator.promote() {
+                                        if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
+                                            promoted_engine.inherit_hidden_state(active_engine);
+                                            promoted_engine.inherit_telemetry_history(active_engine);
+                                        }
+                                        let max_assets = bridge.max_assets();
+                                        let next_epoch = bridge.load_f64_asset(0, 151) + 1.0;
+                                        for a_idx in 0..max_assets {
+                                            bridge.store_f64_asset(a_idx, 151, next_epoch);
+                                        }
                                         GLOBAL_AI_ENGINE.store(Some(Arc::new(promoted_engine)));
                                         GLOBAL_SHADOW_ENGINE.store(None);
                                         println!(
-                                            "[BATBOT_V11][Pre-Flight Auto-Promotion SUCCESS] Passed all 4 Gates! Atomically promoted candidate model to GLOBAL_AI_ENGINE via lock-free RCU store."
+                                            "[BATBOT_V11][Pre-Flight Auto-Promotion SUCCESS] Passed all 4 Gates! Atomically promoted candidate model to GLOBAL_AI_ENGINE via lock-free RCU store and bumped HOTSWAP_EPOCH."
                                         );
                                     }
                                 }

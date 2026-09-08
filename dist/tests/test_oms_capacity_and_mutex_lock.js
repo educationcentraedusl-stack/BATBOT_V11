@@ -52,6 +52,7 @@ async function runOmsCapacityAndMutexProof() {
         client.writeAtomicFloat64Asset(i, 112, 1.0); // Hawkes
         client.setHurstExponent(0.60, i);
         client.setLOBEntropy(0.50, i);
+        client.setRollingIC(0.05, i);
         // Write valid timestamp
         const bigIntView = new BigInt64Array(sab);
         Atomics.store(bigIntView, i * slotsPerAsset + 0, nowNs);
@@ -224,14 +225,55 @@ async function runOmsCapacityAndMutexProof() {
     // STAGE 5: Asynchronous Promise.all Concurrent Tick Race & Serialization Proof
     // ============================================================================
     console.log("[STAGE 5] Testing Asynchronous Promise.all Concurrent Tick Race & Capacity Serialization...");
-    // Setup 9 active confirmed positions on Symbols 0..8
+    // Setup 9 active confirmed positions on Symbols 0..8 (2 LONGs, 7 SHORTs to respect DEF-3101 directional limits)
     for (let i = 0; i < 9; i++) {
         const sym = symbols[i];
         const eng = multiEngine.getEngineForSymbol(sym);
         eng.getHedgeLedger().clearSlots();
-        eng.getHedgeLedger().occupyCoreLong(1.0, 100.0, 1.5, 0.8, false);
-        eng.syncSabPositionState(100.0);
-        riskGuard.recordExecutionSuccess(100.0, "BUY", sym, false, 100.0);
+        if (i < 2) {
+            eng.reconcileStartupPositions([
+                {
+                    symbol: sym,
+                    positionAmt: "1.0",
+                    entryPrice: "100.0",
+                    markPrice: "100.0",
+                    unRealizedProfit: "0",
+                    liquidationPrice: "0",
+                    leverage: "10",
+                    maxNotionalValue: "1000000",
+                    marginType: "cross",
+                    isolatedMargin: "0",
+                    isAutoAddMargin: "false",
+                    positionSide: "LONG",
+                    notional: "100.0",
+                    isolatedWallet: "0",
+                    updateTime: Date.now(),
+                },
+            ]);
+            riskGuard.recordExecutionSuccess(100.0, "BUY", sym, false, 100.0);
+        }
+        else {
+            eng.reconcileStartupPositions([
+                {
+                    symbol: sym,
+                    positionAmt: "-1.0",
+                    entryPrice: "100.0",
+                    markPrice: "100.0",
+                    unRealizedProfit: "0",
+                    liquidationPrice: "0",
+                    leverage: "10",
+                    maxNotionalValue: "1000000",
+                    marginType: "cross",
+                    isolatedMargin: "0",
+                    isAutoAddMargin: "false",
+                    positionSide: "SHORT",
+                    notional: "100.0",
+                    isolatedWallet: "0",
+                    updateTime: Date.now(),
+                },
+            ]);
+            riskGuard.recordExecutionSuccess(100.0, "SELL", sym, false, 100.0);
+        }
     }
     assert(btcEngine.getGlobalActivePositionCount() === 9, "9 active positions must be active before concurrent race");
     // Release LINKUSDT & DOTUSDT to FLAT so exactly 8 are occupied, 2 are FLAT
@@ -245,17 +287,36 @@ async function runOmsCapacityAndMutexProof() {
     riskGuard.recordExecutionSuccess(100.0, "SELL", "DOTUSDT", true, 0.0);
     // Exactly 8 positions confirmed active
     assert(btcEngine.getGlobalActivePositionCount() === 8, "Portfolio must have 8 active positions (2 available slots)");
-    // Re-occupy LINKUSDT so exactly 9 are active (only 1 available slot remaining before 10-slot cap)
-    linkEng.getHedgeLedger().occupyCoreLong(1.0, 100.0, 1.5, 0.8, false);
-    linkEng.syncSabPositionState(100.0);
-    riskGuard.recordExecutionSuccess(100.0, "BUY", "LINKUSDT", false, 100.0);
+    // Re-occupy LINKUSDT as SHORT so exactly 9 are active (2 LONGs, 7 SHORTs -> exactly 1 available slot remaining before 10-slot cap, and 1 available LONG before 3-LONG cap)
+    linkEng.reconcileStartupPositions([
+        {
+            symbol: "LINKUSDT",
+            positionAmt: "-1.0",
+            entryPrice: "100.0",
+            markPrice: "100.0",
+            unRealizedProfit: "0",
+            liquidationPrice: "0",
+            leverage: "10",
+            maxNotionalValue: "1000000",
+            marginType: "cross",
+            isolatedMargin: "0",
+            isAutoAddMargin: "false",
+            positionSide: "SHORT",
+            notional: "100.0",
+            isolatedWallet: "0",
+            updateTime: Date.now(),
+        },
+    ]);
+    riskGuard.recordExecutionSuccess(100.0, "SELL", "LINKUSDT", false, 100.0);
     assert(btcEngine.getGlobalActivePositionCount() === 9, "Portfolio must have exactly 9 active positions (1 available slot left)");
     // Instantiate 11th candidate engine (NEARUSDT) to compete simultaneously with DOTUSDT
     const test11Hedge = new positionLedger_1.HedgePositionLedger("NEARUSDT", 3);
     const nearEngine = new engine_1.StrategyEngine(client, riskGuard, executionClient, { symbol: "NEARUSDT", assetIndex: 0 }, test11Hedge.getLegacyLedger(), test11Hedge);
     // Feed simultaneous strong BUY signals to both DOTUSDT and NEARUSDT
     const dotIdx = symbols.indexOf("DOTUSDT");
-    client.writeAtomicFloat64Asset(dotIdx, 1, 0.80);
+    client.setBestBidQuantity(25.0, dotIdx);
+    client.setBestAskQuantity(2.0, dotIdx);
+    client.setOBI(0.85, dotIdx);
     client.setCVD(10.0, dotIdx);
     client.setAIPredictionDirection(0.85, dotIdx);
     client.setAIPredictionConfidence(0.90, dotIdx);
@@ -263,7 +324,9 @@ async function runOmsCapacityAndMutexProof() {
     client.setLongCooldownLock(0, dotIdx);
     client.setSequenceNum(701n, dotIdx);
     // Setup NEAR tick data on BTC asset index 0 (clean state)
-    client.writeAtomicFloat64Asset(0, 1, 0.80);
+    client.setBestBidQuantity(25.0, 0);
+    client.setBestAskQuantity(2.0, 0);
+    client.setOBI(0.85, 0);
     client.setCVD(10.0, 0);
     client.setAIPredictionDirection(0.85, 0);
     client.setAIPredictionConfidence(0.90, 0);
@@ -295,12 +358,20 @@ async function runOmsCapacityAndMutexProof() {
     // STAGE 6: Clean Release & Flip Authorization
     // ============================================================================
     console.log("[STAGE 6] Testing Clean Position Release & Directional Flip Authorization...");
+    for (const eng of multiEngine.getAllEngines().values()) {
+        eng.getHedgeLedger().clearSlots();
+        eng.syncSabPositionState(0);
+        eng.clearPendingEntryOrders();
+    }
+    riskGuard.resetSymbolNotionals();
     btcHedge.clearSlots();
     btcEngine.syncSabPositionState(0);
     assert(btcHedge.getCoreLong().isOccupied === false, "BTC Core Long must be FLAT");
     assert(btcHedge.getShortSlots()[0].isOccupied === false, "BTC Short Slot must be FLAT");
     // Feed strong SELL signal to BTC
-    client.writeAtomicFloat64Asset(btcIdx, 1, -0.80);
+    client.setBestBidQuantity(2.0, btcIdx);
+    client.setBestAskQuantity(25.0, btcIdx);
+    client.setOBI(-0.85, btcIdx);
     client.setCVD(-10.0, btcIdx);
     client.setAIPredictionDirection(-0.85, btcIdx);
     client.setAIPredictionConfidence(0.90, btcIdx);
@@ -324,7 +395,9 @@ async function runOmsCapacityAndMutexProof() {
     client.setLongCooldownLock(0, btcIdx);
     assert(btcHedge.getShortSlots()[0].isOccupied === false, "BTC Short Slot must be released to FLAT");
     // Feed strong BUY signal to BTC
-    client.writeAtomicFloat64Asset(btcIdx, 1, 0.80);
+    client.setBestBidQuantity(25.0, btcIdx);
+    client.setBestAskQuantity(2.0, btcIdx);
+    client.setOBI(0.85, btcIdx);
     client.setCVD(10.0, btcIdx);
     client.setAIPredictionDirection(0.85, btcIdx);
     client.setAIPredictionConfidence(0.90, btcIdx);

@@ -209,7 +209,12 @@ async function runPhase3Phase4TestSuite() {
     client.setHurstExponent(0.65, 0);
     client.setLOBEntropy(0.60, 0);
     client.setHawkesIntensity(1.2, 0);
+    client.setRollingIC(0.05, 0);
+    client.setBestBidQuantity(25.0, 0);
+    client.setBestAskQuantity(2.0, 0);
+    client.setOBI(0.85, 0);
     Atomics.store(bigIntView, 92, 4n);
+    await new Promise((r) => setTimeout(r, 20));
     const trendSignal = engine.evaluateTick();
     if (trendSignal.signalType !== "BUY") {
         throw new Error(`FAIL: Verified trend regime (H=0.65, S_LOB=0.60, Hawkes=1.2) must generate BUY signal! Got: ${trendSignal.signalType}`);
@@ -258,6 +263,7 @@ async function runPhase3Phase4TestSuite() {
     }
     console.log(`  ✓ 5th loss onExecutionCompleted -> SAB Long cooldown lock set to +900s (15 min Circuit Breaker Halt)`);
     // Next tick evaluation must be blocked by cooldown lock
+    engine.resetInFlightOrderForTesting();
     Atomics.store(bigIntView, 92, 5n);
     const blockedSignal = engine.evaluateTick();
     if (blockedSignal.signalType !== "NONE") {

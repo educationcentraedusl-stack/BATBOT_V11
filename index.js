@@ -310,12 +310,13 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { initCore, createLobEngine, loadAiModel, loadAiModelFull, resetIcTracker, recordTradeIc, getIcStatus, triggerPreflightWarmup, getPreflightStatus, startOmsEngine, evaluateOmsTick, getOmsMetrics, getPositionSnapshot, startIngestion, getMicrostructureMetrics, getDynamicCollars, calculateCsLvrScoreNapi, NativeUniverseScanner, NativeMultiStreamManager, updateAssetReturnNapi, getCovarianceMatrixNapi, getCorrelationMatrixNapi, calculateCcDfkSizeNapi, getMultiAssetCollarsNapi, evaluateMultiAssetSignalsNapi, startMultiAssetOmsNapi, submitMultiAssetIntentBytesNapi, submitMultiAssetIntentNapi, applyMultiAssetFillNapi, getMultiAssetOmsMetricsNapi, popNextIntentPacketBytesNapi, popNextIntentPacketNapi, syncMultiOmsSabNapi, createMultiAssetLobManagerNapi, startPhase5OrchestratorNapi, stopPhase5OrchestratorNapi, getPhase5OrchestratorMetricsNapi } = nativeBinding
+const { initCore, createLobEngine, loadAiModel, loadAiModelFull, bumpHotswapEpoch, resetIcTracker, recordTradeIc, getIcStatus, triggerPreflightWarmup, getPreflightStatus, startOmsEngine, evaluateOmsTick, getOmsMetrics, getPositionSnapshot, startIngestion, getMicrostructureMetrics, getDynamicCollars, calculateCsLvrScoreNapi, NativeUniverseScanner, NativeMultiStreamManager, updateAssetReturnNapi, getCovarianceMatrixNapi, getCorrelationMatrixNapi, calculateCcDfkSizeNapi, getMultiAssetCollarsNapi, evaluateMultiAssetSignalsNapi, startMultiAssetOmsNapi, submitMultiAssetIntentBytesNapi, submitMultiAssetIntentNapi, applyMultiAssetFillNapi, getMultiAssetOmsMetricsNapi, popNextIntentPacketBytesNapi, popNextIntentPacketNapi, syncMultiOmsSabNapi, createMultiAssetLobManagerNapi, startPhase5OrchestratorNapi, stopPhase5OrchestratorNapi, getPhase5OrchestratorMetricsNapi } = nativeBinding
 
 module.exports.initCore = initCore
 module.exports.createLobEngine = createLobEngine
 module.exports.loadAiModel = loadAiModel
 module.exports.loadAiModelFull = loadAiModelFull
+module.exports.bumpHotswapEpoch = bumpHotswapEpoch
 module.exports.resetIcTracker = resetIcTracker
 module.exports.recordTradeIc = recordTradeIc
 module.exports.getIcStatus = getIcStatus

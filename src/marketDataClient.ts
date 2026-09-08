@@ -684,6 +684,23 @@ export class MarketDataClient {
     this.writeAtomicFloat64Asset(assetIdx, 140, prob);
   }
 
+  public getHotswapEpoch(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 151);
+  }
+
+  public setHotswapEpoch(epoch: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 151, epoch);
+  }
+
+  public incrementHotswapEpoch(_assetIdx?: number): number {
+    const current = this.readAtomicFloat64Asset(0, 151);
+    const next = current + 1.0;
+    for (let i = 0; i < this.maxAssets; i++) {
+      this.writeAtomicFloat64Asset(i, 151, next);
+    }
+    return next;
+  }
+
   public getDynamicStopLossPrice(assetIdx: number = 0): number {
     return this.readAtomicFloat64Asset(assetIdx, 141);
   }

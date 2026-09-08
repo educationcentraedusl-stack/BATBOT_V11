@@ -28,8 +28,15 @@ fn vec_std(v: &VecDeque<f64>, n: usize) -> f64 {
     if count <= 1 {
         return 0.0;
     }
-    let mean = vec_mean(v, count);
-    let variance: f64 = v.iter().take(count).map(|x| (x - mean).powi(2)).sum::<f64>() / (count as f64);
+    let mut sum = 0.0;
+    let mut sum_sq = 0.0;
+    for &x in v.iter().take(count) {
+        sum += x;
+        sum_sq += x * x;
+    }
+    let count_f = count as f64;
+    let mean = sum / count_f;
+    let variance = (sum_sq / count_f - mean * mean).max(0.0);
     variance.sqrt()
 }
 
@@ -65,6 +72,7 @@ impl SignedZScores {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct StreamingFeaturePipeline {
     mid_prices: VecDeque<f64>,
     log_ret_1_hist: VecDeque<f64>,
@@ -81,18 +89,16 @@ pub struct StreamingFeaturePipeline {
     obi_ema_100: Option<f64>,
     obi_ema_250: Option<f64>,
 
-    feature_windows: Vec<VecDeque<f64>>,
-    feature_sums: [f64; 40],
-    feature_sum_sqs: [f64; 40],
+    feature_windows: Box<[[f64; 1000]; 40]>,
+    feature_heads: [usize; 40],
+    feature_lens: [usize; 40],
+    feature_means: [f64; 40],
+    feature_m2s: [f64; 40],
     pub signed_z_scores: SignedZScores,
 }
 
 impl StreamingFeaturePipeline {
     pub fn new() -> Self {
-        let mut feature_windows = Vec::with_capacity(40);
-        for _ in 0..40 {
-            feature_windows.push(VecDeque::with_capacity(1000));
-        }
         Self {
             mid_prices: VecDeque::with_capacity(101),
             log_ret_1_hist: VecDeque::with_capacity(100),
@@ -107,9 +113,11 @@ impl StreamingFeaturePipeline {
             obi_ema_50: None,
             obi_ema_100: None,
             obi_ema_250: None,
-            feature_windows,
-            feature_sums: [0.0; 40],
-            feature_sum_sqs: [0.0; 40],
+            feature_windows: Box::new([[0.0f64; 1000]; 40]),
+            feature_heads: [0; 40],
+            feature_lens: [0; 40],
+            feature_means: [0.0; 40],
+            feature_m2s: [0.0; 40],
             signed_z_scores: SignedZScores::default(),
         }
     }
@@ -380,22 +388,63 @@ impl StreamingFeaturePipeline {
 
         for i in 0..40 {
             let val = raw_features[i];
-            let window = &mut self.feature_windows[i];
-            if window.len() == 1000 {
-                if let Some(old) = window.pop_back() {
-                    self.feature_sums[i] -= old;
-                    self.feature_sum_sqs[i] -= old * old;
+            let head = self.feature_heads[i];
+            let count = self.feature_lens[i];
+
+            if count < 1000 {
+                // Expanding window: Online Welford (1962) recurrence
+                let new_count = count + 1;
+                self.feature_lens[i] = new_count;
+                let k = new_count as f64;
+                let delta = val - self.feature_means[i];
+                self.feature_means[i] += delta / k;
+                let delta2 = val - self.feature_means[i];
+                self.feature_m2s[i] += delta * delta2;
+                self.feature_windows[i][head] = val;
+                self.feature_heads[i] = (head + 1) % 1000;
+            } else {
+                // Fixed-length sliding window (N = 1000): Welford-West (1979) sliding recurrence
+                let old = self.feature_windows[i][head];
+                let n = 1000.0;
+                let delta = val - old;
+                let old_mean = self.feature_means[i];
+                let new_mean = old_mean + delta / n;
+                self.feature_means[i] = new_mean;
+                // M2 update: M2_new = M2_old + delta * ((val - new_mean) + (old - old_mean))
+                let delta_m2 = delta * ((val - new_mean) + (old - old_mean));
+                self.feature_m2s[i] = (self.feature_m2s[i] + delta_m2).max(0.0);
+                self.feature_windows[i][head] = val;
+                let next_head = (head + 1) % 1000;
+                self.feature_heads[i] = next_head;
+
+                // Long-term numerical stability: re-center mean and M2 every full buffer cycle
+                if next_head == 0 {
+                    let mut m = 0.0;
+                    let mut m2 = 0.0;
+                    for (idx, &x) in self.feature_windows[i].iter().enumerate() {
+                        let k = (idx + 1) as f64;
+                        let d1 = x - m;
+                        m += d1 / k;
+                        let d2 = x - m;
+                        m2 += d1 * d2;
+                    }
+                    self.feature_means[i] = m;
+                    self.feature_m2s[i] = m2.max(0.0);
                 }
             }
-            window.push_front(val);
-            self.feature_sums[i] += val;
-            self.feature_sum_sqs[i] += val * val;
 
-            let count = window.len() as f64;
-            let mean = self.feature_sums[i] / count;
-            let variance = (self.feature_sum_sqs[i] / count - mean * mean).max(0.0);
+            let count_f = self.feature_lens[i] as f64;
+            let variance = if count_f > 1.0 {
+                self.feature_m2s[i] / (count_f - 1.0)
+            } else {
+                0.0
+            };
             let std_dev = variance.sqrt();
-            let z = (val - mean) / (std_dev + 1e-8);
+            let z = if self.feature_lens[i] < 5 || std_dev < 1e-6 {
+                0.0
+            } else {
+                (val - self.feature_means[i]) / (std_dev + 1e-8)
+            };
 
             // DEF-R2: Store signed z-scores (NOT absolute z-scores)
             if i == 8 { obi_z = z; }
@@ -405,7 +454,8 @@ impl StreamingFeaturePipeline {
             if i == 27 { hawkes_z = z; }
             if i == 2 { micro_z = z; }
 
-            norm_features[i] = (z / 3.0).tanh();
+            // Continuous SOTA Hyperbolic Tangent Normalization strictly bounded in (-1.0, 1.0)
+            norm_features[i] = z.tanh();
         }
 
         let signed_z = SignedZScores {
@@ -426,6 +476,7 @@ impl StreamingFeaturePipeline {
 pub struct AssetTelemetryTracker {
     pub last_mid_price: AtomicU64,
     pub last_prediction_dir: AtomicU64,
+    pub last_inference_ns: AtomicU64,
     pub horizon_5s: Mutex<VecDeque<(u64, f64, f64)>>,   // (timestamp_ns, mid_price, prediction) - 5s Micro-Scalp
     pub horizon_60s: Mutex<VecDeque<(u64, f64, f64)>>,  // (timestamp_ns, mid_price, prediction) - 60s Tactical Alpha
     pub horizon_300s: Mutex<VecDeque<(u64, f64, f64)>>, // (timestamp_ns, mid_price, prediction) - 300s Macro-Regime
@@ -437,6 +488,7 @@ impl AssetTelemetryTracker {
         Self {
             last_mid_price: AtomicU64::new(0.0f64.to_bits()),
             last_prediction_dir: AtomicU64::new(0.0f64.to_bits()),
+            last_inference_ns: AtomicU64::new(0),
             horizon_5s: Mutex::new(VecDeque::with_capacity(3_600)),
             horizon_60s: Mutex::new(VecDeque::with_capacity(18_000)),
             horizon_300s: Mutex::new(VecDeque::with_capacity(36_000)),
@@ -567,123 +619,121 @@ impl AIEngine {
         let lat_us_val = sab.load_f64_asset(asset_idx, 98) * 1000.0;
 
         // Auto-expand feature pipelines dynamically if asset_idx exceeds current capacity
-        {
-            let pipelines = self.feature_pipelines.read().unwrap_or_else(|e| e.into_inner());
-            if asset_idx >= pipelines.len() {
-                drop(pipelines);
-                let mut pipelines_mut = self.feature_pipelines.write().unwrap_or_else(|e| e.into_inner());
-                while pipelines_mut.len() <= asset_idx {
-                    pipelines_mut.push(Mutex::new(StreamingFeaturePipeline::new()));
-                }
+        if asset_idx >= self.feature_pipelines.read().unwrap_or_else(|e| e.into_inner()).len() {
+            let mut pipelines_mut = self.feature_pipelines.write().unwrap_or_else(|e| e.into_inner());
+            while pipelines_mut.len() <= asset_idx {
+                pipelines_mut.push(Mutex::new(StreamingFeaturePipeline::new()));
             }
         }
 
         // Auto-expand asset trackers dynamically if asset_idx exceeds current capacity
-        {
-            let trackers = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
-            if asset_idx >= trackers.len() {
-                drop(trackers);
-                let mut trackers_mut = self.asset_trackers.write().unwrap_or_else(|e| e.into_inner());
-                while trackers_mut.len() <= asset_idx {
-                    trackers_mut.push(AssetTelemetryTracker::new());
+        if asset_idx >= self.asset_trackers.read().unwrap_or_else(|e| e.into_inner()).len() {
+            let mut trackers_mut = self.asset_trackers.write().unwrap_or_else(|e| e.into_inner());
+            while trackers_mut.len() <= asset_idx {
+                trackers_mut.push(AssetTelemetryTracker::new());
+            }
+        }
+
+        let pipelines_guard = self.feature_pipelines.read().unwrap_or_else(|e| e.into_inner());
+        let (lob_features, signed_z) = {
+            let mut pipeline = pipelines_guard[asset_idx].lock().unwrap_or_else(|e| e.into_inner());
+            pipeline.update_and_normalize_with_snr_asset(sab, lat_us_val, asset_idx)?
+        };
+
+        let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
+        let tracker = &trackers_guard[asset_idx];
+
+        // SOTA Triple-Horizon Orthogonal Tensor Evaluation (5s, 60s, 300s) (DEF-3002):
+        let gk_vol = sab.load_f64_asset(asset_idx, 121).max(0.0005);
+        let mut popped_obs: [(f64, f64, f64); 30] = [(0.0, 0.0, 0.0); 30];
+        let mut num_popped = 0;
+
+        // 1. Micro-Scalp Horizon: 5.0s (5_000_000_000 ns)
+        if let Ok(mut hist) = tracker.horizon_5s.lock() {
+            let horizon_ns = 5_000_000_000u64;
+            let vol_5s = gk_vol * 1.0;
+            let mut count = 0;
+            while let Some(front) = hist.front() {
+                if start_ns.saturating_sub(front.0) >= horizon_ns {
+                    if let Some((_, hist_mid, hist_pred)) = hist.pop_front() {
+                        if hist_mid > 0.0 && current_mid > 0.0 && hist_pred != 0.0 && num_popped < 30 {
+                            let ret = (current_mid - hist_mid) / hist_mid;
+                            let target = (ret / (2.0 * vol_5s + 1e-6)).tanh();
+                            let residual = target - hist_pred;
+                            popped_obs[num_popped] = (hist_pred, ret, residual);
+                            num_popped += 1;
+                        }
+                    }
+                    count += 1;
+                    if count >= 10 {
+                        break;
+                    }
+                } else {
+                    break;
                 }
             }
         }
 
-        let (lob_features, signed_z) = {
-            let pipelines = self.feature_pipelines.read().unwrap_or_else(|e| e.into_inner());
-            let mut pipeline = pipelines[asset_idx].lock().unwrap_or_else(|e| e.into_inner());
-            pipeline.update_and_normalize_with_snr_asset(sab, lat_us_val, asset_idx)?
-        };
-
-        // SOTA Triple-Horizon Orthogonal Tensor Evaluation (5s, 60s, 300s) (DEF-3002):
-        let gk_vol = sab.load_f64_asset(asset_idx, 121).max(0.0005);
-        let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
-        if asset_idx < trackers_guard.len() {
-            let tracker = &trackers_guard[asset_idx];
-
-            // 1. Micro-Scalp Horizon: 5.0s (5_000_000_000 ns)
-            if let Ok(mut hist) = tracker.horizon_5s.lock() {
-                let horizon_ns = 5_000_000_000u64;
-                let vol_5s = gk_vol * 1.0;
-                let mut count = 0;
-                while let Some(front) = hist.front() {
-                    if start_ns.saturating_sub(front.0) >= horizon_ns {
-                        if let Some((_, hist_mid, hist_pred)) = hist.pop_front() {
-                            if hist_mid > 0.0 && current_mid > 0.0 && hist_pred != 0.0 {
-                                let ret = (current_mid - hist_mid) / hist_mid;
-                                let target = (ret / (2.0 * vol_5s + 1e-6)).tanh();
-                                let residual = target - hist_pred;
-                                if let Ok(mut ic_guard) = self.ic_tracker.lock() {
-                                    ic_guard.add_observation_asset(hist_pred, ret, Some(sab), asset_idx);
-                                    ic_guard.update_cusum_residual(residual, start_ns, Some(sab), asset_idx);
-                                }
-                            }
+        // 2. Tactical Alpha Horizon: 60.0s (60_000_000_000 ns)
+        if let Ok(mut hist) = tracker.horizon_60s.lock() {
+            let horizon_ns = 60_000_000_000u64;
+            let vol_60s = gk_vol * (60.0f64 / 5.0).sqrt();
+            let mut count = 0;
+            while let Some(front) = hist.front() {
+                if start_ns.saturating_sub(front.0) >= horizon_ns {
+                    if let Some((_, hist_mid, hist_pred)) = hist.pop_front() {
+                        if hist_mid > 0.0 && current_mid > 0.0 && hist_pred != 0.0 && num_popped < 30 {
+                            let ret = (current_mid - hist_mid) / hist_mid;
+                            let target = (ret / (2.0 * vol_60s + 1e-6)).tanh();
+                            let residual = target - hist_pred;
+                            popped_obs[num_popped] = (hist_pred, ret, residual);
+                            num_popped += 1;
                         }
-                        count += 1;
-                        if count >= 10 {
-                            break;
-                        }
-                    } else {
+                    }
+                    count += 1;
+                    if count >= 10 {
                         break;
                     }
+                } else {
+                    break;
                 }
             }
+        }
 
-            // 2. Tactical Alpha Horizon: 60.0s (60_000_000_000 ns)
-            if let Ok(mut hist) = tracker.horizon_60s.lock() {
-                let horizon_ns = 60_000_000_000u64;
-                let vol_60s = gk_vol * (60.0f64 / 5.0).sqrt();
-                let mut count = 0;
-                while let Some(front) = hist.front() {
-                    if start_ns.saturating_sub(front.0) >= horizon_ns {
-                        if let Some((_, hist_mid, hist_pred)) = hist.pop_front() {
-                            if hist_mid > 0.0 && current_mid > 0.0 && hist_pred != 0.0 {
-                                let ret = (current_mid - hist_mid) / hist_mid;
-                                let target = (ret / (2.0 * vol_60s + 1e-6)).tanh();
-                                let residual = target - hist_pred;
-                                if let Ok(mut ic_guard) = self.ic_tracker.lock() {
-                                    ic_guard.add_observation_asset(hist_pred, ret, Some(sab), asset_idx);
-                                    ic_guard.update_cusum_residual(residual, start_ns, Some(sab), asset_idx);
-                                }
-                            }
+        // 3. Macro-Regime Horizon: 300.0s (300_000_000_000 ns)
+        if let Ok(mut hist) = tracker.horizon_300s.lock() {
+            let horizon_ns = 300_000_000_000u64;
+            let vol_300s = gk_vol * (300.0f64 / 5.0).sqrt();
+            let mut count = 0;
+            while let Some(front) = hist.front() {
+                if start_ns.saturating_sub(front.0) >= horizon_ns {
+                    if let Some((_, hist_mid, hist_pred)) = hist.pop_front() {
+                        if hist_mid > 0.0 && current_mid > 0.0 && hist_pred != 0.0 && num_popped < 30 {
+                            let ret = (current_mid - hist_mid) / hist_mid;
+                            let target = (ret / (2.0 * vol_300s + 1e-6)).tanh();
+                            let residual = target - hist_pred;
+                            popped_obs[num_popped] = (hist_pred, ret, residual);
+                            num_popped += 1;
                         }
-                        count += 1;
-                        if count >= 10 {
-                            break;
-                        }
-                    } else {
+                    }
+                    count += 1;
+                    if count >= 10 {
                         break;
                     }
+                } else {
+                    break;
                 }
             }
+        }
 
-            // 3. Macro-Regime Horizon: 300.0s (300_000_000_000 ns)
-            if let Ok(mut hist) = tracker.horizon_300s.lock() {
-                let horizon_ns = 300_000_000_000u64;
-                let vol_300s = gk_vol * (300.0f64 / 5.0).sqrt();
-                let mut count = 0;
-                while let Some(front) = hist.front() {
-                    if start_ns.saturating_sub(front.0) >= horizon_ns {
-                        if let Some((_, hist_mid, hist_pred)) = hist.pop_front() {
-                            if hist_mid > 0.0 && current_mid > 0.0 && hist_pred != 0.0 {
-                                let ret = (current_mid - hist_mid) / hist_mid;
-                                let target = (ret / (2.0 * vol_300s + 1e-6)).tanh();
-                                let residual = target - hist_pred;
-                                if let Ok(mut ic_guard) = self.ic_tracker.lock() {
-                                    ic_guard.add_observation_asset(hist_pred, ret, Some(sab), asset_idx);
-                                    ic_guard.update_cusum_residual(residual, start_ns, Some(sab), asset_idx);
-                                }
-                            }
-                        }
-                        count += 1;
-                        if count >= 10 {
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
+        // Throttled Spearman IC recomputation in background / low frequency
+        if num_popped > 0 {
+            if let Ok(mut ic_guard) = self.ic_tracker.lock() {
+                for i in 0..num_popped {
+                    let (pred, ret, res) = popped_obs[i];
+                    ic_guard.push_observation_fast(pred, ret, res, start_ns);
                 }
+                ic_guard.maybe_recompute_spearman(Some(sab), asset_idx, start_ns);
             }
         }
 
@@ -691,22 +741,20 @@ impl AIEngine {
         let tkan_f32: [f32; 16] = std::array::from_fn(|i| tkan_out[i] as f32);
         let tkan_tensor = Tensor::from_slice(&tkan_f32, (1, 16), &Device::Cpu)?;
 
-        let prev_ns = self.last_inference_ns.swap(start_ns, Ordering::Relaxed);
+        // Isolated per-asset delta-time integration
+        let prev_ns = tracker.last_inference_ns.swap(start_ns, Ordering::Relaxed);
+        self.last_inference_ns.store(start_ns, Ordering::Relaxed);
         let delta_t = if prev_ns == 0 {
             0.001
         } else {
-            ((start_ns.saturating_sub(prev_ns) as f64) / 1e9).max(0.0001)
+            ((start_ns.saturating_sub(prev_ns) as f64) / 1e9).clamp(0.0001, 10.0)
         };
 
         // Auto-expand hidden states dynamically if asset_idx exceeds current capacity
-        {
-            let hs_read = self.hidden_states.read().unwrap_or_else(|e| e.into_inner());
-            if asset_idx >= hs_read.len() {
-                drop(hs_read);
-                let mut hs_write = self.hidden_states.write().unwrap_or_else(|e| e.into_inner());
-                while hs_write.len() <= asset_idx {
-                    hs_write.push(Mutex::new(Tensor::zeros((1, 32), DType::F32, &Device::Cpu).unwrap()));
-                }
+        if asset_idx >= self.hidden_states.read().unwrap_or_else(|e| e.into_inner()).len() {
+            let mut hs_write = self.hidden_states.write().unwrap_or_else(|e| e.into_inner());
+            while hs_write.len() <= asset_idx {
+                hs_write.push(Mutex::new(Tensor::zeros((1, 32), DType::F32, &Device::Cpu).unwrap()));
             }
         }
 
@@ -717,8 +765,6 @@ impl AIEngine {
             if hidden_guard.dims() != &[1, mamba.d_inner, mamba.d_state] {
                 *hidden_guard = Tensor::zeros((1, mamba.d_inner, mamba.d_state), DType::F32, &Device::Cpu)?;
             }
-            let (heads, next_h) = mamba.forward(&tkan_tensor, &*hidden_guard, delta_t)?;
-            *hidden_guard = next_h;
 
             let gk_vol = sab.load_f64_asset(asset_idx, 121).max(0.0);
             let sab_temp = sab.load_f64_asset(asset_idx, 127);
@@ -732,7 +778,9 @@ impl AIEngine {
             let ofi = sab.load_f64_asset(asset_idx, 138);
             let hawkes_asym = sab.load_f64_asset(asset_idx, 149);
 
-            let (dir_raw, _p_win, horiz_sec) = mamba.evaluate_scalar_heads_with_temp(&heads, temp)?;
+            let ((dir_raw, _p_win, horiz_sec), next_h) = mamba.forward_and_evaluate(&tkan_tensor, &*hidden_guard, delta_t, temp)?;
+            *hidden_guard = next_h;
+
             // DEF-R1: Balanced microstructure logit modulation & SINGLE outer tanh WITHOUT temperature divisor
             let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
             let dir = composite_logit.tanh().clamp(-1.0, 1.0);
@@ -742,8 +790,7 @@ impl AIEngine {
             let snr_score = signed_z.compute_sdci(dir_raw);
 
             // DEF-R3: Online Adaptive Quantile Calibration
-            let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
-            let mut conv_hist = trackers_guard[asset_idx].conviction_history.lock().unwrap_or_else(|e| e.into_inner());
+            let mut conv_hist = tracker.conviction_history.lock().unwrap_or_else(|e| e.into_inner());
 
             let conf = compute_calibrated_confidence(
                 direction_magnitude,
@@ -780,8 +827,7 @@ impl AIEngine {
 
             let snr_score = signed_z.compute_sdci(raw_direction);
 
-            let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
-            let mut conv_hist = trackers_guard[asset_idx].conviction_history.lock().unwrap_or_else(|e| e.into_inner());
+            let mut conv_hist = tracker.conviction_history.lock().unwrap_or_else(|e| e.into_inner());
 
             let conf = compute_calibrated_confidence(
                 direction_magnitude,
@@ -811,42 +857,24 @@ impl AIEngine {
         let slippage_ticks = (2.0 + (spread_vel.abs() / 0.5).floor()).min(20.0);
 
         // Store intra-asset telemetry and push prediction to horizon history buffer
-        {
-            let trackers = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
-            let trackers_ref = if asset_idx < trackers.len() {
-                trackers
-            } else {
-                drop(trackers);
-                {
-                    let mut trackers_mut = self.asset_trackers.write().unwrap_or_else(|e| e.into_inner());
-                    while trackers_mut.len() <= asset_idx {
-                        trackers_mut.push(AssetTelemetryTracker::new());
-                    }
-                }
-                self.asset_trackers.read().unwrap_or_else(|e| e.into_inner())
-            };
-
-            if let Some(tracker) = trackers_ref.get(asset_idx) {
-                tracker.last_mid_price.store(current_mid.to_bits(), Ordering::Relaxed);
-                tracker.last_prediction_dir.store(direction.to_bits(), Ordering::Relaxed);
-                if let Ok(mut hist) = tracker.horizon_5s.lock() {
-                    hist.push_back((start_ns, current_mid, direction));
-                    if hist.len() > 3_600 {
-                        hist.pop_front();
-                    }
-                }
-                if let Ok(mut hist) = tracker.horizon_60s.lock() {
-                    hist.push_back((start_ns, current_mid, direction));
-                    if hist.len() > 18_000 {
-                        hist.pop_front();
-                    }
-                }
-                if let Ok(mut hist) = tracker.horizon_300s.lock() {
-                    hist.push_back((start_ns, current_mid, direction));
-                    if hist.len() > 36_000 {
-                        hist.pop_front();
-                    }
-                }
+        tracker.last_mid_price.store(current_mid.to_bits(), Ordering::Relaxed);
+        tracker.last_prediction_dir.store(direction.to_bits(), Ordering::Relaxed);
+        if let Ok(mut hist) = tracker.horizon_5s.lock() {
+            hist.push_back((start_ns, current_mid, direction));
+            if hist.len() > 3_600 {
+                hist.pop_front();
+            }
+        }
+        if let Ok(mut hist) = tracker.horizon_60s.lock() {
+            hist.push_back((start_ns, current_mid, direction));
+            if hist.len() > 18_000 {
+                hist.pop_front();
+            }
+        }
+        if let Ok(mut hist) = tracker.horizon_300s.lock() {
+            hist.push_back((start_ns, current_mid, direction));
+            if hist.len() > 36_000 {
+                hist.pop_front();
             }
         }
 
@@ -1059,6 +1087,61 @@ impl AIEngine {
             }
         }
     }
+
+    /// RCU Telemetry & History Inheritance: Preserves conviction history, horizons, and feature statistics across hot-swaps
+    pub fn inherit_telemetry_history(&self, other: &AIEngine) {
+        let other_guard = other.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
+        let mut self_guard = self.asset_trackers.write().unwrap_or_else(|e| e.into_inner());
+        while self_guard.len() < other_guard.len() {
+            self_guard.push(AssetTelemetryTracker::new());
+        }
+        for (i, other_tracker) in other_guard.iter().enumerate() {
+            if let Some(self_tracker) = self_guard.get(i) {
+                if let Ok(other_conv) = other_tracker.conviction_history.lock() {
+                    if let Ok(mut self_conv) = self_tracker.conviction_history.lock() {
+                        *self_conv = other_conv.clone();
+                    }
+                }
+                if let Ok(other_5s) = other_tracker.horizon_5s.lock() {
+                    if let Ok(mut self_5s) = self_tracker.horizon_5s.lock() {
+                        *self_5s = other_5s.clone();
+                    }
+                }
+                if let Ok(other_60s) = other_tracker.horizon_60s.lock() {
+                    if let Ok(mut self_60s) = self_tracker.horizon_60s.lock() {
+                        *self_60s = other_60s.clone();
+                    }
+                }
+                if let Ok(other_300s) = other_tracker.horizon_300s.lock() {
+                    if let Ok(mut self_300s) = self_tracker.horizon_300s.lock() {
+                        *self_300s = other_300s.clone();
+                    }
+                }
+                self_tracker.last_mid_price.store(other_tracker.last_mid_price.load(Ordering::Relaxed), Ordering::Relaxed);
+                self_tracker.last_prediction_dir.store(other_tracker.last_prediction_dir.load(Ordering::Relaxed), Ordering::Relaxed);
+                self_tracker.last_inference_ns.store(other_tracker.last_inference_ns.load(Ordering::Relaxed), Ordering::Relaxed);
+            }
+        }
+
+        let other_pipes = other.feature_pipelines.read().unwrap_or_else(|e| e.into_inner());
+        let mut self_pipes = self.feature_pipelines.write().unwrap_or_else(|e| e.into_inner());
+        while self_pipes.len() < other_pipes.len() {
+            self_pipes.push(Mutex::new(StreamingFeaturePipeline::new()));
+        }
+        for (i, other_pipe_mutex) in other_pipes.iter().enumerate() {
+            if let Ok(other_pipe) = other_pipe_mutex.lock() {
+                if let Ok(mut self_pipe) = self_pipes[i].lock() {
+                    *self_pipe = other_pipe.clone();
+                }
+            }
+        }
+
+        if let Ok(other_ic) = other.ic_tracker.lock() {
+            if let Ok(mut self_ic) = self.ic_tracker.lock() {
+                *self_ic = other_ic.clone();
+            }
+        }
+    }
 }
 
 /// Dual-Regime Information-Theoretic Volatility Scaling
@@ -1070,7 +1153,7 @@ pub fn compute_dual_regime_volatility_multiplier(gk_vol: f64) -> f64 {
     (psi_high * psi_low).clamp(0.30, 1.00)
 }
 
-/// Decoupled Isotonic Platt-Calibrated Confidence Formulation with Online Quantile Calibration (DEF-R3)
+/// Continuous Bayesian Sample-Weighted Warmup & Platt-Calibrated Confidence Formulation (DEF-R3 SOTA)
 #[inline(always)]
 pub fn compute_calibrated_confidence(
     direction_magnitude: f64,
@@ -1092,14 +1175,14 @@ pub fn compute_calibrated_confidence(
     }
     conviction_history.push_front(effective_conviction);
 
-    // Warm-up: During the first 200 ticks (before sufficient history), output a conservative 0.50 confidence (no edge claimed).
-    if conviction_history.len() < 200 {
+    let n = conviction_history.len();
+    if n == 0 {
         return 0.50;
     }
 
     // Compute empirical percentile rank (O(n) where n <= 2000, ~2-4 µs)
     let count_below = conviction_history.iter().filter(|&&v| v <= effective_conviction).count();
-    let percentile = count_below as f64 / conviction_history.len() as f64;
+    let percentile = count_below as f64 / n as f64;
 
     let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
     let obi_align = obi * direction_sign;
@@ -1108,7 +1191,12 @@ pub fn compute_calibrated_confidence(
     let s = scale.clamp(0.5, 3.0);
     // Center at 50th percentile — INVARIANT
     let calibrated_logit: f64 = (s * (percentile - 0.50) * 2.0 + obi_align * 0.20 + offset) / t;
-    1.0f64 / (1.0f64 + (-calibrated_logit).exp())
+    let conf_calib = 1.0f64 / (1.0f64 + (-calibrated_logit).exp());
+
+    // Continuous Bayesian Sample-Weighted Warmup:
+    // w = min(1.0, N / 30.0). No discontinuous step function!
+    let w = (n as f64 / 30.0).min(1.0);
+    0.50 * (1.0 - w) + conf_calib * w
 }
 
 impl Default for AIEngine {
@@ -1275,6 +1363,37 @@ mod tests {
     }
 
     #[test]
+    fn test_inference_latency_benchmark() {
+        let engine = AIEngine::load_from_paths("./models/cfc_weights.safetensors", "./models/tkan_luts.bin");
+        if !engine.is_calibrated() {
+            println!("Engine not calibrated; skipping physical benchmark");
+            return;
+        }
+        let mut buffer = vec![0u8; 4096];
+        let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len()).unwrap();
+        bridge.store_f64(4, 50000.0);
+        bridge.store_f64(5, 1.5);
+        bridge.store_f64(6, 50001.0);
+        bridge.store_f64(7, 2.5);
+
+        // Warmup 50 iterations
+        for _ in 0..50 {
+            let _ = engine.run_inference(&bridge);
+        }
+
+        // Measure 1000 iterations
+        let n_runs = 1000;
+        let start = std::time::Instant::now();
+        for _ in 0..n_runs {
+            let _ = engine.run_inference(&bridge);
+        }
+        let elapsed = start.elapsed();
+        let avg_us = elapsed.as_micros() as f64 / n_runs as f64;
+        println!("[BENCHMARK] Total for {} inferences: {:?}, Mean per inference: {:.2} µs", n_runs, elapsed, avg_us);
+        assert!(avg_us < 200.0, "Physical inference latency must be < 200 µs, got {:.2} µs", avg_us);
+    }
+
+    #[test]
     fn test_sdci_chop_produces_low_score() {
         // In chop / discordance: AI predicted BUY (dir_raw > 0), but order flow is bearish
         let z_discordant = SignedZScores {
@@ -1319,25 +1438,100 @@ mod tests {
     }
 
     #[test]
-    fn test_quantile_calibration_warm_up_returns_0_50() {
+    fn test_continuous_bayesian_calibration_warmup() {
         let mut conv_hist = VecDeque::with_capacity(2000);
 
-        // Warm-up period (< 200 ticks) must return 0.50 unconditionally
-        for i in 0..199 {
-            let conf = compute_calibrated_confidence(
-                0.80,
-                1.20,
-                0.001,
-                0.50,
-                1.0,
-                1.0,
-                1.0,
-                0.0,
-                &mut conv_hist,
+        // Empty history test
+        assert_eq!(conv_hist.len(), 0);
+
+        // Warm-up is continuous Bayesian: at low sample counts, confidence is regularized toward 0.50
+        // At N = 1, it smoothly incorporates evidence without step-function lockups
+        let conf_1 = compute_calibrated_confidence(
+            0.80, 1.20, 0.001, 0.50, 1.0, 1.0, 1.0, 0.0, &mut conv_hist,
+        );
+        assert!(conf_1 > 0.50 && conf_1 < 0.60, "Tick 1 must have smooth Bayesian shrinkage, got {}", conf_1);
+
+        // Populate up to 30 ticks
+        for _ in 1..30 {
+            let _ = compute_calibrated_confidence(
+                0.80, 1.20, 0.001, 0.50, 1.0, 1.0, 1.0, 0.0, &mut conv_hist,
             );
-            assert_eq!(conf, 0.50, "Tick {} during warm-up must return 0.50, got {}", i, conf);
         }
-        assert_eq!(conv_hist.len(), 199);
+        assert_eq!(conv_hist.len(), 30);
+
+        // At N >= 30, weight reaches 1.0 (fully calibrated)
+        let conf_30 = compute_calibrated_confidence(
+            0.80, 1.20, 0.001, 0.50, 1.0, 1.0, 1.0, 0.0, &mut conv_hist,
+        );
+        assert!(conf_30 > 0.65, "At N >= 30, calibration is fully active, got {}", conf_30);
+    }
+
+    #[test]
+    fn test_rcu_telemetry_history_inheritance() {
+        let engine_old = AIEngine::new();
+        // Seed engine_old with telemetry data
+        {
+            let trackers = engine_old.asset_trackers.read().unwrap();
+            let mut conv = trackers[0].conviction_history.lock().unwrap();
+            conv.push_back(0.75);
+            conv.push_back(0.82);
+            let mut h5 = trackers[0].horizon_5s.lock().unwrap();
+            h5.push_back((1000, 50000.0, 0.5));
+            trackers[0].last_mid_price.store(50000.0f64.to_bits(), Ordering::Relaxed);
+        }
+
+        let engine_new = AIEngine::new();
+        engine_new.inherit_telemetry_history(&engine_old);
+
+        // Verify telemetry was inherited perfectly
+        {
+            let trackers_new = engine_new.asset_trackers.read().unwrap();
+            let conv_new = trackers_new[0].conviction_history.lock().unwrap();
+            assert_eq!(conv_new.len(), 2);
+            assert_eq!(conv_new[0], 0.75);
+            assert_eq!(conv_new[1], 0.82);
+
+            let h5_new = trackers_new[0].horizon_5s.lock().unwrap();
+            assert_eq!(h5_new.len(), 1);
+            assert_eq!(h5_new[0].1, 50000.0);
+
+            assert_eq!(
+                f64::from_bits(trackers_new[0].last_mid_price.load(Ordering::Relaxed)),
+                50000.0
+            );
+        }
+    }
+
+    #[test]
+    fn test_feature_normalization_bounds_and_logits() {
+        let mut buffer = vec![0u8; 2048];
+        let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len()).unwrap();
+        // Set extreme values into SAB
+        bridge.store_f64(4, 1_000_000.0);
+        bridge.store_f64(6, 1_000_001.0);
+        bridge.store_f64(3, 999999.0);
+        bridge.store_f64(1, 1.0);
+        bridge.store_f64(98, 99999.0);
+
+        let mut pipeline = StreamingFeaturePipeline::new();
+        // Feed 100 ticks of extreme inputs
+        for _ in 0..100 {
+            let (feats, _) = pipeline.update_and_normalize_with_snr_asset(&bridge, 1450.0, 0).unwrap();
+            for (idx, &f) in feats.iter().enumerate() {
+                assert!(
+                    f > -1.0 && f < 1.0,
+                    "Feature {} escaped tanh bound: {}",
+                    idx,
+                    f
+                );
+                assert!(
+                    f >= -0.999 && f <= 0.999,
+                    "Feature {} exceeded soft-clip limit: {}",
+                    idx,
+                    f
+                );
+            }
+        }
     }
 
     #[test]

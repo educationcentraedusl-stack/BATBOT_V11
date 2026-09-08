@@ -135,10 +135,12 @@ export class StrategyEngine {
   // DEF-R5 & DEF-R6: Online Lo-MacKinlay Variance Ratio Regime Classifier
   private vrClassifier: OnlineVarianceRatioClassifier = new OnlineVarianceRatioClassifier();
 
-  // DEF-R7: 3-State Hysteresis CUSUM-SPRT IC Kill Switch
+  // DEF-R7 & SOTA: 3-State Hysteresis CUSUM-SPRT IC Kill Switch with High-Alpha Fast Unlatch
   public icState: "ALPHA_ACTIVE" | "DEGRADED" | "MODEL_BROKEN" = "ALPHA_ACTIVE";
   private icStateEnteredAt: number = 0;
   private icConditionMetSince: number = 0;
+  private icEvidenceScore: number = 1.0;
+  private lastKnownHotswapEpoch: number = -1;
 
   // DEF-R8: Composite Leading Confirmation Index (Microprice + OBI Velocity/Accel)
   private prevOBI: number = 0;
@@ -352,19 +354,44 @@ export class StrategyEngine {
   }
 
   /**
-   * SOTA 3-State Hysteresis CUSUM-SPRT IC Kill Switch (DEF-R7)
-   * 
-   * Transition State Machine:
-   * - ALPHA_ACTIVE: Full entries allowed. Transition to DEGRADED if IC < 0.01 for >= 30s.
-   *   Immediate trip to MODEL_BROKEN if IC <= -0.02 or CUSUM drift flag is active.
+   * DEF-R7 & SOTA Anomaly Resolution:
+   * 3-State Hysteresis CUSUM-SPRT IC Kill Switch with High-Alpha Fast-Path Unlatch & Leaky-Bucket Accumulator
+   *
+   * - Fast-Path SPRT Unlatch:
+   *   If safeIC >= 0.10 and not driftFlagged, immediately unlatch to ALPHA_ACTIVE (no timer delay).
+   * - Leaky-Bucket Continuous Evidence Accumulator:
+   *   Smoothly accumulates evidence E_t = lambda * E_{t-1} + (1 - lambda) * (isGoodTick ? 1.0 : 0.0)
+   *   Eradicates fragile timer wipe on single transient noise ticks.
+   * - ALPHA_ACTIVE: Normal entries (1.0x sizing).
+   *   Transition to MODEL_BROKEN if isDriftFlagged or safeIC <= -0.02.
+   *   Transition to DEGRADED if safeIC < 0.01 sustained for >= 30s.
    * - DEGRADED: Reduced entries (aiConfidence >= 0.80 only, 0.50x sizing).
-   *   Transition to MODEL_BROKEN if IC <= -0.02 or CUSUM drift flag is active.
-   *   Recovery to ALPHA_ACTIVE if IC >= 0.03 sustained for >= 60s without drift.
+   *   Transition to MODEL_BROKEN if safeIC <= -0.02 or CUSUM drift flag is active.
+   *   Recovery to ALPHA_ACTIVE if safeIC >= 0.03 sustained for >= 60s without drift or evidence >= 0.95.
    * - MODEL_BROKEN: ALL entries blocked (0.0x sizing).
-   *   Recovery to DEGRADED if IC >= 0.01 sustained for >= 120s without drift.
+   *   Recovery to DEGRADED if safeIC >= 0.01 sustained for >= 30s without drift or evidence >= 0.90.
    */
   public updateICKillSwitchState(ewmaIC: number, isDriftFlagged: boolean, nowMs: number): void {
     const safeIC = Number.isFinite(ewmaIC) ? ewmaIC : 0.0;
+
+    // 1. SOTA Fast-Path SPRT Unlatch: High-conviction alpha (IC >= 0.10) with no structural drift immediately unlatches
+    if (safeIC >= 0.10 && !isDriftFlagged) {
+      if (this.icState !== "ALPHA_ACTIVE") {
+        console.log(
+          `[StrategyEngine][${this.config.symbol}][SPRT_FAST_UNLATCH] High-Conviction Alpha detected (IC: ${safeIC.toFixed(4)} >= 0.10, Drift: false). Instant unlatch from ${this.icState} -> ALPHA_ACTIVE.`
+        );
+        this.icState = "ALPHA_ACTIVE";
+        this.icStateEnteredAt = nowMs;
+        this.icConditionMetSince = 0;
+        this.icEvidenceScore = 1.0;
+      }
+      return;
+    }
+
+    // 2. Continuous Leaky-Bucket Evidence Accumulation (lambda = 0.995 ~ 200 ticks half-life)
+    const isGoodTick = safeIC >= 0.01 && !isDriftFlagged;
+    const lambda = 0.995;
+    this.icEvidenceScore = lambda * this.icEvidenceScore + (1.0 - lambda) * (isGoodTick ? 1.0 : 0.0);
 
     switch (this.icState) {
       case "ALPHA_ACTIVE": {
@@ -372,6 +399,7 @@ export class StrategyEngine {
           this.icState = "MODEL_BROKEN";
           this.icStateEnteredAt = nowMs;
           this.icConditionMetSince = 0;
+          this.icEvidenceScore = 0.0;
           console.warn(
             `[StrategyEngine][${this.config.symbol}][IC_KILL_SWITCH] Transition: ALPHA_ACTIVE -> MODEL_BROKEN | ` +
             `IC: ${safeIC.toFixed(4)}, Drift: ${isDriftFlagged}`
@@ -399,6 +427,7 @@ export class StrategyEngine {
           this.icState = "MODEL_BROKEN";
           this.icStateEnteredAt = nowMs;
           this.icConditionMetSince = 0;
+          this.icEvidenceScore = 0.0;
           console.warn(
             `[StrategyEngine][${this.config.symbol}][IC_KILL_SWITCH] Transition: DEGRADED -> MODEL_BROKEN | ` +
             `IC: ${safeIC.toFixed(4)}, Drift: ${isDriftFlagged}`
@@ -406,16 +435,16 @@ export class StrategyEngine {
         } else if (safeIC >= 0.03 && !isDriftFlagged) {
           if (this.icConditionMetSince === 0) {
             this.icConditionMetSince = nowMs;
-          } else if (nowMs - this.icConditionMetSince >= 60000) {
+          } else if (nowMs - this.icConditionMetSince >= 60000 || this.icEvidenceScore >= 0.95) {
             this.icState = "ALPHA_ACTIVE";
             this.icStateEnteredAt = nowMs;
             this.icConditionMetSince = 0;
             console.log(
               `[StrategyEngine][${this.config.symbol}][IC_KILL_SWITCH] Transition: DEGRADED -> ALPHA_ACTIVE | ` +
-              `IC: ${safeIC.toFixed(4)} sustained >= 0.03 for >= 60s without drift`
+              `IC: ${safeIC.toFixed(4)} sustained >= 0.03 (Evidence: ${(this.icEvidenceScore * 100).toFixed(1)}%)`
             );
           }
-        } else {
+        } else if (this.icEvidenceScore < 0.50) {
           this.icConditionMetSince = 0;
         }
         break;
@@ -425,16 +454,16 @@ export class StrategyEngine {
         if (safeIC >= 0.01 && !isDriftFlagged) {
           if (this.icConditionMetSince === 0) {
             this.icConditionMetSince = nowMs;
-          } else if (nowMs - this.icConditionMetSince >= 120000) {
+          } else if (nowMs - this.icConditionMetSince >= 30000 || this.icEvidenceScore >= 0.90) {
             this.icState = "DEGRADED";
             this.icStateEnteredAt = nowMs;
             this.icConditionMetSince = 0;
             console.log(
               `[StrategyEngine][${this.config.symbol}][IC_KILL_SWITCH] Transition: MODEL_BROKEN -> DEGRADED | ` +
-              `IC: ${safeIC.toFixed(4)} sustained >= 0.01 for >= 120s without drift`
+              `IC: ${safeIC.toFixed(4)} sustained >= 0.01 (Evidence: ${(this.icEvidenceScore * 100).toFixed(1)}%)`
             );
           }
-        } else {
+        } else if (this.icEvidenceScore < 0.50) {
           this.icConditionMetSince = 0;
         }
         break;
@@ -450,6 +479,14 @@ export class StrategyEngine {
     this.icState = state;
     this.icStateEnteredAt = enteredAt;
     this.icConditionMetSince = 0;
+  }
+
+  public getIcEvidenceScore(): number {
+    return this.icEvidenceScore;
+  }
+
+  public setIcEvidenceScoreForTesting(score: number): void {
+    this.icEvidenceScore = score;
   }
 
   public getVrClassifier(): OnlineVarianceRatioClassifier {
@@ -2687,6 +2724,20 @@ export class StrategyEngine {
         if (this.hedgeLedger.getCoreLong().isOccupied && (!this.hedgeLedger.getCoreLong().quantity || this.hedgeLedger.getCoreLong().quantity <= 0)) {
           this.hedgeLedger.releaseCoreLong();
         }
+      }
+
+      // SOTA Hot-Swap Epoch Handshake: Detect background model reload / promotion and unlatch instantly
+      const currentHotswapEpoch = this.client.getHotswapEpoch(this.assetIndex);
+      if (this.lastKnownHotswapEpoch === -1) {
+        this.lastKnownHotswapEpoch = currentHotswapEpoch;
+      } else if (currentHotswapEpoch > this.lastKnownHotswapEpoch) {
+        this.lastKnownHotswapEpoch = currentHotswapEpoch;
+        this.icState = "ALPHA_ACTIVE";
+        this.icConditionMetSince = 0;
+        this.icEvidenceScore = 1.0;
+        console.log(
+          `[StrategyEngine][${this.config.symbol}][HOTSWAP_UNLATCH] Detected new model epoch #${currentHotswapEpoch}. IC Kill Switch reset to ALPHA_ACTIVE.`
+        );
       }
 
       // DEF-R7 & DEF-3103: Update & Short-Circuit on 3-State Hysteresis CUSUM-SPRT IC Kill Switch

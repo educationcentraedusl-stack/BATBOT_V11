@@ -64,6 +64,10 @@ pub fn create_lob_engine() -> bool {
 pub fn load_ai_model(weights_path: String) -> bool {
     let new_engine = AIEngine::load_from_file(&weights_path);
     let success = new_engine.is_calibrated();
+    if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
+        new_engine.inherit_hidden_state(active_engine);
+        new_engine.inherit_telemetry_history(active_engine);
+    }
     GLOBAL_AI_ENGINE.store(Some(Arc::new(new_engine)));
     println!(
         "[BATBOT_V11][N-API Lock-Free RCU] Atomic load_ai_model trigger for path '{}'. Status: {}.",
@@ -77,6 +81,10 @@ pub fn load_ai_model(weights_path: String) -> bool {
 pub fn load_ai_model_full(weights_path: String, tkan_path: String) -> bool {
     let new_engine = AIEngine::load_from_paths(&weights_path, &tkan_path);
     let success = new_engine.is_calibrated();
+    if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
+        new_engine.inherit_hidden_state(active_engine);
+        new_engine.inherit_telemetry_history(active_engine);
+    }
     GLOBAL_AI_ENGINE.store(Some(Arc::new(new_engine)));
     println!(
         "[BATBOT_V11][N-API Lock-Free RCU] Atomic load_ai_model_full trigger for cfc: '{}', tkan: '{}'. Status: {}.",
@@ -85,6 +93,21 @@ pub fn load_ai_model_full(weights_path: String, tkan_path: String) -> bool {
         if success { "CALIBRATED" } else { "UNCALIBRATED" }
     );
     success
+}
+
+#[napi]
+pub fn bump_hotswap_epoch(sab_buffer: Buffer) -> napi::Result<i64> {
+    let raw_ptr = sab_buffer.as_ptr() as *mut u8;
+    let len = sab_buffer.len();
+    let bridge = AtomicSharedMemoryBridge::new(raw_ptr, len)
+        .map_err(|err| napi::Error::from_reason(err.to_string()))?;
+    let max_assets = bridge.max_assets();
+    let prev = bridge.load_f64_asset(0, 151);
+    let next = prev + 1.0;
+    for i in 0..max_assets {
+        bridge.store_f64_asset(i, 151, next);
+    }
+    Ok(next as i64)
 }
 
 #[napi]

@@ -281,8 +281,12 @@ class MultiAssetStrategyEngine {
             const hedgeLedger = engine?.getHedgeLedger();
             const isCoreLongOccupied = hedgeLedger ? (hedgeLedger.getCoreLong().isOccupied || hedgeLedger.getCoreLong().lifecycleState === "PENDING_ENTRY") : false;
             const isShortOccupied = hedgeLedger ? hedgeLedger.getShortSlots().some(s => s.isOccupied || s.lifecycleState === "PENDING_ENTRY") : false;
+            const vrState = engine?.getVrClassifier().getRegimeState();
             if (isSpreadBlowout) {
                 rejectReason = "REJECTED_SPREAD_BLOWOUT";
+            }
+            else if (vrState === "MEAN_REVERT") {
+                rejectReason = "REJECTED_CHOP_REGIME";
             }
             else if (vpin > 0.75) {
                 rejectReason = "REJECTED_TOXIC_FLOW";

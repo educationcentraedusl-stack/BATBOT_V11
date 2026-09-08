@@ -61,8 +61,15 @@ impl CfCCell {
         let z_diff = (&beta - z_prev)?;
         let z = (&beta - z_diff.mul(&decay_factor)?)?;
 
-        // output = W_out \cdot z + b_out
-        let output = z.matmul(&self.w_output)?.broadcast_add(&self.b_output)?;
+        // SOTA Pre-Head RMSNorm: z_norm = z / sqrt(mean(z^2) + eps)
+        let z_sq = (&z * &z)?;
+        let z_sum = z_sq.sum(1)?.unsqueeze(1)?;
+        let z_mean = (z_sum / (self.hidden_dim as f64))?;
+        let z_rms = (z_mean + 1e-6)?.sqrt()?;
+        let z_norm = z.broadcast_div(&z_rms)?;
+
+        // output = W_out \cdot z_norm + b_out
+        let output = z_norm.matmul(&self.w_output)?.broadcast_add(&self.b_output)?;
 
         Ok((output, z))
     }

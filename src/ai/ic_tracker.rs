@@ -117,6 +117,8 @@ pub struct ICTracker {
     is_drifted: bool,
     alpha: f64,
     pub cusum: CusumDriftDetector,
+    pub obs_since_last_eval: usize,
+    pub last_eval_ts_ns: u64,
 }
 
 impl ICTracker {
@@ -131,6 +133,8 @@ impl ICTracker {
             is_drifted: false,
             alpha: 0.05,
             cusum: CusumDriftDetector::default_hft(),
+            obs_since_last_eval: 0,
+            last_eval_ts_ns: 0,
         }
     }
 
@@ -147,19 +151,54 @@ impl ICTracker {
         self.add_observation_asset(prediction, realized_return, sab, 0)
     }
 
-    /// Add an observation and write IC/drift status to SAB slots 101/102.
-    pub fn add_observation_asset(
+    /// Fast O(1) observation append without computing O(N log N) Spearman rank correlation on hot path
+    pub fn push_observation_fast(
         &mut self,
         prediction: f64,
         realized_return: f64,
-        sab: Option<&AtomicSharedMemoryBridge>,
-        asset_idx: usize,
-    ) -> f64 {
+        residual: f64,
+        current_ts_ns: u64,
+    ) {
         if self.pairs.len() >= self.window_size {
             self.pairs.pop_front();
         }
         self.pairs.push_back((prediction, realized_return));
+        self.obs_since_last_eval += 1;
 
+        let drifted = self.cusum.update(residual, current_ts_ns);
+        if drifted {
+            self.is_drifted = true;
+        } else if !self.cusum.is_drifted && (self.current_ic >= self.adaptive_threshold + 0.01 || self.current_ic >= 0.03) {
+            self.is_drifted = false;
+        }
+    }
+
+    /// Throttled Spearman IC recomputation: evaluates at most once every 100 observations or once per second (1_000_000_000 ns)
+    pub fn maybe_recompute_spearman(
+        &mut self,
+        sab: Option<&AtomicSharedMemoryBridge>,
+        asset_idx: usize,
+        current_ts_ns: u64,
+    ) -> Option<f64> {
+        let elapsed = current_ts_ns.saturating_sub(self.last_eval_ts_ns);
+        if self.last_eval_ts_ns == 0
+            || self.obs_since_last_eval >= 100
+            || (self.obs_since_last_eval > 0 && elapsed >= 1_000_000_000)
+        {
+            self.obs_since_last_eval = 0;
+            self.last_eval_ts_ns = current_ts_ns;
+            Some(self.recompute_spearman_and_broadcast(sab, asset_idx))
+        } else {
+            None
+        }
+    }
+
+    /// Recomputes Spearman IC, updates EWMA, and broadcasts to SAB slots 101/102.
+    pub fn recompute_spearman_and_broadcast(
+        &mut self,
+        sab: Option<&AtomicSharedMemoryBridge>,
+        asset_idx: usize,
+    ) -> f64 {
         let ic = self.compute_spearman_ic();
         self.current_ic = ic;
 
@@ -191,8 +230,6 @@ impl ICTracker {
         let dynamic_thresh = (self.ewma_ic - 2.0 * std_dev).clamp(MODEL_DRIFT_FLOOR, 0.0500);
         self.adaptive_threshold = dynamic_thresh;
 
-        // SOTA Multi-Factor Continuous Drift & CUSUM Evaluation (August 2026):
-        // Structural drift is triggered if CUSUM flags variance shift OR if rolling IC decays below dynamic threshold
         let cusum_drift = self.cusum.is_drifted;
         let spearman_drift = ic < dynamic_thresh && ic < 0.0300;
 
@@ -204,7 +241,7 @@ impl ICTracker {
                     ic, dynamic_thresh, cusum_drift, self.pairs.len()
                 );
             }
-        } else if ic >= dynamic_thresh + 0.02 && !self.cusum.is_drifted {
+        } else if ic >= dynamic_thresh + 0.01 && !self.cusum.is_drifted {
             self.is_drifted = false;
         }
 
@@ -219,6 +256,22 @@ impl ICTracker {
         }
 
         ic
+    }
+
+    /// Add an observation and write IC/drift status to SAB slots 101/102.
+    pub fn add_observation_asset(
+        &mut self,
+        prediction: f64,
+        realized_return: f64,
+        sab: Option<&AtomicSharedMemoryBridge>,
+        asset_idx: usize,
+    ) -> f64 {
+        if self.pairs.len() >= self.window_size {
+            self.pairs.pop_front();
+        }
+        self.pairs.push_back((prediction, realized_return));
+
+        self.recompute_spearman_and_broadcast(sab, asset_idx)
     }
 
     /// Evaluates multi-minute residual and updates CUSUM structural break detector.
@@ -251,6 +304,8 @@ impl ICTracker {
         self.adaptive_threshold = MODEL_DRIFT_FLOOR;
         self.is_drifted = false;
         self.cusum.reset();
+        self.obs_since_last_eval = 0;
+        self.last_eval_ts_ns = 0;
     }
 
     pub fn current_ic(&self) -> f64 {

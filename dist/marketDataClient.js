@@ -173,11 +173,20 @@ class MarketDataClient {
     getBestBidPrice(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 4);
     }
+    setBestBidPrice(price, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 4, price);
+    }
     getBestBidQuantity(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 5);
     }
+    setBestBidQuantity(qty, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 5, qty);
+    }
     getBestAskPrice(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 6);
+    }
+    setBestAskPrice(price, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 6, price);
     }
     getMidPrice(assetIdx = 0) {
         const bid = this.readAtomicFloat64Asset(assetIdx, 4);
@@ -186,6 +195,9 @@ class MarketDataClient {
     }
     getBestAskQuantity(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 7);
+    }
+    setBestAskQuantity(qty, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 7, qty);
     }
     getLiquidationTotalVolume(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 8);
@@ -518,6 +530,20 @@ class MarketDataClient {
     }
     setSurvivalProbability(prob, assetIdx = 0) {
         this.writeAtomicFloat64Asset(assetIdx, 140, prob);
+    }
+    getHotswapEpoch(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 140);
+    }
+    setHotswapEpoch(epoch, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 140, epoch);
+    }
+    incrementHotswapEpoch() {
+        const current = this.readAtomicFloat64Asset(0, 140);
+        const next = current + 1.0;
+        for (let i = 0; i < this.maxAssets; i++) {
+            this.writeAtomicFloat64Asset(i, 140, next);
+        }
+        return next;
     }
     getDynamicStopLossPrice(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 141);
