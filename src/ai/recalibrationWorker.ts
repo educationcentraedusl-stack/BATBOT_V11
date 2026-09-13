@@ -138,6 +138,23 @@ export class AutoRecalibrationManager {
   }
 
   /**
+   * Extracts the underlying SharedArrayBuffer from the registered MarketDataClient
+   * for passing to N-API loadAiModel/loadAiModelFull so Rust can atomically bump
+   * HOTSWAP_EPOCH (Slot 151) on model hot-swap.
+   * Lazily initializes MarketDataClient if not already registered.
+   */
+  private getSabBufferForNapi(): Buffer {
+    if (!this.client) {
+      const maxAssets = this.maxAssetSlots || 10;
+      const slotsPerAsset = 256;
+      const sab = new SharedArrayBuffer(maxAssets * slotsPerAsset * 8);
+      this.client = new MarketDataClient(sab, maxAssets, slotsPerAsset);
+    }
+    const sab = this.client.getRawSharedArrayBuffer();
+    return Buffer.from(sab);
+  }
+
+  /**
    * Evaluates if native Rust IC Tracker has processed at least 1000 observation pairs (Warm-Up complete).
    */
   public isRustWarmupComplete(): boolean {
@@ -254,10 +271,11 @@ export class AutoRecalibrationManager {
         `[BATBOT_V11][T-KAN_SCHEDULER] T-KAN binary LUT validation passed (${fs.statSync(this.tkanPath).size} bytes). Triggering load_ai_model_full RCU swap...`
       );
 
-      // Perform dual hot-swap
+      // Perform dual hot-swap with SAB buffer for HOTSWAP_EPOCH atomic bump
+      const sabBuffer = this.getSabBufferForNapi();
       const swapped = nativeAddon.loadAiModelFull
-        ? nativeAddon.loadAiModelFull(this.weightsPath, this.tkanPath)
-        : (nativeAddon.loadAiModel ? nativeAddon.loadAiModel(this.weightsPath) : false);
+        ? nativeAddon.loadAiModelFull(this.weightsPath, this.tkanPath, sabBuffer)
+        : (nativeAddon.loadAiModel ? nativeAddon.loadAiModel(this.weightsPath, sabBuffer) : false);
 
       if (!swapped) {
         throw new Error("NAPI loadAiModelFull failed to hot-swap T-KAN LUTs.");
@@ -557,7 +575,9 @@ export class AutoRecalibrationManager {
       );
 
       // Step 4: Atomic Hot-Swap via NAPI RCU pointer swap in Rust (Zero HFT Latency Pause)
-      const loaded = nativeAddon.loadAiModel ? nativeAddon.loadAiModel(this.weightsPath) : false;
+      // Pass SAB buffer so Rust atomically bumps HOTSWAP_EPOCH (Slot 151) for StrategyEngine unlatch
+      const sabBuffer = this.getSabBufferForNapi();
+      const loaded = nativeAddon.loadAiModel ? nativeAddon.loadAiModel(this.weightsPath, sabBuffer) : false;
       if (!loaded) {
         throw new Error(`NAPI loadAiModel failed to load weights from '${this.weightsPath}'. Engine remains uncalibrated.`);
       }

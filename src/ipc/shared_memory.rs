@@ -6,6 +6,11 @@ pub const DEFAULT_SAB_SLOTS_PER_ASSET: usize = 256;
 pub const SHARED_MEMORY_SLOTS: usize = DEFAULT_SAB_SLOTS_PER_ASSET;
 pub const SHARED_MEMORY_BYTES: usize = SHARED_MEMORY_SLOTS * 8; // 2048 bytes for single-asset baseline
 
+/// Canonical SAB slot index for the HOTSWAP_EPOCH counter.
+/// Must match `SAB_SLOTS.HOTSWAP_EPOCH` in `src/ipc/sabSchema.ts` (= 151).
+/// Used for lock-free RCU model handshake between Rust ingestion and TypeScript strategy engine.
+pub const HOTSWAP_EPOCH_SLOT: usize = 151;
+
 const HAWKES_BUF_CAP: usize = 64;
 
 #[derive(Clone)]

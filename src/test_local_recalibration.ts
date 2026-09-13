@@ -42,7 +42,7 @@ async function runLocalRecalibrationTest() {
 
   console.log("\n[STAGE 4] Verifying Candle Rust N-API zero-lock RCU atomic hot-swap...");
   if (typeof nativeAddon.loadAiModel === "function") {
-    const swapped = nativeAddon.loadAiModel(weightsPath);
+    const swapped = nativeAddon.loadAiModel(weightsPath, undefined);
     if (swapped) {
       console.log("[STAGE 4 PASSED] Candle Rust AIEngine model weights hot-swapped into memory cleanly!");
     } else {

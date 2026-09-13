@@ -51,6 +51,14 @@ export class MarketDataClient {
   }
 
   /**
+   * Returns the underlying SharedArrayBuffer for N-API callers that need raw buffer access
+   * (e.g., Rust-side HOTSWAP_EPOCH atomic manipulation during model hot-swap).
+   */
+  public getRawSharedArrayBuffer(): SharedArrayBuffer {
+    return this.bigIntView.buffer as SharedArrayBuffer;
+  }
+
+  /**
    * Dynamically calculates offset slot for (assetIdx, slot).
    * Strict fail-fast boundary enforcement: throws RangeError if index or slot is out of bounds.
    */

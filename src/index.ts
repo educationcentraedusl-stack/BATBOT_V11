@@ -120,6 +120,7 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
   const telemetryPort = parseInt(process.env.TELEMETRY_PORT || "8080", 10);
   const telemetryServer = new TelemetryWSServer(telemetryPort);
   const recalibrationManager = AutoRecalibrationManager.getInstance();
+  recalibrationManager.setMarketDataClient(client, maxAssets);
   recalibrationManager.setSustainedDriftThreshold(50);
   recalibrationManager.setOnStateChangeCallback((state) => {
     strategyEngine.setEngineState(state);

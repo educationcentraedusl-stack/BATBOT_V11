@@ -67,7 +67,7 @@ fn test_multi_asset_lob_manager_unblocked_thread() {
     // Wait briefly for synchronous unblocked processor thread to consume queue
     std::thread::sleep(std::time::Duration::from_millis(50));
     lob_mgr.stop();
-    let _ = handle.join();
+    let _ = handle.expect("Failed to spawn LOB processor thread").join();
 
     for asset_idx in 0..MAX_CONCURRENT_ASSETS {
         let metrics = lob_mgr.get_metrics_for_asset(asset_idx).expect("Metrics missing");
@@ -117,7 +117,7 @@ fn test_strategy_orchestrator_end_to_end() {
 
     std::thread::sleep(std::time::Duration::from_millis(30));
     orchestrator.stop();
-    let _ = handle.join();
+    let _ = handle.expect("Failed to spawn orchestrator thread").join();
 
     assert!(StrategyOrchestrator::tick_count() >= 100);
     println!(

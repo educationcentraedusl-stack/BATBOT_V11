@@ -263,7 +263,7 @@ async function runPhase3Phase4TestSuite() {
     }
     console.log(`  ✓ 5th loss onExecutionCompleted -> SAB Long cooldown lock set to +900s (15 min Circuit Breaker Halt)`);
     // Next tick evaluation must be blocked by cooldown lock
-    engine.resetInFlightOrderForTesting();
+    engine.resetInFlightOrder();
     Atomics.store(bigIntView, 92, 5n);
     const blockedSignal = engine.evaluateTick();
     if (blockedSignal.signalType !== "NONE") {

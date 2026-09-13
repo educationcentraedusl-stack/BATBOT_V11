@@ -38,6 +38,13 @@ class MarketDataClient {
         this.cvdRateMad = new Float64Array(this.maxAssets);
     }
     /**
+     * Returns the underlying SharedArrayBuffer for N-API callers that need raw buffer access
+     * (e.g., Rust-side HOTSWAP_EPOCH atomic manipulation during model hot-swap).
+     */
+    getRawSharedArrayBuffer() {
+        return this.bigIntView.buffer;
+    }
+    /**
      * Dynamically calculates offset slot for (assetIdx, slot).
      * Strict fail-fast boundary enforcement: throws RangeError if index or slot is out of bounds.
      */
@@ -532,16 +539,16 @@ class MarketDataClient {
         this.writeAtomicFloat64Asset(assetIdx, 140, prob);
     }
     getHotswapEpoch(assetIdx = 0) {
-        return this.readAtomicFloat64Asset(assetIdx, 140);
+        return this.readAtomicFloat64Asset(assetIdx, 151);
     }
     setHotswapEpoch(epoch, assetIdx = 0) {
-        this.writeAtomicFloat64Asset(assetIdx, 140, epoch);
+        this.writeAtomicFloat64Asset(assetIdx, 151, epoch);
     }
-    incrementHotswapEpoch() {
-        const current = this.readAtomicFloat64Asset(0, 140);
+    incrementHotswapEpoch(_assetIdx) {
+        const current = this.readAtomicFloat64Asset(0, 151);
         const next = current + 1.0;
         for (let i = 0; i < this.maxAssets; i++) {
-            this.writeAtomicFloat64Asset(i, 140, next);
+            this.writeAtomicFloat64Asset(i, 151, next);
         }
         return next;
     }

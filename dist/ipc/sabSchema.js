@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SAB_SLOTS = void 0;
+exports.IS_MODEL_DRIFTED = exports.ROLLING_IC = exports.SURVIVAL_PROBABILITY = exports.HOTSWAP_EPOCH = exports.SAB_SLOTS = void 0;
 exports.SAB_SLOTS = {
     TIMESTAMP_NS: 0,
     OBI: 1,
@@ -66,14 +66,13 @@ exports.SAB_SLOTS = {
     CLOSE_ALL_POSITIONS_FLAG: 131,
     ENGINE_PAUSED_FLAG: 132,
     TRIGGER_RECALIBRATION_FLAG: 133,
-    // Account & Execution Telemetry Slots (134..150)
+    // Account & Execution Telemetry Slots (134..151)
     AVAILABLE_BALANCE: 134,
     OMS_WINNING_TRADES: 135,
     OMS_LOSING_TRADES: 136,
     FINALIZED_SIGNAL: 137,
     OFI: 138,
     HJB_RESERVATION_PRICE: 139,
-    HOTSWAP_EPOCH: 140,
     SURVIVAL_PROBABILITY: 140,
     DYNAMIC_STOP_LOSS_PRICE: 141,
     OMS_POSITION_SIDE: 142,
@@ -85,4 +84,6 @@ exports.SAB_SLOTS = {
     OMS_SHORT_UNREALIZED_PNL: 148,
     HAWKES_ASYMMETRY: 149,
     SERVER_TIME_OFFSET_MS: 150,
+    HOTSWAP_EPOCH: 151,
 };
+exports.HOTSWAP_EPOCH = exports.SAB_SLOTS.HOTSWAP_EPOCH, exports.SURVIVAL_PROBABILITY = exports.SAB_SLOTS.SURVIVAL_PROBABILITY, exports.ROLLING_IC = exports.SAB_SLOTS.ROLLING_IC, exports.IS_MODEL_DRIFTED = exports.SAB_SLOTS.IS_MODEL_DRIFTED;

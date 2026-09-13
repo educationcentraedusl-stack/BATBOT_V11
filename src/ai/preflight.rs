@@ -186,25 +186,17 @@ impl PreflightValidator {
                     self.horizon_history.pop_front();
                 }
 
-                let matured = if self.testing_target <= 100 {
-                    // Test / rapid validation mode: evaluate multi-step buffered horizon
-                    if self.horizon_history.len() >= 2 {
+                // Unconditional 300s horizon maturity — zero testing_target escape hatches.
+                // Predictions must mature over a 5-minute real-time window before IC evaluation.
+                let horizon_ns = 300_000_000_000u64;
+                let matured = if let Some(front) = self.horizon_history.front() {
+                    if start_ns.saturating_sub(front.0) >= horizon_ns {
                         self.horizon_history.pop_front()
                     } else {
                         None
                     }
                 } else {
-                    // Production mode: 300s horizon maturity
-                    let horizon_ns = 300_000_000_000u64;
-                    if let Some(front) = self.horizon_history.front() {
-                        if start_ns.saturating_sub(front.0) >= horizon_ns {
-                            self.horizon_history.pop_front()
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
+                    None
                 };
 
                 if let Some((_, hist_mid, hist_pred)) = matured {
@@ -250,14 +242,10 @@ impl PreflightValidator {
         let gate3 = ic_ok && (dir_acc >= 0.50 || self.total_eval_directions <= 5);
         self.gate3_passed = gate3;
 
-        // Gate 4: Realistic Deep Neural Network Latency SLA: Mean latency <= 200,000 ns (200 us) AND Max latency <= 500,000 ns (500 us)
-        // (Note: test/debug build allowance included for unoptimized builds)
-        let is_test_run = cfg!(debug_assertions) || cfg!(test) || self.testing_target <= 100;
-        let gate4 = if is_test_run {
-            mean_latency <= 500_000_000 && self.max_latency_ns <= 1_000_000_000
-        } else {
-            mean_latency <= 200_000 && self.max_latency_ns <= 500_000
-        };
+        // Gate 4: Unconditional Deep Neural Network Latency SLA:
+        //   Mean latency <= 200,000 ns (200 us) AND Max latency <= 500,000 ns (500 us).
+        // NO debug/test/short-run bypass. Both mean and tail latency are strictly enforced.
+        let gate4 = mean_latency <= 200_000 && self.max_latency_ns <= 500_000;
         self.gate4_passed = gate4;
 
         if gate3 && gate4 {
@@ -342,14 +330,14 @@ mod tests {
         }
 
         let engine = AIEngine::load_from_paths("./models/cfc_weights.safetensors", "./models/tkan_luts.bin");
-        let mut validator = PreflightValidator::new(engine, 5, 5, -1.0);
+        let mut validator = PreflightValidator::new(engine, 30, 20, -1.0);
 
         if validator.phase() == PreflightPhase::Warming {
-            for _ in 0..5 {
+            for _ in 0..30 {
                 validator.step_shadow(&bridge);
             }
             assert_eq!(validator.phase(), PreflightPhase::Testing);
-            for i in 0..5 {
+            for i in 0..20 {
                 bridge.store_f64(4, 50000.0 + (i as f64 * 10.0));
                 bridge.store_f64(6, 50010.0 + (i as f64 * 10.0));
                 validator.step_shadow(&bridge);

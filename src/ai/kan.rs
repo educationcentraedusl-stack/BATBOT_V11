@@ -169,6 +169,14 @@ impl TKANLayer {
             ));
         }
 
+        // Touch every 4096-byte page to pre-fault all LUT memory into the process working set,
+        // eliminating page-fault latency spikes during real-time trading and preflight testing.
+        let mut touch_acc = 0u64;
+        for i in (0..mmap.len()).step_by(4096) {
+            touch_acc = touch_acc.wrapping_add(mmap[i] as u64);
+        }
+        std::hint::black_box(touch_acc);
+
         println!(
             "[BATBOT_V11][T-KAN Zero-Copy] Memory-mapped {} edge B-spline LUTs from {}. Zero heap allocation.",
             num_edges,
@@ -207,13 +215,12 @@ impl TKANLayer {
         let mut output = [0.0f64; 16];
         match &self.storage {
             TKANStorage::Heap(edges) => {
-                for j in 0..self.output_dim {
-                    let mut sum = 0.0f64;
-                    for i in 0..self.input_dim {
-                        let edge_idx = i * self.output_dim + j;
-                        sum += edges[edge_idx].evaluate(input[i]);
+                for i in 0..self.input_dim {
+                    let inp = input[i];
+                    let base = i * self.output_dim;
+                    for j in 0..self.output_dim {
+                        output[j] += edges[base + j].evaluate(inp);
                     }
-                    output[j] = sum;
                 }
             }
             TKANStorage::Mmap {
@@ -225,17 +232,33 @@ impl TKANLayer {
             } => {
                 let total_floats = self.input_dim * self.output_dim * lut_size;
                 let ptr = unsafe { mmap.as_ptr().add(24) as *const f64 };
-                let f64_slice = unsafe { std::slice::from_raw_parts(ptr, total_floats) };
 
-                for j in 0..self.output_dim {
-                    let mut sum = 0.0f64;
-                    for i in 0..self.input_dim {
-                        let edge_idx = i * self.output_dim + j;
-                        let start = edge_idx * lut_size;
-                        let edge_slice = &f64_slice[start..start + lut_size];
-                        sum += BSplineLUT::evaluate_from_slice(edge_slice, *min_val, *max_val, input[i]);
+                let min_v = *min_val;
+                let max_v = *max_val;
+                let range = max_v - min_v;
+                let lut_len_minus_1 = (*lut_size - 1) as f64;
+                let inv_range = if range > 1e-12 { lut_len_minus_1 / range } else { 0.0 };
+
+                for i in 0..self.input_dim {
+                    let clamped = input[i].clamp(min_v, max_v);
+                    let idx_f = (clamped - min_v) * inv_range;
+                    let i0 = idx_f.floor() as usize;
+                    let i1 = (i0 + 1).min(*lut_size - 1);
+                    let frac = idx_f - i0 as f64;
+                    let w0 = 1.0 - frac;
+                    let w1 = frac;
+
+                    let base = i * self.output_dim;
+                    for j in 0..self.output_dim {
+                        let start = (base + j) * lut_size;
+                        if start + i1 < total_floats {
+                            unsafe {
+                                let v0 = *ptr.add(start + i0);
+                                let v1 = *ptr.add(start + i1);
+                                output[j] += w0 * v0 + w1 * v1;
+                            }
+                        }
                     }
-                    output[j] = sum;
                 }
             }
         }

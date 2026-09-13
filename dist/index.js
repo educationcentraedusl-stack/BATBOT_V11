@@ -126,6 +126,7 @@ async function initializeSystem() {
     const telemetryPort = parseInt(process.env.TELEMETRY_PORT || "8080", 10);
     const telemetryServer = new server_1.TelemetryWSServer(telemetryPort);
     const recalibrationManager = recalibrationWorker_1.AutoRecalibrationManager.getInstance();
+    recalibrationManager.setMarketDataClient(client, maxAssets);
     recalibrationManager.setSustainedDriftThreshold(50);
     recalibrationManager.setOnStateChangeCallback((state) => {
         strategyEngine.setEngineState(state);

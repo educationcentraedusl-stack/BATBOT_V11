@@ -366,10 +366,8 @@ class StrategyEngine {
     getIcState() {
         return this.icState;
     }
-    setIcStateForTesting(state, enteredAt = 0) {
-        this.icState = state;
-        this.icStateEnteredAt = enteredAt;
-        this.icConditionMetSince = 0;
+    getIcEvidenceScore() {
+        return this.icEvidenceScore;
     }
     getVrClassifier() {
         return this.vrClassifier;
@@ -585,13 +583,20 @@ class StrategyEngine {
         }
         return count;
     }
-    resetInFlightOrderForTesting() {
+    /**
+     * Resets stale in-flight order lock after execution timeout or network failure recovery.
+     * Called by error-recovery paths when an order placement promise was abandoned due to
+     * AbortSignal timeout, TCP socket drop, or Binance API 503 gateway errors.
+     */
+    resetInFlightOrder() {
         this.isOrderInFlight = false;
     }
-    clearPendingOrdersForTesting() {
-        this.clearPendingEntryOrders();
-    }
-    resetLciForTesting() {
+    /**
+     * Resets the LCI (Liquidity Cascade Indicator) microstructural velocity state.
+     * Required when reconnecting to a different market data stream or after extended
+     * disconnection periods where accumulated OBI velocity state becomes stale.
+     */
+    resetLci() {
         this.prevOBI = 0;
         this.prevOBIVelocity = 0;
         this.prevTickMs = 0;

@@ -15,7 +15,7 @@ use arc_swap::ArcSwapOption;
 
 use ai::{AIEngine, PreflightValidator};
 use ipc::bridge::IngestionBridge;
-use ipc::shared_memory::AtomicSharedMemoryBridge;
+use ipc::shared_memory::{AtomicSharedMemoryBridge, HOTSWAP_EPOCH_SLOT};
 use lob::{LimitOrderBook, LockFreeSpscQueue};
 use oms::{BinanceWsConfig, OmsEngine};
 use ws::manager::ConnectionManager;
@@ -61,7 +61,7 @@ pub fn create_lob_engine() -> bool {
 }
 
 #[napi]
-pub fn load_ai_model(weights_path: String) -> bool {
+pub fn load_ai_model(weights_path: String, sab_buffer: Option<Buffer>) -> bool {
     let new_engine = AIEngine::load_from_file(&weights_path);
     let success = new_engine.is_calibrated();
     if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
@@ -69,6 +69,20 @@ pub fn load_ai_model(weights_path: String) -> bool {
         new_engine.inherit_telemetry_history(active_engine);
     }
     GLOBAL_AI_ENGINE.store(Some(Arc::new(new_engine)));
+    // Atomically bump HOTSWAP_EPOCH across all asset slots if SAB buffer is provided
+    if let Some(buf) = sab_buffer {
+        if let Ok(bridge) = AtomicSharedMemoryBridge::new(buf.as_ptr() as *mut u8, buf.len()) {
+            let max_assets = bridge.max_assets();
+            let next = bridge.load_f64_asset(0, HOTSWAP_EPOCH_SLOT) + 1.0;
+            for i in 0..max_assets {
+                bridge.store_f64_asset(i, HOTSWAP_EPOCH_SLOT, next);
+            }
+            println!(
+                "[BATBOT_V11][N-API RCU] HOTSWAP_EPOCH bumped to {} across {} assets after load_ai_model.",
+                next, max_assets
+            );
+        }
+    }
     println!(
         "[BATBOT_V11][N-API Lock-Free RCU] Atomic load_ai_model trigger for path '{}'. Status: {}.",
         weights_path,
@@ -78,7 +92,7 @@ pub fn load_ai_model(weights_path: String) -> bool {
 }
 
 #[napi]
-pub fn load_ai_model_full(weights_path: String, tkan_path: String) -> bool {
+pub fn load_ai_model_full(weights_path: String, tkan_path: String, sab_buffer: Option<Buffer>) -> bool {
     let new_engine = AIEngine::load_from_paths(&weights_path, &tkan_path);
     let success = new_engine.is_calibrated();
     if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
@@ -86,6 +100,20 @@ pub fn load_ai_model_full(weights_path: String, tkan_path: String) -> bool {
         new_engine.inherit_telemetry_history(active_engine);
     }
     GLOBAL_AI_ENGINE.store(Some(Arc::new(new_engine)));
+    // Atomically bump HOTSWAP_EPOCH across all asset slots if SAB buffer is provided
+    if let Some(buf) = sab_buffer {
+        if let Ok(bridge) = AtomicSharedMemoryBridge::new(buf.as_ptr() as *mut u8, buf.len()) {
+            let max_assets = bridge.max_assets();
+            let next = bridge.load_f64_asset(0, HOTSWAP_EPOCH_SLOT) + 1.0;
+            for i in 0..max_assets {
+                bridge.store_f64_asset(i, HOTSWAP_EPOCH_SLOT, next);
+            }
+            println!(
+                "[BATBOT_V11][N-API RCU] HOTSWAP_EPOCH bumped to {} across {} assets after load_ai_model_full.",
+                next, max_assets
+            );
+        }
+    }
     println!(
         "[BATBOT_V11][N-API Lock-Free RCU] Atomic load_ai_model_full trigger for cfc: '{}', tkan: '{}'. Status: {}.",
         weights_path,
@@ -96,18 +124,18 @@ pub fn load_ai_model_full(weights_path: String, tkan_path: String) -> bool {
 }
 
 #[napi]
-pub fn bump_hotswap_epoch(sab_buffer: Buffer) -> napi::Result<i64> {
+pub fn bump_hotswap_epoch(sab_buffer: Buffer) -> napi::Result<f64> {
     let raw_ptr = sab_buffer.as_ptr() as *mut u8;
     let len = sab_buffer.len();
     let bridge = AtomicSharedMemoryBridge::new(raw_ptr, len)
         .map_err(|err| napi::Error::from_reason(err.to_string()))?;
     let max_assets = bridge.max_assets();
-    let prev = bridge.load_f64_asset(0, 151);
+    let prev = bridge.load_f64_asset(0, HOTSWAP_EPOCH_SLOT);
     let next = prev + 1.0;
     for i in 0..max_assets {
-        bridge.store_f64_asset(i, 151, next);
+        bridge.store_f64_asset(i, HOTSWAP_EPOCH_SLOT, next);
     }
-    Ok(next as i64)
+    Ok(next)
 }
 
 #[napi]

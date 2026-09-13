@@ -122,9 +122,9 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   console.log("[STAGE 3] Testing Symmetric Breakdown Initiation (Negative Microprice Dev & Negative Velocity)...");
 
   // Reset order in flight flag and slots for clean stage isolation
-  engine.resetInFlightOrderForTesting();
+  engine.resetInFlightOrder();
   engine.getHedgeLedger().clearSlots();
-  engine.clearPendingOrdersForTesting();
+  engine.clearPendingEntryOrders();
 
   // Tick 3: Re-establish neutral baseline
   await new Promise((r) => setTimeout(r, 10));
@@ -140,9 +140,9 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   client.writeAtomicFloat64Asset(0, SAB_SLOTS.AI_DIRECTION, 0.0); // Neutral baseline
   client.setShortCooldownLock(0, 0);
   engine.evaluateTick();
-  engine.resetInFlightOrderForTesting();
+  engine.resetInFlightOrder();
   engine.getHedgeLedger().clearSlots();
-  engine.clearPendingOrdersForTesting();
+  engine.clearPendingEntryOrders();
   client.setShortCooldownLock(0, 0);
 
   // Tick 4: Toxic ask wall injection: Bid Qty = 2.0, Ask Qty = 30.0 (OBI = -0.875)
