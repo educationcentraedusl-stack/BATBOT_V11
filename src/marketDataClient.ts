@@ -705,6 +705,8 @@ export class MarketDataClient {
     const next = current + 1.0;
     for (let i = 0; i < this.maxAssets; i++) {
       this.writeAtomicFloat64Asset(i, 151, next);
+      this.writeAtomicFloat64Asset(i, 101, 0.0);
+      this.writeAtomicFloat64Asset(i, 102, 0.0);
     }
     return next;
   }

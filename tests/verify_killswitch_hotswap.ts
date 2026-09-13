@@ -6,6 +6,9 @@ import { StrategyEngine } from "../src/strategy/engine";
 import { HOTSWAP_EPOCH, SURVIVAL_PROBABILITY } from "../src/ipc/sabSchema";
 import { timeSynchronizer } from "../src/utils/timeSynchronizer";
 
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const nativeAddon = require("../index.js");
+
 function assert(condition: boolean, message: string): void {
   if (!condition) {
     console.error(`❌ [ASSERTION_FAILED] ${message}`);
@@ -201,13 +204,22 @@ async function runPhysicalVerification(): Promise<void> {
   );
   console.log(`  ✓ Engine re-degraded organically to MODEL_BROKEN (single-tick deterministic)`);
 
-  // Simulate background model reload / promotion: bump Slot 151 epoch and restore IC
+  // Trigger Rust N-API model hot-swap with physical SharedArrayBuffer
+  // Rust atomically bumps HOTSWAP_EPOCH (Slot 151) and physically cleanses ROLLING_IC (Slot 101) & IS_MODEL_DRIFTED (Slot 102) to 0.0
   client.setSequenceNum(50n, 0);
-  client.setRollingIC(0.06, 0);
-  client.setIsModelDrifted(false, 0);
   updateTimestamp();
-  const newModelEpoch = client.incrementHotswapEpoch();
-  console.log(`  ✓ Background candidate model promoted: HOTSWAP_EPOCH bumped to #${newModelEpoch} across all assets`);
+  const sabBuffer = Buffer.from(sab);
+  const swapped = nativeAddon.loadAiModel("./models/cfc_weights.safetensors", sabBuffer);
+  assert(swapped, "Rust N-API loadAiModel must successfully load weights and bump epoch");
+  const newModelEpoch = client.getHotswapEpoch(0);
+  console.log(`  ✓ Background candidate model promoted via Rust N-API: HOTSWAP_EPOCH bumped to #${newModelEpoch} across all assets`);
+
+  // Verify Rust physically cleansed Slot 101 and Slot 102 in the SharedArrayBuffer
+  const cleansedIc = client.getRollingIC(0);
+  const cleansedDrift = client.getIsModelDrifted(0);
+  assert(cleansedIc === 0.0, `Rust N-API failed to reset Slot 101 ROLLING_IC to 0.0, got ${cleansedIc}`);
+  assert(!cleansedDrift, `Rust N-API failed to reset Slot 102 IS_MODEL_DRIFTED to false, got ${cleansedDrift}`);
+  console.log(`  ✓ Rust N-API atomic memory cleanup verified: Slot 101 = ${cleansedIc.toFixed(4)}, Slot 102 = ${cleansedDrift}`);
 
   // Evaluate tick: evaluateTick() must detect new epoch in Slot 151 and unlatch
   const resRecovered = await engine.evaluateTick();
@@ -220,6 +232,20 @@ async function runPhysicalVerification(): Promise<void> {
     `evaluateTick() remained blocked after epoch bump!`
   );
   console.log(`  ✓ evaluateTick() detected new model epoch #${newModelEpoch}: physically unlatched to ${engine.getIcState()}`);
+
+  // PROVE TELEMETRY: Next tick evaluation does NOT instantly revert to MODEL_BROKEN
+  client.setSequenceNum(51n, 0);
+  updateTimestamp();
+  const resNextTick = await engine.evaluateTick();
+  assert(
+    engine.getIcState() === "ALPHA_ACTIVE",
+    `DEF-35.4 RE-LATCH TRAP: evaluateTick() reverted to MODEL_BROKEN on subsequent tick! Got ${engine.getIcState()}`
+  );
+  assert(
+    resNextTick.riskResult?.reasonCode !== "IC_MODEL_BROKEN",
+    `Subsequent tick remained blocked with IC_MODEL_BROKEN!`
+  );
+  console.log(`  ✓ Subsequent evaluateTick() preserved ALPHA_ACTIVE (zero instant re-latch trap)`);
   console.log(`  ✓ Hot-swap epoch handshake fully validated with 100% physical fidelity\n`);
 
   console.log("================================================================================");

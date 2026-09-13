@@ -11,6 +11,14 @@ pub const SHARED_MEMORY_BYTES: usize = SHARED_MEMORY_SLOTS * 8; // 2048 bytes fo
 /// Used for lock-free RCU model handshake between Rust ingestion and TypeScript strategy engine.
 pub const HOTSWAP_EPOCH_SLOT: usize = 151;
 
+/// Canonical SAB slot index for the ROLLING_IC metric.
+/// Must match `SAB_SLOTS.ROLLING_IC` in `src/ipc/sabSchema.ts` (= 101).
+pub const ROLLING_IC_SLOT: usize = 101;
+
+/// Canonical SAB slot index for the IS_MODEL_DRIFTED flag.
+/// Must match `SAB_SLOTS.IS_MODEL_DRIFTED` in `src/ipc/sabSchema.ts` (= 102).
+pub const IS_MODEL_DRIFTED_SLOT: usize = 102;
+
 const HAWKES_BUF_CAP: usize = 64;
 
 #[derive(Clone)]

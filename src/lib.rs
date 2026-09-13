@@ -15,7 +15,9 @@ use arc_swap::ArcSwapOption;
 
 use ai::{AIEngine, PreflightValidator};
 use ipc::bridge::IngestionBridge;
-use ipc::shared_memory::{AtomicSharedMemoryBridge, HOTSWAP_EPOCH_SLOT};
+use ipc::shared_memory::{
+    AtomicSharedMemoryBridge, HOTSWAP_EPOCH_SLOT, IS_MODEL_DRIFTED_SLOT, ROLLING_IC_SLOT,
+};
 use lob::{LimitOrderBook, LockFreeSpscQueue};
 use oms::{BinanceWsConfig, OmsEngine};
 use ws::manager::ConnectionManager;
@@ -76,9 +78,11 @@ pub fn load_ai_model(weights_path: String, sab_buffer: Option<Buffer>) -> bool {
             let next = bridge.load_f64_asset(0, HOTSWAP_EPOCH_SLOT) + 1.0;
             for i in 0..max_assets {
                 bridge.store_f64_asset(i, HOTSWAP_EPOCH_SLOT, next);
+                bridge.store_f64_asset(i, ROLLING_IC_SLOT, 0.0);
+                bridge.store_f64_asset(i, IS_MODEL_DRIFTED_SLOT, 0.0);
             }
             println!(
-                "[BATBOT_V11][N-API RCU] HOTSWAP_EPOCH bumped to {} across {} assets after load_ai_model.",
+                "[BATBOT_V11][N-API RCU] HOTSWAP_EPOCH bumped to {} across {} assets after load_ai_model (cleared ROLLING_IC and IS_MODEL_DRIFTED to 0.0).",
                 next, max_assets
             );
         }
@@ -107,9 +111,11 @@ pub fn load_ai_model_full(weights_path: String, tkan_path: String, sab_buffer: O
             let next = bridge.load_f64_asset(0, HOTSWAP_EPOCH_SLOT) + 1.0;
             for i in 0..max_assets {
                 bridge.store_f64_asset(i, HOTSWAP_EPOCH_SLOT, next);
+                bridge.store_f64_asset(i, ROLLING_IC_SLOT, 0.0);
+                bridge.store_f64_asset(i, IS_MODEL_DRIFTED_SLOT, 0.0);
             }
             println!(
-                "[BATBOT_V11][N-API RCU] HOTSWAP_EPOCH bumped to {} across {} assets after load_ai_model_full.",
+                "[BATBOT_V11][N-API RCU] HOTSWAP_EPOCH bumped to {} across {} assets after load_ai_model_full (cleared ROLLING_IC and IS_MODEL_DRIFTED to 0.0).",
                 next, max_assets
             );
         }
@@ -134,6 +140,8 @@ pub fn bump_hotswap_epoch(sab_buffer: Buffer) -> napi::Result<f64> {
     let next = prev + 1.0;
     for i in 0..max_assets {
         bridge.store_f64_asset(i, HOTSWAP_EPOCH_SLOT, next);
+        bridge.store_f64_asset(i, ROLLING_IC_SLOT, 0.0);
+        bridge.store_f64_asset(i, IS_MODEL_DRIFTED_SLOT, 0.0);
     }
     Ok(next)
 }

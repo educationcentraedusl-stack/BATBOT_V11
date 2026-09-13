@@ -1,6 +1,8 @@
 use crate::{GLOBAL_AI_ENGINE, GLOBAL_SHADOW_ENGINE};
 use crate::ai::PreflightPhase;
-use crate::ipc::shared_memory::{AtomicSharedMemoryBridge, HOTSWAP_EPOCH_SLOT};
+use crate::ipc::shared_memory::{
+    AtomicSharedMemoryBridge, HOTSWAP_EPOCH_SLOT, IS_MODEL_DRIFTED_SLOT, ROLLING_IC_SLOT,
+};
 use crate::lob::{LimitOrderBook, LockFreeSpscQueue};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -111,6 +113,8 @@ impl IngestionBridge {
                                         let next_epoch = bridge.load_f64_asset(0, HOTSWAP_EPOCH_SLOT) + 1.0;
                                         for a_idx in 0..max_assets {
                                             bridge.store_f64_asset(a_idx, HOTSWAP_EPOCH_SLOT, next_epoch);
+                                            bridge.store_f64_asset(a_idx, ROLLING_IC_SLOT, 0.0);
+                                            bridge.store_f64_asset(a_idx, IS_MODEL_DRIFTED_SLOT, 0.0);
                                         }
                                         GLOBAL_AI_ENGINE.store(Some(Arc::new(promoted_engine)));
                                         GLOBAL_SHADOW_ENGINE.store(None);
