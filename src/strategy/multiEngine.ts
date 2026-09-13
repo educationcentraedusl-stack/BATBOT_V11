@@ -166,7 +166,7 @@ export class MultiAssetStrategyEngine {
       this.centralizedUserDataStream = null;
     }
     for (const engine of this.engines.values()) {
-      engine.clearPendingEntryOrders();
+      engine.annihilateRestingEntryOrders("SYSTEM_SHUTDOWN");
     }
     console.log("[MultiAssetStrategyEngine] Continuous reconciliation & centralized stream stopped.");
   }

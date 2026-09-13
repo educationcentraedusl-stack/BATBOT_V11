@@ -250,6 +250,9 @@ async function runPhase3Phase4TestSuite() {
 
   await new Promise((r) => setTimeout(r, 20));
   const trendSignal = engine.evaluateTick();
+  if (trendSignal.executionPromise) {
+    await trendSignal.executionPromise;
+  }
   if (trendSignal.signalType !== "BUY") {
     throw new Error(`FAIL: Verified trend regime (H=0.65, S_LOB=0.60, Hawkes=1.2) must generate BUY signal! Got: ${trendSignal.signalType}`);
   }
@@ -303,7 +306,6 @@ async function runPhase3Phase4TestSuite() {
   console.log(`  ✓ 5th loss onExecutionCompleted -> SAB Long cooldown lock set to +900s (15 min Circuit Breaker Halt)`);
 
   // Next tick evaluation must be blocked by cooldown lock
-  engine.resetInFlightOrder();
   Atomics.store(bigIntView, 92, 5n);
   const blockedSignal = engine.evaluateTick();
   if (blockedSignal.signalType !== "NONE") {

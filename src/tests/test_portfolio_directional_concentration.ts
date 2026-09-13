@@ -171,14 +171,13 @@ async function runPortfolioDirectionalConcentrationTestSuite(): Promise<void> {
   client.writeAtomicFloat64Asset(3, SAB_SLOTS.AI_CONFIDENCE, 0.90);
   client.setOBI(0.50, 3);
   client.setCVD(50.0, 3);
-  client.setSequenceNum(1n, 3);
-  engineAVAX.evaluateTick();
+  const sig1 = engineAVAX.evaluateTick();
+  if (sig1.executionPromise) await sig1.executionPromise;
 
   // Tick 2: Surging buy pressure on AVAX
   await new Promise((r) => setTimeout(r, 10));
   const nowMs2 = timeSynchronizer.getAdjustedNowMs();
   Atomics.store(bigIntView, 3 * slotsPerAsset, BigInt(nowMs2) * 1000000n);
-  engineAVAX.resetInFlightOrder();
   client.setSequenceNum(2n, 3);
   client.setBestBidQuantity(30.0, 3);
   client.setBestAskQuantity(2.0, 3);
@@ -214,7 +213,6 @@ async function runPortfolioDirectionalConcentrationTestSuite(): Promise<void> {
   await new Promise((r) => setTimeout(r, 10));
   const nowMs3 = timeSynchronizer.getAdjustedNowMs();
   Atomics.store(bigIntView, 3 * slotsPerAsset, BigInt(nowMs3) * 1000000n);
-  engineAVAX.resetInFlightOrder();
   client.setSequenceNum(3n, 3);
   client.setBestBidQuantity(35.0, 3);
   client.setBestAskQuantity(2.0, 3);
@@ -222,6 +220,7 @@ async function runPortfolioDirectionalConcentrationTestSuite(): Promise<void> {
   client.setCVD(150.0, 3);
 
   const approvedSignal = engineAVAX.evaluateTick();
+  if (approvedSignal.executionPromise) await approvedSignal.executionPromise;
   console.log(`  AVAX Signal after capacity freed: ${approvedSignal.signalType}`);
   assert(approvedSignal.signalType === "BUY", `AVAX entry must be approved when under limit (BUY), got ${approvedSignal.signalType}`);
   assert(approvedSignal.positionSide === "LONG", `Expected positionSide LONG, got ${approvedSignal.positionSide}`);
@@ -236,9 +235,7 @@ async function runPortfolioDirectionalConcentrationTestSuite(): Promise<void> {
     client.setOmsLongPositionQty(0.0, i);
     engines[i].getHedgeLedger().clearSlots();
     engines[i].syncSabPositionState(0);
-    engines[i].resetInFlightOrder();
-    engines[i].clearPendingEntryOrders();
-    engines[i].resetLci();
+    engines[i].annihilateRestingEntryOrders("TEST_RESET");
   }
 
   // Allocate 3 SHORT positions across BTC, ETH, SOL
@@ -267,12 +264,12 @@ async function runPortfolioDirectionalConcentrationTestSuite(): Promise<void> {
   client.setOBI(-0.50, 3);
   client.setCVD(-50.0, 3);
   client.setSequenceNum(4n, 3);
-  engineAVAX.evaluateTick(); // baseline
+  const baseShortSig = engineAVAX.evaluateTick(); // baseline
+  if (baseShortSig.executionPromise) await baseShortSig.executionPromise;
 
   await new Promise((r) => setTimeout(r, 10));
   const nowMs5 = timeSynchronizer.getAdjustedNowMs();
   Atomics.store(bigIntView, 3 * slotsPerAsset, BigInt(nowMs5) * 1000000n);
-  engineAVAX.resetInFlightOrder();
   client.setSequenceNum(5n, 3);
   client.setBestBidQuantity(2.0, 3);
   client.setBestAskQuantity(30.0, 3);
@@ -301,7 +298,6 @@ async function runPortfolioDirectionalConcentrationTestSuite(): Promise<void> {
   await new Promise((r) => setTimeout(r, 10));
   const nowMs6 = timeSynchronizer.getAdjustedNowMs();
   Atomics.store(bigIntView, 3 * slotsPerAsset, BigInt(nowMs6) * 1000000n);
-  engineAVAX.resetInFlightOrder();
   client.setSequenceNum(6n, 3);
   client.setBestBidQuantity(2.0, 3);
   client.setBestAskQuantity(35.0, 3);
@@ -309,6 +305,7 @@ async function runPortfolioDirectionalConcentrationTestSuite(): Promise<void> {
   client.setCVD(-150.0, 3);
 
   const approvedShortSignal = engineAVAX.evaluateTick();
+  if (approvedShortSignal.executionPromise) await approvedShortSignal.executionPromise;
   console.log(`  AVAX Short Signal after capacity freed: ${approvedShortSignal.signalType}`);
   assert(approvedShortSignal.signalType === "SELL", `AVAX short entry must be approved when under limit (SELL), got ${approvedShortSignal.signalType}`);
   assert(approvedShortSignal.positionSide === "SHORT", `Expected positionSide SHORT, got ${approvedShortSignal.positionSide}`);

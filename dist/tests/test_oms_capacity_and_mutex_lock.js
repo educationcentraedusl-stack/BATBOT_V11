@@ -345,9 +345,9 @@ async function runOmsCapacityAndMutexProof() {
     const finalGlobalCount = btcEngine.getGlobalActivePositionCount();
     assert(finalGlobalCount === 10, `Global active position count must remain capped at exactly 10 (got: ${finalGlobalCount})`);
     // Clean up candidate reservations & restore registered engines
-    dotEng.clearPendingEntryOrders();
+    dotEng.annihilateRestingEntryOrders("TEST_CLEANUP");
     dotEng.getHedgeLedger().clearSlots();
-    nearEngine.clearPendingEntryOrders();
+    nearEngine.annihilateRestingEntryOrders("TEST_CLEANUP");
     nearEngine.getHedgeLedger().clearSlots();
     engine_1.StrategyEngine.resetRegisteredEngines();
     for (const eng of multiEngine.getAllEngines().values()) {
@@ -361,7 +361,7 @@ async function runOmsCapacityAndMutexProof() {
     for (const eng of multiEngine.getAllEngines().values()) {
         eng.getHedgeLedger().clearSlots();
         eng.syncSabPositionState(0);
-        eng.clearPendingEntryOrders();
+        eng.annihilateRestingEntryOrders("TEST_CLEANUP");
     }
     riskGuard.resetSymbolNotionals();
     btcHedge.clearSlots();
@@ -379,10 +379,13 @@ async function runOmsCapacityAndMutexProof() {
     client.setLongCooldownLock(0, btcIdx);
     client.setSequenceNum(501n, btcIdx);
     const btcFlipSellEval = btcEngine.evaluateTick();
+    if (btcFlipSellEval.executionPromise) {
+        await btcFlipSellEval.executionPromise;
+    }
     assert(btcFlipSellEval.signalType === "SELL", `BTC must approve SELL signal when FLAT (got: ${btcFlipSellEval.signalType})`);
     assert(btcFlipSellEval.slotId === "SHORT_SLOT_0", `Target slot must be SHORT_SLOT_0 (got: ${btcFlipSellEval.slotId})`);
-    // Clear in-flight mock dispatch to simulate fill
-    btcEngine.clearPendingEntryOrders();
+    // Clear in-flight mock dispatch via organic AROS-CA
+    btcEngine.annihilateRestingEntryOrders("TEST_CLEANUP");
     // Occupy Short Slot on BTC
     btcHedge.occupyShortSlot(0, 0.005, 78120.0, 1.5, 0.8, false);
     btcEngine.syncSabPositionState(78120.0);
@@ -390,7 +393,7 @@ async function runOmsCapacityAndMutexProof() {
     // Release Short Slot
     btcHedge.releaseShortSlot(0, 78100.0, 0.0004, "SIGNAL_EXIT", 78100.0);
     btcEngine.syncSabPositionState(0);
-    btcEngine.clearPendingEntryOrders();
+    btcEngine.annihilateRestingEntryOrders("TEST_CLEANUP");
     client.setShortCooldownLock(0, btcIdx);
     client.setLongCooldownLock(0, btcIdx);
     assert(btcHedge.getShortSlots()[0].isOccupied === false, "BTC Short Slot must be released to FLAT");

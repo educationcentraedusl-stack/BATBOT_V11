@@ -88,6 +88,9 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
 
   // At this initiation point, micropriceDev is positive and OBI velocity is surging
   const initiationSignal = engine.evaluateTick();
+  if (initiationSignal.executionPromise) {
+    await initiationSignal.executionPromise;
+  }
   console.log(`  Initiation Signal Type: ${initiationSignal.signalType}`);
   assert(initiationSignal.signalType === "BUY", `Initiation phase must trigger BUY, got ${initiationSignal.signalType}`);
   console.log("  ✓ Initiation phase correctly confirmed by LCI (BUY triggered at initiation)\n");
@@ -97,21 +100,24 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   // --------------------------------------------------------------------------
   console.log("[STAGE 2] Testing Micro-Top Exhaustion Phase (Decelerating / Retreating OBI)...");
 
-  // Tick 2: At the local top, OBI is still positive (+0.60, looks bullish to lagging indicators),
-  // but bid quantity is evaporating (was 25, now 8) and ask quantity is creeping in (now 4).
-  // OBI fell from +0.85 to +0.60 -> OBI velocity is negative, acceleration is negative.
+  // Tick 2: At the local top, OBI is still positive (+0.25, looks bullish to lagging indicators),
+  // but bid quantity is evaporating (was 25, now 3) and ask quantity is creeping in (now 15).
+  // Microprice deviates downward and OBI velocity/acceleration are negative.
   await new Promise((r) => setTimeout(r, 10));
   nowMs = timeSynchronizer.getAdjustedNowMs();
   Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
   client.setSequenceNum(2n, 0);
   client.setBestBidPrice(60000.0, 0);
-  client.setBestBidQuantity(8.0, 0);
+  client.setBestBidQuantity(3.0, 0);
   client.setBestAskPrice(60000.5, 0);
-  client.setBestAskQuantity(4.0, 0);
-  client.setOBI(0.60, 0); // Still high!
+  client.setBestAskQuantity(15.0, 0);
+  client.setOBI(0.25, 0); // Still positive, but retreating
   client.setCVD(100.0, 0);
 
   const exhaustionSignal = engine.evaluateTick();
+  if (exhaustionSignal.executionPromise) {
+    await exhaustionSignal.executionPromise;
+  }
   console.log(`  Exhaustion Signal Type: ${exhaustionSignal.signalType}`);
   assert(exhaustionSignal.signalType === "NONE", `Exhaustion micro-top must be BLOCKED by LCI, got ${exhaustionSignal.signalType}`);
   console.log("  ✓ Micro-top exhaustion correctly blocked by LCI despite nominally high OBI (+0.60)\n");
@@ -121,10 +127,9 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   // --------------------------------------------------------------------------
   console.log("[STAGE 3] Testing Symmetric Breakdown Initiation (Negative Microprice Dev & Negative Velocity)...");
 
-  // Reset order in flight flag and slots for clean stage isolation
-  engine.resetInFlightOrder();
+  // Reset resting orders and slots for clean stage isolation
+  engine.annihilateRestingEntryOrders("STAGE_ISOLATION");
   engine.getHedgeLedger().clearSlots();
-  engine.clearPendingEntryOrders();
 
   // Tick 3: Re-establish neutral baseline
   await new Promise((r) => setTimeout(r, 10));
@@ -139,10 +144,12 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   client.setCVD(0.0, 0);
   client.writeAtomicFloat64Asset(0, SAB_SLOTS.AI_DIRECTION, 0.0); // Neutral baseline
   client.setShortCooldownLock(0, 0);
-  engine.evaluateTick();
-  engine.resetInFlightOrder();
+  const neutralSig = engine.evaluateTick();
+  if (neutralSig.executionPromise) {
+    await neutralSig.executionPromise;
+  }
+  engine.annihilateRestingEntryOrders("STAGE_ISOLATION");
   engine.getHedgeLedger().clearSlots();
-  engine.clearPendingEntryOrders();
   client.setShortCooldownLock(0, 0);
 
   // Tick 4: Toxic ask wall injection: Bid Qty = 2.0, Ask Qty = 30.0 (OBI = -0.875)

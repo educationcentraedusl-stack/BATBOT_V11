@@ -716,40 +716,6 @@ export class StrategyEngine {
     return count;
   }
 
-  /**
-   * Resets stale in-flight order lock after execution timeout or network failure recovery.
-   * Called by error-recovery paths when an order placement promise was abandoned due to
-   * AbortSignal timeout, TCP socket drop, or Binance API 503 gateway errors.
-   */
-  public resetInFlightOrder(): void {
-    this.isOrderInFlight = false;
-  }
-
-  /**
-   * Resets the LCI (Liquidity Cascade Indicator) microstructural velocity state.
-   * Required when reconnecting to a different market data stream or after extended
-   * disconnection periods where accumulated OBI velocity state becomes stale.
-   */
-  public resetLci(): void {
-    this.prevOBI = 0;
-    this.prevOBIVelocity = 0;
-    this.prevTickMs = 0;
-    this.isLciInitialized = false;
-  }
-
-  public clearPendingEntryOrders(): void {
-    for (const pending of this.pendingEntryOrders.values()) {
-      if (pending.timeoutTimer) {
-        clearTimeout(pending.timeoutTimer);
-      }
-    }
-    this.pendingEntryOrders.clear();
-    this.isOrderInFlight = false;
-    for (const timer of this.settlementTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.settlementTimers.clear();
-  }
 
   /**
    * SOTA Tier-1 AROS-CA: Active Resting Order Sweep & Continuous Annihilation.

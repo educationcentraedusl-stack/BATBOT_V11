@@ -137,18 +137,19 @@ export class AutoRecalibrationManager {
     this.maxAssetSlots = maxSlots;
   }
 
+  public getMarketDataClient(): MarketDataClient | null {
+    return this.client;
+  }
+
   /**
-   * Extracts the underlying SharedArrayBuffer from the registered MarketDataClient
+   * Extracts the underlying SharedArrayBuffer from the registered live MarketDataClient
    * for passing to N-API loadAiModel/loadAiModelFull so Rust can atomically bump
    * HOTSWAP_EPOCH (Slot 151) on model hot-swap.
-   * Lazily initializes MarketDataClient if not already registered.
+   * Throws an error if no live MarketDataClient is registered.
    */
-  private getSabBufferForNapi(): Buffer {
+  public getSabBufferForNapi(): Buffer {
     if (!this.client) {
-      const maxAssets = this.maxAssetSlots || 10;
-      const slotsPerAsset = 256;
-      const sab = new SharedArrayBuffer(maxAssets * slotsPerAsset * 8);
-      this.client = new MarketDataClient(sab, maxAssets, slotsPerAsset);
+      throw new Error("CRITICAL: SAB Client not bound");
     }
     const sab = this.client.getRawSharedArrayBuffer();
     return Buffer.from(sab);
@@ -273,6 +274,7 @@ export class AutoRecalibrationManager {
 
       // Perform dual hot-swap with SAB buffer for HOTSWAP_EPOCH atomic bump
       const sabBuffer = this.getSabBufferForNapi();
+      console.log(`[STEP 1 PROOF] Passing physical SAB Buffer to Rust. Byte Length: ${sabBuffer.length}`);
       const swapped = nativeAddon.loadAiModelFull
         ? nativeAddon.loadAiModelFull(this.weightsPath, this.tkanPath, sabBuffer)
         : (nativeAddon.loadAiModel ? nativeAddon.loadAiModel(this.weightsPath, sabBuffer) : false);

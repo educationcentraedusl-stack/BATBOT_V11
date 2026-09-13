@@ -125,7 +125,23 @@ async function runQuoteFadingTest() {
   const engine = new StrategyEngine(client, riskGuard, mockExec, btcConfig);
   const bigIntView = new BigInt64Array(sab);
 
-  let seqNum = 100n;
+  // Initialize healthy rolling IC (+0.05) so IR conviction gate passes
+  client.setRollingIC(0.05, 0);
+
+  let seqNum = 1000n;
+
+  // Initialize LCI baseline with neutral tick
+  const nowMs0 = Date.now();
+  Atomics.store(bigIntView, 0, BigInt(nowMs0) * 1000000n);
+  client.writeAtomicFloat64Asset(0, 4, 77000.0);
+  client.writeAtomicFloat64Asset(0, 5, 10.0);
+  client.writeAtomicFloat64Asset(0, 6, 77001.0);
+  client.writeAtomicFloat64Asset(0, 7, 10.0);
+  client.writeAtomicFloat64Asset(0, 1, 0.0);
+  client.writeAtomicFloat64Asset(0, 93, 0.0);
+  client.writeAtomicFloat64Asset(0, 94, 0.50);
+  Atomics.store(bigIntView, 92, seqNum);
+  engine.evaluateTick();
 
   // --------------------------------------------------------------------------------
   // [CASE 1] Neutral / Favorable Flow -> Limit Bid Placed at Top of Book ($77,000.0)
@@ -134,12 +150,16 @@ async function runQuoteFadingTest() {
   {
     capturedOrders.length = 0;
 
-    // Seed SAB Orderbook
+    await new Promise((r) => setTimeout(r, 10));
+    const nowMs1 = Date.now();
+    Atomics.store(bigIntView, 0, BigInt(nowMs1) * 1000000n);
+
+    // Seed SAB Orderbook with favorable surge
     client.writeAtomicFloat64Asset(0, 4, 77000.0); // Best Bid
-    client.writeAtomicFloat64Asset(0, 5, 10.0);    // Best Bid Qty
+    client.writeAtomicFloat64Asset(0, 5, 25.0);    // Best Bid Qty
     client.writeAtomicFloat64Asset(0, 6, 77001.0); // Best Ask
-    client.writeAtomicFloat64Asset(0, 7, 10.0);    // Best Ask Qty
-    client.writeAtomicFloat64Asset(0, 1, 0.15);    // OBI (+0.15)
+    client.writeAtomicFloat64Asset(0, 7, 2.0);     // Best Ask Qty
+    client.writeAtomicFloat64Asset(0, 1, 0.85);    // OBI (+0.85)
     client.writeAtomicFloat64Asset(0, 2, 100.0);   // CVD
     client.writeAtomicFloat64Asset(0, 112, 0.10);  // Hawkes
     client.writeAtomicFloat64Asset(0, 121, 0.001); // Vol
@@ -183,7 +203,7 @@ async function runQuoteFadingTest() {
 
     // Reset ledger to flat and clear in-flight pending entry states
     engine.getHedgeLedger().reset();
-    engine.clearPendingEntryOrders();
+    engine.annihilateRestingEntryOrders("TEST_CLEANUP");
     engine.getHazardEngine().reset();
 
     // Simulate aggressive toxic selling pressure in HazardEngine:
@@ -237,7 +257,7 @@ async function runQuoteFadingTest() {
 
     // Reset ledger to flat and clear in-flight pending entry states
     engine.getHedgeLedger().reset();
-    engine.clearPendingEntryOrders();
+    engine.annihilateRestingEntryOrders("TEST_CLEANUP");
     engine.getHazardEngine().reset();
 
     // Simulate aggressive toxic buying pressure in HazardEngine:

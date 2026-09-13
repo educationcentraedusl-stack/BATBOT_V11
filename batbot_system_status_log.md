@@ -1,5 +1,15 @@
 # BATBOT_V11 System Status Log
 
+- **Date:** 2026-09-13
+- **Feature/Task:** Micro-Managed Strict Remediation - Step 2 of 7 (DEF-35.3: Eradication of Test Backdoors in Strategy Engine)
+- **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/strategy/multiEngine.ts`, `src/tests/test_portfolio_directional_concentration.ts`, `src/tests/test_lci_microprice_entry_timing.ts`, `src/tests/test_phase3_phase4_consecutive_loss_and_chop.ts`, `src/tests/test_oms_capacity_and_mutex_lock.ts`, `src/tests/test_sota_asymmetric_quote_fading.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:**
+  1. **DEF-35.3 Complete Physical Eradication:** Physically removed `resetInFlightOrder()`, `clearPendingEntryOrders()`, and `resetLci()` from `src/strategy/engine.ts`. Absolutely zero methods override `isOrderInFlight`, manually clear orders outside organic OMS flow, or zero out `prevOBI`/`prevOBIVelocity`.
+  2. **MultiEngine Shutdown Compliance:** Replaced deprecated `clearPendingEntryOrders()` call in `src/strategy/multiEngine.ts` with production AROS-CA resting order sweep: `annihilateRestingEntryOrders("SYSTEM_SHUTDOWN")`.
+  3. **Organic State Lifecycle Testing:** Rewrote all test suites (`test_portfolio_directional_concentration.ts`, `test_lci_microprice_entry_timing.ts`, `test_phase3_phase4_consecutive_loss_and_chop.ts`, `test_oms_capacity_and_mutex_lock.ts`, `test_sota_asymmetric_quote_fading.ts`) to use organic state transitions (awaiting `executionPromise`, production `annihilateRestingEntryOrders`, and `onExecutionCompleted` fill callbacks).
+  4. **Build & Test Verification:** 100% clean build (`npm run build`) syncing `src/` and `dist/`. All 5 test suites physically verified and passed with exit code 0.
+- **Status:** ✅ Completed & QA Verified
+
 - **Date:** 2026-09-08
 - **Feature/Task:** Forensic Audit 34.0 Terminal Remediation (DEF-34.1 Physical SAB Buffer Wiring, DEF-34.2 Phase 5 JoinHandle Type Resolution, DEF-34.3/34.4 Gate 4 Unconditional 200µs Mean & 500µs Max SLA Restoration, DEF-34.5 StrategyEngine Backdoor Eradication, DEF-34.6 Continuous Soft-Clipping Math, DEF-34.7 Deterministic State Assertions, and TKAN Zero-Copy Page-Pre-faulting Optimization)
 - **Artifacts Created/Modified:** `src/ai/recalibrationWorker.ts`, `src/scripts/execute_recalibration.ts`, `src/index.ts`, `tests/phase5_orchestrator_tests.rs`, `src/ai/preflight.rs`, `src/strategy/engine.ts`, `src/ai/engine.rs`, `src/ai/mamba.rs`, `src/ai/kan.rs`, `tests/verify_killswitch_hotswap.ts`, `batbot_system_status_log.md`
