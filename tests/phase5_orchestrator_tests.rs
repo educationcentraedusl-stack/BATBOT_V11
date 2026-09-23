@@ -15,8 +15,8 @@ fn test_fast_float_parsing_performance() {
     let iterations = 100_000;
 
     for _ in 0..iterations {
-        let p = fast_float::parse::<f64, _>(price_str.as_bytes()).unwrap();
-        let q = fast_float::parse::<f64, _>(qty_str.as_bytes()).unwrap();
+        let p = fast_float::parse::<f64, _>(price_str.as_bytes()).unwrap_or(0.0);
+        let q = fast_float::parse::<f64, _>(qty_str.as_bytes()).unwrap_or(0.0);
         assert!((p - 95432.50).abs() < 1e-6);
         assert!((q - 1.524).abs() < 1e-6);
     }
@@ -67,10 +67,23 @@ fn test_multi_asset_lob_manager_unblocked_thread() {
     // Wait briefly for synchronous unblocked processor thread to consume queue
     std::thread::sleep(std::time::Duration::from_millis(50));
     lob_mgr.stop();
-    let _ = handle.expect("Failed to spawn LOB processor thread").join();
+    match handle {
+        Ok(h) => {
+            let _ = h.join();
+        }
+        Err(e) => {
+            eprintln!("[Test] Failed to spawn LOB processor thread: {:?}", e);
+        }
+    }
 
     for asset_idx in 0..MAX_CONCURRENT_ASSETS {
-        let metrics = lob_mgr.get_metrics_for_asset(asset_idx).expect("Metrics missing");
+        let metrics = match lob_mgr.get_metrics_for_asset(asset_idx) {
+            Some(m) => m,
+            None => {
+                assert!(false, "Metrics missing for asset {}", asset_idx);
+                continue;
+            }
+        };
         assert!((metrics.last_spread - 0.5).abs() < 1e-6);
     }
 
@@ -117,7 +130,14 @@ fn test_strategy_orchestrator_end_to_end() {
 
     std::thread::sleep(std::time::Duration::from_millis(30));
     orchestrator.stop();
-    let _ = handle.expect("Failed to spawn orchestrator thread").join();
+    match handle {
+        Ok(h) => {
+            let _ = h.join();
+        }
+        Err(e) => {
+            eprintln!("[Test] Failed to spawn orchestrator thread: {:?}", e);
+        }
+    }
 
     assert!(StrategyOrchestrator::tick_count() >= 100);
     println!(

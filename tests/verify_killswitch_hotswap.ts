@@ -135,9 +135,10 @@ async function runPhysicalVerification(): Promise<void> {
 
   // With isDriftFlagged=true, the state machine transitions DETERMINISTICALLY to MODEL_BROKEN
   // in exactly ONE tick (engine.ts line 398). No hedge assertion tolerated.
+  const degradedState = engine.getIcState();
   assert(
-    engine.getIcState() === "MODEL_BROKEN",
-    `Engine must be MODEL_BROKEN after negative IC (-0.05) + drift flag, got ${engine.getIcState()}`
+    degradedState === "MODEL_BROKEN",
+    `Engine must be MODEL_BROKEN after negative IC (-0.05) + drift flag, got ${degradedState}`
   );
   console.log(`  ✓ Engine organically transitioned to MODEL_BROKEN via negative IC (-0.05) + drift flag (single-tick deterministic)`);
 
@@ -198,9 +199,10 @@ async function runPhysicalVerification(): Promise<void> {
   await engine.evaluateTick();
 
   // isDriftFlagged=true with IC=-0.08 deterministically transitions to MODEL_BROKEN in one tick
+  const stage4DegradedState = engine.getIcState();
   assert(
-    engine.getIcState() === "MODEL_BROKEN",
-    `Engine must be MODEL_BROKEN for epoch handshake test, got ${engine.getIcState()}`
+    stage4DegradedState === "MODEL_BROKEN",
+    `Engine must be MODEL_BROKEN for epoch handshake test, got ${stage4DegradedState}`
   );
   console.log(`  ✓ Engine re-degraded organically to MODEL_BROKEN (single-tick deterministic)`);
 

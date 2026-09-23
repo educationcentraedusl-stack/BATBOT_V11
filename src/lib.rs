@@ -41,11 +41,21 @@ lazy_static! {
     pub static ref GLOBAL_MULTI_LOB_MANAGER: ArcSwapOption<MultiAssetLOBManager> = ArcSwapOption::from(None);
     pub static ref GLOBAL_MULTI_STREAM_MANAGER: ArcSwapOption<MultiStreamManager> = ArcSwapOption::from(None);
     pub static ref GLOBAL_STRATEGY_ORCHESTRATOR: ArcSwapOption<StrategyOrchestrator> = ArcSwapOption::from(None);
-    static ref GLOBAL_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_multi_thread()
-
-        .enable_all()
-        .build()
-        .expect("Failed to initialize Tokio runtime for HFT ingestion");
+    static ref GLOBAL_RUNTIME: Option<tokio::runtime::Runtime> = {
+        match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+            Ok(rt) => Some(rt),
+            Err(e) => {
+                eprintln!("[BATBOT_V11][ERROR] Multi-thread Tokio runtime initialization failed: {}. Falling back to current-thread runtime...", e);
+                match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                    Ok(rt) => Some(rt),
+                    Err(fallback_err) => {
+                        eprintln!("[BATBOT_V11][FATAL] Failed to initialize current-thread Tokio runtime: {}", fallback_err);
+                        None
+                    }
+                }
+            }
+        }
+    };
 }
 
 
@@ -367,18 +377,26 @@ pub fn start_ingestion(sab_buffer: Buffer, symbols: Option<Vec<String>>) -> napi
         let sym_str = sym.clone();
 
         // Spawn consumer loop for this asset slot
-        GLOBAL_RUNTIME.spawn(async move {
-            bridge_clone.start_consumer_loop_asset(queue_consumer, asset_idx);
-        });
+        if let Some(ref rt) = *GLOBAL_RUNTIME {
+            rt.spawn(async move {
+                bridge_clone.start_consumer_loop_asset(queue_consumer, asset_idx);
+            });
+        } else {
+            eprintln!("[BATBOT_V11][ERROR] Tokio runtime unavailable for consumer loop on asset slot #{}", asset_idx);
+        }
 
         // Spawn WebSocket stream manager for this symbol
         let conn_mgr = Arc::new(ConnectionManager::new(&sym_str));
-        GLOBAL_RUNTIME.spawn(async move {
-            println!("[BATBOT_V11] Starting Binance Futures WebSocket Stream for Slot #{}: {}...", asset_idx, sym_str);
-            if let Err(e) = conn_mgr.run_rotation_loop(queue_producer).await {
-                eprintln!("[BATBOT_V11][WS Manager Error][Slot #{}] Rotation loop error: {}", asset_idx, e);
-            }
-        });
+        if let Some(ref rt) = *GLOBAL_RUNTIME {
+            rt.spawn(async move {
+                println!("[BATBOT_V11] Starting Binance Futures WebSocket Stream for Slot #{}: {}...", asset_idx, sym_str);
+                if let Err(e) = conn_mgr.run_rotation_loop(queue_producer).await {
+                    eprintln!("[BATBOT_V11][WS Manager Error][Slot #{}] Rotation loop error: {}", asset_idx, e);
+                }
+            });
+        } else {
+            eprintln!("[BATBOT_V11][ERROR] Tokio runtime unavailable for WebSocket stream on asset slot #{}", asset_idx);
+        }
     }
 
     // Spawn Latency Monitor background task on Tokio runtime
@@ -851,9 +869,13 @@ pub fn start_phase5_orchestrator_napi(symbols: Vec<String>) -> bool {
     }
 
     let stream_mgr_clone = stream_mgr.clone();
-    GLOBAL_RUNTIME.spawn(async move {
-        let _ = stream_mgr_clone.update_subscriptions(&symbols).await;
-    });
+    if let Some(ref rt) = *GLOBAL_RUNTIME {
+        rt.spawn(async move {
+            let _ = stream_mgr_clone.update_subscriptions(&symbols).await;
+        });
+    } else {
+        eprintln!("[BATBOT_V11][ERROR] Tokio runtime unavailable for updating stream subscriptions");
+    }
 
     true
 }
