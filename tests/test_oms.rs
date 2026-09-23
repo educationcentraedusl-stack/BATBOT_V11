@@ -103,6 +103,8 @@ fn test_oms_engine_sab_evaluation() -> Result<(), Box<dyn std::error::Error>> {
     bridge.store_f64(100, 2.0); // slippage 2 ticks
     bridge.store_u64(103, 2_000_000); // 2ms latency (slot 103)
     bridge.store_u64(104, 1); // sequence 1 (slot 104)
+    bridge.store_f64(113, 0.40); // Depth depletion
+    bridge.store_f64(122, 0.15); // VPIN / flow toxicity
 
     let intent_opt = oms.evaluate_sab_prediction(&bridge);
     assert!(intent_opt.is_some());

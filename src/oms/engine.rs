@@ -170,6 +170,10 @@ impl OmsEngine {
             .unwrap_or_default()
             .as_nanos() as u64;
 
+        // 4. Read Live Microstructure Metrics from SAB (VPIN slot 122, Depletion slot 113)
+        let v_depletion = sab.load_f64(113);
+        let flow_toxicity = sab.load_f64(122);
+
         // Dynamic tick size from SmartOrderRouter configuration
         let tick_size = self.sor.tick_size();
         let intent = self.sor.route_order(
@@ -181,8 +185,8 @@ impl OmsEngine {
             best_bid,
             best_ask,
             spread_vel,
-            0.0, // v_depletion
-            0.0, // flow_toxicity
+            v_depletion,
+            flow_toxicity,
             slippage_ticks,
             tick_size,
             order_qty,
@@ -284,6 +288,8 @@ mod tests {
         sab.store_f64(100, 2.0); // Slippage ticks
         sab.store_u64(103, 500_000); // 500us latency
         sab.store_u64(104, 1); // Sequence 1
+        sab.store_f64(113, 0.40); // Depth depletion
+        sab.store_f64(122, 0.15); // VPIN / flow toxicity
 
         let intent = engine.evaluate_sab_prediction(&sab);
         assert!(intent.is_some());

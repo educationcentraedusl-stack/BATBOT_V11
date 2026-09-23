@@ -92,6 +92,10 @@ impl StrategyOrchestrator {
         ORCHESTRATOR_TICK_COUNT.load(Ordering::Relaxed)
     }
 
+    pub fn reset_tick_count() {
+        ORCHESTRATOR_TICK_COUNT.store(0, Ordering::Relaxed);
+    }
+
     pub fn signal_count() -> u64 {
         ORCHESTRATOR_SIGNAL_COUNT.load(Ordering::Relaxed)
     }

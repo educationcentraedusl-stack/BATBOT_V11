@@ -349,28 +349,27 @@ mod tests {
         let engine = AIEngine::load_from_paths("./models/cfc_weights.safetensors", "./models/tkan_luts.bin");
         let mut validator = PreflightValidator::new(engine, 30, 20, -1.0);
 
-        if validator.phase() == PreflightPhase::Warming {
-            for _ in 0..30 {
-                validator.step_shadow(&bridge);
-            }
-            assert_eq!(validator.phase(), PreflightPhase::Testing);
-            for i in 0..20 {
-                bridge.store_f64(4, 50000.0 + (i as f64 * 10.0));
-                bridge.store_f64(6, 50010.0 + (i as f64 * 10.0));
-                if i == 10 {
-                    std::thread::sleep(std::time::Duration::from_millis(1050));
-                }
-                validator.step_shadow(&bridge);
-            }
-            if validator.phase() != PreflightPhase::Passed {
-                eprintln!("[TEST DIAGNOSTIC] Preflight phase failed with reason: {:?}", validator.failure_reason);
-            }
-            assert_eq!(validator.phase(), PreflightPhase::Passed);
-
-            let promoted = validator.promote();
-            assert!(promoted.is_some());
-            assert_eq!(validator.phase(), PreflightPhase::Promoted);
+        assert_eq!(validator.phase(), PreflightPhase::Warming, "Validator must start in Warming phase");
+        for _ in 0..30 {
+            validator.step_shadow(&bridge);
         }
+        assert_eq!(validator.phase(), PreflightPhase::Testing);
+        for i in 0..20 {
+            bridge.store_f64(4, 50000.0 + (i as f64 * 10.0));
+            bridge.store_f64(6, 50010.0 + (i as f64 * 10.0));
+            if i == 10 {
+                std::thread::sleep(std::time::Duration::from_millis(1050));
+            }
+            validator.step_shadow(&bridge);
+        }
+        if validator.phase() != PreflightPhase::Passed {
+            eprintln!("[TEST DIAGNOSTIC] Preflight phase failed with reason: {:?}", validator.failure_reason);
+        }
+        assert_eq!(validator.phase(), PreflightPhase::Passed);
+
+        let promoted = validator.promote();
+        assert!(promoted.is_some());
+        assert_eq!(validator.phase(), PreflightPhase::Promoted);
         Ok(())
     }
 
@@ -389,24 +388,23 @@ mod tests {
         let engine = AIEngine::load_from_paths("./models/cfc_weights.safetensors", "./models/tkan_luts.bin");
         let mut validator = PreflightValidator::new(engine, 10, 10, -1.0);
 
-        if validator.phase() == PreflightPhase::Warming {
-            for _ in 0..10 {
-                validator.step_shadow(&bridge);
-            }
-            assert_eq!(validator.phase(), PreflightPhase::Testing);
-            // Rapid execution with zero sleep: zero samples mature, total_eval_directions == 0
-            for _ in 0..10 {
-                validator.step_shadow(&bridge);
-            }
-            // Gate 3 must fail unconditionally on zero samples
-            assert_eq!(validator.phase(), PreflightPhase::Failed);
-            let metrics = validator.get_metrics();
-            assert!(!metrics.gate3_passed);
-            assert_eq!(
-                metrics.failure_reason,
-                Some("Gate 3 Failed: Shadow IC below min threshold or directional accuracy low")
-            );
+        assert_eq!(validator.phase(), PreflightPhase::Warming, "Validator must start in Warming phase");
+        for _ in 0..10 {
+            validator.step_shadow(&bridge);
         }
+        assert_eq!(validator.phase(), PreflightPhase::Testing);
+        // Rapid execution with zero sleep: zero samples mature, total_eval_directions == 0
+        for _ in 0..10 {
+            validator.step_shadow(&bridge);
+        }
+        // Gate 3 must fail unconditionally on zero samples
+        assert_eq!(validator.phase(), PreflightPhase::Failed);
+        let metrics = validator.get_metrics();
+        assert!(!metrics.gate3_passed);
+        assert_eq!(
+            metrics.failure_reason,
+            Some("Gate 3 Failed: Shadow IC below min threshold or directional accuracy low")
+        );
         Ok(())
     }
 }

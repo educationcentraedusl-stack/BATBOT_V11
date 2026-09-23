@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 #[test]
-fn test_fast_float_parsing_performance() {
+fn test_fast_float_parsing_performance() -> Result<(), Box<dyn std::error::Error>> {
     let price_str = "95432.50";
     let qty_str = "1.524";
 
@@ -15,8 +15,10 @@ fn test_fast_float_parsing_performance() {
     let iterations = 100_000;
 
     for _ in 0..iterations {
-        let p = fast_float::parse::<f64, _>(price_str.as_bytes()).unwrap_or(0.0);
-        let q = fast_float::parse::<f64, _>(qty_str.as_bytes()).unwrap_or(0.0);
+        let p = fast_float::parse::<f64, _>(price_str.as_bytes())
+            .map_err(|e| format!("Failed to parse price: {:?}", e))?;
+        let q = fast_float::parse::<f64, _>(qty_str.as_bytes())
+            .map_err(|e| format!("Failed to parse qty: {:?}", e))?;
         assert!((p - 95432.50).abs() < 1e-6);
         assert!((q - 1.524).abs() < 1e-6);
     }
@@ -27,13 +29,15 @@ fn test_fast_float_parsing_performance() {
         "\n[Bench] fast-float parsed 200,000 floats in {:?}. Average latency: {:.2} ns / parse",
         elapsed, nanos_per_op
     );
-    let threshold_ns = if cfg!(debug_assertions) { 2500.0 } else { 100.0 };
+    let threshold_ns = if cfg!(debug_assertions) { 2500.0 } else { 50.0 };
     assert!(
         nanos_per_op < threshold_ns,
         "Float parse latency ({:.2} ns) exceeded threshold ({:.2} ns)",
         nanos_per_op,
         threshold_ns
     );
+
+    Ok(())
 }
 
 #[test]
@@ -71,13 +75,9 @@ fn test_multi_asset_lob_manager_unblocked_thread() -> Result<(), Box<dyn std::er
     h.join().map_err(|_| "LOB processor thread panicked")?;
 
     for asset_idx in 0..MAX_CONCURRENT_ASSETS {
-        let metrics = match lob_mgr.get_metrics_for_asset(asset_idx) {
-            Some(m) => m,
-            None => {
-                assert!(false, "Metrics missing for asset {}", asset_idx);
-                continue;
-            }
-        };
+        let metrics = lob_mgr
+            .get_metrics_for_asset(asset_idx)
+            .ok_or_else(|| format!("Metrics missing for asset {}", asset_idx))?;
         assert!((metrics.last_spread - 0.5).abs() < 1e-6);
     }
 
@@ -91,6 +91,8 @@ fn test_multi_asset_lob_manager_unblocked_thread() -> Result<(), Box<dyn std::er
 
 #[test]
 fn test_strategy_orchestrator_end_to_end() -> Result<(), Box<dyn std::error::Error>> {
+    StrategyOrchestrator::reset_tick_count();
+
     let lob_mgr = Arc::new(MultiAssetLOBManager::new());
     let ai_engine = Arc::new(AIEngine::new());
     let oms_engine = Arc::new(MultiAssetOmsEngine::default_hft(100_000.0));

@@ -513,26 +513,23 @@ pub struct AIEngine {
     pub feature_pipelines: RwLock<Vec<Mutex<StreamingFeaturePipeline>>>,
 }
 
-fn safe_zero_hidden_tensor(device: &Device) -> Tensor {
+fn safe_zero_hidden_tensor(device: &Device) -> Result<Tensor> {
     if let Ok(t) = Tensor::zeros((1, 32), DType::F32, device) {
-        return t;
+        return Ok(t);
     }
     if let Ok(t) = Tensor::zeros((1, 32), DType::F32, &Device::Cpu) {
-        return t;
+        return Ok(t);
     }
     if let Ok(t) = Tensor::from_slice(&[0.0f32; 32], (1, 32), &Device::Cpu) {
-        return t;
+        return Ok(t);
     }
     if let Ok(t) = Tensor::from_vec(vec![0.0f32; 32], (1, 32), &Device::Cpu) {
-        return t;
+        return Ok(t);
     }
     if let Ok(t) = Tensor::new(0.0f32, &Device::Cpu) {
-        return t;
+        return Ok(t);
     }
-    match Tensor::zeros((1, 1), DType::F32, &Device::Cpu) {
-        Ok(t) => t,
-        Err(_) => unreachable!("Exhausted zero-panic fallbacks for tensor allocation"),
-    }
+    Tensor::zeros((1, 1), DType::F32, &Device::Cpu)
 }
 
 impl AIEngine {
@@ -557,12 +554,20 @@ impl AIEngine {
         let mut feature_pipelines = Vec::with_capacity(num_assets);
         let mut hidden_states = Vec::with_capacity(num_assets);
         let mut mamba_hidden = Vec::with_capacity(num_assets);
+        let mut status = weights_engine.status;
 
         for _ in 0..num_assets {
             asset_trackers.push(AssetTelemetryTracker::new());
             feature_pipelines.push(Mutex::new(StreamingFeaturePipeline::new()));
-            let hs = safe_zero_hidden_tensor(&device);
-            hidden_states.push(Mutex::new(hs));
+            match safe_zero_hidden_tensor(&device) {
+                Ok(hs) => {
+                    hidden_states.push(Mutex::new(hs));
+                }
+                Err(e) => {
+                    eprintln!("[BATBOT_V11][AIEngine] Failed to initialize hidden state: {:?}", e);
+                    status = AiEngineStatus::Uncalibrated;
+                }
+            }
             mamba_hidden.push(Mutex::new(vec![0.0f32; 512]));
         }
 
@@ -572,7 +577,7 @@ impl AIEngine {
             mamba: weights_engine.mamba,
             hidden_states: RwLock::new(hidden_states),
             mamba_hidden: RwLock::new(mamba_hidden),
-            status: weights_engine.status,
+            status,
             calibration_params: weights_engine.calibration_params,
             last_inference_ns: AtomicU64::new(0),
             inference_seq: AtomicU64::new(0),
@@ -597,7 +602,9 @@ impl AIEngine {
         if let Ok(new_hs_vec) = new_engine.hidden_states.into_inner() {
             if let Ok(mut hs_vec) = self.hidden_states.write() {
                 while hs_vec.len() < new_hs_vec.len() {
-                    hs_vec.push(Mutex::new(safe_zero_hidden_tensor(&Device::Cpu)));
+                    if let Ok(hs) = safe_zero_hidden_tensor(&Device::Cpu) {
+                        hs_vec.push(Mutex::new(hs));
+                    }
                 }
                 for (i, new_hs_mutex) in new_hs_vec.into_iter().enumerate() {
                     if let Ok(new_hs) = new_hs_mutex.into_inner() {
@@ -838,7 +845,7 @@ impl AIEngine {
             if asset_idx >= self.hidden_states.read().unwrap_or_else(|e| e.into_inner()).len() {
                 let mut hs_write = self.hidden_states.write().unwrap_or_else(|e| e.into_inner());
                 while hs_write.len() <= asset_idx {
-                    hs_write.push(Mutex::new(safe_zero_hidden_tensor(&Device::Cpu)));
+                    hs_write.push(Mutex::new(safe_zero_hidden_tensor(&Device::Cpu)?));
                 }
             }
             let hs_holder = self.hidden_states.read().unwrap_or_else(|e| e.into_inner());
@@ -1103,9 +1110,8 @@ impl AIEngine {
         };
 
         let latency_ns = timer_start.elapsed().as_nanos() as u64;
-        if latency_ns > 200_000 {
-            println!("[STEP 5 PROOF] Full Pipeline Latency (Features + DNN + Assembly + Calib): {} ns", latency_ns);
-        }
+        #[cfg(test)]
+        println!("[STEP 5 PROOF] Full Pipeline Latency (Features + DNN + Assembly + Calib): {} ns", latency_ns);
 
         Ok((direction, confidence, horizon_ms, latency_ns, hidden_norm))
     }
@@ -1114,7 +1120,9 @@ impl AIEngine {
         let other_guard = other.hidden_states.read().unwrap_or_else(|e| e.into_inner());
         let mut self_guard = self.hidden_states.write().unwrap_or_else(|e| e.into_inner());
         while self_guard.len() < other_guard.len() {
-            self_guard.push(Mutex::new(safe_zero_hidden_tensor(&Device::Cpu)));
+            if let Ok(hs) = safe_zero_hidden_tensor(&Device::Cpu) {
+                self_guard.push(Mutex::new(hs));
+            }
         }
         for (i, other_mutex) in other_guard.iter().enumerate() {
             if let Ok(other_hs) = other_mutex.lock() {
@@ -1424,6 +1432,10 @@ mod tests {
                 println!("Bullish Stream Tick {:02}: Dir = {:.4}, Conf = {:.4}", tick, dir, conf);
             }
         }
+        let bull_dir = bridge.load_f64(93);
+        let bull_conf = bridge.load_f64(94);
+        assert!(bull_dir.is_finite(), "bull_dir must be finite");
+        assert!(bull_conf.is_finite() && bull_conf >= 0.0 && bull_conf <= 1.0, "bull_conf must be in [0, 1]");
 
         // Feed 160 bearish ticks (falling price down to 48000, low OBI, crashing CVD)
         for tick in 0..160 {
@@ -1443,16 +1455,23 @@ mod tests {
                 println!("Bearish Stream Tick {:02}: Dir = {:.4}, Conf = {:.4}", tick, dir, conf);
             }
         }
+        let bear_dir = bridge.load_f64(93);
+        let bear_conf = bridge.load_f64(94);
+        assert!(bear_dir.is_finite(), "bear_dir must be finite");
+        assert!(bear_conf.is_finite() && bear_conf >= 0.0 && bear_conf <= 1.0, "bear_conf must be in [0, 1]");
+        assert!(
+            bull_dir > bear_dir,
+            "Bullish stream direction ({:.4}) must be greater than bearish stream direction ({:.4})",
+            bull_dir, bear_dir
+        );
+
         Ok(())
     }
 
     #[test]
     fn test_inference_latency_benchmark() -> Result<()> {
         let engine = AIEngine::load_from_paths("./models/cfc_weights.safetensors", "./models/tkan_luts.bin");
-        if !engine.is_calibrated() {
-            println!("Engine not calibrated; skipping physical benchmark");
-            return Ok(());
-        }
+        assert!(engine.is_calibrated(), "AIEngine must be calibrated with valid model weights for physical benchmark");
         let mut buffer = vec![0u8; 4096];
         let bridge = create_test_bridge(&mut buffer)?;
         bridge.store_f64(4, 50000.0);
