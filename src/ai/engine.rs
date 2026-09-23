@@ -1103,7 +1103,9 @@ impl AIEngine {
         };
 
         let latency_ns = timer_start.elapsed().as_nanos() as u64;
-        println!("[STEP 5 PROOF] Full Pipeline Latency (Features + DNN + Assembly + Calib): {} ns", latency_ns);
+        if latency_ns > 200_000 {
+            println!("[STEP 5 PROOF] Full Pipeline Latency (Features + DNN + Assembly + Calib): {} ns", latency_ns);
+        }
 
         Ok((direction, confidence, horizon_ms, latency_ns, hidden_norm))
     }
@@ -1189,8 +1191,12 @@ impl AIEngine {
                 // CRITICAL: Reset drift state on the inherited tracker to prevent
                 // new models from instantly re-latching to MODEL_BROKEN due to
                 // stale CUSUM accumulators and is_drifted flags from the old model.
+                let now_ns = match SystemTime::now().duration_since(UNIX_EPOCH) {
+                    Ok(d) => d.as_nanos() as u64,
+                    Err(_) => 0,
+                };
                 self_ic.cusum.reset();
-                self_ic.record_recalibration(0);
+                self_ic.record_recalibration(now_ns);
             }
         }
     }

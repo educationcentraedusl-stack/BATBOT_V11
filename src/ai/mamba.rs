@@ -471,20 +471,21 @@ mod tests {
     }
 
     #[test]
-    fn test_zero_input_loaded_mamba_baseline() {
+    fn test_zero_input_loaded_mamba_baseline() -> Result<()> {
         let engine = crate::ai::weights::AiEngine::load_from_file("./models/cfc_weights.safetensors");
         if let Some(mamba) = &engine.mamba {
             let dev = Device::Cpu;
-            let zero_input = Tensor::zeros((1, 16), DType::F32, &dev).unwrap();
-            let zero_h = Tensor::zeros((1, mamba.d_inner, mamba.d_state), DType::F32, &dev).unwrap();
-            let (heads, _) = mamba.forward(&zero_input, &zero_h, 0.001).unwrap();
-            let flat = heads.flatten_all().unwrap();
-            let dir_logit = flat.get(0).unwrap().to_scalar::<f32>().unwrap();
-            let meta_logit = flat.get(1).unwrap().to_scalar::<f32>().unwrap();
-            let horiz_logit = flat.get(2).unwrap().to_scalar::<f32>().unwrap();
+            let zero_input = Tensor::zeros((1, 16), DType::F32, &dev)?;
+            let zero_h = Tensor::zeros((1, mamba.d_inner, mamba.d_state), DType::F32, &dev)?;
+            let (heads, _) = mamba.forward(&zero_input, &zero_h, 0.001)?;
+            let flat = heads.flatten_all()?;
+            let dir_logit = flat.get(0)?.to_scalar::<f32>()?;
+            let meta_logit = flat.get(1)?.to_scalar::<f32>()?;
+            let horiz_logit = flat.get(2)?.to_scalar::<f32>()?;
             println!("Zero Input Loaded Mamba Logits -> dir: {:.4}, meta: {:.4}, horiz: {:.4}",
                 dir_logit, meta_logit, horiz_logit);
         }
+        Ok(())
     }
 
     #[test]

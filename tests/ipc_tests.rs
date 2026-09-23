@@ -4,17 +4,18 @@ mod tests {
     use batbot_v11_core::lob::LOB_DEPTH;
 
     #[test]
-    fn test_atomic_shared_memory_alignment_and_bounds() {
+    fn test_atomic_shared_memory_alignment_and_bounds() -> Result<(), Box<dyn std::error::Error>> {
         let mut raw_buffer = vec![0u8; SHARED_MEMORY_BYTES];
         let bridge_res = AtomicSharedMemoryBridge::new(raw_buffer.as_mut_ptr(), raw_buffer.len());
         assert!(bridge_res.is_ok());
 
-        let bridge = bridge_res.unwrap();
+        let bridge = bridge_res?;
         bridge.store_f64(1, 0.42);
         assert_eq!(bridge.load_f64(1), 0.42);
 
         bridge.store_u64(0, 1_600_000_000);
         assert_eq!(bridge.load_u64(0), 1_600_000_000);
+        Ok(())
     }
 
     #[test]
@@ -25,9 +26,9 @@ mod tests {
     }
 
     #[test]
-    fn test_concurrent_lock_free_ipc_writes() {
+    fn test_concurrent_lock_free_ipc_writes() -> Result<(), Box<dyn std::error::Error>> {
         let mut raw_buffer = vec![0u8; SHARED_MEMORY_BYTES];
-        let bridge = AtomicSharedMemoryBridge::new(raw_buffer.as_mut_ptr(), raw_buffer.len()).unwrap();
+        let bridge = AtomicSharedMemoryBridge::new(raw_buffer.as_mut_ptr(), raw_buffer.len())?;
 
         let mut bids = [(0.0, 0.0); LOB_DEPTH];
         let mut asks = [(0.0, 0.0); LOB_DEPTH];
@@ -74,5 +75,6 @@ mod tests {
         assert_eq!(bridge.load_f64(124), 1.2);
         assert_eq!(bridge.load_f64(125), 1.0);
         assert_eq!(bridge.load_f64(126), 1.0);
+        Ok(())
     }
 }

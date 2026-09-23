@@ -259,12 +259,12 @@ mod tests {
     use crate::oms::websocket_api::BinanceWsApiClient;
 
     #[test]
-    fn test_oms_lock_free_engine_and_sab_evaluation() {
+    fn test_oms_lock_free_engine_and_sab_evaluation() -> Result<(), Box<dyn std::error::Error>> {
         let mut buffer = [0u64; 256];
         let sab = AtomicSharedMemoryBridge::new(
             buffer.as_mut_ptr() as *mut u8,
             buffer.len() * 8,
-        ).unwrap();
+        )?;
 
         let risk_config = RiskConfig {
             max_notional_per_order: 100_000.0,
@@ -287,7 +287,7 @@ mod tests {
 
         let intent = engine.evaluate_sab_prediction(&sab);
         assert!(intent.is_some());
-        let intent = intent.unwrap();
+        let intent = intent.ok_or("Expected intent to be Some")?;
 
         assert_eq!(intent.symbol, "BTCUSDT");
         assert_eq!(intent.side, OrderSide::Buy);
@@ -296,24 +296,30 @@ mod tests {
         let metrics = engine.get_metrics();
         assert_eq!(metrics.total_orders_submitted, 1);
         assert!(metrics.total_volume_usd > 0.0);
+
+        Ok(())
     }
 
     #[test]
-    fn test_zero_heap_hmac_signing() {
+    fn test_zero_heap_hmac_signing() -> Result<(), Box<dyn std::error::Error>> {
         let query = "apiKey=testkey&timestamp=1600000000000";
         let secret = "testsecret";
-        let sig1 = BinanceWsApiClient::sign_query_string(query, secret).unwrap();
+        let sig1 = BinanceWsApiClient::sign_query_string(query, secret)
+            .map_err(|e| format!("{:?}", e))?;
 
         let mut sig_buf = [0u8; 64];
-        BinanceWsApiClient::sign_query_string_buf(query.as_bytes(), secret, &mut sig_buf).unwrap();
-        let sig2 = std::str::from_utf8(&sig_buf).unwrap();
+        BinanceWsApiClient::sign_query_string_buf(query.as_bytes(), secret, &mut sig_buf)
+            .map_err(|e| format!("{:?}", e))?;
+        let sig2 = std::str::from_utf8(&sig_buf)?;
 
         assert_eq!(sig1, sig2);
         assert_eq!(sig1.len(), 64);
+
+        Ok(())
     }
 
     #[test]
-    fn test_sor_dynamic_tick_size_and_zero_format_routing() {
+    fn test_sor_dynamic_tick_size_and_zero_format_routing() -> Result<(), Box<dyn std::error::Error>> {
         let sor = SmartOrderRouter::default_hft();
         assert_eq!(sor.tick_size(), 0.10);
 
@@ -334,12 +340,13 @@ mod tests {
             1600000000000000000,
         );
 
-
         assert!(intent.is_some());
-        let intent = intent.unwrap();
+        let intent = intent.ok_or("Expected intent to be Some")?;
         assert_eq!(intent.symbol, "ETHUSDT");
         assert_eq!(intent.side, OrderSide::Buy);
         assert!(intent.client_order_id.starts_with("BAT_"));
+
+        Ok(())
     }
 }
 

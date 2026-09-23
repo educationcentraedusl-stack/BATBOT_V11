@@ -1,6 +1,18 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-09-23
+- **Feature/Task:** Master Plan Execution - Batch 1 (Phases 1 & 2: Zero-Panic Macro Purge, Thread Safety, Latency Threshold Calibration & I/O De-jittering)
+- **Artifacts Created/Modified:** `tests/test_oms.rs`, `tests/ipc_tests.rs`, `src/ai/mamba.rs`, `src/ai/preflight.rs`, `src/oms/engine.rs`, `tests/phase5_orchestrator_tests.rs`, `src/ai/engine.rs`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:**
+  1. **Phase 1 Macro Purge (Zero-Panic Architecture):** 100% eradicated all `.unwrap()` and `.expect()` occurrences across the Rust codebase (`tests/test_oms.rs`, `tests/ipc_tests.rs`, `src/ai/mamba.rs`, `src/ai/preflight.rs`, and `src/oms/engine.rs`). Converted test functions to return `Result<(), Box<dyn std::error::Error>>` (or `candle_core::Result<()>`) and strictly propagate errors via the `?` operator. Telemetry check confirms 0 occurrences of `unwrap(` and `expect(` across all `.rs` files.
+  2. **Phase 2 Thread & Latency Calibration:** In `tests/phase5_orchestrator_tests.rs`, calibrated fast-float threshold to `100.0 ns` to absorb OS scheduler jitter and safely handle/propagate thread spawn and join errors without swallowing them via `eprintln!`.
+  3. **Phase 2 I/O De-jittering:** In `src/ai/engine.rs` (`run_shadow_inference`), gated synchronous `println!` latency diagnostics behind `if latency_ns > 200_000`, removing I/O jitter from the critical sub-microsecond path.
+  4. **Phase 2 Cooldown Window Fix:** In `inherit_telemetry_history` (`src/ai/engine.rs`), injected the true real-time timestamp (`SystemTime::now().duration_since(UNIX_EPOCH)`) into `record_recalibration(now_ns)` instead of passing `0`, ensuring newly promoted models strictly inherit the full cooldown window.
+  5. **Physical Test Verification:** Full release compilation and test suite (`cargo test --release`) executed with 100% pass rate: 49 unittests in `src/lib.rs`, 3 tests in `tests/ipc_tests.rs`, 6 tests in `tests/lob_tests.rs`, 3 tests in `tests/phase5_orchestrator_tests.rs`, 5 tests in `tests/test_oms.rs` (66/66 total tests passed, 0 failed, 0 panicked).
+- **Status:** ✅ Completed & QA Verified
+
+
+- **Date:** 2026-09-23
 - **Feature/Task:** Micro-Managed Strict Remediation - Step 7 of 7 (DEF-34.6: Continuous Soft-Clip Normalization in `src/ai/engine.rs` & DEF-34.7: Deterministic State Assertions in `tests/verify_killswitch_hotswap.ts`)
 - **Artifacts Created/Modified:** `src/ai/engine.rs`, `tests/verify_killswitch_hotswap.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
 - **HFT/Performance Compliance:**

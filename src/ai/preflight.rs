@@ -334,9 +334,9 @@ mod tests {
     }
 
     #[test]
-    fn test_preflight_warmup_testing_promotion_flow() {
+    fn test_preflight_warmup_testing_promotion_flow() -> Result<(), Box<dyn std::error::Error>> {
         let mut buffer = vec![0u8; 2048];
-        let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len()).unwrap();
+        let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len())?;
         bridge.store_f64(4, 50000.0); // bid
         bridge.store_f64(6, 50010.0); // ask
 
@@ -371,12 +371,13 @@ mod tests {
             assert!(promoted.is_some());
             assert_eq!(validator.phase(), PreflightPhase::Promoted);
         }
+        Ok(())
     }
 
     #[test]
-    fn test_preflight_gate3_zero_sample_failure() {
+    fn test_preflight_gate3_zero_sample_failure() -> Result<(), Box<dyn std::error::Error>> {
         let mut buffer = vec![0u8; 2048];
-        let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len()).unwrap();
+        let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len())?;
         bridge.store_f64(4, 50000.0);
         bridge.store_f64(6, 50010.0);
 
@@ -406,6 +407,7 @@ mod tests {
                 Some("Gate 3 Failed: Shadow IC below min threshold or directional accuracy low")
             );
         }
+        Ok(())
     }
 }
 

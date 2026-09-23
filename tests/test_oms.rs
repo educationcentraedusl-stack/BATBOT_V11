@@ -62,7 +62,7 @@ fn test_kelly_sizer_math() {
 }
 
 #[test]
-fn test_risk_guard_collars() {
+fn test_risk_guard_collars() -> Result<(), Box<dyn std::error::Error>> {
     let risk_guard = OmsRiskGuard::with_default_config();
 
     let sor = SmartOrderRouter::default_hft();
@@ -70,7 +70,7 @@ fn test_risk_guard_collars() {
         .route_order(
             "BTCUSDT", 0, 1.0, 0.90, 30.0, 90000.0, 90001.0, 0.6, 0.2, 0.1, 2.0, 0.10, 0.5, 1000000,
         )
-        .expect("SOR should return OrderIntent");
+        .ok_or("SOR should return OrderIntent")?;
 
     // Valid order within limits
     let res = risk_guard.validate_order(&intent, 90000.5, 0.0);
@@ -79,13 +79,14 @@ fn test_risk_guard_collars() {
     // Price collar violation (> 1% distance from mid price)
     let bad_res = risk_guard.validate_order(&intent, 80000.0, 0.0);
     assert!(bad_res.is_err());
+
+    Ok(())
 }
 
 #[test]
-fn test_oms_engine_sab_evaluation() {
+fn test_oms_engine_sab_evaluation() -> Result<(), Box<dyn std::error::Error>> {
     let mut buffer = vec![0u8; 2048];
-    let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len())
-        .expect("Failed to create bridge");
+    let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len())?;
 
     let mut risk_config = RiskConfig::default();
     risk_config.max_notional_per_order = 100_000.0;
@@ -106,7 +107,7 @@ fn test_oms_engine_sab_evaluation() {
     let intent_opt = oms.evaluate_sab_prediction(&bridge);
     assert!(intent_opt.is_some());
 
-    let intent = intent_opt.unwrap();
+    let intent = intent_opt.ok_or("Expected intent to be Some")?;
     assert_eq!(intent.symbol, "BTCUSDT");
     assert_eq!(intent.side, OrderSide::Buy);
     assert_eq!(intent.order_type, OrderType::Limit);
@@ -115,15 +116,16 @@ fn test_oms_engine_sab_evaluation() {
     // Position state synced to SAB
     let pos_qty_sab = bridge.load_f64(105);
     assert_eq!(pos_qty_sab, 0.0); // position flat prior to fills
+
+    Ok(())
 }
 
 #[test]
-fn test_multi_asset_oms_engine_lifecycle() {
+fn test_multi_asset_oms_engine_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
     use batbot_v11_core::oms::{ExecutionReport, MultiAssetOmsEngine, OrderIntent, OrderStatus};
 
     let mut buffer = vec![0u8; 20480]; // 10 assets * 256 slots * 8 bytes
-    let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len())
-        .expect("Failed to create multi-asset bridge");
+    let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len())?;
 
     let symbols = vec![
         "ETHUSDT".to_string(),
@@ -159,14 +161,14 @@ fn test_multi_asset_oms_engine_lifecycle() {
     );
 
     assert!(submit_res.is_ok(), "Multi-asset intent submission should succeed");
-    let slices = submit_res.unwrap();
+    let slices = submit_res.map_err(|e| format!("{:?}", e))?;
     assert!(!slices.is_empty());
     assert!(slices[0].client_order_id.starts_with("CUSTOM_TS_ID_101"));
 
     // Pop from intent queue
     let popped = engine.intent_queue().pop();
     assert!(popped.is_some());
-    let pkt_intent = popped.unwrap().to_intent();
+    let pkt_intent = popped.ok_or("Expected popped intent to be Some")?.to_intent();
     assert!(pkt_intent.client_order_id.starts_with("CUSTOM_TS_ID_101"));
 
     // Sync SAB slots
@@ -197,4 +199,6 @@ fn test_multi_asset_oms_engine_lifecycle() {
     let metrics = engine.get_metrics(0);
     assert_eq!(metrics.total_orders_filled, 1);
     assert_eq!(metrics.total_volume_usd, 3000.0);
+
+    Ok(())
 }
