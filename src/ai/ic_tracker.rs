@@ -76,7 +76,7 @@ impl CusumDriftDetector {
 
         // Cooldown enforcement: must be at least cooldown_ns since last recalibration
         let is_cooldown_satisfied = self.last_recalib_ts_ns == 0
-            || current_ts_ns >= self.last_recalib_ts_ns + self.cooldown_ns;
+            || current_ts_ns.saturating_sub(self.last_recalib_ts_ns) >= self.cooldown_ns;
 
         if self.sample_count >= 50 && self.s_pos >= self.threshold && is_cooldown_satisfied {
             self.is_drifted = true;

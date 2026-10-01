@@ -387,63 +387,79 @@ impl StreamingFeaturePipeline {
         let mut hawkes_z = 0.0f64;
 
         for i in 0..40 {
-            let val = raw_features[i];
-            let head = self.feature_heads[i];
-            let count = self.feature_lens[i];
+            let val = *raw_features.get(i)
+                .ok_or_else(|| Error::Msg(format!("Missing raw_features[{}]", i)))?;
+            let head = *self.feature_heads.get(i)
+                .ok_or_else(|| Error::Msg(format!("Missing feature_heads[{}]", i)))?;
+            let count = *self.feature_lens.get(i)
+                .ok_or_else(|| Error::Msg(format!("Missing feature_lens[{}]", i)))?;
+            let window_row = self.feature_windows.get_mut(i)
+                .ok_or_else(|| Error::Msg(format!("Missing feature_windows[{}]", i)))?;
+            let mean_ref = self.feature_means.get_mut(i)
+                .ok_or_else(|| Error::Msg(format!("Missing feature_means[{}]", i)))?;
+            let m2_ref = self.feature_m2s.get_mut(i)
+                .ok_or_else(|| Error::Msg(format!("Missing feature_m2s[{}]", i)))?;
+            let lens_ref = self.feature_lens.get_mut(i)
+                .ok_or_else(|| Error::Msg(format!("Missing feature_lens[{}]", i)))?;
+            let heads_ref = self.feature_heads.get_mut(i)
+                .ok_or_else(|| Error::Msg(format!("Missing feature_heads[{}]", i)))?;
+
+            let win_cell = window_row.get_mut(head)
+                .ok_or_else(|| Error::Msg(format!("Window head index out of bounds: head={}", head)))?;
 
             if count < 1000 {
                 // Expanding window: Online Welford (1962) recurrence
                 let new_count = count + 1;
-                self.feature_lens[i] = new_count;
+                *lens_ref = new_count;
                 let k = new_count as f64;
-                let delta = val - self.feature_means[i];
-                self.feature_means[i] += delta / k;
-                let delta2 = val - self.feature_means[i];
-                self.feature_m2s[i] += delta * delta2;
-                self.feature_windows[i][head] = val;
-                self.feature_heads[i] = (head + 1) % 1000;
+                let delta = val - *mean_ref;
+                *mean_ref += delta / k;
+                let delta2 = val - *mean_ref;
+                *m2_ref += delta * delta2;
+                *win_cell = val;
+                *heads_ref = (head + 1) % 1000;
             } else {
                 // Fixed-length sliding window (N = 1000): Welford-West (1979) sliding recurrence
-                let old = self.feature_windows[i][head];
+                let old = *win_cell;
                 let n = 1000.0;
                 let delta = val - old;
-                let old_mean = self.feature_means[i];
+                let old_mean = *mean_ref;
                 let new_mean = old_mean + delta / n;
-                self.feature_means[i] = new_mean;
+                *mean_ref = new_mean;
                 // M2 update: M2_new = M2_old + delta * ((val - new_mean) + (old - old_mean))
                 let delta_m2 = delta * ((val - new_mean) + (old - old_mean));
-                self.feature_m2s[i] = (self.feature_m2s[i] + delta_m2).max(0.0);
-                self.feature_windows[i][head] = val;
+                *m2_ref = (*m2_ref + delta_m2).max(0.0);
+                *win_cell = val;
                 let next_head = (head + 1) % 1000;
-                self.feature_heads[i] = next_head;
+                *heads_ref = next_head;
 
                 // Long-term numerical stability: re-center mean and M2 every full buffer cycle
                 if next_head == 0 {
                     let mut m = 0.0;
                     let mut m2 = 0.0;
-                    for (idx, &x) in self.feature_windows[i].iter().enumerate() {
+                    for (idx, &x) in window_row.iter().enumerate() {
                         let k = (idx + 1) as f64;
                         let d1 = x - m;
                         m += d1 / k;
                         let d2 = x - m;
                         m2 += d1 * d2;
                     }
-                    self.feature_means[i] = m;
-                    self.feature_m2s[i] = m2.max(0.0);
+                    *mean_ref = m;
+                    *m2_ref = m2.max(0.0);
                 }
             }
 
-            let count_f = self.feature_lens[i] as f64;
+            let count_f = *lens_ref as f64;
             let variance = if count_f > 1.0 {
-                self.feature_m2s[i] / (count_f - 1.0)
+                *m2_ref / (count_f - 1.0)
             } else {
                 0.0
             };
             let std_dev = variance.sqrt();
-            let z = if self.feature_lens[i] < 5 || std_dev < 1e-6 {
+            let z = if *lens_ref < 5 || std_dev < 1e-6 {
                 0.0
             } else {
-                (val - self.feature_means[i]) / (std_dev + 1e-8)
+                (val - *mean_ref) / (std_dev + 1e-8)
             };
 
             // DEF-R2: Store signed z-scores (NOT absolute z-scores)
@@ -456,7 +472,9 @@ impl StreamingFeaturePipeline {
 
             // Continuous C∞-differentiable soft-clip normalization strictly bounded in (-0.999, 0.999)
             // Uses 0.999 * z.tanh() to preserve gradient continuity
-            norm_features[i] = 0.999 * z.tanh();
+            if let Some(norm_slot) = norm_features.get_mut(i) {
+                *norm_slot = 0.999 * z.tanh();
+            }
         }
 
         let signed_z = SignedZScores {
@@ -523,13 +541,7 @@ fn safe_zero_hidden_tensor(device: &Device) -> Result<Tensor> {
     if let Ok(t) = Tensor::from_slice(&[0.0f32; 32], (1, 32), &Device::Cpu) {
         return Ok(t);
     }
-    if let Ok(t) = Tensor::from_vec(vec![0.0f32; 32], (1, 32), &Device::Cpu) {
-        return Ok(t);
-    }
-    if let Ok(t) = Tensor::new(0.0f32, &Device::Cpu) {
-        return Ok(t);
-    }
-    Tensor::zeros((1, 1), DType::F32, &Device::Cpu)
+    Tensor::from_vec(vec![0.0f32; 32], (1, 32), &Device::Cpu)
 }
 
 impl AIEngine {
@@ -537,7 +549,7 @@ impl AIEngine {
         Self::load_from_file("./models/cfc_weights.safetensors")
     }
 
-    pub fn load_from_paths(cfc_path: &str, tkan_path: &str) -> Self {
+    pub fn try_load_from_paths(cfc_path: &str, tkan_path: &str) -> Result<Self> {
         let device = Device::Cpu;
         let tkan = TKANLayer::load_from_binary_or_default(tkan_path);
         let weights_engine = AiEngine::load_from_file(cfc_path);
@@ -554,24 +566,18 @@ impl AIEngine {
         let mut feature_pipelines = Vec::with_capacity(num_assets);
         let mut hidden_states = Vec::with_capacity(num_assets);
         let mut mamba_hidden = Vec::with_capacity(num_assets);
-        let mut status = weights_engine.status;
+        let status = weights_engine.status;
 
+        let mamba_dim = weights_engine.mamba.as_ref().map(|m| m.d_inner * m.d_state).unwrap_or(0);
         for _ in 0..num_assets {
+            let hs = safe_zero_hidden_tensor(&device)?;
             asset_trackers.push(AssetTelemetryTracker::new());
             feature_pipelines.push(Mutex::new(StreamingFeaturePipeline::new()));
-            match safe_zero_hidden_tensor(&device) {
-                Ok(hs) => {
-                    hidden_states.push(Mutex::new(hs));
-                }
-                Err(e) => {
-                    eprintln!("[BATBOT_V11][AIEngine] Failed to initialize hidden state: {:?}", e);
-                    status = AiEngineStatus::Uncalibrated;
-                }
-            }
-            mamba_hidden.push(Mutex::new(vec![0.0f32; 512]));
+            hidden_states.push(Mutex::new(hs));
+            mamba_hidden.push(Mutex::new(vec![0.0f32; mamba_dim]));
         }
 
-        Self {
+        Ok(Self {
             tkan,
             cell: weights_engine.cell,
             mamba: weights_engine.mamba,
@@ -584,6 +590,31 @@ impl AIEngine {
             ic_tracker: Mutex::new(ICTracker::default_1000()),
             asset_trackers: RwLock::new(asset_trackers),
             feature_pipelines: RwLock::new(feature_pipelines),
+        })
+    }
+
+    pub fn load_from_paths(cfc_path: &str, tkan_path: &str) -> Self {
+        match Self::try_load_from_paths(cfc_path, tkan_path) {
+            Ok(engine) => engine,
+            Err(e) => {
+                eprintln!("[BATBOT_V11][AIEngine] Failed to load engine from paths: {:?}", e);
+                let tkan = TKANLayer::load_from_binary_or_default(tkan_path);
+                let weights_engine = AiEngine::load_from_file(cfc_path);
+                Self {
+                    tkan,
+                    cell: weights_engine.cell,
+                    mamba: weights_engine.mamba,
+                    hidden_states: RwLock::new(Vec::new()),
+                    mamba_hidden: RwLock::new(Vec::new()),
+                    status: AiEngineStatus::Uncalibrated,
+                    calibration_params: weights_engine.calibration_params,
+                    last_inference_ns: AtomicU64::new(0),
+                    inference_seq: AtomicU64::new(0),
+                    ic_tracker: Mutex::new(ICTracker::default_1000()),
+                    asset_trackers: RwLock::new(Vec::new()),
+                    feature_pipelines: RwLock::new(Vec::new()),
+                }
+            }
         }
     }
 
@@ -594,27 +625,41 @@ impl AIEngine {
     pub fn reload_weights(&mut self, path: &str) -> bool {
         let new_engine = Self::load_from_file(path);
         let calibrated = new_engine.is_calibrated();
+        if !calibrated {
+            return false;
+        }
+        let Ok(new_hs_vec) = new_engine.hidden_states.into_inner() else {
+            return false;
+        };
+        let Ok(mut hs_vec) = self.hidden_states.write() else {
+            return false;
+        };
+
+        // Transactional allocation check: ensure all hidden states can be allocated before mutating engine
+        while hs_vec.len() < new_hs_vec.len() {
+            let hs = match safe_zero_hidden_tensor(&Device::Cpu) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("[BATBOT_V11][hot_reload] Failed to allocate hidden tensor during reload: {:?}", e);
+                    return false;
+                }
+            };
+            hs_vec.push(Mutex::new(hs));
+        }
+        for (i, new_hs_mutex) in new_hs_vec.into_iter().enumerate() {
+            if let Ok(new_hs) = new_hs_mutex.into_inner() {
+                if let Some(hs_mutex) = hs_vec.get(i) {
+                    if let Ok(mut hs) = hs_mutex.lock() {
+                        *hs = new_hs;
+                    }
+                }
+            }
+        }
         self.tkan = new_engine.tkan;
         self.cell = new_engine.cell;
         self.mamba = new_engine.mamba;
         self.status = new_engine.status;
         self.calibration_params = new_engine.calibration_params;
-        if let Ok(new_hs_vec) = new_engine.hidden_states.into_inner() {
-            if let Ok(mut hs_vec) = self.hidden_states.write() {
-                while hs_vec.len() < new_hs_vec.len() {
-                    if let Ok(hs) = safe_zero_hidden_tensor(&Device::Cpu) {
-                        hs_vec.push(Mutex::new(hs));
-                    }
-                }
-                for (i, new_hs_mutex) in new_hs_vec.into_iter().enumerate() {
-                    if let Ok(new_hs) = new_hs_mutex.into_inner() {
-                        if let Ok(mut hs) = hs_vec[i].lock() {
-                            *hs = new_hs;
-                        }
-                    }
-                }
-            }
-        }
         if let Ok(mut mh_vec) = self.mamba_hidden.write() {
             for mh_mutex in mh_vec.iter_mut() {
                 if let Ok(mut mh) = mh_mutex.lock() {
@@ -646,7 +691,7 @@ impl AIEngine {
 
         let start_ns = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
+            .map_err(|e| Error::Msg(format!("SYSTEM_CLOCK_SKEW_ERROR: {:?}", e)))?
             .as_nanos() as u64;
 
         let best_bid = sab.load_f64_asset(asset_idx, 4);
@@ -676,12 +721,15 @@ impl AIEngine {
 
         let pipelines_guard = self.feature_pipelines.read().unwrap_or_else(|e| e.into_inner());
         let (lob_features, signed_z) = {
-            let mut pipeline = pipelines_guard[asset_idx].lock().unwrap_or_else(|e| e.into_inner());
+            let pipeline_mutex = pipelines_guard.get(asset_idx)
+                .ok_or_else(|| Error::Msg(format!("Pipeline missing for asset_idx {}", asset_idx)))?;
+            let mut pipeline = pipeline_mutex.lock().unwrap_or_else(|e| e.into_inner());
             pipeline.update_and_normalize_with_snr_asset(sab, lat_us_val, asset_idx)?
         };
 
         let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
-        let tracker = &trackers_guard[asset_idx];
+        let tracker = trackers_guard.get(asset_idx)
+            .ok_or_else(|| Error::Msg(format!("Tracker missing for asset_idx {}", asset_idx)))?;
 
         // SOTA Triple-Horizon Orthogonal Tensor Evaluation (5s, 60s, 300s) (DEF-3002):
         let gk_vol = sab.load_f64_asset(asset_idx, 121).max(0.0005);
@@ -700,8 +748,10 @@ impl AIEngine {
                             let ret = (current_mid - hist_mid) / hist_mid;
                             let target = (ret / (2.0 * vol_5s + 1e-6)).tanh();
                             let residual = target - hist_pred;
-                            popped_obs[num_popped] = (hist_pred, ret, residual);
-                            num_popped += 1;
+                            if let Some(slot) = popped_obs.get_mut(num_popped) {
+                                *slot = (hist_pred, ret, residual);
+                                num_popped += 1;
+                            }
                         }
                     }
                     count += 1;
@@ -726,8 +776,10 @@ impl AIEngine {
                             let ret = (current_mid - hist_mid) / hist_mid;
                             let target = (ret / (2.0 * vol_60s + 1e-6)).tanh();
                             let residual = target - hist_pred;
-                            popped_obs[num_popped] = (hist_pred, ret, residual);
-                            num_popped += 1;
+                            if let Some(slot) = popped_obs.get_mut(num_popped) {
+                                *slot = (hist_pred, ret, residual);
+                                num_popped += 1;
+                            }
                         }
                     }
                     count += 1;
@@ -752,8 +804,10 @@ impl AIEngine {
                             let ret = (current_mid - hist_mid) / hist_mid;
                             let target = (ret / (2.0 * vol_300s + 1e-6)).tanh();
                             let residual = target - hist_pred;
-                            popped_obs[num_popped] = (hist_pred, ret, residual);
-                            num_popped += 1;
+                            if let Some(slot) = popped_obs.get_mut(num_popped) {
+                                *slot = (hist_pred, ret, residual);
+                                num_popped += 1;
+                            }
                         }
                     }
                     count += 1;
@@ -770,15 +824,25 @@ impl AIEngine {
         if num_popped > 0 {
             if let Ok(mut ic_guard) = self.ic_tracker.lock() {
                 for i in 0..num_popped {
-                    let (pred, ret, res) = popped_obs[i];
-                    ic_guard.push_observation_fast(pred, ret, res, start_ns);
+                    if let Some(&(pred, ret, res)) = popped_obs.get(i) {
+                        ic_guard.push_observation_fast(pred, ret, res, start_ns);
+                    }
                 }
                 ic_guard.maybe_recompute_spearman(Some(sab), asset_idx, start_ns);
             }
         }
 
         let tkan_out = self.tkan.forward(&lob_features);
-        let tkan_f32: [f32; 16] = std::array::from_fn(|i| tkan_out[i] as f32);
+        if tkan_out.len() < 16 {
+            return Err(Error::Msg(format!("TKAN output insufficient: expected 16, got {}", tkan_out.len())));
+        }
+        let mut tkan_f32 = [0.0f32; 16];
+        for i in 0..16 {
+            let val = *tkan_out.get(i).ok_or_else(|| Error::Msg(format!("Missing tkan_out[{}]", i)))?;
+            if let Some(slot) = tkan_f32.get_mut(i) {
+                *slot = val as f32;
+            }
+        }
         let tkan_tensor = Tensor::from_slice(&tkan_f32, (1, 16), &Device::Cpu)?;
 
         // Isolated per-asset delta-time integration
@@ -799,7 +863,9 @@ impl AIEngine {
                 }
             }
             let mh_holder = self.mamba_hidden.read().unwrap_or_else(|e| e.into_inner());
-            let mut m_hidden_guard = mh_holder[asset_idx].lock().unwrap_or_else(|e| e.into_inner());
+            let mh_mutex = mh_holder.get(asset_idx)
+                .ok_or_else(|| Error::Msg(format!("Mamba hidden state missing for asset_idx {}", asset_idx)))?;
+            let mut m_hidden_guard = mh_mutex.lock().unwrap_or_else(|e| e.into_inner());
             if m_hidden_guard.len() != mamba.d_inner * mamba.d_state {
                 m_hidden_guard.resize(mamba.d_inner * mamba.d_state, 0.0f32);
             }
@@ -849,7 +915,9 @@ impl AIEngine {
                 }
             }
             let hs_holder = self.hidden_states.read().unwrap_or_else(|e| e.into_inner());
-            let mut hidden_guard = hs_holder[asset_idx].lock().unwrap_or_else(|e| e.into_inner());
+            let hs_mutex = hs_holder.get(asset_idx)
+                .ok_or_else(|| Error::Msg(format!("Hidden state missing for asset_idx {}", asset_idx)))?;
+            let mut hidden_guard = hs_mutex.lock().unwrap_or_else(|e| e.into_inner());
             let (output_tensor, next_hidden) = cell.forward(&tkan_tensor, &*hidden_guard, delta_t)?;
             *hidden_guard = next_hidden;
             let flat_out = output_tensor.flatten_all()?;
@@ -894,8 +962,8 @@ impl AIEngine {
 
         let end_ns = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(start_ns);
         let latency_ns = end_ns.saturating_sub(start_ns);
 
         let spread_vel = sab.load_f64_asset(asset_idx, 3);
@@ -937,85 +1005,85 @@ impl AIEngine {
         Ok(())
     }
 
-    pub fn evaluate_features(&self, features: &[f64; 40]) -> (f64, f64) {
+    pub fn evaluate_features(&self, features: &[f64; 40]) -> Result<(f64, f64)> {
         let tkan_out = self.tkan.forward(features);
-        let tkan_f32: [f32; 16] = std::array::from_fn(|i| tkan_out[i] as f32);
-        if let Ok(tkan_tensor) = Tensor::from_slice(&tkan_f32, (1, 16), &Device::Cpu) {
-            let hs_holder = self.hidden_states.read().unwrap_or_else(|e| e.into_inner());
-            if let Some(hs_mutex) = hs_holder.get(0) {
-                if let Ok(mut hidden_guard) = hs_mutex.lock() {
-                    let signed_z = SignedZScores {
-                        obi_z: features[8],
-                        ofi_z: features[17],
-                        cvd_z: features[21],
-                        vel_z: features[24],
-                        hawkes_z: features[27],
-                        micro_z: features[2],
-                    };
-                    let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
-                    if let Some(mamba) = &self.mamba {
-                        let mh_holder = self.mamba_hidden.read().unwrap_or_else(|e| e.into_inner());
-                        if let Some(mh_mutex) = mh_holder.get(0) {
-                            if let Ok(mut m_hidden_guard) = mh_mutex.lock() {
-                                if m_hidden_guard.len() != mamba.d_inner * mamba.d_state {
-                                    m_hidden_guard.resize(mamba.d_inner * mamba.d_state, 0.0f32);
-                                }
-                                let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
-                                let (dir_raw, _p_win, _) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.001, temp);
-                                let obi = features[8];
-                                let ofi = features[17];
-                                let hawkes_asym = features[27];
-                                let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
-                                let dir = composite_logit.tanh();
-                                let snr_score = signed_z.compute_sdci(dir_raw);
-                                if let Some(tracker) = trackers_guard.get(0) {
-                                    if let Ok(mut conv_hist) = tracker.conviction_history.lock() {
-                                        let conf = compute_calibrated_confidence(
-                                            dir.abs(),
-                                            snr_score,
-                                            0.0010,
-                                            obi,
-                                            dir,
-                                            temp,
-                                            self.calibration_params.platt_scale,
-                                            self.calibration_params.platt_offset,
-                                            &mut *conv_hist,
-                                        );
-                                        return (dir, conf);
-                                    }
-                                }
-                            }
-                        }
-                    } else if let Some(cell) = &self.cell {
-                        if let Ok((output_tensor, next_h)) = cell.forward(&tkan_tensor, &*hidden_guard, 0.001) {
-                            *hidden_guard = next_h;
-                            if let Ok(flat) = output_tensor.flatten_all() {
-                                let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
-                                let raw_dir = flat.get(0).and_then(|t| t.to_scalar::<f32>()).map(|v| (v as f64).tanh()).unwrap_or(0.0);
-                                let snr_score = signed_z.compute_sdci(raw_dir);
-                                if let Some(tracker) = trackers_guard.get(0) {
-                                    if let Ok(mut conv_hist) = tracker.conviction_history.lock() {
-                                        let conf = compute_calibrated_confidence(
-                                            raw_dir.abs(),
-                                            snr_score,
-                                            0.0010,
-                                            0.0,
-                                            raw_dir,
-                                            temp,
-                                            self.calibration_params.platt_scale,
-                                            self.calibration_params.platt_offset,
-                                            &mut *conv_hist,
-                                        );
-                                        return (raw_dir, conf);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+        if tkan_out.len() < 16 {
+            return Err(Error::Msg(format!("TKAN output insufficient: expected 16, got {}", tkan_out.len())));
+        }
+        let mut tkan_f32 = [0.0f32; 16];
+        for i in 0..16 {
+            let val = *tkan_out.get(i).ok_or_else(|| Error::Msg(format!("Missing tkan_out[{}]", i)))?;
+            if let Some(slot) = tkan_f32.get_mut(i) {
+                *slot = val as f32;
             }
         }
-        (0.0, 0.50)
+        let tkan_tensor = Tensor::from_slice(&tkan_f32, (1, 16), &Device::Cpu)?;
+        let hs_holder = self.hidden_states.read().unwrap_or_else(|e| e.into_inner());
+        let hs_mutex = hs_holder.get(0).ok_or_else(|| Error::Msg("Hidden state[0] missing".to_string()))?;
+        let mut hidden_guard = hs_mutex.lock().unwrap_or_else(|e| e.into_inner());
+
+        let signed_z = SignedZScores {
+            obi_z: *features.get(8).ok_or_else(|| Error::Msg("Missing feature[8] for obi_z".to_string()))?,
+            ofi_z: *features.get(17).ok_or_else(|| Error::Msg("Missing feature[17] for ofi_z".to_string()))?,
+            cvd_z: *features.get(21).ok_or_else(|| Error::Msg("Missing feature[21] for cvd_z".to_string()))?,
+            vel_z: *features.get(24).ok_or_else(|| Error::Msg("Missing feature[24] for vel_z".to_string()))?,
+            hawkes_z: *features.get(27).ok_or_else(|| Error::Msg("Missing feature[27] for hawkes_z".to_string()))?,
+            micro_z: *features.get(2).ok_or_else(|| Error::Msg("Missing feature[2] for micro_z".to_string()))?,
+        };
+        let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
+        if let Some(mamba) = &self.mamba {
+            let mh_holder = self.mamba_hidden.read().unwrap_or_else(|e| e.into_inner());
+            let mh_mutex = mh_holder.get(0).ok_or_else(|| Error::Msg("Mamba hidden[0] missing".to_string()))?;
+            let mut m_hidden_guard = mh_mutex.lock().unwrap_or_else(|e| e.into_inner());
+            if m_hidden_guard.len() != mamba.d_inner * mamba.d_state {
+                m_hidden_guard.resize(mamba.d_inner * mamba.d_state, 0.0f32);
+            }
+            let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
+            let (dir_raw, _p_win, _) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.001, temp);
+            let obi = *features.get(8).ok_or_else(|| Error::Msg("Missing feature[8] for obi".to_string()))?;
+            let ofi = *features.get(17).ok_or_else(|| Error::Msg("Missing feature[17] for ofi".to_string()))?;
+            let hawkes_asym = *features.get(27).ok_or_else(|| Error::Msg("Missing feature[27] for hawkes_asym".to_string()))?;
+            let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
+            let dir = composite_logit.tanh();
+            let snr_score = signed_z.compute_sdci(dir_raw);
+            let tracker = trackers_guard.get(0).ok_or_else(|| Error::Msg("Tracker[0] missing".to_string()))?;
+            let mut conv_hist = tracker.conviction_history.lock().unwrap_or_else(|e| e.into_inner());
+            let conf = compute_calibrated_confidence(
+                dir.abs(),
+                snr_score,
+                0.0010,
+                obi,
+                dir,
+                temp,
+                self.calibration_params.platt_scale,
+                self.calibration_params.platt_offset,
+                &mut *conv_hist,
+            );
+            return Ok((dir, conf));
+        } else if let Some(cell) = &self.cell {
+            let (output_tensor, next_h) = cell.forward(&tkan_tensor, &*hidden_guard, 0.001)?;
+            *hidden_guard = next_h;
+            let flat = output_tensor.flatten_all()?;
+            let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
+            let raw_scalar = flat.get(0)?.to_scalar::<f32>()?;
+            let raw_dir = (raw_scalar as f64).tanh();
+            let snr_score = signed_z.compute_sdci(raw_dir);
+            let tracker = trackers_guard.get(0).ok_or_else(|| Error::Msg("Tracker[0] missing".to_string()))?;
+            let mut conv_hist = tracker.conviction_history.lock().unwrap_or_else(|e| e.into_inner());
+            let conf = compute_calibrated_confidence(
+                raw_dir.abs(),
+                snr_score,
+                0.0010,
+                0.0,
+                raw_dir,
+                temp,
+                self.calibration_params.platt_scale,
+                self.calibration_params.platt_offset,
+                &mut *conv_hist,
+            );
+            return Ok((raw_dir, conf));
+        }
+        Err(Error::Msg("No active model (Mamba or CfC cell) calibrated".to_string()))
     }
 
     pub fn run_shadow_inference(&self, sab: &AtomicSharedMemoryBridge) -> Result<(f64, f64, f64, u64, f64)> {
@@ -1030,20 +1098,33 @@ impl AIEngine {
         let lat_us_val = sab.load_f64_asset(0, 98) * 1000.0;
         let (lob_features, signed_z) = {
             let pipelines = self.feature_pipelines.read().unwrap_or_else(|e| e.into_inner());
-            let mut pipeline = pipelines[0].lock().unwrap_or_else(|e| e.into_inner());
+            let pipeline_mutex = pipelines.get(0)
+                .ok_or_else(|| Error::Msg("Pipeline[0] missing for shadow inference".to_string()))?;
+            let mut pipeline = pipeline_mutex.lock().unwrap_or_else(|e| e.into_inner());
             pipeline.update_and_normalize_with_snr_asset(sab, lat_us_val, 0)?
         };
 
         let (direction, confidence, horizon_ms, hidden_norm) = if let Some(mamba) = &self.mamba {
             let mh_holder = self.mamba_hidden.read().unwrap_or_else(|e| e.into_inner());
-            let mut m_hidden_guard = mh_holder[0].lock().unwrap_or_else(|e| e.into_inner());
+            let mh_mutex = mh_holder.get(0)
+                .ok_or_else(|| Error::Msg("Mamba hidden[0] missing for shadow inference".to_string()))?;
+            let mut m_hidden_guard = mh_mutex.lock().unwrap_or_else(|e| e.into_inner());
             if m_hidden_guard.len() != mamba.d_inner * mamba.d_state {
                 m_hidden_guard.resize(mamba.d_inner * mamba.d_state, 0.0f32);
             }
             let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
 
             let tkan_out = self.tkan.forward(&lob_features);
-            let tkan_f32: [f32; 16] = std::array::from_fn(|i| tkan_out[i] as f32);
+            if tkan_out.len() < 16 {
+                return Err(Error::Msg(format!("TKAN output insufficient: expected 16, got {}", tkan_out.len())));
+            }
+            let mut tkan_f32 = [0.0f32; 16];
+            for i in 0..16 {
+                let val = *tkan_out.get(i).ok_or_else(|| Error::Msg(format!("Missing tkan_out[{}]", i)))?;
+                if let Some(slot) = tkan_f32.get_mut(i) {
+                    *slot = val as f32;
+                }
+            }
             let (dir_raw, _p_win, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.001, temp);
 
             let norm = m_hidden_guard.iter().map(|v| v * v).sum::<f32>().sqrt() as f64;
@@ -1056,7 +1137,9 @@ impl AIEngine {
             let snr_score = signed_z.compute_sdci(dir_raw);
 
             let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
-            let mut conv_hist = trackers_guard[0].conviction_history.lock().unwrap_or_else(|e| e.into_inner());
+            let tracker_0 = trackers_guard.get(0)
+                .ok_or_else(|| Error::Msg("Tracker[0] missing for shadow mamba inference".to_string()))?;
+            let mut conv_hist = tracker_0.conviction_history.lock().unwrap_or_else(|e| e.into_inner());
 
             let conf = compute_calibrated_confidence(
                 dir.abs(),
@@ -1072,11 +1155,22 @@ impl AIEngine {
             (dir, conf, horiz_sec * 1000.0, norm)
         } else if let Some(cell) = &self.cell {
             let hs_holder = self.hidden_states.read().unwrap_or_else(|e| e.into_inner());
-            let mut hidden_guard = hs_holder[0].lock().unwrap_or_else(|e| e.into_inner());
+            let hs_mutex = hs_holder.get(0)
+                .ok_or_else(|| Error::Msg("Hidden state[0] missing for shadow CfC inference".to_string()))?;
+            let mut hidden_guard = hs_mutex.lock().unwrap_or_else(|e| e.into_inner());
             let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
 
             let tkan_out = self.tkan.forward(&lob_features);
-            let tkan_f32: [f32; 16] = std::array::from_fn(|i| tkan_out[i] as f32);
+            if tkan_out.len() < 16 {
+                return Err(Error::Msg(format!("TKAN output insufficient: expected 16, got {}", tkan_out.len())));
+            }
+            let mut tkan_f32 = [0.0f32; 16];
+            for i in 0..16 {
+                let val = *tkan_out.get(i).ok_or_else(|| Error::Msg(format!("Missing tkan_out[{}]", i)))?;
+                if let Some(slot) = tkan_f32.get_mut(i) {
+                    *slot = val as f32;
+                }
+            }
             let tkan_tensor = Tensor::from_slice(&tkan_f32, (1, 16), &Device::Cpu)?;
             let (output_tensor, next_h) = cell.forward(&tkan_tensor, &*hidden_guard, 0.001)?;
 
@@ -1091,7 +1185,9 @@ impl AIEngine {
             let snr_score = signed_z.compute_sdci(raw_dir);
 
             let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
-            let mut conv_hist = trackers_guard[0].conviction_history.lock().unwrap_or_else(|e| e.into_inner());
+            let tracker_0 = trackers_guard.get(0)
+                .ok_or_else(|| Error::Msg("Tracker[0] missing for shadow CfC inference".to_string()))?;
+            let mut conv_hist = tracker_0.conviction_history.lock().unwrap_or_else(|e| e.into_inner());
 
             let conf = compute_calibrated_confidence(
                 dir.abs(),
@@ -1116,33 +1212,44 @@ impl AIEngine {
         Ok((direction, confidence, horizon_ms, latency_ns, hidden_norm))
     }
 
-    pub fn inherit_hidden_state(&self, other: &AIEngine) {
+    pub fn inherit_hidden_state(&self, other: &AIEngine) -> Result<()> {
         let other_guard = other.hidden_states.read().unwrap_or_else(|e| e.into_inner());
         let mut self_guard = self.hidden_states.write().unwrap_or_else(|e| e.into_inner());
         while self_guard.len() < other_guard.len() {
-            if let Ok(hs) = safe_zero_hidden_tensor(&Device::Cpu) {
-                self_guard.push(Mutex::new(hs));
-            }
+            let hs = safe_zero_hidden_tensor(&Device::Cpu)?;
+            self_guard.push(Mutex::new(hs));
         }
         for (i, other_mutex) in other_guard.iter().enumerate() {
             if let Ok(other_hs) = other_mutex.lock() {
-                if let Ok(mut self_hs) = self_guard[i].lock() {
-                    *self_hs = other_hs.clone();
+                if let Some(self_hs_mutex) = self_guard.get(i) {
+                    if let Ok(mut self_hs) = self_hs_mutex.lock() {
+                        *self_hs = other_hs.clone();
+                    }
                 }
             }
         }
         let other_mh = other.mamba_hidden.read().unwrap_or_else(|e| e.into_inner());
         let mut self_mh = self.mamba_hidden.write().unwrap_or_else(|e| e.into_inner());
         while self_mh.len() < other_mh.len() {
-            self_mh.push(Mutex::new(vec![0.0f32; 512]));
+            let next_idx = self_mh.len();
+            let state_len = other_mh.get(next_idx)
+                .and_then(|mutex| mutex.lock().ok())
+                .map(|val| val.len())
+                .or_else(|| self.mamba.as_ref().map(|m| m.d_inner * m.d_state))
+                .or_else(|| other.mamba.as_ref().map(|m| m.d_inner * m.d_state))
+                .ok_or_else(|| Error::Msg(format!("Cannot determine dynamic state length for Mamba slot {}", next_idx)))?;
+            self_mh.push(Mutex::new(vec![0.0f32; state_len]));
         }
         for (i, other_mutex) in other_mh.iter().enumerate() {
             if let Ok(other_val) = other_mutex.lock() {
-                if let Ok(mut self_val) = self_mh[i].lock() {
-                    *self_val = other_val.clone();
+                if let Some(self_mh_mutex) = self_mh.get(i) {
+                    if let Ok(mut self_val) = self_mh_mutex.lock() {
+                        *self_val = other_val.clone();
+                    }
                 }
             }
         }
+        Ok(())
     }
 
     /// RCU Telemetry & History Inheritance: Preserves conviction history, horizons, and feature statistics across hot-swaps
@@ -1187,8 +1294,10 @@ impl AIEngine {
         }
         for (i, other_pipe_mutex) in other_pipes.iter().enumerate() {
             if let Ok(other_pipe) = other_pipe_mutex.lock() {
-                if let Ok(mut self_pipe) = self_pipes[i].lock() {
-                    *self_pipe = other_pipe.clone();
+                if let Some(self_pipe_mutex) = self_pipes.get(i) {
+                    if let Ok(mut self_pipe) = self_pipe_mutex.lock() {
+                        *self_pipe = other_pipe.clone();
+                    }
                 }
             }
         }
@@ -1199,12 +1308,14 @@ impl AIEngine {
                 // CRITICAL: Reset drift state on the inherited tracker to prevent
                 // new models from instantly re-latching to MODEL_BROKEN due to
                 // stale CUSUM accumulators and is_drifted flags from the old model.
-                let now_ns = match SystemTime::now().duration_since(UNIX_EPOCH) {
-                    Ok(d) => d.as_nanos() as u64,
-                    Err(_) => 0,
-                };
-                self_ic.cusum.reset();
-                self_ic.record_recalibration(now_ns);
+                if let Ok(d) = SystemTime::now().duration_since(UNIX_EPOCH) {
+                    let now_ns = d.as_nanos() as u64;
+                    self_ic.cusum.reset();
+                    self_ic.record_recalibration(now_ns);
+                } else {
+                    eprintln!("[BATBOT_V11][inherit_telemetry] SystemTime clock skew detected; resetting CUSUM without recalibration timestamp");
+                    self_ic.cusum.reset();
+                }
             }
         }
     }
@@ -1379,7 +1490,7 @@ mod tests {
                 println!("b_heads: {:?}", b_heads);
             }
             if let Ok(b_out) = mamba.b_out.to_vec1::<f32>() {
-                println!("b_out (first 10): {:?}", &b_out[0..10.min(b_out.len())]);
+                println!("b_out (first 10): {:?}", b_out.get(0..10.min(b_out.len())).unwrap_or_default());
             }
             if let Ok(w_heads_t) = mamba.w_heads.t() {
                 if let Ok(w_head_0) = w_heads_t.get(0) {
@@ -1387,7 +1498,7 @@ mod tests {
                         println!("w_heads col 0 (dir) sum: {:.4}, mean: {:.4}, vals: {:?}",
                             w_heads_col0.iter().sum::<f32>(),
                             w_heads_col0.iter().sum::<f32>() / w_heads_col0.len() as f32,
-                            &w_heads_col0[0..10.min(w_heads_col0.len())]
+                            w_heads_col0.get(0..10.min(w_heads_col0.len())).unwrap_or_default()
                         );
                     }
                 }
@@ -1586,14 +1697,16 @@ mod tests {
         // Seed engine_old with telemetry data
         {
             let trackers = engine_old.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
-            if let Ok(mut conv) = trackers[0].conviction_history.lock() {
-                conv.push_back(0.75);
-                conv.push_back(0.82);
+            if let Some(tracker) = trackers.get(0) {
+                if let Ok(mut conv) = tracker.conviction_history.lock() {
+                    conv.push_back(0.75);
+                    conv.push_back(0.82);
+                }
+                if let Ok(mut h5) = tracker.horizon_5s.lock() {
+                    h5.push_back((1000, 50000.0, 0.5));
+                }
+                tracker.last_mid_price.store(50000.0f64.to_bits(), Ordering::Relaxed);
             }
-            if let Ok(mut h5) = trackers[0].horizon_5s.lock() {
-                h5.push_back((1000, 50000.0, 0.5));
-            }
-            trackers[0].last_mid_price.store(50000.0f64.to_bits(), Ordering::Relaxed);
         }
 
         let engine_new = AIEngine::new();
@@ -1602,21 +1715,23 @@ mod tests {
         // Verify telemetry was inherited perfectly
         {
             let trackers_new = engine_new.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
-            if let Ok(conv_new) = trackers_new[0].conviction_history.lock() {
-                assert_eq!(conv_new.len(), 2);
-                assert_eq!(conv_new[0], 0.75);
-                assert_eq!(conv_new[1], 0.82);
-            }
+            if let Some(tracker_new) = trackers_new.get(0) {
+                if let Ok(conv_new) = tracker_new.conviction_history.lock() {
+                    assert_eq!(conv_new.len(), 2);
+                    assert_eq!(conv_new.get(0).copied(), Some(0.75));
+                    assert_eq!(conv_new.get(1).copied(), Some(0.82));
+                }
 
-            if let Ok(h5_new) = trackers_new[0].horizon_5s.lock() {
-                assert_eq!(h5_new.len(), 1);
-                assert_eq!(h5_new[0].1, 50000.0);
-            }
+                if let Ok(h5_new) = tracker_new.horizon_5s.lock() {
+                    assert_eq!(h5_new.len(), 1);
+                    assert_eq!(h5_new.get(0).map(|item| item.1), Some(50000.0));
+                }
 
-            assert_eq!(
-                f64::from_bits(trackers_new[0].last_mid_price.load(Ordering::Relaxed)),
-                50000.0
-            );
+                assert_eq!(
+                    f64::from_bits(tracker_new.last_mid_price.load(Ordering::Relaxed)),
+                    50000.0
+                );
+            }
         }
     }
 

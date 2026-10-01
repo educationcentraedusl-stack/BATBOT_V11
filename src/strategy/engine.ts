@@ -136,7 +136,7 @@ export class StrategyEngine {
   private vrClassifier: OnlineVarianceRatioClassifier = new OnlineVarianceRatioClassifier();
 
   // DEF-R7 & SOTA: 3-State Hysteresis CUSUM-SPRT IC Kill Switch with High-Alpha Fast Unlatch
-  public icState: "ALPHA_ACTIVE" | "DEGRADED" | "MODEL_BROKEN" = "ALPHA_ACTIVE";
+  private icState: "ALPHA_ACTIVE" | "DEGRADED" | "MODEL_BROKEN" = "ALPHA_ACTIVE";
   private icStateEnteredAt: number = 0;
   private icConditionMetSince: number = 0;
   private icEvidenceScore: number = 1.0;
@@ -369,22 +369,21 @@ export class StrategyEngine {
    *   Transition to MODEL_BROKEN if safeIC <= -0.02 or CUSUM drift flag is active.
    *   Recovery to ALPHA_ACTIVE if safeIC >= 0.03 sustained for >= 60s without drift or evidence >= 0.95.
    * - MODEL_BROKEN: ALL entries blocked (0.0x sizing).
-   *   Recovery to DEGRADED if safeIC >= 0.01 sustained for >= 30s without drift or evidence >= 0.90.
+   *   Recovery to DEGRADED if safeIC >= 0.01 sustained for >= 120s without drift.
    */
   public updateICKillSwitchState(ewmaIC: number, isDriftFlagged: boolean, nowMs: number): void {
     const safeIC = Number.isFinite(ewmaIC) ? ewmaIC : 0.0;
 
-    // 1. SOTA Fast-Path SPRT Unlatch: High-conviction alpha (IC >= 0.10) with no structural drift immediately unlatches
-    if (safeIC >= 0.10 && !isDriftFlagged) {
-      if (this.icState !== "ALPHA_ACTIVE") {
-        console.log(
-          `[StrategyEngine][${this.config.symbol}][SPRT_FAST_UNLATCH] High-Conviction Alpha detected (IC: ${safeIC.toFixed(4)} >= 0.10, Drift: false). Instant unlatch from ${this.icState} -> ALPHA_ACTIVE.`
-        );
-        this.icState = "ALPHA_ACTIVE";
-        this.icStateEnteredAt = nowMs;
-        this.icConditionMetSince = 0;
-        this.icEvidenceScore = 1.0;
-      }
+    // 1. SOTA Fast-Path SPRT Unlatch: High-conviction alpha (IC >= 0.10) with no structural drift immediately unlatches from DEGRADED only.
+    // STRICTLY FORBIDDEN when MODEL_BROKEN (must strictly serve 120s quarantine).
+    if (this.icState === "DEGRADED" && safeIC >= 0.10 && !isDriftFlagged) {
+      console.log(
+        `[StrategyEngine][${this.config.symbol}][SPRT_FAST_UNLATCH] High-Conviction Alpha detected (IC: ${safeIC.toFixed(4)} >= 0.10, Drift: false). Instant unlatch from DEGRADED -> ALPHA_ACTIVE.`
+      );
+      this.icState = "ALPHA_ACTIVE";
+      this.icStateEnteredAt = nowMs;
+      this.icConditionMetSince = 0;
+      this.icEvidenceScore = 1.0;
       return;
     }
 
@@ -435,7 +434,7 @@ export class StrategyEngine {
         } else if (safeIC >= 0.03 && !isDriftFlagged) {
           if (this.icConditionMetSince === 0) {
             this.icConditionMetSince = nowMs;
-          } else if (nowMs - this.icConditionMetSince >= 60000 || this.icEvidenceScore >= 0.95) {
+          } else if (nowMs - this.icConditionMetSince >= 60000) {
             this.icState = "ALPHA_ACTIVE";
             this.icStateEnteredAt = nowMs;
             this.icConditionMetSince = 0;
@@ -454,7 +453,7 @@ export class StrategyEngine {
         if (safeIC >= 0.01 && !isDriftFlagged) {
           if (this.icConditionMetSince === 0) {
             this.icConditionMetSince = nowMs;
-          } else if (nowMs - this.icConditionMetSince >= 30000 || this.icEvidenceScore >= 0.90) {
+          } else if (nowMs - this.icConditionMetSince >= 120000) {
             this.icState = "DEGRADED";
             this.icStateEnteredAt = nowMs;
             this.icConditionMetSince = 0;
@@ -463,7 +462,9 @@ export class StrategyEngine {
               `IC: ${safeIC.toFixed(4)} sustained >= 0.01 (Evidence: ${(this.icEvidenceScore * 100).toFixed(1)}%)`
             );
           }
-        } else if (this.icEvidenceScore < 0.50) {
+        } else {
+          // DEF-3902: Any drift occurrence (isDriftFlagged === true) or low/negative IC (safeIC < 0.01)
+          // MUST unconditionally reset recovery timer, regardless of icEvidenceScore.
           this.icConditionMetSince = 0;
         }
         break;

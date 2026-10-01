@@ -53,22 +53,31 @@ async function runICKillSwitchHysteresisTestSuite() {
     // Step 2a: IC drops to +0.005 (< 0.01) at t = 1,000,000
     engine.updateICKillSwitchState(0.005, false, simulatedNowMs);
     assert(engine.getIcState() === "ALPHA_ACTIVE", "Must not immediately drop to DEGRADED without 30s persistence");
-    // Step 2b: At t + 20s (elapsed 20,000ms < 30,000ms), still ALPHA_ACTIVE
-    simulatedNowMs += 20_000;
-    engine.updateICKillSwitchState(0.005, false, simulatedNowMs);
+    // Step 2b: Loop 200 ticks (100ms each = 20,000ms = 20s elapsed < 30,000ms), still ALPHA_ACTIVE
+    for (let i = 0; i < 200; i++) {
+        simulatedNowMs += 100;
+        engine.updateICKillSwitchState(0.005, false, simulatedNowMs);
+    }
     assert(engine.getIcState() === "ALPHA_ACTIVE", "State must remain ALPHA_ACTIVE at t+20s (timer not expired)");
-    // Step 2c: Momentary spike back to +0.02 resets timer
-    simulatedNowMs += 5_000;
-    engine.updateICKillSwitchState(0.02, false, simulatedNowMs);
+    // Step 2c: Momentary spike back to +0.02 resets timer (loop 50 ticks of 100ms)
+    for (let i = 0; i < 50; i++) {
+        simulatedNowMs += 100;
+        engine.updateICKillSwitchState(0.02, false, simulatedNowMs);
+    }
     assert(engine.getIcState() === "ALPHA_ACTIVE", "State remains ALPHA_ACTIVE and timer resets on recovery");
-    // Step 2d: IC drops to +0.002, must now wait full 30s from new drop
-    simulatedNowMs += 1_000;
+    // Step 2d: IC drops to +0.002, loop 290 ticks (29s elapsed)
+    simulatedNowMs += 100;
     engine.updateICKillSwitchState(0.002, false, simulatedNowMs); // drop start
-    simulatedNowMs += 29_000; // 29s elapsed
-    engine.updateICKillSwitchState(0.002, false, simulatedNowMs);
+    for (let i = 0; i < 290; i++) {
+        simulatedNowMs += 100;
+        engine.updateICKillSwitchState(0.002, false, simulatedNowMs);
+    }
     assert(engine.getIcState() === "ALPHA_ACTIVE", "State must still be ALPHA_ACTIVE at 29s elapsed");
-    simulatedNowMs += 1_500; // 30.5s elapsed >= 30s
-    engine.updateICKillSwitchState(0.002, false, simulatedNowMs);
+    // Loop 15 more ticks (1.5s -> 30.5s total elapsed >= 30s)
+    for (let i = 0; i < 15; i++) {
+        simulatedNowMs += 100;
+        engine.updateICKillSwitchState(0.002, false, simulatedNowMs);
+    }
     assert(engine.getIcState() === "DEGRADED", `State must transition to DEGRADED after >= 30s, got ${engine.getIcState()}`);
     console.log("  ✓ Degradation timer verified: requires full 30s sustained low IC to enter DEGRADED\n");
     // --------------------------------------------------------------------------
@@ -76,7 +85,7 @@ async function runICKillSwitchHysteresisTestSuite() {
     // --------------------------------------------------------------------------
     console.log("[STAGE 3] Testing Immediate Collapse to MODEL_BROKEN (CUSUM Drift)...");
     // In DEGRADED state, CUSUM drift is detected in Rust SAB
-    simulatedNowMs += 5_000;
+    simulatedNowMs += 100;
     engine.updateICKillSwitchState(0.002, true, simulatedNowMs); // isDriftFlagged = true
     assert(engine.getIcState() === "MODEL_BROKEN", `CUSUM drift must immediately force MODEL_BROKEN, got ${engine.getIcState()}`);
     // Physical evaluateTick() proof: even under strong BUY conviction, MODEL_BROKEN must short-circuit and block
@@ -102,45 +111,64 @@ async function runICKillSwitchHysteresisTestSuite() {
     // STAGE 4: Recovery from MODEL_BROKEN to DEGRADED (Requires 120s)
     // --------------------------------------------------------------------------
     console.log("[STAGE 4] Testing MODEL_BROKEN Recovery Hysteresis (Requires 120s without drift)...");
-    // IC recovers to +0.015, but drift clears at t = simulatedNowMs
-    simulatedNowMs += 1_000;
-    engine.updateICKillSwitchState(0.015, false, simulatedNowMs);
-    assert(engine.getIcState() === "MODEL_BROKEN", "Must not immediately exit MODEL_BROKEN");
-    // At 60s elapsed: still MODEL_BROKEN
-    simulatedNowMs += 60_000;
-    engine.updateICKillSwitchState(0.015, false, simulatedNowMs);
+    // Step 4a: Prove SPRT Fast-Path bypass is strictly forbidden in MODEL_BROKEN (DEF-3901)
+    simulatedNowMs += 100;
+    engine.updateICKillSwitchState(0.15, false, simulatedNowMs); // High conviction alpha (IC: 0.15 >= 0.10)
+    assert(engine.getIcState() === "MODEL_BROKEN", "SPRT Fast-path unlatch MUST be strictly blocked in MODEL_BROKEN (DEF-3901 violation if bypassed)");
+    // Step 4b: Organic continuous tick stream for 60s (600 ticks @ 100ms) with healthy IC (+0.015)
+    for (let i = 0; i < 600; i++) {
+        simulatedNowMs += 100;
+        engine.updateICKillSwitchState(0.015, false, simulatedNowMs);
+    }
     assert(engine.getIcState() === "MODEL_BROKEN", "Must remain MODEL_BROKEN at 60s (requires 120s)");
-    // At 119s elapsed: still MODEL_BROKEN
-    simulatedNowMs += 59_000;
-    engine.updateICKillSwitchState(0.015, false, simulatedNowMs);
-    assert(engine.getIcState() === "MODEL_BROKEN", "Must remain MODEL_BROKEN at 119s");
-    // At 121s elapsed: transitions to DEGRADED
-    simulatedNowMs += 2_000;
-    engine.updateICKillSwitchState(0.015, false, simulatedNowMs);
+    // Step 4c: Inject a single CUSUM drift tick at t = 60s to prove timer reset (DEF-3902)
+    simulatedNowMs += 100;
+    engine.updateICKillSwitchState(0.015, true, simulatedNowMs); // isDriftFlagged = true
+    assert(engine.getIcState() === "MODEL_BROKEN", "Must remain MODEL_BROKEN on drift event");
+    // Step 4d: Organic continuous tick stream for another 60s (600 ticks @ 100ms) after drift clears
+    // Total elapsed time since Stage 4 started is 120s, but only 60s since drift reset!
+    for (let i = 0; i < 600; i++) {
+        simulatedNowMs += 100;
+        engine.updateICKillSwitchState(0.015, false, simulatedNowMs);
+    }
+    assert(engine.getIcState() === "MODEL_BROKEN", "Must remain MODEL_BROKEN at 60s post-drift (drift must have unconditionally reset 120s timer)");
+    // Step 4e: Run 590 more ticks (59s) -> total 119s elapsed post-drift
+    for (let i = 0; i < 590; i++) {
+        simulatedNowMs += 100;
+        engine.updateICKillSwitchState(0.015, false, simulatedNowMs);
+    }
+    assert(engine.getIcState() === "MODEL_BROKEN", "Must remain MODEL_BROKEN at 119s post-drift");
+    // Step 4f: Advance past 120s post-drift (20 more ticks = 2s -> total 121s elapsed post-drift)
+    for (let i = 0; i < 20; i++) {
+        simulatedNowMs += 100;
+        engine.updateICKillSwitchState(0.015, false, simulatedNowMs);
+    }
     assert(engine.getIcState() === "DEGRADED", `Must transition to DEGRADED after >= 120s, got ${engine.getIcState()}`);
-    console.log("  ✓ MODEL_BROKEN recovery verified: requires 120s sustained recovery\n");
+    assert(engine.getIcEvidenceScore() > 0.95, `Evidence score must accumulate to > 95% over continuous ticks, got ${(engine.getIcEvidenceScore() * 100).toFixed(1)}%`);
+    console.log("  ✓ MODEL_BROKEN recovery verified: organic 120s tick loop with mid-quarantine drift reset enforced\n");
     // --------------------------------------------------------------------------
     // STAGE 5: Recovery from DEGRADED to ALPHA_ACTIVE (Requires 60s)
     // --------------------------------------------------------------------------
     console.log("[STAGE 5] Testing DEGRADED Recovery to ALPHA_ACTIVE (Requires 60s at IC >= 0.03)...");
     // IC jumps to +0.04 (>= 0.03)
-    simulatedNowMs += 1_000;
-    engine.updateICKillSwitchState(0.04, false, simulatedNowMs);
-    assert(engine.getIcState() === "DEGRADED", "Must not immediately jump to ALPHA_ACTIVE");
-    // At 45s: still DEGRADED
-    simulatedNowMs += 45_000;
-    engine.updateICKillSwitchState(0.04, false, simulatedNowMs);
-    assert(engine.getIcState() === "DEGRADED", "Must remain DEGRADED at 45s");
-    // At 61s: transitions to ALPHA_ACTIVE
-    simulatedNowMs += 16_000;
-    engine.updateICKillSwitchState(0.04, false, simulatedNowMs);
+    // Run 450 ticks @ 100ms (45s elapsed < 60s)
+    for (let i = 0; i < 450; i++) {
+        simulatedNowMs += 100;
+        engine.updateICKillSwitchState(0.04, false, simulatedNowMs);
+    }
+    assert(engine.getIcState() === "DEGRADED", "Must remain DEGRADED at 45s (requires 60s)");
+    // Run 160 more ticks @ 100ms (16s -> total 61s elapsed >= 60s)
+    for (let i = 0; i < 160; i++) {
+        simulatedNowMs += 100;
+        engine.updateICKillSwitchState(0.04, false, simulatedNowMs);
+    }
     assert(engine.getIcState() === "ALPHA_ACTIVE", `Must recover to ALPHA_ACTIVE after 60s, got ${engine.getIcState()}`);
     console.log("  ✓ Full recovery verified: restored to ALPHA_ACTIVE after 60s sustained high IC\n");
     // --------------------------------------------------------------------------
     // STAGE 6: Catastrophic Collapse directly from ALPHA_ACTIVE (IC <= -0.02)
     // --------------------------------------------------------------------------
     console.log("[STAGE 6] Testing Direct Collapse from ALPHA_ACTIVE on Negative IC (<= -0.02)...");
-    simulatedNowMs += 10_000;
+    simulatedNowMs += 100;
     engine.updateICKillSwitchState(-0.11, false, simulatedNowMs); // Autopsy condition: IC = -0.11
     assert(engine.getIcState() === "MODEL_BROKEN", `IC = -0.11 must immediately force MODEL_BROKEN, got ${engine.getIcState()}`);
     // Physical evaluateTick() proof: catastrophic IC immediately halts engine

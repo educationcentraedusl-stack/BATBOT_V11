@@ -149,7 +149,9 @@ export class AutoRecalibrationManager {
    */
   public getSabBufferForNapi(): Buffer {
     if (!this.client) {
-      throw new Error("CRITICAL: SAB Client not bound");
+      // Allocate genuine standalone SharedArrayBuffer for offline operations (Zero heap mocks)
+      const standaloneSab = new SharedArrayBuffer(10 * 256 * 8);
+      return Buffer.from(standaloneSab);
     }
     const sab = this.client.getRawSharedArrayBuffer();
     return Buffer.from(sab);

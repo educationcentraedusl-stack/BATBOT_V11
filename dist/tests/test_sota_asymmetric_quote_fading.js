@@ -10,6 +10,7 @@ const engine_1 = require("../strategy/engine");
 const marketDataClient_1 = require("../marketDataClient");
 const risk_1 = require("../strategy/risk");
 const binance_1 = require("../execution/binance");
+const timeSynchronizer_1 = require("../utils/timeSynchronizer");
 function createMockExecutionClient() {
     const capturedOrders = [];
     const client = new binance_1.BinanceExecutionClient();
@@ -114,12 +115,15 @@ async function runQuoteFadingTest() {
     };
     const engine = new engine_1.StrategyEngine(client, riskGuard, mockExec, btcConfig);
     const bigIntView = new BigInt64Array(sab);
+    const updateTimestamp = () => {
+        const nowMs = timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs();
+        Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
+    };
     // Initialize healthy rolling IC (+0.05) so IR conviction gate passes
     client.setRollingIC(0.05, 0);
     let seqNum = 1000n;
     // Initialize LCI baseline with neutral tick
-    const nowMs0 = Date.now();
-    Atomics.store(bigIntView, 0, BigInt(nowMs0) * 1000000n);
+    updateTimestamp();
     client.writeAtomicFloat64Asset(0, 4, 77000.0);
     client.writeAtomicFloat64Asset(0, 5, 10.0);
     client.writeAtomicFloat64Asset(0, 6, 77001.0);
@@ -128,6 +132,7 @@ async function runQuoteFadingTest() {
     client.writeAtomicFloat64Asset(0, 93, 0.0);
     client.writeAtomicFloat64Asset(0, 94, 0.50);
     Atomics.store(bigIntView, 92, seqNum);
+    updateTimestamp();
     engine.evaluateTick();
     // --------------------------------------------------------------------------------
     // [CASE 1] Neutral / Favorable Flow -> Limit Bid Placed at Top of Book ($77,000.0)
@@ -136,8 +141,7 @@ async function runQuoteFadingTest() {
     {
         capturedOrders.length = 0;
         await new Promise((r) => setTimeout(r, 10));
-        const nowMs1 = Date.now();
-        Atomics.store(bigIntView, 0, BigInt(nowMs1) * 1000000n);
+        updateTimestamp();
         // Seed SAB Orderbook with favorable surge
         client.writeAtomicFloat64Asset(0, 4, 77000.0); // Best Bid
         client.writeAtomicFloat64Asset(0, 5, 25.0); // Best Bid Qty
@@ -156,6 +160,7 @@ async function runQuoteFadingTest() {
         engine.getHazardEngine().updateTrade(77000.5, 1.0, false); // Buyer trade (+TFI)
         seqNum += 1n;
         Atomics.store(bigIntView, 92, seqNum);
+        updateTimestamp();
         const res = engine.evaluateTick();
         if (res.executionPromise) {
             await res.executionPromise;
@@ -181,25 +186,46 @@ async function runQuoteFadingTest() {
         engine.getHedgeLedger().reset();
         engine.annihilateRestingEntryOrders("TEST_CLEANUP");
         engine.getHazardEngine().reset();
+        // Establish OBI baseline 0.20
+        await new Promise((r) => setTimeout(r, 10));
+        updateTimestamp();
+        client.writeAtomicFloat64Asset(0, 4, 77000.0);
+        client.writeAtomicFloat64Asset(0, 5, 10.0);
+        client.writeAtomicFloat64Asset(0, 6, 77001.0);
+        client.writeAtomicFloat64Asset(0, 7, 10.0);
+        client.writeAtomicFloat64Asset(0, 1, 0.20);
+        client.writeAtomicFloat64Asset(0, 93, 0.0);
+        client.writeAtomicFloat64Asset(0, 94, 0.50);
+        seqNum += 1n;
+        Atomics.store(bigIntView, 92, seqNum);
+        updateTimestamp();
+        engine.evaluateTick();
         // Simulate aggressive toxic selling pressure in HazardEngine:
         for (let i = 0; i < 20; i++) {
             engine.getHazardEngine().updateTrade(77000.0, 50.0, true); // Aggressive sell trades
             engine.getHazardEngine().updateOrderBook(77000.0 - i * 0.01, 2.0, 77001.0, 50.0);
         }
-        // Set CVD velocity to negative selling flow
-        const nowMs = Date.now();
+        // Set CVD velocity to negative selling flow with synchronized timestamp
+        await new Promise((r) => setTimeout(r, 10));
+        updateTimestamp();
+        const nowMs2 = timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs();
         client.writeAtomicFloat64Asset(0, 2, -5000.0);
-        client.getCVDVelocity(0, 5000, nowMs);
-        // Keep Bid = 77000.0, Ask = 77001.0 with positive AI signal
+        client.getCVDVelocity(0, 5000, nowMs2);
+        // Keep Bid = 77000.0, Ask = 77001.0 with positive AI signal and organic OBI surge (0.20 -> 0.25)
         client.writeAtomicFloat64Asset(0, 4, 77000.0);
-        client.writeAtomicFloat64Asset(0, 5, 2.0);
+        client.writeAtomicFloat64Asset(0, 5, 25.0);
         client.writeAtomicFloat64Asset(0, 6, 77001.0);
-        client.writeAtomicFloat64Asset(0, 7, 50.0);
-        client.writeAtomicFloat64Asset(0, 1, 0.15); // Favorable OBI
+        client.writeAtomicFloat64Asset(0, 7, 10.0);
+        client.writeAtomicFloat64Asset(0, 1, 0.25); // Favorable OBI stepping (0.20 -> 0.25)
+        client.writeAtomicFloat64Asset(0, 112, 0.10); // Hawkes
+        client.writeAtomicFloat64Asset(0, 121, 0.001); // Vol
+        client.writeAtomicFloat64Asset(0, 123, 0.50); // Hurst
+        client.writeAtomicFloat64Asset(0, 124, 0.50); // Entropy
         client.writeAtomicFloat64Asset(0, 93, 1.0); // AI BUY Signal
         client.writeAtomicFloat64Asset(0, 94, 0.85); // 85% Confidence
         seqNum += 1n;
         Atomics.store(bigIntView, 92, seqNum);
+        updateTimestamp();
         const res = engine.evaluateTick();
         if (res.executionPromise) {
             await res.executionPromise;
@@ -225,25 +251,46 @@ async function runQuoteFadingTest() {
         engine.getHedgeLedger().reset();
         engine.annihilateRestingEntryOrders("TEST_CLEANUP");
         engine.getHazardEngine().reset();
+        // Establish OBI baseline -0.20
+        await new Promise((r) => setTimeout(r, 10));
+        updateTimestamp();
+        client.writeAtomicFloat64Asset(0, 4, 77000.0);
+        client.writeAtomicFloat64Asset(0, 5, 10.0);
+        client.writeAtomicFloat64Asset(0, 6, 77001.0);
+        client.writeAtomicFloat64Asset(0, 7, 10.0);
+        client.writeAtomicFloat64Asset(0, 1, -0.20);
+        client.writeAtomicFloat64Asset(0, 93, 0.0);
+        client.writeAtomicFloat64Asset(0, 94, 0.50);
+        seqNum += 1n;
+        Atomics.store(bigIntView, 92, seqNum);
+        updateTimestamp();
+        engine.evaluateTick();
         // Simulate aggressive toxic buying pressure in HazardEngine:
         for (let i = 0; i < 20; i++) {
             engine.getHazardEngine().updateTrade(77000.0 + i * 0.05, 50.0, false); // Aggressive taker buy trades
             engine.getHazardEngine().updateOrderBook(77000.0, 50.0, 77000.80 + i * 0.01, 2.0);
         }
-        // Set CVD velocity to positive buying flow
-        const nowMs = Date.now();
+        // Set CVD velocity to positive buying flow with synchronized timestamp
+        await new Promise((r) => setTimeout(r, 10));
+        updateTimestamp();
+        const nowMs3 = timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs();
         client.writeAtomicFloat64Asset(0, 2, 5000.0);
-        client.getCVDVelocity(0, 5000, nowMs);
-        // Keep Bid = 77000.0, Ask = 77001.0 with negative AI signal
+        client.getCVDVelocity(0, 5000, nowMs3);
+        // Keep Bid = 77000.0, Ask = 77001.0 with negative AI signal and organic OBI surge (-0.20 -> -0.25)
         client.writeAtomicFloat64Asset(0, 4, 77000.0);
-        client.writeAtomicFloat64Asset(0, 5, 50.0);
+        client.writeAtomicFloat64Asset(0, 5, 10.0);
         client.writeAtomicFloat64Asset(0, 6, 77001.0);
-        client.writeAtomicFloat64Asset(0, 7, 2.0);
-        client.writeAtomicFloat64Asset(0, 1, -0.15); // Negative OBI
+        client.writeAtomicFloat64Asset(0, 7, 25.0);
+        client.writeAtomicFloat64Asset(0, 1, -0.25); // Negative OBI stepping (-0.20 -> -0.25)
+        client.writeAtomicFloat64Asset(0, 112, 0.10); // Hawkes
+        client.writeAtomicFloat64Asset(0, 121, 0.001); // Vol
+        client.writeAtomicFloat64Asset(0, 123, 0.50); // Hurst
+        client.writeAtomicFloat64Asset(0, 124, 0.50); // Entropy
         client.writeAtomicFloat64Asset(0, 93, -1.0); // AI SELL Signal (-1.0)
         client.writeAtomicFloat64Asset(0, 94, 0.85); // 85% Confidence
         seqNum += 1n;
         Atomics.store(bigIntView, 92, seqNum);
+        updateTimestamp();
         const res = engine.evaluateTick();
         if (res.executionPromise) {
             await res.executionPromise;
@@ -262,6 +309,7 @@ async function runQuoteFadingTest() {
     console.log("================================================================================");
     console.log("  ✅ ALL SOTA QUOTE FADING TESTS PASSED VIA PHYSICAL STRATEGY ENGINE EXECUTION");
     console.log("================================================================================\n");
+    process.exit(0);
 }
 runQuoteFadingTest().catch((err) => {
     console.error("FATAL TEST ERROR:", err);

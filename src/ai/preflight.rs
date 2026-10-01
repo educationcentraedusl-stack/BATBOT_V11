@@ -67,6 +67,8 @@ pub struct PreflightValidator {
     gate3_passed: bool,
     gate4_passed: bool,
     pub horizon_history: VecDeque<(u64, f64, f64)>, // (timestamp_ns, mid_price, prediction)
+    pub horizon_duration_ns: u64,
+    pub testing_start_ns: u64,
 }
 
 impl PreflightValidator {
@@ -75,6 +77,22 @@ impl PreflightValidator {
         warmup_target: u64,
         testing_target: u64,
         min_ic_threshold: f64,
+    ) -> Self {
+        Self::new_with_horizon(
+            candidate_engine,
+            warmup_target,
+            testing_target,
+            min_ic_threshold,
+            300_000_000_000u64,
+        )
+    }
+
+    pub fn new_with_horizon(
+        candidate_engine: AIEngine,
+        warmup_target: u64,
+        testing_target: u64,
+        min_ic_threshold: f64,
+        horizon_duration_ns: u64,
     ) -> Self {
         let is_calibrated = candidate_engine.is_calibrated();
         let gate1_passed = is_calibrated;
@@ -105,6 +123,8 @@ impl PreflightValidator {
             gate3_passed: false,
             gate4_passed: false,
             horizon_history: VecDeque::with_capacity(36_000),
+            horizon_duration_ns,
+            testing_start_ns: 0,
         }
     }
 
@@ -173,6 +193,9 @@ impl PreflightValidator {
                 }
             }
             PreflightPhase::Testing => {
+                if self.testing_start_ns == 0 {
+                    self.testing_start_ns = start_ns;
+                }
                 self.testing_ticks += 1;
                 self.latency_samples += 1;
                 self.total_latency_ns += latency_ns;
@@ -186,13 +209,7 @@ impl PreflightValidator {
                     self.horizon_history.pop_front();
                 }
 
-                // Dynamic horizon scaling: allows rapid testing targets to mature organically
-                // without artificial bypasses, while enforcing 300s in production.
-                let horizon_ns = if self.testing_target <= 100 {
-                    1_000_000_000u64
-                } else {
-                    300_000_000_000u64
-                };
+                let horizon_ns = self.horizon_duration_ns;
                 let matured = if let Some(front) = self.horizon_history.front() {
                     if start_ns.saturating_sub(front.0) >= horizon_ns {
                         self.horizon_history.pop_front()
@@ -218,8 +235,9 @@ impl PreflightValidator {
                     }
                 }
 
-                // Final gate evaluation when testing window completes
-                if self.testing_ticks >= self.testing_target {
+                // Final gate evaluation ONLY when BOTH tick target is reached AND absolute horizon_duration_ns has elapsed chronologically (DEF-3904)
+                let elapsed_ns = start_ns.saturating_sub(self.testing_start_ns);
+                if self.testing_ticks >= self.testing_target && elapsed_ns >= self.horizon_duration_ns {
                     self.evaluate_final_gates();
                 }
             }
@@ -347,7 +365,7 @@ mod tests {
         }
 
         let engine = AIEngine::load_from_paths("./models/cfc_weights.safetensors", "./models/tkan_luts.bin");
-        let mut validator = PreflightValidator::new(engine, 30, 20, -1.0);
+        let mut validator = PreflightValidator::new_with_horizon(engine, 30, 20, -1.0, 1_000_000_000);
 
         assert_eq!(validator.phase(), PreflightPhase::Warming, "Validator must start in Warming phase");
         for _ in 0..30 {
@@ -386,18 +404,31 @@ mod tests {
         }
 
         let engine = AIEngine::load_from_paths("./models/cfc_weights.safetensors", "./models/tkan_luts.bin");
-        let mut validator = PreflightValidator::new(engine, 10, 10, -1.0);
+        let mut validator = PreflightValidator::new_with_horizon(engine, 10, 10, -1.0, 1_000_000_000);
 
         assert_eq!(validator.phase(), PreflightPhase::Warming, "Validator must start in Warming phase");
         for _ in 0..10 {
             validator.step_shadow(&bridge);
         }
         assert_eq!(validator.phase(), PreflightPhase::Testing);
-        // Rapid execution with zero sleep: zero samples mature, total_eval_directions == 0
+        // Rapid execution with zero sleep: testing must NOT terminate before horizon_duration_ns elapses (DEF-3904)
         for _ in 0..10 {
             validator.step_shadow(&bridge);
         }
-        // Gate 3 must fail unconditionally on zero samples
+        assert_eq!(
+            validator.phase(),
+            PreflightPhase::Testing,
+            "Validator must not prematurely terminate testing before horizon_duration_ns elapses"
+        );
+
+        // Clear horizon history so zero matured samples can be evaluated when horizon elapses
+        validator.horizon_history.clear();
+
+        // Sleep to satisfy elapsed_ns >= horizon_duration_ns (1s horizon)
+        std::thread::sleep(std::time::Duration::from_millis(1050));
+        validator.step_shadow(&bridge);
+
+        // Gate 3 must fail unconditionally on zero samples once horizon elapses
         assert_eq!(validator.phase(), PreflightPhase::Failed);
         let metrics = validator.get_metrics();
         assert!(!metrics.gate3_passed);

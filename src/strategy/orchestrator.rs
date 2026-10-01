@@ -171,9 +171,13 @@ impl StrategyOrchestrator {
                                     }
 
                                     // Run AI inference (CFC + TKAN)
-                                    let ai_result = ai.evaluate_features(&features);
-                                    let signal_direction = ai_result.0; // Direction
-                                    let confidence = ai_result.1;       // Confidence
+                                    let (signal_direction, confidence) = match ai.evaluate_features(&features) {
+                                        Ok(res) => res,
+                                        Err(err) => {
+                                            eprintln!("[BATBOT_V11][Strategy Orchestrator] Inference failed for asset {}: {:?}", asset_idx, err);
+                                            continue;
+                                        }
+                                    };
 
                                     // If signal confidence exceeds threshold (e.g. 0.65)
                                     if confidence >= 0.65 && signal_direction.abs() > 0.5 {

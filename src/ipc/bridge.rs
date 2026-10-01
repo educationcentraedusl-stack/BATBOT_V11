@@ -106,7 +106,9 @@ impl IngestionBridge {
                                 if validator.phase() == PreflightPhase::Passed {
                                     if let Some(promoted_engine) = validator.promote() {
                                         if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
-                                            promoted_engine.inherit_hidden_state(active_engine);
+                                            if let Err(e) = promoted_engine.inherit_hidden_state(active_engine) {
+                                                eprintln!("[BATBOT_V11] Failed to inherit hidden state: {:?}", e);
+                                            }
                                             promoted_engine.inherit_telemetry_history(active_engine);
                                         }
                                         let max_assets = bridge.max_assets();

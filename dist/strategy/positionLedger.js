@@ -434,6 +434,7 @@ class HedgePositionLedger {
     sessionDrawdownPnl = 0;
     // Zero-GC Pre-allocated Reusable SOTA Exit Triggers Array & Slots
     sotaTriggers = [];
+    cachedTriggersRing = [];
     preallocatedTriggers = Array.from({ length: 8 }, () => ({
         slotId: "",
         side: "LONG",
@@ -1700,97 +1701,115 @@ class HedgePositionLedger {
         }
     }
     evaluateHedgeDynamicTpSl(markPrice, aiDirectionOrNowMs = 0, aiConfidence = 0, vpin = 0, hawkes = 0, garmanKlass = 0, ofi = 0, nowMs = Date.now()) {
-        const triggers = [];
+        this.cachedTriggersRing.length = 0;
         if (markPrice <= 0)
-            return triggers;
+            return this.cachedTriggersRing;
+        // Fast-path early exit: if no slots are occupied, exit immediately before computing fee buffers, timestamps or leverage
+        let hasOccupiedSlot = this.coreLong.isOccupied && this.coreLong.quantity > 0;
+        if (!hasOccupiedSlot) {
+            for (let i = 0; i < this.maxShortSlots; i++) {
+                if (this.shortSlots[i].isOccupied && this.shortSlots[i].quantity > 0) {
+                    hasOccupiedSlot = true;
+                    break;
+                }
+            }
+        }
+        if (!hasOccupiedSlot) {
+            return this.cachedTriggersRing;
+        }
         const actualNowMs = aiDirectionOrNowMs > 1e11 ? aiDirectionOrNowMs : (nowMs > 1e11 ? nowMs : Date.now());
         const aiDirection = aiDirectionOrNowMs > 1e11 ? 0 : aiDirectionOrNowMs;
-        const makerFee = this.sizingCalc.getMakerFeeRate();
-        const takerFee = this.sizingCalc.getTakerFeeRate();
-        const feeBuffer = (makerFee + takerFee) * 2.5;
+        const feeBuffer = this.feeMultiplier;
         const effectiveLev = this.leverage > 0 ? this.leverage : 20.0;
         if (this.coreLong.isOccupied && this.coreLong.entryPrice > 0 && this.coreLong.quantity > 0) {
-            this.evalHedgeSlot(this.coreLong, markPrice, actualNowMs, aiDirection, aiConfidence, vpin, hawkes, garmanKlass, ofi, feeBuffer, effectiveLev, triggers);
+            this.evalHedgeSlot(this.coreLong, markPrice, actualNowMs, aiDirection, aiConfidence, vpin, hawkes, garmanKlass, ofi, feeBuffer, effectiveLev, this.cachedTriggersRing);
         }
         for (let i = 0; i < this.maxShortSlots; i++) {
             const slot = this.shortSlots[i];
-            if (slot.isOccupied && slot.entryPrice > 0 && slot.quantity > 0) {
-                this.evalHedgeSlot(slot, markPrice, actualNowMs, aiDirection, aiConfidence, vpin, hawkes, garmanKlass, ofi, feeBuffer, effectiveLev, triggers);
-            }
+            if (!slot.isOccupied)
+                continue;
+            if (slot.entryPrice <= 0 || slot.quantity <= 0)
+                continue;
+            this.evalHedgeSlot(slot, markPrice, actualNowMs, aiDirection, aiConfidence, vpin, hawkes, garmanKlass, ofi, feeBuffer, effectiveLev, this.cachedTriggersRing);
         }
-        return triggers;
+        return this.cachedTriggersRing;
     }
     evalHedgeSlot(slot, markPrice, actualNowMs, aiDirection, aiConfidence, vpin, hawkes, garmanKlass, ofi, feeBuffer, effectiveLev, triggers) {
-        const initialQty = slot.initialQuantity && slot.initialQuantity > 0 ? slot.initialQuantity : slot.quantity;
-        const stage = slot.tpStageReached || 0;
+        if (!slot.isOccupied)
+            return;
+        const entryPrice = slot.entryPrice;
+        if (entryPrice <= 0)
+            return;
         const isLong = slot.side === "LONG";
-        const tpPrices = slot.tpPrices && slot.tpPrices.length === 5 ? slot.tpPrices : [];
-        const hasActiveLimitOrders = slot.activeTpOrderIds && slot.activeTpOrderIds.length > 0;
-        const openTime = slot.openTime && slot.openTime > 0 ? slot.openTime : actualNowMs;
-        const durationMs = Math.max(0, actualNowMs - openTime);
-        const durationSec = durationMs / 1000;
         // 0A. Tick-by-Tick Dynamic Trailing SL & Early Profit Lock (Zero Time Delays)
         if (isLong) {
-            slot.peakPrice = Math.max(slot.peakPrice ?? slot.entryPrice, markPrice);
+            if (slot.peakPrice === undefined || markPrice > slot.peakPrice) {
+                slot.peakPrice = markPrice;
+            }
         }
         else {
-            slot.troughPrice = Math.min(slot.troughPrice && slot.troughPrice > 0 ? slot.troughPrice : slot.entryPrice, markPrice);
+            if (!slot.troughPrice || markPrice < slot.troughPrice) {
+                slot.troughPrice = markPrice;
+            }
         }
         const rawRoePct = isLong
-            ? ((markPrice - slot.entryPrice) / slot.entryPrice) * effectiveLev * 100.0
-            : ((slot.entryPrice - markPrice) / slot.entryPrice) * effectiveLev * 100.0;
-        if (rawRoePct > (slot.peakRoe ?? 0)) {
+            ? ((markPrice - entryPrice) / entryPrice) * (effectiveLev * 100.0)
+            : ((entryPrice - markPrice) / entryPrice) * (effectiveLev * 100.0);
+        if (slot.peakRoe === undefined || rawRoePct > slot.peakRoe) {
             slot.peakRoe = rawRoePct;
         }
-        // Dynamic Continuous Tick-by-Tick Trailing SL (Locks past Entry Price as soon as in profit)
-        const minVol = garmanKlass > 0.000001 ? Math.sqrt(garmanKlass) : 0.0020;
-        const dynamicTrailDist = Math.max(this.priceTickSize * 3, slot.entryPrice * Math.max(0.0010, minVol * 1.0));
         if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
-            slot.breakEvenPrice = this.formatPriceFast(isLong ? slot.entryPrice * (1.0 + feeBuffer) : slot.entryPrice * (1.0 - feeBuffer));
+            const beRaw = isLong ? entryPrice * (1.0 + feeBuffer) : entryPrice * (1.0 - feeBuffer);
+            slot.breakEvenPrice = Math.round(beRaw * this.invPriceTickSize) / this.invPriceTickSize;
         }
-        const maxLongSl = this.formatPriceFast(markPrice - this.priceTickSize * 2);
-        const minShortSl = this.formatPriceFast(markPrice + this.priceTickSize * 2);
         // =========================================================================
         // LAYER 1: STANDARD STEP-COLLAR RATCHETS (MANDATORY >= +8.0% NET ROE GATE)
         // =========================================================================
         const currentPeakRoe = slot.peakRoe ?? rawRoePct;
         // Tier 1: +8.0% Net ROE -> Lock Entry + Round-Trip Fees
         if (rawRoePct >= 8.0 || currentPeakRoe >= 8.0) {
+            const maxLongSl = Math.round((markPrice - this.priceTickSize * 2) * this.invPriceTickSize) / this.invPriceTickSize;
+            const minShortSl = Math.round((markPrice + this.priceTickSize * 2) * this.invPriceTickSize) / this.invPriceTickSize;
             const beOffset = feeBuffer + 0.0002;
             const rawTier1 = isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset);
-            const targetTier1Sl = isLong ? Math.min(maxLongSl, this.formatPriceFast(rawTier1)) : Math.max(minShortSl, this.formatPriceFast(rawTier1));
+            const roundedTier1 = Math.round(rawTier1 * this.invPriceTickSize) / this.invPriceTickSize;
+            const targetTier1Sl = isLong ? Math.min(maxLongSl, roundedTier1) : Math.max(minShortSl, roundedTier1);
             if (!slot.stepCollarTier || slot.stepCollarTier < 1) {
                 slot.stepCollarTier = 1;
                 slot.breakEvenLocked = true;
                 slot.breakEvenPrice = targetTier1Sl;
             }
             this.applyMonotonicStopLoss(slot, targetTier1Sl);
-        }
-        // Tier 2: +15.0% Net ROE -> Lock +10.0% ROE
-        if (rawRoePct >= 15.0 || currentPeakRoe >= 15.0) {
-            const lockOffset = (10.0 / 100.0) / effectiveLev;
-            const rawTier2 = isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset);
-            const targetTier2Sl = isLong ? Math.min(maxLongSl, this.formatPriceFast(rawTier2)) : Math.max(minShortSl, this.formatPriceFast(rawTier2));
-            if (!slot.stepCollarTier || slot.stepCollarTier < 2) {
-                slot.stepCollarTier = 2;
-                slot.breakEvenLocked = true;
+            // Tier 2: +15.0% Net ROE -> Lock +10.0% ROE
+            if (rawRoePct >= 15.0 || currentPeakRoe >= 15.0) {
+                const lockOffset = 0.10 / effectiveLev;
+                const rawTier2 = isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset);
+                const roundedTier2 = Math.round(rawTier2 * this.invPriceTickSize) / this.invPriceTickSize;
+                const targetTier2Sl = isLong ? Math.min(maxLongSl, roundedTier2) : Math.max(minShortSl, roundedTier2);
+                if (!slot.stepCollarTier || slot.stepCollarTier < 2) {
+                    slot.stepCollarTier = 2;
+                    slot.breakEvenLocked = true;
+                }
+                this.applyMonotonicStopLoss(slot, targetTier2Sl);
             }
-            this.applyMonotonicStopLoss(slot, targetTier2Sl);
-        }
-        // Tier 3: >= +25.0% Net ROE -> Aggressive 70% Trailing Profit Collar
-        if (rawRoePct >= 25.0 || currentPeakRoe >= 25.0) {
-            const trailRoe = currentPeakRoe * 0.70;
-            const trailOffset = (trailRoe / 100.0) / effectiveLev;
-            const rawTier3 = isLong ? slot.entryPrice * (1.0 + trailOffset) : slot.entryPrice * (1.0 - trailOffset);
-            const targetTier3Sl = isLong ? Math.min(maxLongSl, this.formatPriceFast(rawTier3)) : Math.max(minShortSl, this.formatPriceFast(rawTier3));
-            if (!slot.stepCollarTier || slot.stepCollarTier < 3) {
-                slot.stepCollarTier = 3;
-                slot.breakEvenLocked = true;
+            // Tier 3: >= +25.0% Net ROE -> Aggressive 70% Trailing Profit Collar
+            if (rawRoePct >= 25.0 || currentPeakRoe >= 25.0) {
+                const trailRoe = currentPeakRoe * 0.70;
+                const trailOffset = (trailRoe * 0.01) / effectiveLev;
+                const rawTier3 = isLong ? slot.entryPrice * (1.0 + trailOffset) : slot.entryPrice * (1.0 - trailOffset);
+                const roundedTier3 = Math.round(rawTier3 * this.invPriceTickSize) / this.invPriceTickSize;
+                const targetTier3Sl = isLong ? Math.min(maxLongSl, roundedTier3) : Math.max(minShortSl, roundedTier3);
+                if (!slot.stepCollarTier || slot.stepCollarTier < 3) {
+                    slot.stepCollarTier = 3;
+                    slot.breakEvenLocked = true;
+                }
+                this.applyMonotonicStopLoss(slot, targetTier3Sl);
             }
-            this.applyMonotonicStopLoss(slot, targetTier3Sl);
         }
+        const openTime = slot.openTime && slot.openTime > 0 ? slot.openTime : actualNowMs;
+        const durationMs = actualNowMs > openTime ? actualNowMs - openTime : 0;
         // Terminal Lifespan Harvest (30 Minutes Max Horizon)
-        if (durationSec >= 1800.0) {
+        if (durationMs >= 1800000.0) {
             if (!slot.timeDecayTier || slot.timeDecayTier < 4) {
                 slot.timeDecayTier = 4;
                 triggers.push({
@@ -1859,25 +1878,32 @@ class HedgePositionLedger {
             const isToxicFlow = vpin >= 0.80 || (isLong ? ofi < -0.3 : ofi > 0.3);
             const isHawkesBurst = hawkes > 2.5;
             if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
-                slot.breakEvenPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + feeBuffer) : slot.entryPrice * (1.0 - feeBuffer));
+                const beRaw = isLong ? slot.entryPrice * (1.0 + feeBuffer) : slot.entryPrice * (1.0 - feeBuffer);
+                slot.breakEvenPrice = Math.round(beRaw * this.invPriceTickSize) / this.invPriceTickSize;
             }
             if (slot.breakEvenPrice && slot.breakEvenPrice > 0 && (isToxicFlow || isHawkesBurst)) {
                 let emergencyTargetSl = slot.breakEvenPrice;
                 if (isToxicFlow) {
                     // Ratchet SL to Breakeven + 0.05% offset to lock profit under toxicity
                     const offset = feeBuffer + 0.0005;
-                    emergencyTargetSl = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset));
+                    const raw = isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset);
+                    emergencyTargetSl = Math.round(raw * this.invPriceTickSize) / this.invPriceTickSize;
                 }
                 else if (isHawkesBurst) {
                     // Ratchet SL under order arrival velocity spike
                     const offset = feeBuffer + 0.0010;
-                    emergencyTargetSl = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.symbol, isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset));
+                    const raw = isLong ? slot.entryPrice * (1.0 + offset) : slot.entryPrice * (1.0 - offset);
+                    emergencyTargetSl = Math.round(raw * this.invPriceTickSize) / this.invPriceTickSize;
                 }
                 this.applyMonotonicStopLoss(slot, emergencyTargetSl);
             }
         }
         // 1. Symmetrical Immediate Take-Profit Evaluation (Zero Holding Time Hysteresis - Symmetrical to SL)
-        if (!hasActiveLimitOrders && tpPrices.length === 5) {
+        const hasActiveLimitOrders = slot.activeTpOrderIds && slot.activeTpOrderIds.length > 0;
+        const tpPrices = slot.tpPrices;
+        const stage = slot.tpStageReached || 0;
+        const initialQty = slot.initialQuantity && slot.initialQuantity > 0 ? slot.initialQuantity : slot.quantity;
+        if (!hasActiveLimitOrders && tpPrices && tpPrices.length === 5) {
             // TP1 (+20% ROI Target)
             if (stage < 1 && ((isLong && markPrice >= tpPrices[0]) || (!isLong && markPrice <= tpPrices[0]))) {
                 slot.tpStageReached = 1;
@@ -2292,8 +2318,7 @@ class HedgePositionLedger {
     formatPriceFast(rawPrice) {
         if (rawPrice <= 0)
             return 0;
-        const rounded = Math.round(rawPrice / this.priceTickSize) * this.priceTickSize;
-        return Math.round(rounded * this.priceFactor) / this.priceFactor;
+        return Math.round(rawPrice * this.invPriceTickSize) / this.invPriceTickSize;
     }
     pushSotaTrigger(slotId, side, reason, quantity, entryPrice, markPrice, isPartialClose, activeTpOrderIds, activeStopLossOrderId, executionStyle = "AGGRESSIVE_MARKET", targetPrice) {
         const idx = this.sotaTriggers.length;

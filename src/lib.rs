@@ -77,7 +77,9 @@ pub fn load_ai_model(weights_path: String, sab_buffer: Option<Buffer>) -> bool {
     let new_engine = AIEngine::load_from_file(&weights_path);
     let success = new_engine.is_calibrated();
     if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
-        new_engine.inherit_hidden_state(active_engine);
+        if let Err(e) = new_engine.inherit_hidden_state(active_engine) {
+            eprintln!("[BATBOT_V11] Failed to inherit hidden state: {:?}", e);
+        }
         new_engine.inherit_telemetry_history(active_engine);
     }
     GLOBAL_AI_ENGINE.store(Some(Arc::new(new_engine)));
@@ -110,7 +112,9 @@ pub fn load_ai_model_full(weights_path: String, tkan_path: String, sab_buffer: O
     let new_engine = AIEngine::load_from_paths(&weights_path, &tkan_path);
     let success = new_engine.is_calibrated();
     if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
-        new_engine.inherit_hidden_state(active_engine);
+        if let Err(e) = new_engine.inherit_hidden_state(active_engine) {
+            eprintln!("[BATBOT_V11] Failed to inherit hidden state: {:?}", e);
+        }
         new_engine.inherit_telemetry_history(active_engine);
     }
     GLOBAL_AI_ENGINE.store(Some(Arc::new(new_engine)));
@@ -209,7 +213,9 @@ pub fn trigger_preflight_warmup(
 ) -> bool {
     let candidate = AIEngine::load_from_paths(&weights_path, &tkan_path);
     if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
-        candidate.inherit_hidden_state(active_engine);
+        if let Err(e) = candidate.inherit_hidden_state(active_engine) {
+            eprintln!("[BATBOT_V11] Failed to inherit hidden state: {:?}", e);
+        }
     }
 
     let min_ic_val = min_ic.unwrap_or(0.03);
