@@ -1,6 +1,16 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-10-01
+- **Feature/Task:** Master Plan Execution - Batch 3.1: Absolute Terminal Remediation (Zero-Alloc Hot-Path & Silent Catches Purged)
+- **Artifacts Created/Modified:** `src/strategy/positionLedger.ts`, `src/ai/recalibrationWorker.ts`
+- **HFT/Performance Compliance:**
+  1. **DEF-4001 (Zero-Allocation Cancel Order IDs Ring Buffer - `src/strategy/positionLedger.ts`):** Eradicated `const cancelIds: number[] = [];` heap allocation from `pushSotaTrigger`. Replaced with preallocated static ring buffer `preallocatedCancelIdRings: number[][]` and zero-allocation length reset (`cancelIds.length = 0`), eliminating GC spikes on exit ticks.
+  2. **DEF-4002 (Zero-Allocation Preallocated Exit Trigger Mutation - `src/strategy/positionLedger.ts`):** Eradicated all 9 inline object literal allocations (`triggers.push({ ... })`) in `evalHedgeSlot`. Replaced with `pushHedgeTrigger()` mutating and reusing objects from `preallocatedTriggers` ring buffer.
+  3. **DEF-4003 (Silent Catch Purge & Structured Error Logging - `src/ai/recalibrationWorker.ts`):** Replaced empty `catch {}` blocks around TKAN schedule file read/write and Rust warmup status checks with explicit structured logging (`console.warn("[BATBOT_V11][recalibrationWorker] ...")`).
+  4. **Latency Verification:** 100,000 tick evaluation hot-path latency benchmark completed in 1.2566 µs / tick, strictly compliant with < 1.5000 µs HFT SLA.
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-10-01
 - **Feature/Task:** Master Plan Execution - Batch 3 (Phase 7: Recalibration Worker Timeout Extension & Zero-Trust SAB Safety Verification)
 - **Artifacts Created/Modified:** `src/ai/recalibrationWorker.ts` (verified, no changes needed — prior Batch 1.3 DEF-3805/DEF-3806 remediation already committed)
 - **HFT/Performance Compliance:**

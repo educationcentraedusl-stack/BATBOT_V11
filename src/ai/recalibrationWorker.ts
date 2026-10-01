@@ -104,8 +104,9 @@ export class AutoRecalibrationManager {
           this.lastTkanTrainingTimestamp = parsed;
         }
       }
-    } catch {
-      // Safe fallback
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn("[BATBOT_V11][recalibrationWorker] TKAN file I/O read failed, using fallback:", msg);
     }
   }
 
@@ -167,7 +168,9 @@ export class AutoRecalibrationManager {
         const parsed = JSON.parse(rawJson);
         const sampleCount = typeof parsed.sample_count === "number" ? parsed.sample_count : 0;
         return sampleCount >= 1000;
-      } catch {
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn("[BATBOT_V11][recalibrationWorker] getIcStatus query failed:", msg);
         return false;
       }
     }
@@ -288,8 +291,9 @@ export class AutoRecalibrationManager {
       this.lastTkanTrainingTimestamp = Date.now();
       try {
         fs.writeFileSync(this.tkanScheduleFilePath, this.lastTkanTrainingTimestamp.toString(), "utf-8");
-      } catch {
-        // Safe persistence fallback
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn("[BATBOT_V11][recalibrationWorker] TKAN file I/O write failed, using fallback:", msg);
       }
 
       console.log("[BATBOT_V11][T-KAN_SCHEDULER] T-KAN spatial initialization completed and hot-swapped successfully!");

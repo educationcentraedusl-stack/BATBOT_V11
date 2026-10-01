@@ -647,6 +647,7 @@ export class HedgePositionLedger {
   // Zero-GC Pre-allocated Reusable SOTA Exit Triggers Array & Slots
   private readonly sotaTriggers: SlotExitTrigger[] = [];
   private readonly cachedTriggersRing: SlotExitTrigger[] = [];
+  private readonly preallocatedCancelIdRings: number[][] = Array.from({ length: 8 }, () => []);
   private readonly preallocatedTriggers: SlotExitTrigger[] = Array.from({ length: 8 }, () => ({
     slotId: "",
     side: "LONG",
@@ -655,6 +656,7 @@ export class HedgePositionLedger {
     entryPrice: 0,
     markPrice: 0,
     isPartialClose: false,
+    tpStage: undefined,
     cancelOrderIds: undefined,
     executionStyle: "AGGRESSIVE_MARKET",
     targetPrice: undefined,
@@ -2281,16 +2283,21 @@ export class HedgePositionLedger {
     if (durationMs >= 1800000.0) {
       if (!slot.timeDecayTier || slot.timeDecayTier < 4) {
         slot.timeDecayTier = 4;
-        triggers.push({
-          slotId: slot.slotId,
-          side: slot.side,
-          reason: "LONG_HOLD_PROFIT_HARVEST",
-          quantity: slot.quantity,
-          entryPrice: slot.entryPrice,
+        const cancelIds = this.extractCancelOrderIds(slot, triggers.length);
+        this.pushHedgeTrigger(
+          triggers,
+          slot.slotId,
+          slot.side,
+          "LONG_HOLD_PROFIT_HARVEST",
+          slot.quantity,
+          slot.entryPrice,
           markPrice,
-          isPartialClose: false,
-          cancelOrderIds: this.extractCancelOrderIds(slot),
-        });
+          false,
+          undefined,
+          cancelIds,
+          "AGGRESSIVE_MARKET",
+          undefined
+        );
         return;
       }
     }
@@ -2317,8 +2324,8 @@ export class HedgePositionLedger {
       : (aiDirection < 0.50 || aiConfidence < 0.70);
 
     if (isResetCondition) {
-      slot.reversalTickCounter = 0;
-      slot.reversalStartTs = 0;
+      if (slot.reversalTickCounter !== 0) slot.reversalTickCounter = 0;
+      if (slot.reversalStartTs !== 0) slot.reversalStartTs = 0;
     } else if (isOpposingConviction) {
       slot.reversalTickCounter = (slot.reversalTickCounter || 0) + 1;
       if (!slot.reversalStartTs || slot.reversalStartTs <= 0) {
@@ -2333,16 +2340,21 @@ export class HedgePositionLedger {
     const isDebouncedReversal = (slot.reversalTickCounter || 0) >= 15 && reversalDurationMs >= 1500.0;
 
     if (!isQuarantineActive && !isInProfitImmunityActive && isDebouncedReversal) {
-      triggers.push({
-        slotId: slot.slotId,
-        side: slot.side,
-        reason: `AI_REVERSAL_EXIT_${slot.side}`,
-        quantity: slot.quantity,
-        entryPrice: slot.entryPrice,
+      const cancelIds = this.extractCancelOrderIds(slot, triggers.length);
+      this.pushHedgeTrigger(
+        triggers,
+        slot.slotId,
+        slot.side,
+        `AI_REVERSAL_EXIT_${slot.side}`,
+        slot.quantity,
+        slot.entryPrice,
         markPrice,
-        isPartialClose: false,
-        cancelOrderIds: this.extractCancelOrderIds(slot),
-      });
+        false,
+        undefined,
+        cancelIds,
+        "AGGRESSIVE_MARKET",
+        undefined
+      );
       return;
     }
 
@@ -2395,16 +2407,20 @@ export class HedgePositionLedger {
 
         const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
         if (chunk > 0) {
-          triggers.push({
-            slotId: slot.slotId,
-            side: slot.side,
-            reason: "TAKE_PROFIT_TP1",
-            quantity: chunk,
-            entryPrice: slot.entryPrice,
+          this.pushHedgeTrigger(
+            triggers,
+            slot.slotId,
+            slot.side,
+            "TAKE_PROFIT_TP1",
+            chunk,
+            slot.entryPrice,
             markPrice,
-            isPartialClose: chunk < slot.quantity,
-            tpStage: 1,
-          });
+            chunk < slot.quantity,
+            1,
+            undefined,
+            "AGGRESSIVE_MARKET",
+            undefined
+          );
           return;
         }
       }
@@ -2416,16 +2432,20 @@ export class HedgePositionLedger {
 
         const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
         if (chunk > 0) {
-          triggers.push({
-            slotId: slot.slotId,
-            side: slot.side,
-            reason: "TAKE_PROFIT_TP2",
-            quantity: chunk,
-            entryPrice: slot.entryPrice,
+          this.pushHedgeTrigger(
+            triggers,
+            slot.slotId,
+            slot.side,
+            "TAKE_PROFIT_TP2",
+            chunk,
+            slot.entryPrice,
             markPrice,
-            isPartialClose: chunk < slot.quantity,
-            tpStage: 2,
-          });
+            chunk < slot.quantity,
+            2,
+            undefined,
+            "AGGRESSIVE_MARKET",
+            undefined
+          );
           return;
         }
       }
@@ -2437,16 +2457,20 @@ export class HedgePositionLedger {
 
         const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
         if (chunk > 0) {
-          triggers.push({
-            slotId: slot.slotId,
-            side: slot.side,
-            reason: "TAKE_PROFIT_TP3",
-            quantity: chunk,
-            entryPrice: slot.entryPrice,
+          this.pushHedgeTrigger(
+            triggers,
+            slot.slotId,
+            slot.side,
+            "TAKE_PROFIT_TP3",
+            chunk,
+            slot.entryPrice,
             markPrice,
-            isPartialClose: chunk < slot.quantity,
-            tpStage: 3,
-          });
+            chunk < slot.quantity,
+            3,
+            undefined,
+            "AGGRESSIVE_MARKET",
+            undefined
+          );
           return;
         }
       }
@@ -2458,16 +2482,20 @@ export class HedgePositionLedger {
 
         const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
         if (chunk > 0) {
-          triggers.push({
-            slotId: slot.slotId,
-            side: slot.side,
-            reason: "TAKE_PROFIT_TP4",
-            quantity: chunk,
-            entryPrice: slot.entryPrice,
+          this.pushHedgeTrigger(
+            triggers,
+            slot.slotId,
+            slot.side,
+            "TAKE_PROFIT_TP4",
+            chunk,
+            slot.entryPrice,
             markPrice,
-            isPartialClose: chunk < slot.quantity,
-            tpStage: 4,
-          });
+            chunk < slot.quantity,
+            4,
+            undefined,
+            "AGGRESSIVE_MARKET",
+            undefined
+          );
           return;
         }
       }
@@ -2475,16 +2503,20 @@ export class HedgePositionLedger {
       // TP5 (+120%+ ROI Target) -> Close remaining position
       if (stage < 5 && ((isLong && markPrice >= tpPrices[4]) || (!isLong && markPrice <= tpPrices[4]))) {
         slot.tpStageReached = 5;
-        triggers.push({
-          slotId: slot.slotId,
-          side: slot.side,
-          reason: "TAKE_PROFIT_TP5",
-          quantity: slot.quantity,
-          entryPrice: slot.entryPrice,
+        this.pushHedgeTrigger(
+          triggers,
+          slot.slotId,
+          slot.side,
+          "TAKE_PROFIT_TP5",
+          slot.quantity,
+          slot.entryPrice,
           markPrice,
-          isPartialClose: false,
-          tpStage: 5,
-        });
+          false,
+          5,
+          undefined,
+          "AGGRESSIVE_MARKET",
+          undefined
+        );
         return;
       }
     }
@@ -2496,16 +2528,21 @@ export class HedgePositionLedger {
 
     if (isSlTriggered) {
       const reason = slot.breakEvenLocked ? "BREAK_EVEN_STOP_LOSS" : "STOP_LOSS";
-      triggers.push({
-        slotId: slot.slotId,
-        side: slot.side,
+      const cancelIds = this.extractCancelOrderIds(slot, triggers.length);
+      this.pushHedgeTrigger(
+        triggers,
+        slot.slotId,
+        slot.side,
         reason,
-        quantity: slot.quantity,
-        entryPrice: slot.entryPrice,
+        slot.quantity,
+        slot.entryPrice,
         markPrice,
-        isPartialClose: false,
-        cancelOrderIds: this.extractCancelOrderIds(slot),
-      });
+        false,
+        undefined,
+        cancelIds,
+        "AGGRESSIVE_MARKET",
+        undefined
+      );
       return;
     }
 
@@ -2516,31 +2553,84 @@ export class HedgePositionLedger {
         : ((slot.entryPrice - markPrice) / slot.entryPrice) * 100;
 
       if (pnlPct >= slot.takeProfitPercent) {
-        triggers.push({
-          slotId: slot.slotId,
-          side: slot.side,
-          reason: "TAKE_PROFIT",
-          quantity: slot.quantity,
-          entryPrice: slot.entryPrice,
+        this.pushHedgeTrigger(
+          triggers,
+          slot.slotId,
+          slot.side,
+          "TAKE_PROFIT",
+          slot.quantity,
+          slot.entryPrice,
           markPrice,
-          isPartialClose: false,
-        });
+          false,
+          undefined,
+          undefined,
+          "AGGRESSIVE_MARKET",
+          undefined
+        );
       }
     }
   }
 
-  private extractCancelOrderIds(slot: PositionSlot): number[] | undefined {
-    if (!slot.activeTpOrderIds?.length && !slot.activeStopLossOrderId) {
+  private populateCancelOrderIds(
+    idx: number,
+    activeTpOrderIds?: number[],
+    activeStopLossOrderId?: number
+  ): number[] | undefined {
+    const hasTp = activeTpOrderIds && activeTpOrderIds.length > 0;
+    const hasSl = activeStopLossOrderId && activeStopLossOrderId > 0;
+    if (!hasTp && !hasSl) {
       return undefined;
     }
-    const ids: number[] = [];
-    if (slot.activeTpOrderIds && slot.activeTpOrderIds.length > 0) {
-      ids.push(...slot.activeTpOrderIds);
+    if (idx >= this.preallocatedCancelIdRings.length) {
+      return undefined;
     }
-    if (slot.activeStopLossOrderId && slot.activeStopLossOrderId > 0) {
-      ids.push(slot.activeStopLossOrderId);
+    const cancelIds = this.preallocatedCancelIdRings[idx];
+    cancelIds.length = 0;
+    if (hasTp && activeTpOrderIds) {
+      for (let i = 0; i < activeTpOrderIds.length; i++) {
+        cancelIds.push(activeTpOrderIds[i]);
+      }
     }
-    return ids;
+    if (hasSl && activeStopLossOrderId) {
+      cancelIds.push(activeStopLossOrderId);
+    }
+    return cancelIds.length > 0 ? cancelIds : undefined;
+  }
+
+  private pushHedgeTrigger(
+    triggers: SlotExitTrigger[],
+    slotId: string,
+    side: "LONG" | "SHORT",
+    reason: string,
+    quantity: number,
+    entryPrice: number,
+    markPrice: number,
+    isPartialClose: boolean,
+    tpStage?: number,
+    cancelOrderIds?: number[],
+    executionStyle: "PASSIVE_MAKER" | "AGGRESSIVE_MARKET" = "AGGRESSIVE_MARKET",
+    targetPrice?: number
+  ): void {
+    const idx = triggers.length;
+    if (idx < this.preallocatedTriggers.length) {
+      const trg = this.preallocatedTriggers[idx];
+      trg.slotId = slotId;
+      trg.side = side;
+      trg.reason = reason;
+      trg.quantity = quantity;
+      trg.entryPrice = entryPrice;
+      trg.markPrice = markPrice;
+      trg.isPartialClose = isPartialClose;
+      trg.tpStage = tpStage;
+      trg.cancelOrderIds = cancelOrderIds;
+      trg.executionStyle = executionStyle;
+      trg.targetPrice = targetPrice;
+      triggers.push(trg);
+    }
+  }
+
+  private extractCancelOrderIds(slot: PositionSlot, idx: number): number[] | undefined {
+    return this.populateCancelOrderIds(idx, slot.activeTpOrderIds, slot.activeStopLossOrderId);
   }
 
   /**
@@ -2957,6 +3047,7 @@ export class HedgePositionLedger {
   ): void {
     const idx = this.sotaTriggers.length;
     if (idx < this.preallocatedTriggers.length) {
+      const cancelIds = this.populateCancelOrderIds(idx, activeTpOrderIds, activeStopLossOrderId);
       const trg = this.preallocatedTriggers[idx];
       trg.slotId = slotId;
       trg.side = side;
@@ -2965,16 +3056,10 @@ export class HedgePositionLedger {
       trg.entryPrice = entryPrice;
       trg.markPrice = markPrice;
       trg.isPartialClose = isPartialClose;
+      trg.tpStage = undefined;
       trg.executionStyle = executionStyle;
       trg.targetPrice = targetPrice;
-      const cancelIds: number[] = [];
-      if (activeTpOrderIds && activeTpOrderIds.length > 0) {
-        cancelIds.push(...activeTpOrderIds);
-      }
-      if (activeStopLossOrderId && activeStopLossOrderId > 0) {
-        cancelIds.push(activeStopLossOrderId);
-      }
-      trg.cancelOrderIds = cancelIds.length > 0 ? cancelIds : undefined;
+      trg.cancelOrderIds = cancelIds;
       this.sotaTriggers.push(trg);
     }
   }

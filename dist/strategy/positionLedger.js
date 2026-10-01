@@ -435,6 +435,7 @@ class HedgePositionLedger {
     // Zero-GC Pre-allocated Reusable SOTA Exit Triggers Array & Slots
     sotaTriggers = [];
     cachedTriggersRing = [];
+    preallocatedCancelIdRings = Array.from({ length: 8 }, () => []);
     preallocatedTriggers = Array.from({ length: 8 }, () => ({
         slotId: "",
         side: "LONG",
@@ -443,6 +444,7 @@ class HedgePositionLedger {
         entryPrice: 0,
         markPrice: 0,
         isPartialClose: false,
+        tpStage: undefined,
         cancelOrderIds: undefined,
         executionStyle: "AGGRESSIVE_MARKET",
         targetPrice: undefined,
@@ -1812,16 +1814,8 @@ class HedgePositionLedger {
         if (durationMs >= 1800000.0) {
             if (!slot.timeDecayTier || slot.timeDecayTier < 4) {
                 slot.timeDecayTier = 4;
-                triggers.push({
-                    slotId: slot.slotId,
-                    side: slot.side,
-                    reason: "LONG_HOLD_PROFIT_HARVEST",
-                    quantity: slot.quantity,
-                    entryPrice: slot.entryPrice,
-                    markPrice,
-                    isPartialClose: false,
-                    cancelOrderIds: this.extractCancelOrderIds(slot),
-                });
+                const cancelIds = this.extractCancelOrderIds(slot, triggers.length);
+                this.pushHedgeTrigger(triggers, slot.slotId, slot.side, "LONG_HOLD_PROFIT_HARVEST", slot.quantity, slot.entryPrice, markPrice, false, undefined, cancelIds, "AGGRESSIVE_MARKET", undefined);
                 return;
             }
         }
@@ -1843,8 +1837,10 @@ class HedgePositionLedger {
             ? (aiDirection > -0.50 || aiConfidence < 0.70)
             : (aiDirection < 0.50 || aiConfidence < 0.70);
         if (isResetCondition) {
-            slot.reversalTickCounter = 0;
-            slot.reversalStartTs = 0;
+            if (slot.reversalTickCounter !== 0)
+                slot.reversalTickCounter = 0;
+            if (slot.reversalStartTs !== 0)
+                slot.reversalStartTs = 0;
         }
         else if (isOpposingConviction) {
             slot.reversalTickCounter = (slot.reversalTickCounter || 0) + 1;
@@ -1857,16 +1853,8 @@ class HedgePositionLedger {
             : 0;
         const isDebouncedReversal = (slot.reversalTickCounter || 0) >= 15 && reversalDurationMs >= 1500.0;
         if (!isQuarantineActive && !isInProfitImmunityActive && isDebouncedReversal) {
-            triggers.push({
-                slotId: slot.slotId,
-                side: slot.side,
-                reason: `AI_REVERSAL_EXIT_${slot.side}`,
-                quantity: slot.quantity,
-                entryPrice: slot.entryPrice,
-                markPrice,
-                isPartialClose: false,
-                cancelOrderIds: this.extractCancelOrderIds(slot),
-            });
+            const cancelIds = this.extractCancelOrderIds(slot, triggers.length);
+            this.pushHedgeTrigger(triggers, slot.slotId, slot.side, `AI_REVERSAL_EXIT_${slot.side}`, slot.quantity, slot.entryPrice, markPrice, false, undefined, cancelIds, "AGGRESSIVE_MARKET", undefined);
             return;
         }
         // =========================================================================
@@ -1913,16 +1901,7 @@ class HedgePositionLedger {
                 }
                 const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
                 if (chunk > 0) {
-                    triggers.push({
-                        slotId: slot.slotId,
-                        side: slot.side,
-                        reason: "TAKE_PROFIT_TP1",
-                        quantity: chunk,
-                        entryPrice: slot.entryPrice,
-                        markPrice,
-                        isPartialClose: chunk < slot.quantity,
-                        tpStage: 1,
-                    });
+                    this.pushHedgeTrigger(triggers, slot.slotId, slot.side, "TAKE_PROFIT_TP1", chunk, slot.entryPrice, markPrice, chunk < slot.quantity, 1, undefined, "AGGRESSIVE_MARKET", undefined);
                     return;
                 }
             }
@@ -1932,16 +1911,7 @@ class HedgePositionLedger {
                 this.applyMonotonicStopLoss(slot, tpPrices[0]);
                 const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
                 if (chunk > 0) {
-                    triggers.push({
-                        slotId: slot.slotId,
-                        side: slot.side,
-                        reason: "TAKE_PROFIT_TP2",
-                        quantity: chunk,
-                        entryPrice: slot.entryPrice,
-                        markPrice,
-                        isPartialClose: chunk < slot.quantity,
-                        tpStage: 2,
-                    });
+                    this.pushHedgeTrigger(triggers, slot.slotId, slot.side, "TAKE_PROFIT_TP2", chunk, slot.entryPrice, markPrice, chunk < slot.quantity, 2, undefined, "AGGRESSIVE_MARKET", undefined);
                     return;
                 }
             }
@@ -1951,16 +1921,7 @@ class HedgePositionLedger {
                 this.applyMonotonicStopLoss(slot, tpPrices[1]);
                 const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
                 if (chunk > 0) {
-                    triggers.push({
-                        slotId: slot.slotId,
-                        side: slot.side,
-                        reason: "TAKE_PROFIT_TP3",
-                        quantity: chunk,
-                        entryPrice: slot.entryPrice,
-                        markPrice,
-                        isPartialClose: chunk < slot.quantity,
-                        tpStage: 3,
-                    });
+                    this.pushHedgeTrigger(triggers, slot.slotId, slot.side, "TAKE_PROFIT_TP3", chunk, slot.entryPrice, markPrice, chunk < slot.quantity, 3, undefined, "AGGRESSIVE_MARKET", undefined);
                     return;
                 }
             }
@@ -1970,32 +1931,14 @@ class HedgePositionLedger {
                 this.applyMonotonicStopLoss(slot, tpPrices[2]);
                 const chunk = calculatePartialExitChunk(slot.quantity, initialQty, 20, 0.001, 0.001, 5.0, markPrice);
                 if (chunk > 0) {
-                    triggers.push({
-                        slotId: slot.slotId,
-                        side: slot.side,
-                        reason: "TAKE_PROFIT_TP4",
-                        quantity: chunk,
-                        entryPrice: slot.entryPrice,
-                        markPrice,
-                        isPartialClose: chunk < slot.quantity,
-                        tpStage: 4,
-                    });
+                    this.pushHedgeTrigger(triggers, slot.slotId, slot.side, "TAKE_PROFIT_TP4", chunk, slot.entryPrice, markPrice, chunk < slot.quantity, 4, undefined, "AGGRESSIVE_MARKET", undefined);
                     return;
                 }
             }
             // TP5 (+120%+ ROI Target) -> Close remaining position
             if (stage < 5 && ((isLong && markPrice >= tpPrices[4]) || (!isLong && markPrice <= tpPrices[4]))) {
                 slot.tpStageReached = 5;
-                triggers.push({
-                    slotId: slot.slotId,
-                    side: slot.side,
-                    reason: "TAKE_PROFIT_TP5",
-                    quantity: slot.quantity,
-                    entryPrice: slot.entryPrice,
-                    markPrice,
-                    isPartialClose: false,
-                    tpStage: 5,
-                });
+                this.pushHedgeTrigger(triggers, slot.slotId, slot.side, "TAKE_PROFIT_TP5", slot.quantity, slot.entryPrice, markPrice, false, 5, undefined, "AGGRESSIVE_MARKET", undefined);
                 return;
             }
         }
@@ -2005,16 +1948,8 @@ class HedgePositionLedger {
             : markPrice >= slot.stopLossPrice;
         if (isSlTriggered) {
             const reason = slot.breakEvenLocked ? "BREAK_EVEN_STOP_LOSS" : "STOP_LOSS";
-            triggers.push({
-                slotId: slot.slotId,
-                side: slot.side,
-                reason,
-                quantity: slot.quantity,
-                entryPrice: slot.entryPrice,
-                markPrice,
-                isPartialClose: false,
-                cancelOrderIds: this.extractCancelOrderIds(slot),
-            });
+            const cancelIds = this.extractCancelOrderIds(slot, triggers.length);
+            this.pushHedgeTrigger(triggers, slot.slotId, slot.side, reason, slot.quantity, slot.entryPrice, markPrice, false, undefined, cancelIds, "AGGRESSIVE_MARKET", undefined);
             return;
         }
         // 3. Fallback Standard TP Percent Check (Symmetrical Immediate Exit - Zero Time Barrier)
@@ -2023,30 +1958,51 @@ class HedgePositionLedger {
                 ? ((markPrice - slot.entryPrice) / slot.entryPrice) * 100
                 : ((slot.entryPrice - markPrice) / slot.entryPrice) * 100;
             if (pnlPct >= slot.takeProfitPercent) {
-                triggers.push({
-                    slotId: slot.slotId,
-                    side: slot.side,
-                    reason: "TAKE_PROFIT",
-                    quantity: slot.quantity,
-                    entryPrice: slot.entryPrice,
-                    markPrice,
-                    isPartialClose: false,
-                });
+                this.pushHedgeTrigger(triggers, slot.slotId, slot.side, "TAKE_PROFIT", slot.quantity, slot.entryPrice, markPrice, false, undefined, undefined, "AGGRESSIVE_MARKET", undefined);
             }
         }
     }
-    extractCancelOrderIds(slot) {
-        if (!slot.activeTpOrderIds?.length && !slot.activeStopLossOrderId) {
+    populateCancelOrderIds(idx, activeTpOrderIds, activeStopLossOrderId) {
+        const hasTp = activeTpOrderIds && activeTpOrderIds.length > 0;
+        const hasSl = activeStopLossOrderId && activeStopLossOrderId > 0;
+        if (!hasTp && !hasSl) {
             return undefined;
         }
-        const ids = [];
-        if (slot.activeTpOrderIds && slot.activeTpOrderIds.length > 0) {
-            ids.push(...slot.activeTpOrderIds);
+        if (idx >= this.preallocatedCancelIdRings.length) {
+            return undefined;
         }
-        if (slot.activeStopLossOrderId && slot.activeStopLossOrderId > 0) {
-            ids.push(slot.activeStopLossOrderId);
+        const cancelIds = this.preallocatedCancelIdRings[idx];
+        cancelIds.length = 0;
+        if (hasTp && activeTpOrderIds) {
+            for (let i = 0; i < activeTpOrderIds.length; i++) {
+                cancelIds.push(activeTpOrderIds[i]);
+            }
         }
-        return ids;
+        if (hasSl && activeStopLossOrderId) {
+            cancelIds.push(activeStopLossOrderId);
+        }
+        return cancelIds.length > 0 ? cancelIds : undefined;
+    }
+    pushHedgeTrigger(triggers, slotId, side, reason, quantity, entryPrice, markPrice, isPartialClose, tpStage, cancelOrderIds, executionStyle = "AGGRESSIVE_MARKET", targetPrice) {
+        const idx = triggers.length;
+        if (idx < this.preallocatedTriggers.length) {
+            const trg = this.preallocatedTriggers[idx];
+            trg.slotId = slotId;
+            trg.side = side;
+            trg.reason = reason;
+            trg.quantity = quantity;
+            trg.entryPrice = entryPrice;
+            trg.markPrice = markPrice;
+            trg.isPartialClose = isPartialClose;
+            trg.tpStage = tpStage;
+            trg.cancelOrderIds = cancelOrderIds;
+            trg.executionStyle = executionStyle;
+            trg.targetPrice = targetPrice;
+            triggers.push(trg);
+        }
+    }
+    extractCancelOrderIds(slot, idx) {
+        return this.populateCancelOrderIds(idx, slot.activeTpOrderIds, slot.activeStopLossOrderId);
     }
     /**
      * Returns the current cumulative realized PnL (USDT) for this ledger.
@@ -2323,6 +2279,7 @@ class HedgePositionLedger {
     pushSotaTrigger(slotId, side, reason, quantity, entryPrice, markPrice, isPartialClose, activeTpOrderIds, activeStopLossOrderId, executionStyle = "AGGRESSIVE_MARKET", targetPrice) {
         const idx = this.sotaTriggers.length;
         if (idx < this.preallocatedTriggers.length) {
+            const cancelIds = this.populateCancelOrderIds(idx, activeTpOrderIds, activeStopLossOrderId);
             const trg = this.preallocatedTriggers[idx];
             trg.slotId = slotId;
             trg.side = side;
@@ -2331,16 +2288,10 @@ class HedgePositionLedger {
             trg.entryPrice = entryPrice;
             trg.markPrice = markPrice;
             trg.isPartialClose = isPartialClose;
+            trg.tpStage = undefined;
             trg.executionStyle = executionStyle;
             trg.targetPrice = targetPrice;
-            const cancelIds = [];
-            if (activeTpOrderIds && activeTpOrderIds.length > 0) {
-                cancelIds.push(...activeTpOrderIds);
-            }
-            if (activeStopLossOrderId && activeStopLossOrderId > 0) {
-                cancelIds.push(activeStopLossOrderId);
-            }
-            trg.cancelOrderIds = cancelIds.length > 0 ? cancelIds : undefined;
+            trg.cancelOrderIds = cancelIds;
             this.sotaTriggers.push(trg);
         }
     }
