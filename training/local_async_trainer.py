@@ -24,7 +24,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
-from safetensors.torch import load_file, save_file
+from safetensors.torch import load, load_file, save_file
 
 class LocalMamba2SSM(nn.Module):
     """
@@ -122,7 +122,7 @@ class DualStageFocalLoss(nn.Module):
     """
     def __init__(
         self,
-        delta: float = 1e-3,
+        delta: float = 0.1,
         ic_weight: float = 0.5,
         focal_gamma: float = 2.0,
         focal_alpha: float = 0.65,
@@ -346,7 +346,7 @@ def train_local_cfc():
         print("[Local Recalibrator Error] Dataset contains 0 train sequences.")
         sys.exit(1)
 
-    batch_size = 4096
+    batch_size = 256
     train_dataset = TensorDataset(x_train, y_train)
     val_dataset = TensorDataset(x_val, y_val)
 
@@ -354,23 +354,59 @@ def train_local_cfc():
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
     model = LocalMamba2SSM(input_dim=16, d_inner=32, d_state=16).to(device)
-    criterion = DualStageFocalLoss(delta=1e-3, ic_weight=0.5, focal_gamma=2.0, focal_alpha=0.65)
 
-    epochs = 10
+    # 1. Warm-Start Transfer Learning (Eradicate QA-4203)
+    if os.path.exists(weights_path):
+        try:
+            with open(weights_path, "rb") as f:
+                saved_tensors = load(f.read())
+            model_state = model.state_dict()
+            loadable_state = {
+                k: v.to(device) for k, v in saved_tensors.items()
+                if k in model_state and v.shape == model_state[k].shape
+            }
+            if len(loadable_state) > 0:
+                model.load_state_dict(loadable_state, strict=False)
+                print(
+                    f"[BATBOT_V11][WARM-START] Successfully loaded {len(loadable_state)}/{len(model_state)} "
+                    f"parameter tensors from '{weights_path}' (Transfer Learning Active)."
+                )
+            else:
+                print(
+                    f"[BATBOT_V11][WARM-START] No compatible parameter tensors found in '{weights_path}'. "
+                    f"Falling back to random initialization."
+                )
+        except Exception as e:
+            print(
+                f"[BATBOT_V11][WARM-START] Corrupted or unreadable weights file at '{weights_path}' ({e}). "
+                f"Falling back to random initialization."
+            )
+    else:
+        print(f"[BATBOT_V11][WARM-START] Weights file not found at '{weights_path}' (Cold-Start). Initializing fresh random weights.")
+
+    criterion = DualStageFocalLoss(delta=0.1, ic_weight=0.5, focal_gamma=2.0, focal_alpha=0.65)
+
+    epochs = 50
     total_steps = max(1, epochs * len(train_loader))
     optimizer = torch.optim.AdamW(model.parameters(), lr=2e-3, weight_decay=1e-4, amsgrad=True)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer, max_lr=2e-3, total_steps=total_steps, pct_start=0.1
     )
 
-    best_val_ic = -1.0
+    best_val_ic = -float("inf")
+    best_state_dict = None
+    early_stopping_patience = 15
+    patience_counter = 0
 
-    print(f"[BATBOT_V11][LOCAL-TRAINER] Starting Sub-30s Mid-Frequency Scalping Recalibration ({epochs} Epochs)...")
+    print(f"[BATBOT_V11][LOCAL-TRAINER] Starting Continuous Transfer-Learning Recalibration ({epochs} Epochs, Batch Size: {batch_size})...")
 
     for epoch in range(1, epochs + 1):
         model.train()
         last_loss = 0.0
         last_focal = 0.0
+        total_grad_norm = 0.0
+        num_batches = 0
+
         for bx, by in train_loader:
             if bx.shape[1] == 0:
                 continue
@@ -386,12 +422,16 @@ def train_local_cfc():
                 loss, dir_loss, focal_loss, ic = criterion(pred, by)
 
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             scheduler.step()
 
             last_loss = loss.item()
             last_focal = focal_loss.item()
+            total_grad_norm += float(grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm)
+            num_batches += 1
+
+        epoch_grad_norm = total_grad_norm / max(1, num_batches)
 
         if val_samples > 0:
             model.eval()
@@ -415,12 +455,30 @@ def train_local_cfc():
             val_ic = val_ic_sum / max(1, val_count)
             if val_ic > best_val_ic:
                 best_val_ic = val_ic
+                patience_counter = 0
+                best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            else:
+                patience_counter += 1
 
-        if epoch % 2 == 0 or epoch == epochs:
-            print(f"[BATBOT Epoch {epoch:02d}/{epochs}] Loss: {last_loss:.6f} | Focal: {last_focal:.6f} | Best Val IC: {best_val_ic:+.4f}")
+        print(
+            f"[BATBOT Epoch {epoch:02d}/{epochs}] Loss: {last_loss:.6f} | "
+            f"Focal: {last_focal:.6f} | Grad Norm: {epoch_grad_norm:.4f} | "
+            f"Best Val IC: {best_val_ic:+.4f}"
+        )
 
         # Update real-time training progress for TUI dashboard
         write_progress(int((epoch / epochs) * 100))
+
+        if val_samples > 0 and patience_counter >= early_stopping_patience:
+            print(
+                f"[BATBOT_V11][LOCAL-TRAINER] Early stopping triggered at epoch {epoch:02d} "
+                f"(no validation IC improvement for {early_stopping_patience} epochs)."
+            )
+            break
+
+    if best_state_dict is not None:
+        model.load_state_dict(best_state_dict)
+        print(f"[BATBOT_V11][LOCAL-TRAINER] Restored best model weights with Validation IC: {best_val_ic:+.4f}")
 
     duration = time.time() - start_time
     print(f"[BATBOT_V11][LOCAL-TRAINER] Recalibration completed in {duration:.3f}s | Final Best Val IC: {best_val_ic:+.4f}")
@@ -462,8 +520,9 @@ def train_local_cfc():
     save_file(weight_tensors, tmp_weights_path)
 
     if os.path.exists(weights_path):
-        os.remove(weights_path)
-    os.rename(tmp_weights_path, weights_path)
+        os.replace(tmp_weights_path, weights_path)
+    else:
+        os.rename(tmp_weights_path, weights_path)
     shutil.copyfile(weights_path, weights_updated_path)
 
     weights_size = os.path.getsize(weights_path)

@@ -418,10 +418,13 @@ impl Mamba2Cell {
         let t = temperature.clamp(0.5, 10.0);
         let ssm_scale = ((self.d_inner * self.d_state) as f64).sqrt().max(1.0);
         let direction_raw = dir_logit / ssm_scale;
-        let p_win = 1.0 / (1.0 + (-meta_logit / (t * (self.d_inner as f64).sqrt())).exp());
+        // QA-4204 FIX: Return raw SSM-scaled meta_logit for Platt calibration in caller.
+        // Previously: p_win = sigmoid(meta_logit / (temp * sqrt(d_inner))) — premature sigmoid
+        // destroyed calibration-readiness. Now the caller applies: sigmoid(platt_scale * meta_logit_scaled + platt_offset).
+        let meta_logit_scaled = meta_logit / ssm_scale;
         let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().max(5.0);
 
-        (direction_raw, p_win, horizon_sec)
+        (direction_raw, meta_logit_scaled, horizon_sec)
     }
 
     /// Evaluates scalar predictions directly for ultra-low latency (<1.0 µs).
@@ -451,10 +454,11 @@ impl Mamba2Cell {
         let ssm_scale = ((self.d_inner * self.d_state) as f64).sqrt().max(1.0);
         // DEF-R1: RMS-Normalized Raw Logit Passthrough (NO inner tanh compression)
         let direction_raw = dir_logit / ssm_scale;
-        let p_win = 1.0 / (1.0 + (-meta_logit / (t * (self.d_inner as f64).sqrt())).exp());
+        // QA-4204 FIX: Return raw SSM-scaled meta_logit for Platt calibration in caller.
+        let meta_logit_scaled = meta_logit / ssm_scale;
         let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().max(5.0);
 
-        Ok((direction_raw, p_win, horizon_sec))
+        Ok((direction_raw, meta_logit_scaled, horizon_sec))
     }
 }
 
@@ -480,9 +484,9 @@ mod tests {
         assert_eq!(heads.dims(), &[1, 3]);
         assert_eq!(h_next.dims(), &[1, d_inner, d_state]);
 
-        let (dir, p_win, horiz) = cell.evaluate_scalar_heads(&heads)?;
+        let (dir, meta_logit, horiz) = cell.evaluate_scalar_heads(&heads)?;
         assert_eq!(dir, 0.0);
-        assert!((p_win - 0.50).abs() < 1e-4);
+        assert_eq!(meta_logit, 0.0);
         assert!(horiz >= 5.0);
 
         Ok(())

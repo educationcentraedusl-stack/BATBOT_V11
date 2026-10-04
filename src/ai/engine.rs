@@ -493,7 +493,6 @@ pub struct AssetTelemetryTracker {
     pub horizon_5s: Mutex<VecDeque<(u64, f64, f64)>>,   // (timestamp_ns, mid_price, prediction) - 5s Micro-Scalp
     pub horizon_60s: Mutex<VecDeque<(u64, f64, f64)>>,  // (timestamp_ns, mid_price, prediction) - 60s Tactical Alpha
     pub horizon_300s: Mutex<VecDeque<(u64, f64, f64)>>, // (timestamp_ns, mid_price, prediction) - 300s Macro-Regime
-    pub conviction_history: Mutex<VecDeque<f64>>,       // capacity 2000 - DEF-R3 Quantile Calibration
 }
 
 impl AssetTelemetryTracker {
@@ -505,7 +504,6 @@ impl AssetTelemetryTracker {
             horizon_5s: Mutex::new(VecDeque::with_capacity(3_600)),
             horizon_60s: Mutex::new(VecDeque::with_capacity(18_000)),
             horizon_300s: Mutex::new(VecDeque::with_capacity(36_000)),
-            conviction_history: Mutex::new(VecDeque::with_capacity(2000)),
         }
     }
 }
@@ -864,42 +862,37 @@ impl AIEngine {
                 m_hidden_guard.resize(mamba.d_inner * mamba.d_state, 0.0f32);
             }
 
-            let gk_vol = sab.load_f64_asset(asset_idx, 121).max(0.0);
-            let sab_temp = sab.load_f64_asset(asset_idx, 127);
             let sab_scale = sab.load_f64_asset(asset_idx, 128);
             let sab_offset = sab.load_f64_asset(asset_idx, 129);
+            let sab_temp = sab.load_f64_asset(asset_idx, 127);
 
             let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.5, 5.0);
-            let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale }.clamp(0.5, 5.0);
-            let offset = sab_offset.clamp(-2.0, 2.0);
+            let platt_scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale }.clamp(0.5, 5.0);
+            let platt_offset = sab_offset.clamp(-2.0, 2.0);
             let obi = sab.load_f64_asset(asset_idx, 1);
             let ofi = sab.load_f64_asset(asset_idx, 138);
             let hawkes_asym = sab.load_f64_asset(asset_idx, 149);
 
-            let (dir_raw, _p_win, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, delta_t, temp);
+            // QA-4204 FIX: Capture raw meta_logit from Mamba-2 head 1 for Platt-scaled confidence
+            let (dir_raw, meta_logit, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, delta_t, temp);
 
             // DEF-R1: Balanced microstructure logit modulation & SINGLE outer tanh WITHOUT temperature divisor
             let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
-            let dir = composite_logit.tanh();
-            let direction_magnitude = dir.abs();
+            let mut dir = composite_logit.tanh();
 
-            // DEF-R2: Signed Directional Concordance Index (SDCI)
+            // DEF-R2: Signed Directional Concordance Index (SDCI) — INDEPENDENT GATE
             let snr_score = signed_z.compute_sdci(dir_raw);
 
-            // DEF-R3: Online Adaptive Quantile Calibration
-            let mut conv_hist = tracker.conviction_history.lock().unwrap_or_else(|e| e.into_inner());
+            // QA-4204 SDCI GATE: If microstructure flow is discordant (SDCI < 0.50),
+            // forcefully reject the trade by zeroing direction. This prevents discordant-flow
+            // trades independent of the model's confidence.
+            if snr_score < 0.50 {
+                dir = 0.0;
+            }
 
-            let conf = compute_calibrated_confidence(
-                direction_magnitude,
-                snr_score,
-                gk_vol,
-                obi,
-                dir,
-                temp,
-                scale,
-                offset,
-                &mut *conv_hist,
-            );
+            // QA-4204 FIX: Platt-scaled meta-logit confidence replaces self-referential percentile rank.
+            // conf = sigmoid(platt_scale * meta_logit + platt_offset)
+            let conf = compute_platt_confidence(meta_logit, platt_scale, platt_offset);
             (dir, conf, horiz_sec * 1000.0)
         } else if let Some(cell) = &self.cell {
             if asset_idx >= self.hidden_states.read().unwrap_or_else(|e| e.into_inner()).len() {
@@ -919,34 +912,16 @@ impl AIEngine {
             let raw_direction = if num_elems > 0 { flat_out.get(0)?.to_scalar::<f32>()? as f64 } else { 0.0 };
             let horiz_ms = if num_elems > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
 
-            let gk_vol = sab.load_f64_asset(asset_idx, 121).max(0.0);
-            let sab_temp = sab.load_f64_asset(asset_idx, 127);
-            let sab_scale = sab.load_f64_asset(asset_idx, 128);
-            let sab_offset = sab.load_f64_asset(asset_idx, 129);
+            let mut dir = raw_direction.tanh();
 
-            let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.5, 5.0);
-            let scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale }.clamp(0.5, 5.0);
-            let offset = sab_offset.clamp(-2.0, 2.0);
-            let obi = sab.load_f64_asset(asset_idx, 1);
-
-            let dir = raw_direction.tanh();
-            let direction_magnitude = dir.abs();
-
+            // CfC path: SDCI independent gate
             let snr_score = signed_z.compute_sdci(raw_direction);
+            if snr_score < 0.50 {
+                dir = 0.0;
+            }
 
-            let mut conv_hist = tracker.conviction_history.lock().unwrap_or_else(|e| e.into_inner());
-
-            let conf = compute_calibrated_confidence(
-                direction_magnitude,
-                snr_score,
-                gk_vol,
-                obi,
-                dir,
-                temp,
-                scale,
-                offset,
-                &mut *conv_hist,
-            );
+            // CfC model has no native meta-logit head — use neutral confidence 0.50
+            let conf = 0.50;
             (dir, conf, horiz_ms)
         } else {
             return Ok(());
@@ -1024,7 +999,6 @@ impl AIEngine {
             hawkes_z: *features.get(27).ok_or_else(|| Error::Msg("Missing feature[27] for hawkes_z".to_string()))?,
             micro_z: *features.get(2).ok_or_else(|| Error::Msg("Missing feature[2] for micro_z".to_string()))?,
         };
-        let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
         if let Some(mamba) = &self.mamba {
             let mh_holder = self.mamba_hidden.read().unwrap_or_else(|e| e.into_inner());
             let mh_mutex = mh_holder.get(0).ok_or_else(|| Error::Msg("Mamba hidden[0] missing".to_string()))?;
@@ -1033,48 +1007,37 @@ impl AIEngine {
                 m_hidden_guard.resize(mamba.d_inner * mamba.d_state, 0.0f32);
             }
             let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
-            let (dir_raw, _p_win, _) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.001, temp);
+            // QA-4204 FIX: Capture raw meta_logit for Platt-scaled confidence
+            let (dir_raw, meta_logit, _) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.001, temp);
             let obi = *features.get(8).ok_or_else(|| Error::Msg("Missing feature[8] for obi".to_string()))?;
             let ofi = *features.get(17).ok_or_else(|| Error::Msg("Missing feature[17] for ofi".to_string()))?;
             let hawkes_asym = *features.get(27).ok_or_else(|| Error::Msg("Missing feature[27] for hawkes_asym".to_string()))?;
             let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
-            let dir = composite_logit.tanh();
+            let mut dir = composite_logit.tanh();
+            // SDCI independent gate
             let snr_score = signed_z.compute_sdci(dir_raw);
-            let tracker = trackers_guard.get(0).ok_or_else(|| Error::Msg("Tracker[0] missing".to_string()))?;
-            let mut conv_hist = tracker.conviction_history.lock().unwrap_or_else(|e| e.into_inner());
-            let conf = compute_calibrated_confidence(
-                dir.abs(),
-                snr_score,
-                0.0010,
-                obi,
-                dir,
-                temp,
+            if snr_score < 0.50 {
+                dir = 0.0;
+            }
+            let conf = compute_platt_confidence(
+                meta_logit,
                 self.calibration_params.platt_scale,
                 self.calibration_params.platt_offset,
-                &mut *conv_hist,
             );
             return Ok((dir, conf));
         } else if let Some(cell) = &self.cell {
             let (output_tensor, next_h) = cell.forward(&tkan_tensor, &*hidden_guard, 0.001)?;
             *hidden_guard = next_h;
             let flat = output_tensor.flatten_all()?;
-            let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
             let raw_scalar = flat.get(0)?.to_scalar::<f32>()?;
-            let raw_dir = (raw_scalar as f64).tanh();
+            let mut raw_dir = (raw_scalar as f64).tanh();
+            // CfC path: SDCI independent gate
             let snr_score = signed_z.compute_sdci(raw_dir);
-            let tracker = trackers_guard.get(0).ok_or_else(|| Error::Msg("Tracker[0] missing".to_string()))?;
-            let mut conv_hist = tracker.conviction_history.lock().unwrap_or_else(|e| e.into_inner());
-            let conf = compute_calibrated_confidence(
-                raw_dir.abs(),
-                snr_score,
-                0.0010,
-                0.0,
-                raw_dir,
-                temp,
-                self.calibration_params.platt_scale,
-                self.calibration_params.platt_offset,
-                &mut *conv_hist,
-            );
+            if snr_score < 0.50 {
+                raw_dir = 0.0;
+            }
+            // CfC model has no native meta-logit head — use neutral confidence 0.50
+            let conf = 0.50;
             return Ok((raw_dir, conf));
         }
         Err(Error::Msg("No active model (Mamba or CfC cell) calibrated".to_string()))
@@ -1119,32 +1082,26 @@ impl AIEngine {
                     *slot = val as f32;
                 }
             }
-            let (dir_raw, _p_win, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.001, temp);
+            // QA-4204 FIX: Capture raw meta_logit for Platt-scaled confidence
+            let (dir_raw, meta_logit, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.001, temp);
 
             let norm = m_hidden_guard.iter().map(|v| v * v).sum::<f32>().sqrt() as f64;
-            let gk_vol = sab.load_f64_asset(0, 121).max(0.0);
             let obi = sab.load_f64_asset(0, 1);
             let ofi = sab.load_f64_asset(0, 138);
             let hawkes_asym = sab.load_f64_asset(0, 149);
             let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
-            let dir = composite_logit.tanh();
+            let mut dir = composite_logit.tanh();
+
+            // SDCI independent gate
             let snr_score = signed_z.compute_sdci(dir_raw);
+            if snr_score < 0.50 {
+                dir = 0.0;
+            }
 
-            let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
-            let tracker_0 = trackers_guard.get(0)
-                .ok_or_else(|| Error::Msg("Tracker[0] missing for shadow mamba inference".to_string()))?;
-            let mut conv_hist = tracker_0.conviction_history.lock().unwrap_or_else(|e| e.into_inner());
-
-            let conf = compute_calibrated_confidence(
-                dir.abs(),
-                snr_score,
-                gk_vol,
-                obi,
-                dir,
-                temp,
+            let conf = compute_platt_confidence(
+                meta_logit,
                 self.calibration_params.platt_scale,
                 self.calibration_params.platt_offset,
-                &mut *conv_hist,
             );
             (dir, conf, horiz_sec * 1000.0, norm)
         } else if let Some(cell) = &self.cell {
@@ -1152,7 +1109,6 @@ impl AIEngine {
             let hs_mutex = hs_holder.get(0)
                 .ok_or_else(|| Error::Msg("Hidden state[0] missing for shadow CfC inference".to_string()))?;
             let mut hidden_guard = hs_mutex.lock().unwrap_or_else(|e| e.into_inner());
-            let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
 
             let tkan_out = self.tkan.forward(&lob_features);
             if tkan_out.len() < 16 {
@@ -1173,27 +1129,14 @@ impl AIEngine {
             let flat_out = output_tensor.flatten_all()?;
             let raw_dir = flat_out.get(0)?.to_scalar::<f32>()? as f64;
             let horiz = if flat_out.elem_count() > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
-            let dir = raw_dir.tanh();
-            let gk_vol = sab.load_f64_asset(0, 121).max(0.0);
-            let obi = sab.load_f64_asset(0, 1);
+            let mut dir = raw_dir.tanh();
+            // CfC path: SDCI independent gate
             let snr_score = signed_z.compute_sdci(raw_dir);
-
-            let trackers_guard = self.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
-            let tracker_0 = trackers_guard.get(0)
-                .ok_or_else(|| Error::Msg("Tracker[0] missing for shadow CfC inference".to_string()))?;
-            let mut conv_hist = tracker_0.conviction_history.lock().unwrap_or_else(|e| e.into_inner());
-
-            let conf = compute_calibrated_confidence(
-                dir.abs(),
-                snr_score,
-                gk_vol,
-                obi,
-                dir,
-                temp,
-                self.calibration_params.platt_scale,
-                self.calibration_params.platt_offset,
-                &mut *conv_hist,
-            );
+            if snr_score < 0.50 {
+                dir = 0.0;
+            }
+            // CfC model has no native meta-logit head — neutral confidence 0.50
+            let conf = 0.50;
             (dir, conf, horiz, norm)
         } else {
             return Err(Error::Msg("UNCALIBRATED".to_string()));
@@ -1255,11 +1198,6 @@ impl AIEngine {
         }
         for (i, other_tracker) in other_guard.iter().enumerate() {
             if let Some(self_tracker) = self_guard.get(i) {
-                if let Ok(other_conv) = other_tracker.conviction_history.lock() {
-                    if let Ok(mut self_conv) = self_tracker.conviction_history.lock() {
-                        *self_conv = other_conv.clone();
-                    }
-                }
                 if let Ok(other_5s) = other_tracker.horizon_5s.lock() {
                     if let Ok(mut self_5s) = self_tracker.horizon_5s.lock() {
                         *self_5s = other_5s.clone();
@@ -1315,59 +1253,25 @@ impl AIEngine {
     }
 }
 
-/// Dual-Regime Information-Theoretic Volatility Scaling
+/// QA-4204 FIX: Platt-Scaled Meta-Logit Confidence
+/// Directly applies standard Platt scaling to the model's native meta-logit output.
+/// conf = sigmoid(platt_scale * meta_logit + platt_offset)
+///
+/// This replaces the mathematically flawed self-referential percentile rank confidence
+/// that computed `effective_conviction = direction_magnitude * snr_score * psi_vol`
+/// and then ranked it against its own 2000-sample rolling history.
+/// The meta-logit is trained with focal loss on the meta-label target ("significant move")
+/// and represents the model's genuine probabilistic assessment of trade significance.
 #[inline(always)]
-pub fn compute_dual_regime_volatility_multiplier(gk_vol: f64) -> f64 {
-    let vol = gk_vol.max(0.0);
-    let psi_high = 1.0 / (1.0 + (vol / 0.0015).clamp(0.0, 3.0));
-    let psi_low = (vol / (vol + 0.00008)).powf(0.35);
-    (psi_high * psi_low).clamp(0.30, 1.00)
-}
-
-/// Continuous Bayesian Sample-Weighted Warmup & Platt-Calibrated Confidence Formulation (DEF-R3 SOTA)
-#[inline(always)]
-pub fn compute_calibrated_confidence(
-    direction_magnitude: f64,
-    snr_score: f64,
-    gk_vol: f64,
-    obi: f64,
-    direction: f64,
-    temp: f64,
-    scale: f64,
-    offset: f64,
-    conviction_history: &mut VecDeque<f64>,
+pub fn compute_platt_confidence(
+    meta_logit: f64,
+    platt_scale: f64,
+    platt_offset: f64,
 ) -> f64 {
-    let psi_vol = compute_dual_regime_volatility_multiplier(gk_vol);
-    let effective_conviction = direction_magnitude * snr_score * psi_vol;
-
-    // Update rolling buffer (capacity 2000)
-    if conviction_history.len() >= 2000 {
-        conviction_history.pop_back();
-    }
-    conviction_history.push_front(effective_conviction);
-
-    let n = conviction_history.len();
-    if n == 0 {
-        return 0.50;
-    }
-
-    // Compute empirical percentile rank (O(n) where n <= 2000, ~2-4 µs)
-    let count_below = conviction_history.iter().filter(|&&v| v <= effective_conviction).count();
-    let percentile = count_below as f64 / n as f64;
-
-    let direction_sign = if direction.abs() < 1e-6 { 0.0 } else { direction.signum() };
-    let obi_align = obi * direction_sign;
-
-    let t = temp.clamp(0.5, 5.0);
-    let s = scale.clamp(0.5, 3.0);
-    // Center at 50th percentile — INVARIANT
-    let calibrated_logit: f64 = (s * (percentile - 0.50) * 2.0 + obi_align * 0.20 + offset) / t;
-    let conf_calib = 1.0f64 / (1.0f64 + (-calibrated_logit).exp());
-
-    // Continuous Bayesian Sample-Weighted Warmup:
-    // w = min(1.0, N / 30.0). No discontinuous step function!
-    let w = (n as f64 / 30.0).min(1.0);
-    0.50 * (1.0 - w) + conf_calib * w
+    let s = platt_scale.clamp(0.1, 10.0);
+    let calibrated_logit = (s * meta_logit + platt_offset).clamp(-60.0, 60.0);
+    let sig = 1.0 / (1.0 + (-calibrated_logit).exp());
+    sig.clamp(1e-7, 1.0 - 1e-7)
 }
 
 impl Default for AIEngine {
@@ -1657,45 +1561,70 @@ mod tests {
     }
 
     #[test]
-    fn test_continuous_bayesian_calibration_warmup() {
-        let mut conv_hist = VecDeque::with_capacity(2000);
+    fn test_platt_confidence_calibration() {
+        // QA-4204: Platt-scaled confidence directly from model's meta-logit.
+        // No rolling history, no percentile rank, no warmup needed.
 
-        // Empty history test
-        assert_eq!(conv_hist.len(), 0);
-
-        // Warm-up is continuous Bayesian: at low sample counts, confidence is regularized toward 0.50
-        // At N = 1, it smoothly incorporates evidence without step-function lockups
-        let conf_1 = compute_calibrated_confidence(
-            0.80, 1.20, 0.001, 0.50, 1.0, 1.0, 1.0, 0.0, &mut conv_hist,
+        // Zero meta_logit with zero offset → sigmoid(0) = 0.50
+        let conf_zero = compute_platt_confidence(0.0, 1.0, 0.0);
+        assert!(
+            (conf_zero - 0.50).abs() < 1e-6,
+            "Zero meta_logit must produce 0.50 confidence, got {}",
+            conf_zero
         );
-        assert!(conf_1 > 0.50 && conf_1 < 0.60, "Tick 1 must have smooth Bayesian shrinkage, got {}", conf_1);
 
-        // Populate up to 30 ticks
-        for _ in 1..30 {
-            let _ = compute_calibrated_confidence(
-                0.80, 1.20, 0.001, 0.50, 1.0, 1.0, 1.0, 0.0, &mut conv_hist,
-            );
-        }
-        assert_eq!(conv_hist.len(), 30);
-
-        // At N >= 30, weight reaches 1.0 (fully calibrated)
-        let conf_30 = compute_calibrated_confidence(
-            0.80, 1.20, 0.001, 0.50, 1.0, 1.0, 1.0, 0.0, &mut conv_hist,
+        // Positive meta_logit → confidence > 0.50
+        let conf_pos = compute_platt_confidence(1.0, 1.0, 0.0);
+        assert!(
+            conf_pos > 0.50 && conf_pos < 1.0,
+            "Positive meta_logit must yield confidence > 0.50, got {}",
+            conf_pos
         );
-        assert!(conf_30 > 0.65, "At N >= 30, calibration is fully active, got {}", conf_30);
+        // sigmoid(1.0) ≈ 0.7311
+        assert!(
+            (conf_pos - 0.7311).abs() < 0.001,
+            "sigmoid(1.0) ≈ 0.7311, got {}",
+            conf_pos
+        );
+
+        // Negative meta_logit → confidence < 0.50
+        let conf_neg = compute_platt_confidence(-1.0, 1.0, 0.0);
+        assert!(
+            conf_neg < 0.50 && conf_neg > 0.0,
+            "Negative meta_logit must yield confidence < 0.50, got {}",
+            conf_neg
+        );
+
+        // Platt scale amplifies: higher scale → more extreme confidence
+        let conf_high_scale = compute_platt_confidence(1.0, 3.0, 0.0);
+        assert!(
+            conf_high_scale > conf_pos,
+            "Higher platt_scale must amplify confidence: {} > {}",
+            conf_high_scale, conf_pos
+        );
+
+        // Platt offset shifts the decision boundary
+        let conf_with_offset = compute_platt_confidence(0.0, 1.0, 1.0);
+        assert!(
+            conf_with_offset > 0.50,
+            "Positive offset must shift confidence above 0.50 at zero logit, got {}",
+            conf_with_offset
+        );
+
+        // All outputs must be strictly in (0, 1)
+        let conf_extreme_pos = compute_platt_confidence(100.0, 10.0, 0.0);
+        let conf_extreme_neg = compute_platt_confidence(-100.0, 10.0, 0.0);
+        assert!(conf_extreme_pos > 0.0 && conf_extreme_pos < 1.0);
+        assert!(conf_extreme_neg > 0.0 && conf_extreme_neg < 1.0);
     }
 
     #[test]
     fn test_rcu_telemetry_history_inheritance() {
         let engine_old = AIEngine::new();
-        // Seed engine_old with telemetry data
+        // Seed engine_old with telemetry data (horizon history + atomic prices)
         {
             let trackers = engine_old.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
             if let Some(tracker) = trackers.get(0) {
-                if let Ok(mut conv) = tracker.conviction_history.lock() {
-                    conv.push_back(0.75);
-                    conv.push_back(0.82);
-                }
                 if let Ok(mut h5) = tracker.horizon_5s.lock() {
                     h5.push_back((1000, 50000.0, 0.5));
                 }
@@ -1710,12 +1639,6 @@ mod tests {
         {
             let trackers_new = engine_new.asset_trackers.read().unwrap_or_else(|e| e.into_inner());
             if let Some(tracker_new) = trackers_new.get(0) {
-                if let Ok(conv_new) = tracker_new.conviction_history.lock() {
-                    assert_eq!(conv_new.len(), 2);
-                    assert_eq!(conv_new.get(0).copied(), Some(0.75));
-                    assert_eq!(conv_new.get(1).copied(), Some(0.82));
-                }
-
                 if let Ok(h5_new) = tracker_new.horizon_5s.lock() {
                     assert_eq!(h5_new.len(), 1);
                     assert_eq!(h5_new.get(0).map(|item| item.1), Some(50000.0));
@@ -1793,75 +1716,50 @@ mod tests {
     }
 
     #[test]
-    fn test_quantile_calibration_invariant_centering() {
-        let mut conv_hist = VecDeque::with_capacity(2000);
+    fn test_platt_confidence_mathematical_properties() {
+        // QA-4204: Verify mathematical correctness of Platt-scaled meta-logit confidence
 
-        // Seed with 300 uniformly spaced samples in [0.10, 0.90]
-        for i in 0..300 {
-            let val = 0.10 + (i as f64 / 300.0) * 0.80;
-            // Warm-up will finish at tick 200
-            let _ = compute_calibrated_confidence(
-                val,
-                1.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-                1.0,
-                0.0,
-                &mut conv_hist,
-            );
-        }
+        // Property 1: Monotonicity — higher meta_logit → higher confidence
+        let conf_low = compute_platt_confidence(-2.0, 1.0, 0.0);
+        let conf_mid = compute_platt_confidence(0.0, 1.0, 0.0);
+        let conf_high = compute_platt_confidence(2.0, 1.0, 0.0);
+        assert!(conf_low < conf_mid, "Monotonicity violated: {} < {}", conf_low, conf_mid);
+        assert!(conf_mid < conf_high, "Monotonicity violated: {} < {}", conf_mid, conf_high);
 
-        assert_eq!(conv_hist.len(), 300);
-
-        // Test median input (50th percentile) with zero OBI alignment and zero offset
-        let median_val = 0.50;
-        let conf_median = compute_calibrated_confidence(
-            median_val,
-            1.0,
-            0.0,
-            0.0,
-            0.0,
-            1.0,
-            1.0,
-            0.0,
-            &mut conv_hist,
-        );
-
-        // Calibrated confidence at median should be centered at ~0.50 (within ±0.03)
+        // Property 2: Symmetry — sigmoid(-x) = 1 - sigmoid(x)
+        let conf_pos = compute_platt_confidence(1.5, 1.0, 0.0);
+        let conf_neg = compute_platt_confidence(-1.5, 1.0, 0.0);
         assert!(
-            (conf_median - 0.50).abs() < 0.03,
-            "Median input must produce ~0.50 calibrated confidence, got {}",
-            conf_median
+            (conf_pos + conf_neg - 1.0).abs() < 1e-10,
+            "Symmetry violated: sigmoid(1.5) + sigmoid(-1.5) must equal 1.0, got {} + {} = {}",
+            conf_pos, conf_neg, conf_pos + conf_neg
         );
 
-        // High conviction input (e.g. 0.95, near top) should yield high confidence > 0.60
-        let conf_high = compute_calibrated_confidence(
-            0.95,
-            1.5,
-            0.001,
-            0.5,
-            1.0,
-            1.0,
-            1.0,
-            0.0,
-            &mut conv_hist,
+        // Property 3: Scale clamping — platt_scale is clamped to [0.1, 10.0]
+        let conf_tiny_scale = compute_platt_confidence(1.0, 0.001, 0.0);
+        let conf_min_scale = compute_platt_confidence(1.0, 0.1, 0.0);
+        assert!(
+            (conf_tiny_scale - conf_min_scale).abs() < 1e-10,
+            "Scale below 0.1 must clamp to 0.1"
         );
-        assert!(conf_high > 0.60, "High conviction must exceed 0.60, got {}", conf_high);
 
-        // Low conviction input should yield low confidence < 0.40
-        let conf_low = compute_calibrated_confidence(
-            0.05,
-            0.10,
-            0.001,
-            -0.5,
-            1.0,
-            1.0,
-            1.0,
-            0.0,
-            &mut conv_hist,
+        // Property 4: Offset effectively shifts decision boundary
+        // With offset = +2.0, even a zero meta_logit should have high confidence
+        let conf_offset_pos = compute_platt_confidence(0.0, 1.0, 2.0);
+        assert!(
+            conf_offset_pos > 0.80,
+            "Positive offset of 2.0 at zero logit must produce high confidence, got {}",
+            conf_offset_pos
         );
-        assert!(conf_low < 0.40, "Low conviction must be below 0.40, got {}", conf_low);
+        // sigmoid(2.0) ≈ 0.8808
+        assert!(
+            (conf_offset_pos - 0.8808).abs() < 0.001,
+            "sigmoid(2.0) ≈ 0.8808, got {}",
+            conf_offset_pos
+        );
+
+        // Property 5: Large negative meta_logit → low confidence < 0.10
+        let conf_very_low = compute_platt_confidence(-5.0, 1.0, 0.0);
+        assert!(conf_very_low < 0.01, "Large negative meta_logit must produce very low confidence, got {}", conf_very_low);
     }
 }
