@@ -239,9 +239,8 @@ impl StreamingFeaturePipeline {
         let obi_lag5 = *self.obi_hist.get(4).unwrap_or(&obi);
         let obi_vel_5 = (obi - obi_lag5) / 5.0;
 
-        // Ingest SOTA Multi-Level OFI and Bivariate Hawkes Asymmetry from SAB slots 138 and 149
-        let multi_level_ofi = sab.load_f64_asset(asset_idx, 138).clamp(-1.0, 1.0);
-        let hawkes_asymmetry = sab.load_f64_asset(asset_idx, 149).clamp(-1.0, 1.0);
+        // Feature 17: OBI Pressure Ratio (aligns 1:1 with TKAN_FEATURE_NAMES[17])
+        let obi_press_ratio = obi * spread;
 
         let cvd_raw = sab.load_f64_asset(asset_idx, 2);
         let cvd_lag1 = *self.cvd_hist.get(0).unwrap_or(&cvd_raw);
@@ -259,20 +258,15 @@ impl StreamingFeaturePipeline {
         let cvd_lag100 = *self.cvd_hist.get(99).unwrap_or(&cvd_raw);
         let cvd_delta_100 = cvd_raw - cvd_lag100;
 
-        // Bounded Tanh Normalization into strictly [-1.0, 1.0]
-        let cvd_vel_10 = (cvd_delta_10 * 0.0005).tanh();
-        let cvd_norm_1 = (cvd_delta_1 * 0.005).tanh();
-        let cvd_norm_5 = (cvd_delta_5 * 0.001).tanh();
-        let cvd_norm_10 = cvd_vel_10;
-        let cvd_norm_50 = (cvd_delta_50 * 0.0001).tanh();
-        let cvd_norm_100 = (cvd_delta_100 * 0.00005).tanh();
-
         let trade_vel = sab.load_f64_asset(asset_idx, 3);
         let trade_vel_lag1 = *self.trade_vel_hist.get(0).unwrap_or(&trade_vel);
         let trade_vel_accel = trade_vel - trade_vel_lag1;
 
         let trade_vel_mean_10 = vec_mean(&self.trade_vel_hist, 10);
-        let vpin_proxy_10 = ((cvd_delta_10.abs() / (trade_vel_mean_10 + 1e-5)) * 0.05).tanh();
+        let vpin_proxy_10 = cvd_delta_10.abs() / (trade_vel_mean_10 + 1e-5);
+
+        let trade_vel_mean_50 = vec_mean(&self.trade_vel_hist, 50);
+        let vpin_proxy_50 = cvd_delta_50.abs() / (trade_vel_mean_50 + 1e-5);
 
         let lat_us = lat_us_val;
         let lat_us_lag1 = *self.lat_us_hist.get(0).unwrap_or(&lat_us);
@@ -321,17 +315,17 @@ impl StreamingFeaturePipeline {
             obi_ema_250_val,
             obi_vel_1,
             obi_vel_5,
-            multi_level_ofi,
-            cvd_vel_10,
-            cvd_norm_1,
-            cvd_norm_5,
-            cvd_norm_10,
-            cvd_norm_50,
-            cvd_norm_100,
+            obi_press_ratio,
+            cvd_raw,
+            cvd_delta_1,
+            cvd_delta_5,
+            cvd_delta_10,
+            cvd_delta_50,
+            cvd_delta_100,
             trade_vel,
             trade_vel_accel,
             vpin_proxy_10,
-            hawkes_asymmetry,
+            vpin_proxy_50,
             lat_us,
             lat_us_mean_50,
             lat_us_std_50,

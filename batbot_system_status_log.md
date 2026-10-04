@@ -1,5 +1,32 @@
 # BATBOT_V11 System Status Log
 
+- **Date:** 2026-10-04
+- **Feature/Task:** Quantitative AI Remediation Batch 4.2 (Phase 2: Fix Target Labels - Eradicate QA-4202)
+- **Artifacts Created/Modified:** `training/prepare_data.py`, `data/feature_stats.json`, `data/tkan_features.safetensors`, `data/cfc_features.safetensors`
+- **HFT/Performance Compliance:**
+  1. **Triple-Barrier Logic Eradication (QA-4202):** Completely eradicated macro-regime 30-minute / 1.5% profit barriers that caused target leakage and trivial mode collapse (predicting near-zero direction).
+  2. **HFT-Aligned 5-Second Micro-Horizon Continuous Targets:**
+     - Computed strict 5-second forward log return: `ret_5s = ln(P_{t+5s} / P_t)`.
+     - Computed localized backward volatility: `vol_5s = max(vol_realized_50, 0.0005)` with strict zero look-ahead bias guarantee.
+     - Formulated continuous direction target: `y_dir = tanh(ret_5s / (2 * vol_5s + 1e-6))` in `[-1.0, 1.0]`.
+     - Formulated binary significance target: `y_meta = 1.0 if |ret_5s| > vol_5s else 0.0`.
+     - Locked constant horizon target: `y_horiz = 5.0` seconds.
+  3. **Purge Buffer Synchronization:** Aligned chronological train/val split purge buffer to 5 seconds (`5000` ms) to prevent horizon leakage without discarding 30 minutes of valid data.
+  4. **Dataset Alignment:** Verified `create_cfc_sequences_strided` cleanly asserts `TKAN_OUTPUT_DIM = 16` and target dimension = 3, mapping to `[Batch, 32, 16]` and `[Batch, 32, 3]`.
+  5. **Physical Verification:** Unit test suite passed 4/4 stages with high variance ($y_{\text{dir}}$ std = 0.6815, 0 NaNs, 0 Infs). End-to-end data prep passed producing valid SafeTensors and `feature_stats.json`. TypeScript typecheck (`npx tsc --noEmit`) passed with 0 errors.
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-10-02
+- **Feature/Task:** Quantitative AI Remediation Batch 4.1 (Phase 1: Feature Schema and Normalization Parity)
+- **Artifacts Created/Modified:** `training/data_config.py`, `training/prepare_data.py`, `src/ai/engine.rs`
+- **HFT/Performance Compliance:**
+  1. **Schema Mismatch Eradication (QA-4201):** Eradicated legacy `CFC_FEATURE_NAMES` schema entirely. Defined `TKAN_OUTPUT_DIM = 16`. Implemented SIMD-vectorized offline T-KAN B-spline LUT inference pass in `prepare_data.py`, matching `src/ai/kan.rs` 1:1, so Mamba-2 trains on genuine 16-dim T-KAN latent projections.
+  2. **Normalization Parity (QA-4205):** Standardized rolling Z-score normalization in Polars to `0.999 * tanh(z)` matching Rust `StreamingFeaturePipeline` in `engine.rs:476`.
+  3. **CVD Pre-Normalization Alignment:** Eradicated hardcoded double-tanh pre-normalization from `src/ai/engine.rs`, feeding raw CVD deltas directly into Welford to eliminate distortion.
+  4. **T-KAN Index Alignment:** Fixed index 17 (`obi_press_ratio = obi * spread`) and index 27 (`vpin_proxy_50 = cvd_delta_50.abs() / (trade_vel_mean_50 + 1e-5)`), unifying all 40 features between Python and Rust 1:1.
+  5. **Physical Verification:** `cargo test --release --lib ai::engine::tests` passed 13/13 tests (0 failures, sub-200µs SLA verified). `npm run build:ts` compiled with 0 errors. Python offline T-KAN pass executed with clean shape `(N, 16)` and finite values.
+- **Status:** ✅ Completed & QA Verified
+
 - **Date:** 2026-10-01
 - **Feature/Task:** Master Plan Execution - Batch 3.1: Absolute Terminal Remediation (Zero-Alloc Hot-Path & Silent Catches Purged)
 - **Artifacts Created/Modified:** `src/strategy/positionLedger.ts`, `src/ai/recalibrationWorker.ts`

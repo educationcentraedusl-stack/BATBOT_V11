@@ -74,22 +74,5 @@ TKAN_FEATURE_NAMES = [
     "momentum_direction",
 ]
 
-# CfC Continuous-Time Feature Schema (Strictly 16 Dimensions)
-CFC_FEATURE_NAMES = [
-    "mid_log_ret_10",
-    "mid_log_ret_50",
-    "relative_spread",
-    "micro_price_dev",
-    "obi_l1",
-    "obi_ema_10",
-    "obi_ema_50",
-    "cvd_delta_10",
-    "trade_vel",
-    "vpin_proxy_10",
-    "lat_us_norm",
-    "vol_realized_50",
-    "exec_side_flag",
-    "order_fill_qty",
-    "pnl_realized_trend",
-    "delta_tau",
-]
+# T-KAN Latent Output Dimension (Consumed by Mamba-2 / CfC Sequence Model)
+TKAN_OUTPUT_DIM = 16

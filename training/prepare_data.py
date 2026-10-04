@@ -14,6 +14,7 @@ import json
 import math
 import time
 import tempfile
+import struct
 import numpy as np
 import polars as pl
 import torch
@@ -21,8 +22,9 @@ from safetensors.torch import save_file
 
 from data_config import (
     DATA_DIR, SIGNALS_PATH, EXECUTIONS_PATH, TKAN_OUT_PATH, CFC_OUT_PATH, STATS_OUT_PATH,
+    MODELS_DIR, TKAN_LUT_PATH,
     WELFORD_WINDOW, CFC_SEQ_LEN, TRAIN_SPLIT_RATIO,
-    TKAN_FEATURE_NAMES, CFC_FEATURE_NAMES
+    TKAN_FEATURE_NAMES, TKAN_OUTPUT_DIM
 )
 
 # Strict Purge Buffer to prevent target horizon leakage across train/val boundary
@@ -103,7 +105,7 @@ def compute_polars_rolling_tanh_df(df: pl.DataFrame, feature_names: list[str], w
     Uses Polars native rolling_mean and rolling_std (powered by Rust multi-threaded SIMD Welford variance).
     Preserves unnormalized physical time delta (delta_tau) in seconds for continuous-time liquid neural network ODE solving.
     Formula: z_t = (x_t - mean_W(x)) / (std_W(x) + eps)
-             x_norm = tanh(z_t / 3.0) -> strictly bounded into (-1.0, 1.0)
+             x_norm = tanh(z_t) * 0.999 -> strictly bounded into (-0.999, 0.999) matching engine.rs
     """
     exprs = []
     for col in feature_names:
@@ -114,107 +116,134 @@ def compute_polars_rolling_tanh_df(df: pl.DataFrame, feature_names: list[str], w
             mean_expr = pl.col(col).rolling_mean(window_size=window, min_samples=1)
             std_expr = pl.col(col).rolling_std(window_size=window, min_samples=1).fill_null(1.0)
             z_expr = (pl.col(col) - mean_expr) / (std_expr + eps)
-            norm_expr = (z_expr / 3.0).tanh().fill_null(0.0).fill_nan(0.0).alias(col)
+            norm_expr = (z_expr.tanh() * 0.999).fill_null(0.0).fill_nan(0.0).alias(col)
         exprs.append(norm_expr)
 
     df_norm = df.select(exprs)
     return df_norm.to_numpy().astype(np.float32)
 
 
-def compute_volatility_adjusted_triple_barrier_labels(
+def compute_micro_horizon_continuous_targets(
     ts_ms: np.ndarray,
     mid_prices: np.ndarray,
-    vols: np.ndarray,
-    max_horizon_ms: int = 1800000, # 30 minutes (1,800,000 ms)
-    m_tp: float = 3.50,
-    m_sl: float = 1.75,
-    min_tp_pct: float = 0.0150, # +1.50% profit barrier ($2 to $5 net move on standard position)
-    min_sl_pct: float = 0.0100, # -1.00% initial risk barrier
+    vols: np.ndarray = None,
+    horizon_ms: int = 5000,
+    min_vol: float = 0.0005,
 ) -> np.ndarray:
     """
-    Computes Volatility-Adjusted Triple-Barrier Labels for Mid-Frequency Scalping ($2 to $5 Net Profit).
-    Replaces continuous return regression targets with a Dual-Stage Directional & Meta-Labeling Target Matrix.
+    Computes SOTA HFT Micro-Horizon Continuous Return Targets (5-Second Horizon).
+    Eradicates QA-4202 (Triple-Barrier Target Leakage & Mode Collapse).
 
-    Barriers:
-      - Upper Take-Profit Barrier: P_tp = P_0 * (1 + max(min_tp_pct, m_tp * vol))
-      - Lower Stop-Loss Barrier:   P_sl = P_0 * (1 - max(min_sl_pct, m_sl * vol))
-      - Maximum Time Horizon:      T_max = 1800 seconds (30 minutes)
+    Targets per sample [y_dir, y_meta, y_horiz]:
+      - y_dir in [-1.0, 1.0]: Continuous Direction Target = tanh(ret_5s / (2 * vol_5s + 1e-6))
+      - y_meta in {0.0, 1.0}: Significance / Meta Target = 1.0 if |ret_5s| > vol_5s else 0.0
+      - y_horiz in [5.0]: Constant 5.0 seconds micro-horizon target
 
-    Outputs per sample [y_dir, y_meta, y_horiz]:
-      - y_dir in [-1.0, 1.0]: Primary directional hypothesis (+1.0 Long, -1.0 Short, or continuous directional return)
-      - y_meta in {0.0, 1.0}: Meta-classification target (1.0 = Macro $2-$5 Profit Expansion Reached, 0.0 = Loss / Timeout)
-      - y_horiz in [5.0, 1800.0]: Realized duration to barrier touch or timeout in seconds
+    Guarantees:
+      - Strict 5-second forward lookahead: ret_5s = ln(P_{t + 5s} / P_t).
+      - Zero look-ahead bias: vol_5s is strictly computed from backward historical data.
     """
     n = len(mid_prices)
-    targets = np.zeros((n, 3), dtype=np.float32)
+    if n == 0:
+        return np.empty((0, 3), dtype=np.float32)
 
-    for i in range(n):
-        p0 = mid_prices[i]
-        t0 = ts_ms[i]
-        vol_i = max(0.0005, float(vols[i]))
+    # 1. Calculate strict 5-second forward index using searchsorted
+    if n > 1 and ts_ms is not None and len(ts_ms) == n and (ts_ms[-1] - ts_ms[0] >= horizon_ms):
+        target_ts = ts_ms + horizon_ms
+        idx_5s = np.searchsorted(ts_ms, target_ts, side="left")
+        idx_5s = np.clip(idx_5s, 0, n - 1)
+    else:
+        # Fallback for synthetic/flat timestamps: assume standard 100ms tick interval (50 ticks = 5s)
+        shift_ticks = max(1, min(50, n // 2))
+        idx_5s = np.clip(np.arange(n) + shift_ticks, 0, n - 1)
 
-        tp_pct = max(min_tp_pct, m_tp * vol_i)
-        sl_pct = max(min_sl_pct, m_sl * vol_i)
+    # 2. Strict 5-second forward log return
+    curr_mid = np.maximum(mid_prices, 1e-8)
+    future_mid = np.maximum(mid_prices[idx_5s], 1e-8)
+    ret_5s = np.log(future_mid / curr_mid)
+    ret_5s = np.nan_to_num(ret_5s, nan=0.0, posinf=0.0, neginf=0.0)
 
-        p_tp_long = p0 * (1.0 + tp_pct)
-        p_sl_long = p0 * (1.0 - sl_pct)
-        p_tp_short = p0 * (1.0 - tp_pct)
-        p_sl_short = p0 * (1.0 + sl_pct)
+    # 3. Localized Volatility (vol_5s) strictly backward-looking (Zero Look-Ahead Bias)
+    if vols is not None and len(vols) == n:
+        vol_5s = np.maximum(np.nan_to_num(vols, nan=min_vol), min_vol)
+    else:
+        # Compute backward rolling standard deviation over 50 ticks from historical returns
+        backward_ret = np.diff(np.log(curr_mid), prepend=np.log(curr_mid[0]))
+        vol_series = pl.Series("ret", backward_ret).rolling_std(window_size=50).fill_null(min_vol).to_numpy()
+        vol_5s = np.maximum(vol_series, min_vol)
 
-        t_limit = t0 + max_horizon_ms if t0 > 0 else 0
+    # 4. Direction Target: tanh(ret_5s / (2 * vol_5s + 1e-6))
+    y_dir = np.tanh(ret_5s / (2.0 * vol_5s + 1e-6))
+    y_dir = np.nan_to_num(y_dir, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Forward scan up to max horizon
-        resolved = False
-        long_won = False
-        short_won = False
-        exit_idx = i
+    # 5. Significance / Meta Target: 1.0 if |ret_5s| > vol_5s else 0.0
+    y_meta = np.where(np.abs(ret_5s) > vol_5s, 1.0, 0.0).astype(np.float32)
 
-        max_lookahead = min(n, i + 3600)
-        for j in range(i + 1, max_lookahead):
-            exit_idx = j
-            pj = mid_prices[j]
-            tj = ts_ms[j]
+    # 6. Horizon Target: 5.0 (constant)
+    y_horiz = np.full_like(ret_5s, 5.0, dtype=np.float32)
 
-            # Check time limit
-            if t_limit > 0 and tj > t_limit:
-                break
-
-            long_hit_tp = (pj >= p_tp_long)
-            long_hit_sl = (pj <= p_sl_long)
-
-            short_hit_tp = (pj <= p_tp_short)
-            short_hit_sl = (pj >= p_sl_short)
-
-            if long_hit_tp and not long_hit_sl:
-                long_won = True
-                resolved = True
-                break
-            elif short_hit_tp and not short_hit_sl:
-                short_won = True
-                resolved = True
-                break
-            elif long_hit_sl or short_hit_sl:
-                resolved = True
-                break
-
-        dt_sec = max(5.0, min(1800.0, (ts_ms[exit_idx] - t0) / 1000.0)) if (t0 > 0 and ts_ms[exit_idx] > t0) else max(5.0, float(exit_idx - i) * 0.5)
-
-        if long_won:
-            targets[i, 0] = 1.0
-            targets[i, 1] = 1.0
-            targets[i, 2] = dt_sec
-        elif short_won:
-            targets[i, 0] = -1.0
-            targets[i, 1] = 1.0
-            targets[i, 2] = dt_sec
-        else:
-            p_exit = mid_prices[exit_idx]
-            ret_delta = (p_exit - p0) / (p0 + 1e-8)
-            targets[i, 0] = float(np.tanh(ret_delta / tp_pct))
-            targets[i, 1] = 0.0
-            targets[i, 2] = dt_sec
-
+    # Assemble [y_dir, y_meta, y_horiz] matrix
+    targets = np.stack([y_dir, y_meta, y_horiz], axis=1).astype(np.float32)
     return targets
+
+
+# Alias for backward compatibility with existing callers
+compute_volatility_adjusted_triple_barrier_labels = compute_micro_horizon_continuous_targets
+
+
+def evaluate_tkan_offline(tkan_norm: np.ndarray, lut_path: str = TKAN_LUT_PATH) -> np.ndarray:
+    """
+    Offline T-KAN B-spline LUT inference pass matching src/ai/kan.rs exactly.
+    Projects 40-dimensional Welford-normalized LOB features down to 16 dimensions
+    using pre-trained B-spline look-up tables in tkan_luts.bin.
+    Falls back to default identity (tanh activation sum) if LUT file is missing or invalid.
+    """
+    N, input_dim = tkan_norm.shape
+    output_dim = TKAN_OUTPUT_DIM
+    assert input_dim == 40, f"Expected 40 input features, got {input_dim}"
+
+    if os.path.exists(lut_path) and os.path.getsize(lut_path) >= 24 + 640 * 2 * 8:
+        try:
+            with open(lut_path, "rb") as f:
+                header = f.read(24)
+                num_edges, lut_size, min_val, max_val = struct.unpack("<IIdd", header)
+                if num_edges == 640 and lut_size >= 2 and max_val > min_val:
+                    total_floats = num_edges * lut_size
+                    payload = np.fromfile(f, dtype=np.float64, count=total_floats)
+                    if len(payload) == total_floats:
+                        luts = payload.reshape((input_dim, output_dim, lut_size))
+
+                        clamped = np.clip(tkan_norm, min_val, max_val)
+                        inv_range = (lut_size - 1) / (max_val - min_val)
+                        idx_f = (clamped - min_val) * inv_range
+                        i0 = np.floor(idx_f).astype(np.int64)
+                        i1 = np.minimum(i0 + 1, lut_size - 1)
+                        frac = idx_f - i0
+                        w0 = (1.0 - frac)[:, :, np.newaxis]
+                        w1 = frac[:, :, np.newaxis]
+
+                        out = np.zeros((N, output_dim), dtype=np.float64)
+                        for i in range(input_dim):
+                            lut_i = luts[i]
+                            i0_i = i0[:, i]
+                            i1_i = i1[:, i]
+                            v0 = lut_i[:, i0_i].T
+                            v1 = lut_i[:, i1_i].T
+                            w0_i = w0[:, i]
+                            w1_i = w1[:, i]
+                            out += w0_i * v0 + w1_i * v1
+
+                        print(f"[T-KAN Offline] Evaluated {N} samples through {num_edges} B-spline LUTs from '{lut_path}'")
+                        return out.astype(np.float32)
+        except Exception as e:
+            print(f"[T-KAN Offline Warning] Failed to evaluate LUTs ({e}). Falling back to identity.")
+
+    # Fallback default identity: matching TKANLayer::default_40_to_16 in kan.rs
+    print("[T-KAN Offline] Using default identity T-KAN projection.")
+    tanh_inputs = np.tanh(tkan_norm)
+    sum_tanh = tanh_inputs.sum(axis=1, keepdims=True)
+    out = np.repeat(sum_tanh, output_dim, axis=1)
+    return out.astype(np.float32)
 
 
 def create_cfc_sequences_strided(features: np.ndarray, targets: np.ndarray, seq_len: int = 32):
@@ -222,8 +251,13 @@ def create_cfc_sequences_strided(features: np.ndarray, targets: np.ndarray, seq_
     Memory-efficient 32-step sliding window sequence extraction using zero-copy NumPy striding
     (np.lib.stride_tricks.sliding_window_view).
     Completely eliminates Python for-loops during sequence generation.
-    Returns PyTorch tensors of shape [Batch, SeqLen, Features].
+    Maps 16-dimensional T-KAN latent features and 3-dimensional micro-horizon targets
+    [y_dir, y_meta, y_horiz] into 3D sequence tensors cleanly.
+    Returns PyTorch tensors of shape [Batch, SeqLen, Features] and [Batch, SeqLen, 3].
     """
+    assert features.shape[1] == TKAN_OUTPUT_DIM, f"Features dim mismatch: expected {TKAN_OUTPUT_DIM}, got {features.shape[1]}"
+    assert targets.shape[1] == 3, f"Targets dim mismatch: expected 3, got {targets.shape[1]}"
+
     num_samples = len(features) - seq_len + 1
     if num_samples <= 0:
         return torch.from_numpy(features).unsqueeze(0).contiguous(), torch.from_numpy(targets).unsqueeze(0).contiguous()
@@ -370,32 +404,32 @@ def load_and_preprocess_lob_data():
             pl.lit(0.0).alias("execution_latency_ms")
         ])
 
-    # Step 6: Volatility-Adjusted Triple-Barrier Labeling ($2 to $5 Net Profit Target)
-    print("[Label Engine] Computing Volatility-Adjusted Triple-Barrier Targets (30m Horizon, $2-$5 Target)...")
+    # Step 6: Micro-Horizon Continuous Target Labeling (5-Second HFT Target)
+    print("[Label Engine] Computing Micro-Horizon Continuous Targets (5s Horizon, Zero Look-Ahead Vol)...")
     ts_array = df.select("ts").to_numpy().flatten().astype(np.int64)
     mid_array = df.select("mid_price").to_numpy().flatten().astype(np.float64)
     vol_array = df.select("vol_realized_50").to_numpy().flatten().astype(np.float64)
 
-    y_triple_barrier = compute_volatility_adjusted_triple_barrier_labels(
+    y_targets = compute_micro_horizon_continuous_targets(
         ts_array, mid_array, vol_array,
-        max_horizon_ms=1800000, # 30-minute macro holding horizon
-        m_tp=3.50,
-        m_sl=1.75,
-        min_tp_pct=0.0150,
-        min_sl_pct=0.0100,
+        horizon_ms=5000,
+        min_vol=0.0005,
     )
 
-    meta_win_rate = float((y_triple_barrier[:, 1] > 0.5).mean() * 100.0)
-    print(f"[Label Engine] Triple-Barrier Labeling Complete: Meta Win Rate = {meta_win_rate:.2f}%")
+    meta_sig_rate = float((y_targets[:, 1] > 0.5).mean() * 100.0)
+    print(f"[Label Engine] Micro-Horizon Labeling Complete: Significant Move Rate = {meta_sig_rate:.2f}%")
 
     # Perform SIMD-Accelerated Rolling Z-Score + Tanh Bounding entirely in Rust/Polars
     print("[Normalization] Executing SIMD Polars Rolling Z-Scores (Rust Welford) + Symmetrical Tanh Bounding...")
     norm_start = time.time()
 
     tkan_norm = compute_polars_rolling_tanh_df(df, TKAN_FEATURE_NAMES, window=WELFORD_WINDOW)
-    cfc_norm = compute_polars_rolling_tanh_df(df, CFC_FEATURE_NAMES, window=WELFORD_WINDOW)
-
     print(f"[Normalization] Completed SIMD feature normalization in {time.time() - norm_start:.4f}s")
+
+    print("[T-KAN Encoder] Running offline T-KAN B-spline projection (40 -> 16)...")
+    tkan_infer_start = time.time()
+    cfc_norm = evaluate_tkan_offline(tkan_norm, TKAN_LUT_PATH)
+    print(f"[T-KAN Encoder] Completed offline T-KAN inference in {time.time() - tkan_infer_start:.4f}s")
 
     N, num_tkan_features = tkan_norm.shape
     _, num_cfc_features = cfc_norm.shape
@@ -410,33 +444,33 @@ def load_and_preprocess_lob_data():
     assert num_tkan_features == 40, f"Error: T-KAN feature count is {num_tkan_features}, expected 40!"
     assert num_cfc_features == 16, f"Error: CfC feature count is {num_cfc_features}, expected 16!"
 
-    # Split 80/20 Chronologically with Dynamic Purge Buffer (covering 30-minute lookahead window)
+    # Split 80/20 Chronologically with Dynamic Purge Buffer (covering 5-second lookahead window)
     split_idx = int(N * TRAIN_SPLIT_RATIO)
     t_split_end = ts_array[split_idx] if split_idx < len(ts_array) else 0
 
     val_start_idx = split_idx
     if t_split_end > 0:
-        t_purge_cutoff = t_split_end + 1800000 # 30 minutes in ms
+        t_purge_cutoff = t_split_end + 5000 # 5-second micro-horizon forward window in ms
         while val_start_idx < N - 1 and ts_array[val_start_idx] < t_purge_cutoff:
             val_start_idx += 1
 
     # Fallback to minimum purge buffer if timestamps are dense or synthetic
-    min_purge_ticks = min(max(50, int((N - split_idx) * 0.1)), 500)
+    min_purge_ticks = min(max(10, int((N - split_idx) * 0.05)), 100)
     if (val_start_idx - split_idx) < min_purge_ticks and (split_idx + min_purge_ticks) < N:
         val_start_idx = split_idx + min_purge_ticks
 
     purged_count = val_start_idx - split_idx
 
-    print(f"[Dataset Split] Chronological 80/20 Split with 30-Minute Non-Overlapping Purge Buffer:")
+    print(f"[Dataset Split] Chronological 80/20 Split with 5-Second Non-Overlapping Purge Buffer:")
     print(f"                Train Range: [0 : {split_idx}] ({split_idx} samples)")
     print(f"                Purge Buffer Range: [{split_idx} : {val_start_idx}] ({purged_count} ticks purged)")
     print(f"                Validation Range: [{val_start_idx} : {N}] ({max(0, N - val_start_idx)} samples)")
 
     # Prepare T-KAN Tensors
     tkan_train_in = torch.from_numpy(tkan_norm[:split_idx])
-    tkan_train_tgt = torch.from_numpy(y_triple_barrier[:split_idx])
+    tkan_train_tgt = torch.from_numpy(y_targets[:split_idx])
     tkan_val_in = torch.from_numpy(tkan_norm[val_start_idx:])
-    tkan_val_tgt = torch.from_numpy(y_triple_barrier[val_start_idx:])
+    tkan_val_tgt = torch.from_numpy(y_targets[val_start_idx:])
 
     tkan_tensors = {
         "train_inputs": tkan_train_in.contiguous(),
@@ -447,9 +481,9 @@ def load_and_preprocess_lob_data():
 
     # Prepare compact 2D CfC / Mamba-2 Tensors [N, 16] & Targets [N, 3]
     cfc_train_in = torch.from_numpy(cfc_norm[:split_idx]).contiguous()
-    cfc_train_tgt = torch.from_numpy(y_triple_barrier[:split_idx]).contiguous()
+    cfc_train_tgt = torch.from_numpy(y_targets[:split_idx]).contiguous()
     cfc_val_in = torch.from_numpy(cfc_norm[val_start_idx:]).contiguous()
-    cfc_val_tgt = torch.from_numpy(y_triple_barrier[val_start_idx:]).contiguous()
+    cfc_val_tgt = torch.from_numpy(y_targets[val_start_idx:]).contiguous()
 
     cfc_tensors = {
         "train_inputs": cfc_train_in,
@@ -481,7 +515,9 @@ def load_and_preprocess_lob_data():
         "welford_window": WELFORD_WINDOW,
         "cfc_sequence_length": CFC_SEQ_LEN,
         "purge_buffer_ticks": purged_count,
-        "meta_win_rate_pct": meta_win_rate,
+        "meta_win_rate_pct": meta_sig_rate,
+        "target_horizon_sec": 5.0,
+        "target_type": "micro_horizon_continuous_5s",
         "tkan_features": {
             "dim": 40,
             "names": TKAN_FEATURE_NAMES,
@@ -490,8 +526,8 @@ def load_and_preprocess_lob_data():
             "mean_val": float(tkan_norm.mean()),
         },
         "cfc_features": {
-            "dim": 16,
-            "names": CFC_FEATURE_NAMES,
+            "dim": TKAN_OUTPUT_DIM,
+            "names": [f"tkan_out_{i}" for i in range(TKAN_OUTPUT_DIM)],
             "min_val": float(cfc_norm.min()),
             "max_val": float(cfc_norm.max()),
             "mean_val": float(cfc_norm.mean()),

@@ -1,11 +1,14 @@
 {
-  "dataset_records": 475259,
-  "train_records": 380207,
-  "purged_records": 50,
-  "val_records": 95002,
+  "dataset_records": 1400,
+  "train_records": 1120,
+  "purged_records": 279,
+  "val_records": 1,
   "welford_window": 1000,
   "cfc_sequence_length": 32,
-  "purge_buffer_ticks": 50,
+  "purge_buffer_ticks": 279,
+  "meta_win_rate_pct": 0.0,
+  "target_horizon_sec": 5.0,
+  "target_type": "micro_horizon_continuous_5s",
   "tkan_features": {
     "dim": 40,
     "names": [
@@ -50,49 +53,49 @@
       "price_acceleration",
       "momentum_direction"
     ],
-    "min_val": -1.0,
-    "max_val": 1.0,
-    "mean_val": -0.0008202504250220954
+    "min_val": -0.9990000128746033,
+    "max_val": 0.9989981055259705,
+    "mean_val": -0.021456703543663025
   },
   "cfc_features": {
     "dim": 16,
     "names": [
-      "mid_log_ret_10",
-      "mid_log_ret_50",
-      "relative_spread",
-      "micro_price_dev",
-      "obi_l1",
-      "obi_ema_10",
-      "obi_ema_50",
-      "cvd_delta_10",
-      "trade_vel",
-      "vpin_proxy_10",
-      "lat_us_norm",
-      "vol_realized_50",
-      "exec_side_flag",
-      "order_fill_qty",
-      "pnl_realized_trend",
-      "delta_tau"
+      "tkan_out_0",
+      "tkan_out_1",
+      "tkan_out_2",
+      "tkan_out_3",
+      "tkan_out_4",
+      "tkan_out_5",
+      "tkan_out_6",
+      "tkan_out_7",
+      "tkan_out_8",
+      "tkan_out_9",
+      "tkan_out_10",
+      "tkan_out_11",
+      "tkan_out_12",
+      "tkan_out_13",
+      "tkan_out_14",
+      "tkan_out_15"
     ],
-    "min_val": -1.0,
-    "max_val": 10.0,
-    "mean_val": 0.0482586994767189
+    "min_val": -3.181981325149536,
+    "max_val": 2.512342691421509,
+    "mean_val": -0.1449376940727234
   },
   "shapes": {
     "tkan_train_inputs": [
-      380207,
+      1120,
       40
     ],
     "tkan_val_inputs": [
-      95002,
+      1,
       40
     ],
     "cfc_train_inputs": [
-      380207,
+      1120,
       16
     ],
     "cfc_val_inputs": [
-      95002,
+      1,
       16
     ]
   }
