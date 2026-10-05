@@ -838,13 +838,10 @@ impl AIEngine {
         let tkan_tensor = Tensor::from_slice(&tkan_f32, (1, 16), &Device::Cpu)?;
 
         // Isolated per-asset delta-time integration
-        let prev_ns = tracker.last_inference_ns.swap(start_ns, Ordering::Relaxed);
+        let _prev_ns = tracker.last_inference_ns.swap(start_ns, Ordering::Relaxed);
         self.last_inference_ns.store(start_ns, Ordering::Relaxed);
-        let delta_t = if prev_ns == 0 {
-            0.001
-        } else {
-            ((start_ns.saturating_sub(prev_ns) as f64) / 1e9).clamp(0.0001, 10.0)
-        };
+        // Canonical inter-tick discretization time step (0.010s = 10ms) matching training distribution exactly (QA-43.0 D-2)
+        let delta_t = 0.010f64;
 
         let (direction, confidence, horizon_ms) = if let Some(mamba) = &self.mamba {
             // Auto-expand mamba hidden dynamically if asset_idx exceeds current capacity
@@ -1008,7 +1005,7 @@ impl AIEngine {
             }
             let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
             // QA-4204 FIX: Capture raw meta_logit for Platt-scaled confidence
-            let (dir_raw, meta_logit, _) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.001, temp);
+            let (dir_raw, meta_logit, _) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.010, temp);
             let obi = *features.get(8).ok_or_else(|| Error::Msg("Missing feature[8] for obi".to_string()))?;
             let ofi = *features.get(17).ok_or_else(|| Error::Msg("Missing feature[17] for ofi".to_string()))?;
             let hawkes_asym = *features.get(27).ok_or_else(|| Error::Msg("Missing feature[27] for hawkes_asym".to_string()))?;
@@ -1026,7 +1023,7 @@ impl AIEngine {
             );
             return Ok((dir, conf));
         } else if let Some(cell) = &self.cell {
-            let (output_tensor, next_h) = cell.forward(&tkan_tensor, &*hidden_guard, 0.001)?;
+            let (output_tensor, next_h) = cell.forward(&tkan_tensor, &*hidden_guard, 0.010)?;
             *hidden_guard = next_h;
             let flat = output_tensor.flatten_all()?;
             let raw_scalar = flat.get(0)?.to_scalar::<f32>()?;
@@ -1083,7 +1080,7 @@ impl AIEngine {
                 }
             }
             // QA-4204 FIX: Capture raw meta_logit for Platt-scaled confidence
-            let (dir_raw, meta_logit, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.001, temp);
+            let (dir_raw, meta_logit, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.010, temp);
 
             let norm = m_hidden_guard.iter().map(|v| v * v).sum::<f32>().sqrt() as f64;
             let obi = sab.load_f64_asset(0, 1);
@@ -1122,7 +1119,7 @@ impl AIEngine {
                 }
             }
             let tkan_tensor = Tensor::from_slice(&tkan_f32, (1, 16), &Device::Cpu)?;
-            let (output_tensor, next_h) = cell.forward(&tkan_tensor, &*hidden_guard, 0.001)?;
+            let (output_tensor, next_h) = cell.forward(&tkan_tensor, &*hidden_guard, 0.010)?;
 
             let norm = next_h.sqr()?.sum_all()?.to_scalar::<f32>()?.sqrt() as f64;
             *hidden_guard = next_h;

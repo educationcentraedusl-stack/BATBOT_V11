@@ -151,11 +151,22 @@ def compute_micro_horizon_continuous_targets(
     if n > 1 and ts_ms is not None and len(ts_ms) == n and (ts_ms[-1] - ts_ms[0] >= horizon_ms):
         target_ts = ts_ms + horizon_ms
         idx_5s = np.searchsorted(ts_ms, target_ts, side="left")
-        idx_5s = np.clip(idx_5s, 0, n - 1)
+        # Eliminate terminal price sharing: for samples exceeding boundary, reference self (ret_5s = 0.0)
+        idx_5s = np.where(idx_5s < n, idx_5s, np.arange(n))
     else:
         # Fallback for synthetic/flat timestamps: assume standard 100ms tick interval (50 ticks = 5s)
-        shift_ticks = max(1, min(50, n // 2))
-        idx_5s = np.clip(np.arange(n) + shift_ticks, 0, n - 1)
+        # Shift must be strictly greater than CFC_SEQ_LEN (32 ticks) to prevent feature-target overlap within the sequence window.
+        # Eradicates QA-43.0 D-1: Remove shift_ticks = max(1, min(50, n // 2)) and terminal np.clip price sharing.
+        min_forward_shift = max(50, CFC_SEQ_LEN + 1)
+        if n <= min_forward_shift:
+            # Dataset too small to provide a clean forward target beyond sequence window: return clean neutral targets
+            return np.zeros((n, 3), dtype=np.float32)
+        shift_ticks = min_forward_shift
+        raw_idx = np.arange(n) + shift_ticks
+        valid_forward = raw_idx < n
+        # For terminal samples without clean forward targets, reference self (idx = t)
+        # so future_mid == curr_mid, yielding ret_5s = 0.0 without terminal price sharing or overlap.
+        idx_5s = np.where(valid_forward, raw_idx, np.arange(n))
 
     # 2. Strict 5-second forward log return
     curr_mid = np.maximum(mid_prices, 1e-8)

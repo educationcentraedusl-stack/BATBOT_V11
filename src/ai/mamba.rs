@@ -67,22 +67,22 @@ impl Mamba2Cell {
         input_dim: usize,
         d_inner: usize,
         d_state: usize,
-    ) -> Self {
-        let a_clamped = a_log.clamp(-20.0f32, 20.0f32).unwrap_or_else(|_| a_log.clone());
-        let a_softplus = a_clamped.exp().and_then(|e| (e + 1.0)?.log()).unwrap_or_else(|_| a_log.clone());
-        let w_heads_flat = w_heads.flatten_all().and_then(|t| t.to_vec1::<f32>()).unwrap_or_default();
-        let b_heads_flat = b_heads.flatten_all().and_then(|t| t.to_vec1::<f32>()).unwrap_or_default();
-        let w_in_flat = w_in.flatten_all().and_then(|t| t.to_vec1::<f32>()).unwrap_or_default();
-        let b_in_flat = b_in.flatten_all().and_then(|t| t.to_vec1::<f32>()).unwrap_or_default();
-        let a_softplus_flat = a_softplus.flatten_all().and_then(|t| t.to_vec1::<f32>()).unwrap_or_default();
-        let w_b_flat = w_b.flatten_all().and_then(|t| t.to_vec1::<f32>()).unwrap_or_default();
-        let b_b_flat = b_b.flatten_all().and_then(|t| t.to_vec1::<f32>()).unwrap_or_default();
-        let w_c_flat = w_c.flatten_all().and_then(|t| t.to_vec1::<f32>()).unwrap_or_default();
-        let b_c_flat = b_c.flatten_all().and_then(|t| t.to_vec1::<f32>()).unwrap_or_default();
-        let w_out_flat = w_out.flatten_all().and_then(|t| t.to_vec1::<f32>()).unwrap_or_default();
-        let b_out_flat = b_out.flatten_all().and_then(|t| t.to_vec1::<f32>()).unwrap_or_default();
-        let d_skip_flat = d_skip.flatten_all().and_then(|t| t.to_vec1::<f32>()).unwrap_or_default();
-        Self {
+    ) -> Result<Self> {
+        let a_clamped = a_log.clamp(-20.0f32, 20.0f32)?;
+        let a_softplus = (a_clamped.exp()? + 1.0)?.log()?;
+        let w_heads_flat = w_heads.flatten_all()?.to_vec1::<f32>()?;
+        let b_heads_flat = b_heads.flatten_all()?.to_vec1::<f32>()?;
+        let w_in_flat = w_in.flatten_all()?.to_vec1::<f32>()?;
+        let b_in_flat = b_in.flatten_all()?.to_vec1::<f32>()?;
+        let a_softplus_flat = a_softplus.flatten_all()?.to_vec1::<f32>()?;
+        let w_b_flat = w_b.flatten_all()?.to_vec1::<f32>()?;
+        let b_b_flat = b_b.flatten_all()?.to_vec1::<f32>()?;
+        let w_c_flat = w_c.flatten_all()?.to_vec1::<f32>()?;
+        let b_c_flat = b_c.flatten_all()?.to_vec1::<f32>()?;
+        let w_out_flat = w_out.flatten_all()?.to_vec1::<f32>()?;
+        let b_out_flat = b_out.flatten_all()?.to_vec1::<f32>()?;
+        let d_skip_flat = d_skip.flatten_all()?.to_vec1::<f32>()?;
+        Ok(Self {
             w_in,
             b_in,
             a_log,
@@ -111,7 +111,7 @@ impl Mamba2Cell {
             input_dim,
             d_inner,
             d_state,
-        }
+        })
     }
 
     /// Creates a default initialized Mamba-2 cell on the specified device.
@@ -134,10 +134,10 @@ impl Mamba2Cell {
         let w_heads = Tensor::zeros((d_inner, 3), DType::F32, device)?;
         let b_heads = Tensor::zeros((3,), DType::F32, device)?;
 
-        Ok(Self::new(
+        Self::new(
             w_in, b_in, a_log, w_b, b_b, w_c, b_c, w_out, b_out, d_skip, w_heads, b_heads,
             input_dim, d_inner, d_state,
-        ))
+        )
     }
 
     /// True SOTA Mamba-2 Discretized State Space Evolution:
@@ -548,6 +548,37 @@ mod tests {
         assert!(dir >= -1.0 && dir <= 1.0);
         assert!(dir > 0.90 && dir <= 1.0);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_mamba2_cell_rejects_corrupted_weights() -> Result<()> {
+        let device = Device::Cpu;
+        let input_dim = 16;
+        let d_inner = 32;
+        let d_state = 16;
+
+        let w_in = Tensor::zeros((input_dim, d_inner), DType::F32, &device)?;
+        let b_in = Tensor::zeros((d_inner,), DType::F32, &device)?;
+        let a_log = Tensor::zeros((d_inner,), DType::F32, &device)?;
+        let w_b = Tensor::zeros((d_inner, d_state), DType::F32, &device)?;
+        let b_b = Tensor::zeros((d_state,), DType::F32, &device)?;
+        let w_c = Tensor::zeros((d_inner, d_state), DType::F32, &device)?;
+        let b_c = Tensor::zeros((d_state,), DType::F32, &device)?;
+        let w_out = Tensor::zeros((d_inner, d_inner), DType::F32, &device)?;
+        let b_out = Tensor::zeros((d_inner,), DType::F32, &device)?;
+        let d_skip = Tensor::ones((d_inner,), DType::F32, &device)?;
+        // Corrupted tensor: dtype F64 instead of F32
+        let corrupted_w_heads = Tensor::zeros((d_inner, 3), DType::F64, &device)?;
+        let b_heads = Tensor::zeros((3,), DType::F32, &device)?;
+
+        let result = Mamba2Cell::new(
+            w_in, b_in, a_log, w_b, b_b, w_c, b_c, w_out, b_out, d_skip, corrupted_w_heads, b_heads,
+            input_dim, d_inner, d_state,
+        );
+
+        // QA-43.0 D-3: Must strictly fail and propagate error, never swallow silently via unwrap_or_default
+        assert!(result.is_err(), "Mamba2Cell::new must return Err on corrupted/invalid weights");
         Ok(())
     }
 }

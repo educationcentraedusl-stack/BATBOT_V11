@@ -148,22 +148,38 @@ impl AiEngine {
             let input_dim = w_in.dims()[0];
             let d_inner = w_in.dims()[1];
             let d_state = w_b.dims()[1];
-            let mamba_cell = Mamba2Cell::new(
+            match Mamba2Cell::new(
                 w_in, b_in, a_log, w_b, b_b, w_c, b_c, w_out, b_out, d_skip, w_heads, b_heads,
                 input_dim, d_inner, d_state,
-            );
-            println!(
-                "[BATBOT_V11][AI Engine Zero-Copy] Loaded SOTA Mamba-2 SSM weights from {} via mmap. Status: CALIBRATED (Mamba-2: in={}, inner={}, state={}).",
-                path_ref.display(),
-                input_dim,
-                d_inner,
-                d_state
-            );
-            Self {
-                cell: None,
-                mamba: Some(mamba_cell),
-                status: AiEngineStatus::Calibrated,
-                calibration_params,
+            ) {
+                Ok(mamba_cell) => {
+                    println!(
+                        "[BATBOT_V11][AI Engine Zero-Copy] Loaded SOTA Mamba-2 SSM weights from {} via mmap. Status: CALIBRATED (Mamba-2: in={}, inner={}, state={}).",
+                        path_ref.display(),
+                        input_dim,
+                        d_inner,
+                        d_state
+                    );
+                    Self {
+                        cell: None,
+                        mamba: Some(mamba_cell),
+                        status: AiEngineStatus::Calibrated,
+                        calibration_params,
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[BATBOT_V11][AI Engine ERROR] Failed to construct Mamba-2 cell from {}: {:?}. Status: UNCALIBRATED.",
+                        path_ref.display(),
+                        e
+                    );
+                    Self {
+                        cell: None,
+                        mamba: None,
+                        status: AiEngineStatus::Uncalibrated,
+                        calibration_params: CalibrationParams::default(),
+                    }
+                }
             }
         } else if let (Some(w_a), Some(b_a), Some(w_b), Some(b_b), Some(w_o), Some(b_o)) =
             (w_alpha, b_alpha, w_beta, b_beta, w_output, b_output)

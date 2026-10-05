@@ -60,7 +60,7 @@ class LocalMamba2SSM(nn.Module):
         self.w_heads = nn.Parameter(torch.randn(d_inner, 3) * (1.0 / math.sqrt(d_inner)))
         self.b_heads = nn.Parameter(torch.zeros(3))
 
-    def forward(self, input_seq: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_seq: torch.Tensor, delta_t: float = 0.010) -> torch.Tensor:
         batch_size, seq_len, _ = input_seq.shape
         device = input_seq.device
 
@@ -73,17 +73,26 @@ class LocalMamba2SSM(nn.Module):
         a_clamped = torch.clamp(self.a_log, -20.0, 20.0)
         a_softplus = F.softplus(a_clamped) # [d_inner]
 
+        # Inter-tick delta_t discretization interval (canonical 10ms = 0.010s)
+        # Unified across Python training and Rust inference (Eradicates QA-43.0 D-2)
+        if isinstance(delta_t, (int, float)):
+            dt_tensor = torch.full((batch_size, 1), float(delta_t), device=device, dtype=input_seq.dtype)
+        elif torch.is_tensor(delta_t):
+            dt_tensor = delta_t.to(device=device, dtype=input_seq.dtype)
+            if dt_tensor.dim() == 1:
+                dt_tensor = dt_tensor.unsqueeze(1)
+        else:
+            dt_tensor = torch.full((batch_size, 1), 0.010, device=device, dtype=input_seq.dtype)
+        dt_val = torch.clamp(dt_tensor, min=1e-4, max=10.0)
+
         for t in range(seq_len):
             x_t = input_seq[:, t, :] # [Batch, 16]
-
-            # Delta time interval from feature index 15 (delta_tau)
-            delta_t = torch.clamp(x_t[:, 15:16].abs(), min=1e-4, max=10.0) # [Batch, 1]
 
             # 1. Input Linear Projection
             u_t = x_t @ self.w_in + self.b_in # [Batch, d_inner]
 
             # 2. Selective Discretization & Exponential Decay
-            delta_a = delta_t * a_softplus.unsqueeze(0) # [Batch, d_inner]
+            delta_a = dt_val * a_softplus.unsqueeze(0) # [Batch, d_inner]
             decay = torch.exp(-delta_a).unsqueeze(-1) # [Batch, d_inner, 1]
 
             # 3. Selective B and C projections
@@ -273,8 +282,8 @@ def write_progress(pct: int):
         progress_path = os.path.join(os.getcwd(), ".training_progress")
         with open(progress_path, "w") as f:
             f.write(f"{pct}\n")
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[Warning] Failed to write progress: {e}")
 
 
 def train_local_cfc():
