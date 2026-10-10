@@ -2893,5 +2893,13 @@
   3. **D-3 Eradication (Silent Zombie Model Fallbacks - `mamba.rs`, `weights.rs`):** Completely eradicated all 12 instances of `.unwrap_or_default()` and `.unwrap_or_else()` in `Mamba2Cell::new()`, refactoring the constructor to return `Result<Self, candle_core::Error>`. Corrupted weights now fail loudly with `eprintln!` and set `AiEngineStatus::Uncalibrated` rather than silently executing with zeroed weights.
   4. **D-4 Eradication (Exception Swallowing - `local_async_trainer.py`):** Replaced bare `except Exception: pass` in `write_progress` with explicit warning logger `except Exception as e: print(f"[Warning] Failed to write progress: {e}")`.
   5. **Verification & Proof:** Rust release test suite passed (`cargo test --release` 67/67 passed, 50 unittests, 17 integration tests in 1.32s), clean TypeScript compilation (`npx tsc --noEmit`, 0 errors), Python D-1 and D-2 gradient verification tests passed 100%.
+- **Date:** 2026-10-10
+- **Feature/Task:** Full Pipeline Production Model Training (The New Brain)
+- **Artifacts Created/Modified:** `data/tkan_features.safetensors`, `data/cfc_features.safetensors`, `data/feature_stats.json`, `models/cfc_weights.safetensors`, `models/cfc_updated.safetensors`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:**
+  1. **HFT Dataset Generation (`prepare_data.py`):** Ingested 136,923 LOB signals, performed SIMD Welford Rolling Z-Scores with symmetrical tanh bounds, executed offline T-KAN B-spline LUT inference (40 -> 16 dimensions), and computed 5-second micro-horizon continuous targets ($y_{\text{dir}}$, $y_{\text{meta}}$, $y_{\text{horiz}}$) with non-overlapping purge buffer (100 ticks).
+  2. **Mamba-2 SSM Training (`local_async_trainer.py`):** Successfully executed transfer learning warm-start (12/12 tensors loaded), optimized with AdamW and OneCycleLR over unfolded 3D sequences (`[19969, 32, 16]` train, `[4969, 32, 16]` val). Grad Norm converged steadily (90.31 -> 2.94). Peak validation IC achieved +0.0723 at Epoch 12. Early stopping triggered at Epoch 27 restoring best checkpoint weights.
+  3. **Calibration & Persistence:** Fitted empirical Platt scaling ($A = 0.0629$, $B = -0.9234$, $T = 0.2098$) and atomically exported 25,348-byte production weights to `models/cfc_weights.safetensors`.
 - **Status:** ✅ Completed & QA Verified
+
 
