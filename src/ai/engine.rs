@@ -56,12 +56,11 @@ impl SignedZScores {
     #[inline(always)]
     pub fn compute_sdci(&self, dir_raw: f64) -> f64 {
         let pred_sign = if dir_raw > 0.0 { 1.0 } else if dir_raw < 0.0 { -1.0 } else { 0.0 };
-        // Feature 24 (spread velocity) has INVERTED concordance: negative z (tighter) is bullish
-        let spread_sign_flip = -1.0;
 
+        // DEF-4305: Trade velocity acceleration confirms momentum in prediction direction (no inverted sign flip)
         let sdci = 1.0 * pred_sign * self.obi_z.clamp(-3.0, 3.0)
                  + 0.8 * pred_sign * self.cvd_z.clamp(-3.0, 3.0)
-                 + 0.5 * pred_sign * spread_sign_flip * self.vel_z.clamp(-3.0, 3.0)
+                 + 0.5 * pred_sign * self.vel_z.clamp(-3.0, 3.0)
                  + 0.5 * pred_sign * self.micro_z.clamp(-3.0, 3.0)
                  + 0.6 * pred_sign * self.ofi_z.clamp(-3.0, 3.0)
                  + 0.6 * pred_sign * self.hawkes_z.clamp(-3.0, 3.0);
@@ -377,8 +376,6 @@ impl StreamingFeaturePipeline {
         let mut cvd_z = 0.0f64;
         let mut vel_z = 0.0f64;
         let mut micro_z = 0.0f64;
-        let mut ofi_z = 0.0f64;
-        let mut hawkes_z = 0.0f64;
 
         for i in 0..40 {
             let val = *raw_features.get(i)
@@ -456,12 +453,10 @@ impl StreamingFeaturePipeline {
                 (val - *mean_ref) / (std_dev + 1e-8)
             };
 
-            // DEF-R2: Store signed z-scores (NOT absolute z-scores)
+            // DEF-4305: Store canonical signed z-scores (strictly aligned indices)
             if i == 8 { obi_z = z; }
-            if i == 17 { ofi_z = z; }
-            if i == 21 { cvd_z = z; }
+            if i == 20 { cvd_z = z; }
             if i == 24 { vel_z = z; }
-            if i == 27 { hawkes_z = z; }
             if i == 2 { micro_z = z; }
 
             // Continuous C∞-differentiable soft-clip normalization strictly bounded in (-0.999, 0.999)
@@ -470,6 +465,10 @@ impl StreamingFeaturePipeline {
                 *norm_slot = 0.999 * z.tanh();
             }
         }
+
+        // DEF-4305: Read genuine OFI (slot 138) and Hawkes asymmetry (slot 149) from live SAB
+        let ofi_z = sab.load_f64_asset(asset_idx, 138);
+        let hawkes_z = sab.load_f64_asset(asset_idx, 149);
 
         let signed_z = SignedZScores {
             obi_z,
@@ -518,7 +517,7 @@ pub struct AIEngine {
     pub calibration_params: crate::ai::weights::CalibrationParams,
     pub last_inference_ns: AtomicU64,
     pub inference_seq: AtomicU64,
-    pub ic_tracker: Mutex<ICTracker>,
+    pub ic_trackers: RwLock<Vec<Mutex<ICTracker>>>,
     pub asset_trackers: RwLock<Vec<AssetTelemetryTracker>>,
     pub feature_pipelines: RwLock<Vec<Mutex<StreamingFeaturePipeline>>>,
 }
@@ -558,6 +557,7 @@ impl AIEngine {
         let mut feature_pipelines = Vec::with_capacity(num_assets);
         let mut hidden_states = Vec::with_capacity(num_assets);
         let mut mamba_hidden = Vec::with_capacity(num_assets);
+        let mut ic_trackers = Vec::with_capacity(num_assets);
         let status = weights_engine.status;
 
         let mamba_dim = weights_engine.mamba.as_ref().map(|m| m.d_inner * m.d_state).unwrap_or(0);
@@ -567,6 +567,7 @@ impl AIEngine {
             feature_pipelines.push(Mutex::new(StreamingFeaturePipeline::new()));
             hidden_states.push(Mutex::new(hs));
             mamba_hidden.push(Mutex::new(vec![0.0f32; mamba_dim]));
+            ic_trackers.push(Mutex::new(ICTracker::default_1000()));
         }
 
         Ok(Self {
@@ -579,7 +580,7 @@ impl AIEngine {
             calibration_params: weights_engine.calibration_params,
             last_inference_ns: AtomicU64::new(0),
             inference_seq: AtomicU64::new(0),
-            ic_tracker: Mutex::new(ICTracker::default_1000()),
+            ic_trackers: RwLock::new(ic_trackers),
             asset_trackers: RwLock::new(asset_trackers),
             feature_pipelines: RwLock::new(feature_pipelines),
         })
@@ -602,7 +603,7 @@ impl AIEngine {
                     calibration_params: weights_engine.calibration_params,
                     last_inference_ns: AtomicU64::new(0),
                     inference_seq: AtomicU64::new(0),
-                    ic_tracker: Mutex::new(ICTracker::default_1000()),
+                    ic_trackers: RwLock::new(Vec::new()),
                     asset_trackers: RwLock::new(Vec::new()),
                     feature_pipelines: RwLock::new(Vec::new()),
                 }
@@ -667,8 +668,22 @@ impl AIEngine {
     }
 
     pub fn reset_ic_tracker(&self) {
-        if let Ok(mut tracker) = self.ic_tracker.lock() {
-            tracker.reset();
+        if let Ok(trackers) = self.ic_trackers.read() {
+            for tracker_mutex in trackers.iter() {
+                if let Ok(mut tracker) = tracker_mutex.lock() {
+                    tracker.reset();
+                }
+            }
+        }
+    }
+
+    pub fn reset_ic_tracker_asset(&self, asset_idx: usize) {
+        if let Ok(trackers) = self.ic_trackers.read() {
+            if let Some(tracker_mutex) = trackers.get(asset_idx) {
+                if let Ok(mut tracker) = tracker_mutex.lock() {
+                    tracker.reset();
+                }
+            }
         }
     }
 
@@ -812,15 +827,24 @@ impl AIEngine {
             }
         }
 
-        // Throttled Spearman IC recomputation in background / low frequency
+        // Throttled Spearman IC recomputation in background / low frequency (DEF-4307: Multi-asset isolated tracker)
         if num_popped > 0 {
-            if let Ok(mut ic_guard) = self.ic_tracker.lock() {
-                for i in 0..num_popped {
-                    if let Some(&(pred, ret, res)) = popped_obs.get(i) {
-                        ic_guard.push_observation_fast(pred, ret, res, start_ns);
-                    }
+            if asset_idx >= self.ic_trackers.read().unwrap_or_else(|e| e.into_inner()).len() {
+                let mut tr_write = self.ic_trackers.write().unwrap_or_else(|e| e.into_inner());
+                while tr_write.len() <= asset_idx {
+                    tr_write.push(Mutex::new(ICTracker::default_1000()));
                 }
-                ic_guard.maybe_recompute_spearman(Some(sab), asset_idx, start_ns);
+            }
+            let trackers_holder = self.ic_trackers.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(tracker_mutex) = trackers_holder.get(asset_idx) {
+                if let Ok(mut ic_guard) = tracker_mutex.lock() {
+                    for i in 0..num_popped {
+                        if let Some(&(pred, ret, res)) = popped_obs.get(i) {
+                            ic_guard.push_observation_fast(pred, ret, res, start_ns);
+                        }
+                    }
+                    ic_guard.maybe_recompute_spearman(Some(sab), asset_idx, start_ns);
+                }
             }
         }
 
@@ -864,8 +888,17 @@ impl AIEngine {
             let sab_temp = sab.load_f64_asset(asset_idx, 127);
 
             let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.5, 5.0);
-            let platt_scale = if sab_scale > 0.001 { sab_scale } else { self.calibration_params.platt_scale }.clamp(0.5, 5.0);
-            let platt_offset = sab_offset.clamp(-2.0, 2.0);
+            // DEF-4303: Restore Platt scaling fallbacks for uninitialized SAB telemetry (slot 128 & 129)
+            let platt_scale = if sab_scale > 0.001 {
+                sab_scale
+            } else {
+                self.calibration_params.platt_scale
+            }.clamp(0.01, 10.0);
+            let platt_offset = if sab_offset.abs() > 1e-6 {
+                sab_offset
+            } else {
+                self.calibration_params.platt_offset
+            }.clamp(-5.0, 5.0);
             let obi = sab.load_f64_asset(asset_idx, 1);
             let ofi = sab.load_f64_asset(asset_idx, 138);
             let hawkes_asym = sab.load_f64_asset(asset_idx, 149);
@@ -972,6 +1005,26 @@ impl AIEngine {
     }
 
     pub fn evaluate_features(&self, features: &[f64; 40]) -> Result<(f64, f64)> {
+        self.evaluate_features_with_order_flow(features, 0.0, 0.0)
+    }
+
+    pub fn evaluate_features_with_sab(
+        &self,
+        features: &[f64; 40],
+        sab: &AtomicSharedMemoryBridge,
+        asset_idx: usize,
+    ) -> Result<(f64, f64)> {
+        let ofi = sab.load_f64_asset(asset_idx, 138);
+        let hawkes = sab.load_f64_asset(asset_idx, 149);
+        self.evaluate_features_with_order_flow(features, ofi, hawkes)
+    }
+
+    pub fn evaluate_features_with_order_flow(
+        &self,
+        features: &[f64; 40],
+        ofi: f64,
+        hawkes_asym: f64,
+    ) -> Result<(f64, f64)> {
         let tkan_out = self.tkan.forward(features);
         if tkan_out.len() < 16 {
             return Err(Error::Msg(format!("TKAN output insufficient: expected 16, got {}", tkan_out.len())));
@@ -988,13 +1041,14 @@ impl AIEngine {
         let hs_mutex = hs_holder.get(0).ok_or_else(|| Error::Msg("Hidden state[0] missing".to_string()))?;
         let mut hidden_guard = hs_mutex.lock().unwrap_or_else(|e| e.into_inner());
 
+        // DEF-4305: Canonical SignedZScores alignment without aliasing feature 17 or 27
         let signed_z = SignedZScores {
             obi_z: *features.get(8).ok_or_else(|| Error::Msg("Missing feature[8] for obi_z".to_string()))?,
-            ofi_z: *features.get(17).ok_or_else(|| Error::Msg("Missing feature[17] for ofi_z".to_string()))?,
-            cvd_z: *features.get(21).ok_or_else(|| Error::Msg("Missing feature[21] for cvd_z".to_string()))?,
+            cvd_z: *features.get(20).ok_or_else(|| Error::Msg("Missing feature[20] for cvd_z".to_string()))?,
             vel_z: *features.get(24).ok_or_else(|| Error::Msg("Missing feature[24] for vel_z".to_string()))?,
-            hawkes_z: *features.get(27).ok_or_else(|| Error::Msg("Missing feature[27] for hawkes_z".to_string()))?,
             micro_z: *features.get(2).ok_or_else(|| Error::Msg("Missing feature[2] for micro_z".to_string()))?,
+            ofi_z: ofi,
+            hawkes_z: hawkes_asym,
         };
         if let Some(mamba) = &self.mamba {
             let mh_holder = self.mamba_hidden.read().unwrap_or_else(|e| e.into_inner());
@@ -1007,8 +1061,7 @@ impl AIEngine {
             // QA-4204 FIX: Capture raw meta_logit for Platt-scaled confidence
             let (dir_raw, meta_logit, _) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.010, temp);
             let obi = *features.get(8).ok_or_else(|| Error::Msg("Missing feature[8] for obi".to_string()))?;
-            let ofi = *features.get(17).ok_or_else(|| Error::Msg("Missing feature[17] for ofi".to_string()))?;
-            let hawkes_asym = *features.get(27).ok_or_else(|| Error::Msg("Missing feature[27] for hawkes_asym".to_string()))?;
+            // DEF-4305: Use genuine OFI and Hawkes asymmetry, never aliasing spatial index 17 or 27
             let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
             let mut dir = composite_logit.tanh();
             // SDCI independent gate
@@ -1231,19 +1284,28 @@ impl AIEngine {
             }
         }
 
-        if let Ok(other_ic) = other.ic_tracker.lock() {
-            if let Ok(mut self_ic) = self.ic_tracker.lock() {
-                *self_ic = other_ic.clone();
-                // CRITICAL: Reset drift state on the inherited tracker to prevent
-                // new models from instantly re-latching to MODEL_BROKEN due to
-                // stale CUSUM accumulators and is_drifted flags from the old model.
-                if let Ok(d) = SystemTime::now().duration_since(UNIX_EPOCH) {
-                    let now_ns = d.as_nanos() as u64;
-                    self_ic.cusum.reset();
-                    self_ic.record_recalibration(now_ns);
-                } else {
-                    eprintln!("[BATBOT_V11][inherit_telemetry] SystemTime clock skew detected; resetting CUSUM without recalibration timestamp");
-                    self_ic.cusum.reset();
+        let other_trackers = other.ic_trackers.read().unwrap_or_else(|e| e.into_inner());
+        let mut self_trackers = self.ic_trackers.write().unwrap_or_else(|e| e.into_inner());
+        while self_trackers.len() < other_trackers.len() {
+            self_trackers.push(Mutex::new(ICTracker::default_1000()));
+        }
+        for (i, other_tracker_mutex) in other_trackers.iter().enumerate() {
+            if let Ok(other_tracker) = other_tracker_mutex.lock() {
+                if let Some(self_tracker_mutex) = self_trackers.get(i) {
+                    if let Ok(mut self_tracker) = self_tracker_mutex.lock() {
+                        *self_tracker = other_tracker.clone();
+                        // CRITICAL: Reset drift state on the inherited tracker to prevent
+                        // new models from instantly re-latching to MODEL_BROKEN due to
+                        // stale CUSUM accumulators and is_drifted flags from the old model.
+                        if let Ok(d) = SystemTime::now().duration_since(UNIX_EPOCH) {
+                            let now_ns = d.as_nanos() as u64;
+                            self_tracker.cusum.reset();
+                            self_tracker.record_recalibration(now_ns);
+                        } else {
+                            eprintln!("[BATBOT_V11][inherit_telemetry] SystemTime clock skew detected; resetting CUSUM without recalibration timestamp");
+                            self_tracker.cusum.reset();
+                        }
+                    }
                 }
             }
         }
@@ -1519,7 +1581,7 @@ mod tests {
         let z_discordant = SignedZScores {
             obi_z: -2.0,      // Bearish bid pressure
             cvd_z: -2.5,      // Net selling
-            vel_z: 2.0,       // Spread widening (negative for buy because spread_sign_flip = -1.0)
+            vel_z: -2.0,      // Decelerating volume / discordant trade velocity
             micro_z: -1.5,    // Bearish micro-price
             ofi_z: -2.0,      // Bearish OFI
             hawkes_z: -1.8,   // Bearish Hawkes asymmetry
@@ -1544,7 +1606,7 @@ mod tests {
         let z_concordant = SignedZScores {
             obi_z: 2.5,       // Strong bid pressure
             cvd_z: 3.0,       // Heavy net buying
-            vel_z: -2.0,      // Tightening spread (spread_sign_flip * -2.0 = +2.0)
+            vel_z: 2.0,       // Accelerating trade velocity confirming momentum
             micro_z: 2.0,     // Strong upward microprice
             ofi_z: 2.5,       // High positive OFI
             hawkes_z: 2.2,    // Positive Hawkes burst

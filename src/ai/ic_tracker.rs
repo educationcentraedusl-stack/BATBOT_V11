@@ -202,16 +202,12 @@ impl ICTracker {
         let ic = self.compute_spearman_ic();
         self.current_ic = ic;
 
-        // Warm-up grace period
+        // Warm-up grace period (DEF-4306: Preserve CUSUM drift during warm-up)
         if self.pairs.len() < self.window_size {
-            self.is_drifted = false;
+            self.is_drifted = self.cusum.is_drifted;
             if let Some(bridge) = sab {
                 bridge.store_f64_asset(asset_idx, 101, ic);
-                bridge.store_f64_asset(asset_idx, 102, 0.0);
-                if asset_idx != 0 {
-                    bridge.store_f64_asset(0, 101, ic);
-                    bridge.store_f64_asset(0, 102, 0.0);
-                }
+                bridge.store_f64_asset(asset_idx, 102, if self.is_drifted { 1.0 } else { 0.0 });
             }
             return ic;
         }
@@ -245,14 +241,10 @@ impl ICTracker {
             self.is_drifted = false;
         }
 
-        // Broadcast to SAB slots 101 and 102
+        // Broadcast to SAB slots 101 and 102 (DEF-4307: Strictly isolated per asset)
         if let Some(bridge) = sab {
             bridge.store_f64_asset(asset_idx, 101, ic);
             bridge.store_f64_asset(asset_idx, 102, if self.is_drifted { 1.0 } else { 0.0 });
-            if asset_idx != 0 {
-                bridge.store_f64_asset(0, 101, ic);
-                bridge.store_f64_asset(0, 102, if self.is_drifted { 1.0 } else { 0.0 });
-            }
         }
 
         ic
@@ -281,9 +273,6 @@ impl ICTracker {
             self.is_drifted = true;
             if let Some(bridge) = sab {
                 bridge.store_f64_asset(asset_idx, 102, 1.0);
-                if asset_idx != 0 {
-                    bridge.store_f64_asset(0, 102, 1.0);
-                }
             }
             true
         } else {
@@ -476,5 +465,27 @@ mod tests {
 
         assert!(tracker.current_ic() >= 0.0500, "IC should be high positive");
         assert!(!tracker.is_drifted(), "Healthy IC under normal CUSUM MUST be in-control");
+    }
+
+    #[test]
+    fn test_cusum_drift_preserved_during_warmup() {
+        let mut tracker = ICTracker::new(1000);
+        let ts_base = 1_000_000_000u64;
+
+        // Establish normal in-control baseline
+        for i in 0..60 {
+            tracker.push_observation_fast(1.0, 1.0, 0.01 * ((i % 5) as f64), ts_base + i * 1_000_000);
+        }
+        assert!(!tracker.cusum.is_drifted, "Baseline residuals should not trigger drift");
+
+        // Ingest large abnormal residual spike (structural break)
+        for i in 60..80 {
+            tracker.push_observation_fast(1.0, 0.0, 10.0, ts_base + i * 1_000_000);
+        }
+        assert!(tracker.cusum.is_drifted, "CUSUM should be drifted after persistent shock");
+
+        // Recompute spearman during warm-up (80 < 1000 pairs)
+        tracker.recompute_spearman_and_broadcast(None, 0);
+        assert!(tracker.is_drifted(), "DEF-4306: Drift must be preserved during warm-up when CUSUM is drifted");
     }
 }

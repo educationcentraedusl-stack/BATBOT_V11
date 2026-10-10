@@ -174,10 +174,14 @@ pub fn reset_ic_tracker() -> bool {
 #[napi]
 pub fn record_trade_ic(prediction: f64, realized_return: f64, asset_idx: Option<u32>) -> bool {
     if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
-        if let Ok(mut tracker) = active_engine.ic_tracker.lock() {
-            let idx = asset_idx.unwrap_or(0) as usize;
-            tracker.add_observation_asset(prediction, realized_return, None, idx);
-            return true;
+        let idx = asset_idx.unwrap_or(0) as usize;
+        if let Ok(trackers) = active_engine.ic_trackers.read() {
+            if let Some(tracker_mutex) = trackers.get(idx) {
+                if let Ok(mut tracker) = tracker_mutex.lock() {
+                    tracker.add_observation_asset(prediction, realized_return, None, idx);
+                    return true;
+                }
+            }
         }
     }
     false
@@ -186,21 +190,22 @@ pub fn record_trade_ic(prediction: f64, realized_return: f64, asset_idx: Option<
 #[napi]
 pub fn get_ic_status() -> String {
     if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
-        if let Ok(tracker) = active_engine.ic_tracker.lock() {
-            format!(
-                "{{\"ic\":{:.6},\"ewma_ic\":{:.6},\"adaptive_threshold\":{:.6},\"is_drifted\":{},\"sample_count\":{}}}",
-                tracker.current_ic(),
-                tracker.ewma_ic(),
-                tracker.adaptive_threshold(),
-                tracker.is_drifted(),
-                tracker.len()
-            )
-        } else {
-            "{\"ic\":0.0,\"ewma_ic\":0.0,\"adaptive_threshold\":0.01,\"is_drifted\":false,\"sample_count\":0}".to_string()
+        if let Ok(trackers) = active_engine.ic_trackers.read() {
+            if let Some(tracker_mutex) = trackers.get(0) {
+                if let Ok(tracker) = tracker_mutex.lock() {
+                    return format!(
+                        "{{\"ic\":{:.6},\"ewma_ic\":{:.6},\"adaptive_threshold\":{:.6},\"is_drifted\":{},\"sample_count\":{}}}",
+                        tracker.current_ic(),
+                        tracker.ewma_ic(),
+                        tracker.adaptive_threshold(),
+                        tracker.is_drifted(),
+                        tracker.len()
+                    );
+                }
+            }
         }
-    } else {
-        "{\"ic\":0.0,\"ewma_ic\":0.0,\"adaptive_threshold\":0.01,\"is_drifted\":false,\"sample_count\":0}".to_string()
     }
+    "{\"ic\":0.0,\"ewma_ic\":0.0,\"adaptive_threshold\":0.01,\"is_drifted\":false,\"sample_count\":0}".to_string()
 }
 
 #[napi]

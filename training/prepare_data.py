@@ -27,9 +27,6 @@ from data_config import (
     TKAN_FEATURE_NAMES, TKAN_OUTPUT_DIM
 )
 
-# Strict Purge Buffer to prevent target horizon leakage across train/val boundary
-PURGE_BUFFER_TICKS = 500
-
 def read_ndjson_sanitized(file_path: str, schema_overrides: dict) -> pl.DataFrame:
     """
     Reads an NDJSON file into a Polars DataFrame with O(1) RAM streaming and strict JSON validation.
@@ -109,14 +106,10 @@ def compute_polars_rolling_tanh_df(df: pl.DataFrame, feature_names: list[str], w
     """
     exprs = []
     for col in feature_names:
-        if col == "delta_tau":
-            # Preserve raw physical seconds for ODE solver delta_t, clipped to [1e-4, 10.0] seconds
-            norm_expr = pl.col(col).fill_null(0.001).clip(1e-4, 10.0).alias(col)
-        else:
-            mean_expr = pl.col(col).rolling_mean(window_size=window, min_samples=1)
-            std_expr = pl.col(col).rolling_std(window_size=window, min_samples=1).fill_null(1.0)
-            z_expr = (pl.col(col) - mean_expr) / (std_expr + eps)
-            norm_expr = (z_expr.tanh() * 0.999).fill_null(0.0).fill_nan(0.0).alias(col)
+        mean_expr = pl.col(col).rolling_mean(window_size=window, min_samples=1)
+        std_expr = pl.col(col).rolling_std(window_size=window, min_samples=1).fill_null(1.0)
+        z_expr = (pl.col(col) - mean_expr) / (std_expr + eps)
+        norm_expr = (z_expr.tanh() * 0.999).fill_null(0.0).fill_nan(0.0).alias(col)
         exprs.append(norm_expr)
 
     df_norm = df.select(exprs)

@@ -94,6 +94,7 @@ class LocalMamba2SSM(nn.Module):
             # 2. Selective Discretization & Exponential Decay
             delta_a = dt_val * a_softplus.unsqueeze(0) # [Batch, d_inner]
             decay = torch.exp(-delta_a).unsqueeze(-1) # [Batch, d_inner, 1]
+            one_minus_decay = (1.0 - torch.exp(-delta_a)).unsqueeze(-1) # [Batch, d_inner, 1]
 
             # 3. Selective B and C projections
             b_proj = u_t @ self.w_b + self.b_b # [Batch, d_state]
@@ -103,8 +104,10 @@ class LocalMamba2SSM(nn.Module):
             b_3d = b_proj.unsqueeze(1) # [Batch, 1, d_state]
             c_3d = c_proj.unsqueeze(1) # [Batch, 1, d_state]
 
-            # 4. Latent State Transition
-            h_t = h_prev * decay + (u_3d * b_3d) # [Batch, d_inner, d_state]
+            # 4. Latent State Transition (with ZOH 1 - decay scaling matching Rust)
+            input_outer = u_3d * b_3d # [Batch, d_inner, d_state]
+            input_scaled = input_outer * one_minus_decay # [Batch, d_inner, d_state]
+            h_t = h_prev * decay + input_scaled # [Batch, d_inner, d_state]
 
             # 5. Output Contraction across d_state
             h_contracted = (h_t * c_3d).sum(dim=2) # [Batch, d_inner]
@@ -113,8 +116,13 @@ class LocalMamba2SSM(nn.Module):
             y_skip = u_t * self.d_skip # [Batch, d_inner]
             y_t = y_ssm + y_skip # [Batch, d_inner]
 
-            # 6. Multi-Head Predictions: [Batch, 3] -> (dir_logit, meta_logit, horiz_logit)
-            heads_t = y_t @ self.w_heads + self.b_heads # [Batch, 3]
+            # 6. Pre-Head RMSNorm matching src/ai/mamba.rs
+            mean_sq = (y_t ** 2).mean(dim=-1, keepdim=True)
+            y_rms = torch.sqrt(mean_sq + 1e-6)
+            y_norm = y_t / y_rms
+
+            # 7. Multi-Head Predictions: [Batch, 3] -> (dir_logit, meta_logit, horiz_logit)
+            heads_t = y_norm @ self.w_heads + self.b_heads # [Batch, 3]
             outputs.append(heads_t.unsqueeze(1))
 
             h_prev = h_t
@@ -127,7 +135,7 @@ class DualStageFocalLoss(nn.Module):
     Dual-Stage Multi-Objective Loss combining:
     1. Primary Direction: Huber Loss + IC Rank Correlation on y_dir in [-1.0, 1.0].
     2. Meta-Labeling Classifier: Focal Loss on P_win in {0.0, 1.0} to handle class imbalance.
-    3. Holding Horizon Duration: Smooth L1 Loss on estimated duration in minutes.
+    3. Holding Horizon Duration: Smooth L1 Loss on estimated duration in seconds.
     """
     def __init__(
         self,
@@ -179,17 +187,17 @@ class DualStageFocalLoss(nn.Module):
         if tgt_last.shape[-1] < 3:
             # Backward-compatibility for legacy 1D target datasets: synthesize pseudo-targets
             tgt_meta = (tgt_dir.abs() > 0.5).float()
-            tgt_horiz = torch.full_like(tgt_dir, 300.0 / 60.0) # 5.0 minutes
+            tgt_horiz = torch.full_like(tgt_dir, 5.0) # 5.0 seconds
         else:
             tgt_meta = tgt_last[:, 1].clamp(0.0, 1.0)
-            tgt_horiz = (tgt_last[:, 2] / 60.0).clamp(0.1, 30.0)
+            tgt_horiz = tgt_last[:, 2].clamp(1.0, 300.0) # in seconds
 
         bce = F.binary_cross_entropy_with_logits(meta_logit, tgt_meta, reduction='none')
         p_t = torch.exp(-bce)
         alpha_t = self.focal_alpha * tgt_meta + (1.0 - self.focal_alpha) * (1.0 - tgt_meta)
         focal_loss = (alpha_t * ((1.0 - p_t) ** self.focal_gamma) * bce).mean()
 
-        # 3. Horizon Head (in minutes)
+        # 3. Horizon Head (in seconds)
         horiz_logit = pred_last[:, 2]
         pred_horiz = F.softplus(horiz_logit)
         horiz_loss = F.smooth_l1_loss(pred_horiz, tgt_horiz)

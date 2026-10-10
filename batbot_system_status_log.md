@@ -1,5 +1,15 @@
 # BATBOT_V11 System Status Log
 
+- **Date:** 2026-10-10
+- **Feature/Task:** Quantitative AI Remediation Batch 4.5 (Phase 5: Multi-Asset IC Isolation & CUSUM Preservation - Eradicate DEF-4306 & DEF-4307)
+- **Artifacts Created/Modified:** `src/ai/ic_tracker.rs`, `src/ai/engine.rs`, `src/lib.rs`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:**
+  1. **Preserve CUSUM Drift During Warm-Up (DEF-4306):** In `recompute_spearman_and_broadcast`, decoupled Spearman sample count warm-up from CUSUM drift detection. Assigned `self.is_drifted = self.cusum.is_drifted;` and broadcast active drift states to SAB slot 102.
+  2. **Eradicate Asset 0 SAB Clobbering (DEF-4307):** Removed all cross-asset overwrites of Asset 0 SAB slots 101 and 102 (`if asset_idx != 0 { bridge.store_f64_asset(0, ...); }`) across `recompute_spearman_and_broadcast` and `update_cusum_residual`.
+  3. **Multi-Asset IC Isolation (DEF-4307):** Converted `AIEngine.ic_tracker` to `pub ic_trackers: RwLock<Vec<Mutex<ICTracker>>>`. Pre-allocated per-asset tracker instances in `try_load_from_paths` and `load_from_paths`, updated `run_inference_asset` to route observations and evaluations strictly to `ic_trackers[asset_idx]`, updated `inherit_telemetry_history` to inherit and recalibrate per-asset trackers across hot reloads, and updated `reset_ic_tracker` to iterate all assets.
+  4. **Physical Verification:** `cargo test --lib ai::ic_tracker` (5/5 passed), `cargo test --lib ai::engine::tests` (13/13 passed), and `cargo check` (0 errors, 0 warnings).
+- **Status:** ✅ Completed & QA Verified
+
 - **Date:** 2026-10-04
 - **Feature/Task:** Quantitative AI Remediation Batch 4.4 (Phase 4: Confidence Calibration & SDCI Gating - Eradicate QA-4204)
 - **Artifacts Created/Modified:** `src/ai/engine.rs`, `src/ai/mamba.rs`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`

@@ -291,12 +291,9 @@ impl Mamba2Cell {
         }
 
         let t = temperature.clamp(0.5, 10.0);
-        let ssm_scale = ((self.d_inner * self.d_state) as f64).sqrt().max(1.0);
-        let direction_raw = dir_logit / ssm_scale;
-        let p_win = 1.0 / (1.0 + (-meta_logit / (t * (self.d_inner as f64).sqrt())).exp());
-        let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().max(5.0);
+        let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().clamp(1.0, 300.0);
 
-        Ok(((direction_raw, p_win, horizon_sec), h_next))
+        Ok(((dir_logit, meta_logit, horizon_sec), h_next))
     }
 
     /// Pure in-memory zero-allocation CPU vectorized forward pass (<1.0 µs latency).
@@ -416,15 +413,10 @@ impl Mamba2Cell {
         }
 
         let t = temperature.clamp(0.5, 10.0);
-        let ssm_scale = ((self.d_inner * self.d_state) as f64).sqrt().max(1.0);
-        let direction_raw = dir_logit / ssm_scale;
-        // QA-4204 FIX: Return raw SSM-scaled meta_logit for Platt calibration in caller.
-        // Previously: p_win = sigmoid(meta_logit / (temp * sqrt(d_inner))) — premature sigmoid
-        // destroyed calibration-readiness. Now the caller applies: sigmoid(platt_scale * meta_logit_scaled + platt_offset).
-        let meta_logit_scaled = meta_logit / ssm_scale;
-        let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().max(5.0);
+        // DEF-4301 & DEF-4302: Direct raw standardized logit passthrough without ssm_scale attenuation.
+        let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().clamp(1.0, 300.0);
 
-        (direction_raw, meta_logit_scaled, horizon_sec)
+        (dir_logit, meta_logit, horizon_sec)
     }
 
     /// Evaluates scalar predictions directly for ultra-low latency (<1.0 µs).
@@ -451,14 +443,10 @@ impl Mamba2Cell {
         let horiz_logit = *vec.get(2).ok_or_else(|| Error::Msg("Missing head dimension 2 (horizon)".to_string()))? as f64;
 
         let t = temperature.clamp(0.5, 10.0);
-        let ssm_scale = ((self.d_inner * self.d_state) as f64).sqrt().max(1.0);
-        // DEF-R1: RMS-Normalized Raw Logit Passthrough (NO inner tanh compression)
-        let direction_raw = dir_logit / ssm_scale;
-        // QA-4204 FIX: Return raw SSM-scaled meta_logit for Platt calibration in caller.
-        let meta_logit_scaled = meta_logit / ssm_scale;
-        let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().max(5.0);
+        // DEF-4301 & DEF-4302: Direct raw standardized logit passthrough without ssm_scale attenuation.
+        let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().clamp(1.0, 300.0);
 
-        Ok((direction_raw, meta_logit_scaled, horizon_sec))
+        Ok((dir_logit, meta_logit, horizon_sec))
     }
 }
 
@@ -487,7 +475,8 @@ mod tests {
         let (dir, meta_logit, horiz) = cell.evaluate_scalar_heads(&heads)?;
         assert_eq!(dir, 0.0);
         assert_eq!(meta_logit, 0.0);
-        assert!(horiz >= 5.0);
+        assert!(horiz >= 1.0 && horiz <= 300.0);
+        assert_eq!(horiz, 1.0);
 
         Ok(())
     }
@@ -525,10 +514,10 @@ mod tests {
 
         // Extreme positive logit (50.0) -> must NOT be compressed by inner tanh
         let heads = Tensor::from_slice(&[50.0f32, 1.0f32, 2.0f32], (1, 3), &device)?;
-        let (dir_raw, _p_win, _horiz_sec) = cell.evaluate_scalar_heads_with_temp(&heads, 1.0)?;
+        let (dir_raw, _meta_logit, _horiz_sec) = cell.evaluate_scalar_heads_with_temp(&heads, 1.0)?;
 
-        let ssm_scale = ((cell.d_inner * cell.d_state) as f64).sqrt().max(1.0);
-        let expected_dir_raw = 50.0 / ssm_scale;
+        // DEF-4302: Raw logit passes through directly without ssm_scale attenuation
+        let expected_dir_raw = 50.0;
 
         assert!((dir_raw - expected_dir_raw).abs() < 1e-5);
         // Physical proof: dir_raw > 1.0 proves inner tanh is completely eliminated
