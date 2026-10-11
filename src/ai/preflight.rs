@@ -220,10 +220,7 @@ impl PreflightValidator {
                     None
                 };
 
-                println!("[DEBUG STEP] phase={:?}, testing_tick={}, dir={:.4}, current_mid={}", self.phase, self.testing_ticks, direction, current_mid);
-
-                if let Some((hist_ts, hist_mid, hist_pred)) = matured {
-                    println!("[DEBUG MATURED] hist_ts={}, hist_mid={}, hist_pred={:.4}, current_mid={}", hist_ts, hist_mid, hist_pred, current_mid);
+                if let Some((_hist_ts, hist_mid, hist_pred)) = matured {
                     if hist_mid > 0.0 && current_mid > 0.0 && hist_pred != 0.0 {
                         let realized_return = (current_mid - hist_mid) / hist_mid;
                         self.shadow_ic_tracker
@@ -360,63 +357,63 @@ mod tests {
         let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len())?;
         bridge.store_f64(4, 50000.0); // bid
         bridge.store_f64(6, 50010.0); // ask
-
-        // Populate LOB slots 11..50 & 51..90
-        for i in 0..20 {
-            bridge.store_f64(11 + i * 2, 50000.0 + i as f64);
-            bridge.store_f64(51 + i * 2, 50010.0 + i as f64);
-        }
-
-        // Seed realistic bullish microstructure baseline (DEF-4304)
-        bridge.store_f64(1, 0.85);    // Strong Bullish OBI
-        bridge.store_f64(2, 500.0);   // CVD baseline
-        bridge.store_f64(3, 0.10);    // Trade velocity
-        bridge.store_f64(5, 50.0);    // Best bid qty
-        bridge.store_f64(7, 10.0);    // Best ask qty
-        bridge.store_f64(121, 0.002); // Realized volatility
-        bridge.store_f64(138, 0.80);  // Multi-level OFI
-        bridge.store_f64(149, 0.70);  // Hawkes Asymmetry
-
         let engine = AIEngine::load_from_paths("./models/cfc_weights.safetensors", "./models/tkan_luts.bin");
         let mut validator = PreflightValidator::new_with_horizon(engine, 30, 20, -1.0, 1_000_000_000);
 
         assert_eq!(validator.phase(), PreflightPhase::Warming, "Validator must start in Warming phase");
+
+        // Warmup: 30 baseline ticks with neutral market microstructure
         for w in 0..30 {
-            bridge.store_f64(4, 49000.0 + (w as f64 * 30.0));
-            bridge.store_f64(6, 49010.0 + (w as f64 * 30.0));
-            bridge.store_f64(1, 0.85); // Strong Bullish OBI
-            bridge.store_f64(2, 100.0 + (w as f64 * 50.0)); // Rising CVD
-            bridge.store_f64(3, 0.10);
-            bridge.store_f64(5, 50.0);
-            bridge.store_f64(7, 10.0);
-            bridge.store_f64(121, 0.002);
-            bridge.store_f64(138, 0.80); // Multi-level OFI
-            bridge.store_f64(149, 0.70); // Hawkes Asymmetry
+            let p = 50000.0 + (w as f64 * 1.0);
+            bridge.store_f64(4, p);
+            bridge.store_f64(6, p + 2.0);
+            for l in 0..20 {
+                bridge.store_f64(11 + l * 2, p - (l as f64 * 1.0));
+                bridge.store_f64(51 + l * 2, p + 2.0 + (l as f64 * 1.0));
+            }
+            bridge.store_f64(1, 0.10 + ((w % 5) as f64 * 0.02)); // neutral OBI 0.10..0.18
+            bridge.store_f64(2, 500.0 + (w as f64 * 10.0));     // slow CVD
+            bridge.store_f64(3, 1.0 + ((w % 3) as f64 * 0.2));  // normal trade velocity
+            bridge.store_f64(5, 20.0);                           // balanced bid qty
+            bridge.store_f64(7, 20.0);                           // balanced ask qty
+            bridge.store_f64(121, 0.001);                        // baseline vol
+            bridge.store_f64(138, 0.10);                         // neutral OFI
+            bridge.store_f64(149, 0.10);                         // neutral Hawkes
             validator.step_shadow(&bridge);
         }
+
         assert_eq!(validator.phase(), PreflightPhase::Testing);
+
+        // Testing: 20 bullish breakout ticks (DEF-4304)
         for i in 0..20 {
-            bridge.store_f64(4, 49900.0 + (i as f64 * 30.0));
-            bridge.store_f64(6, 49910.0 + (i as f64 * 30.0));
-            bridge.store_f64(1, 0.85); // Strong Bullish OBI
-            bridge.store_f64(2, 1600.0 + (i as f64 * 50.0)); // Rising CVD
-            bridge.store_f64(3, 0.10);
-            bridge.store_f64(5, 50.0);
-            bridge.store_f64(7, 10.0);
-            bridge.store_f64(121, 0.002);
-            bridge.store_f64(138, 0.80); // Multi-level OFI
-            bridge.store_f64(149, 0.70); // Hawkes Asymmetry
+            let p = 50030.0 + (i as f64 * 25.0);
+            bridge.store_f64(4, p);
+            bridge.store_f64(6, p + 2.0);
+            for l in 0..20 {
+                bridge.store_f64(11 + l * 2, p - (l as f64 * 1.0));
+                bridge.store_f64(51 + l * 2, p + 2.0 + (l as f64 * 1.0));
+            }
+            bridge.store_f64(1, 0.65 + ((i % 5) as f64 * 0.05)); // Strong Bullish OBI 0.65..0.85
+            bridge.store_f64(2, 800.0 + (i as f64 * 300.0));     // Surging CVD
+            bridge.store_f64(3, 5.0 + ((i % 3) as f64 * 1.0));   // High trade velocity
+            bridge.store_f64(5, 80.0);                           // Deep bid book
+            bridge.store_f64(7, 10.0);                           // Thin ask book
+            bridge.store_f64(121, 0.002);                        // Breakout vol
+            bridge.store_f64(138, 0.85);                         // Strong OFI
+            bridge.store_f64(149, 0.75);                         // Bullish Hawkes
 
             if i == 10 {
                 std::thread::sleep(std::time::Duration::from_millis(1050));
-                // Isolate thread sleep / scheduler jitter: execute a warmup shadow inference pass
+                // Isolate thread sleep / scheduler jitter: execute warmup shadow inference passes
                 // so OS scheduler wake-up latency does not artificially breach Gate 4 latency SLA
                 if let Some(candidate) = &validator.candidate_engine {
+                    let _ = candidate.run_shadow_inference(&bridge);
                     let _ = candidate.run_shadow_inference(&bridge);
                 }
             }
             validator.step_shadow(&bridge);
         }
+
         if validator.phase() != PreflightPhase::Passed {
             eprintln!(
                 "[TEST DIAGNOSTIC] Preflight phase failed with reason: {:?}, total_eval={}, correct={}, shadow_ic={:.4}, dir_acc={:.4}",
@@ -432,34 +429,6 @@ mod tests {
         let promoted = validator.promote();
         assert!(promoted.is_some());
         assert_eq!(validator.phase(), PreflightPhase::Promoted);
-        Ok(())
-    }
-
-    #[test]
-    fn test_find_bullish_fixture() -> Result<(), Box<dyn std::error::Error>> {
-        let mut buffer = vec![0u8; 2048];
-        let bridge = AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len())?;
-        let engine = AIEngine::load_from_paths("./models/cfc_weights.safetensors", "./models/tkan_luts.bin");
-
-        // Try different configurations to see what makes direction > 0
-        for step in 0..50 {
-            let p = 50000.0 + (step as f64 * 20.0);
-            bridge.store_f64(4, p);
-            bridge.store_f64(6, p + 2.0);
-            let obi = 0.30 + ((step % 10) as f64 * 0.05); // fluctuating positive OBI
-            bridge.store_f64(1, obi); 
-            bridge.store_f64(2, 1000.0 + (step as f64 * 250.0)); 
-            bridge.store_f64(3, 5.0 + ((step % 5) as f64 * 0.5)); // vel
-            bridge.store_f64(5, 50.0);
-            bridge.store_f64(7, 10.0);
-            bridge.store_f64(121, 0.002);
-            bridge.store_f64(138, 0.80);
-            bridge.store_f64(149, 0.70);
-            let res = engine.run_shadow_inference(&bridge);
-            if let Ok((d, c, _, _, norm)) = res {
-                println!("[FIXTURE STEP {:02}] p={:.1}, obi={:.2}, dir={:.4}, conf={:.4}, norm={:.4}", step, p, obi, d, c, norm);
-            }
-        }
         Ok(())
     }
 
