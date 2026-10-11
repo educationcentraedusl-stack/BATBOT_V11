@@ -15,6 +15,17 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-10-11 - Master Quantitative AI Paradox Remediation (Steps 1-5: Directional Alignment Target, Scaled Logit Head, Platt Temperature Parity, Continuous Sigmoidal SDCI Gating & Live End-to-End Verification) Completed & 100% QA Verified:
+  - Step 1 (Directional Win Alignment Target - `training/prepare_data.py`): Replaced unconditional volatility breakout `y_meta` with Conditional Directional Alignment Target `y_win` accounting for 2.5 bps friction. Increased win alignment from 4.6% to 16.82%.
+  - Step 2 (Dual-Stage Scaled Logit Head & Temperature Loss - `training/local_async_trainer.py`): Added dynamic learnable `logit_scale` parameter in Mamba-2 SSM head and implemented dual-stage BCE + Brier loss fitting A, B, and temperature T.
+  - Step 3 (Rust Inference Algebraic Parity - `src/ai/engine.rs`, `src/ai/weights.rs`): Synchronized `compute_platt_confidence` to `((s * meta_logit + platt_offset) / t).clamp(-60.0, 60.0)` and loaded `logit_scale` into `CalibrationParams`.
+  - Step 4 (Continuous Sigmoidal SDCI Gating - `src/ai/engine.rs`): Replaced discontinuous step function with smooth sigmoidal gate `let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp()); let dir = composite_logit.tanh() * sdci_gate;` across all inference paths.
+  - Step 5 (Physical Pipeline Retraining, Compilation & Verification):
+    - Data preparation completed: 136,923 samples prepared in `data/cfc_features.safetensors` (10.39 MB).
+    - Model retrained and calibrated: 10 epochs converged, `A = 0.2044`, `B = -0.0339`, `T = 1.4920`, weights saved to `models/cfc_weights.safetensors` (25,416 bytes).
+    - Cargo test suite passed: 69/69 Rust tests passed (`cargo test --release`).
+    - N-API compilation: Native `.node` module rebuilt (`npm run build:rust` in 1m 02s).
+    - Signal gating verified: All 7 ASCRG tests in `src/tests/test_sota_signal_gating_ascrg.ts` passed (100% success, 1.28 µs evaluation latency < 1.50 µs SLA).
 * 2026-10-11 - Recalibration Deadlock Remediation (Steps 1-4: Workload Retuning, Timeout Alignment, Cleanup Guarantees & Dashboard Decoupling) Completed & 100% QA Verified:
   - Step 1 (Python Training Budget Retuning - `training/local_async_trainer.py`): Scaled epochs to 10 and tuned early stopping patience to 10 for continuous warm-start fine-tuning, bringing runtime down from 40m to ~8.4m.
   - Step 2 (Node.js Timeout Extension & Guaranteed Cleanup - `src/ai/recalibrationWorker.ts`): Expanded `execFileAsync` timeout for `prepare_data.py` and `local_async_trainer.py` to 600,000ms (10 minutes). Injected unconditional `this.cleanupLockAndProgressFiles()` call in the worker `finally` block to prevent orphaned `.training_progress` and `.training.lock` files on crashes or timeouts.

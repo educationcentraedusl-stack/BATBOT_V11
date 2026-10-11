@@ -59,6 +59,8 @@ class LocalMamba2SSM(nn.Module):
         # 5. Multi-Head Predictions (Direction Logit, Meta Logit, Horizon Logit)
         self.w_heads = nn.Parameter(torch.randn(d_inner, 3) * (1.0 / math.sqrt(d_inner)))
         self.b_heads = nn.Parameter(torch.zeros(3))
+        # Learnable logit scaling parameter to prevent Pre-Head RMSNorm gradient attenuation
+        self.logit_scale = nn.Parameter(torch.tensor(math.log(math.sqrt(d_inner)), dtype=torch.float32))
 
     def forward(self, input_seq: torch.Tensor, delta_t: float = 0.010) -> torch.Tensor:
         batch_size, seq_len, _ = input_seq.shape
@@ -123,6 +125,9 @@ class LocalMamba2SSM(nn.Module):
 
             # 7. Multi-Head Predictions: [Batch, 3] -> (dir_logit, meta_logit, horiz_logit)
             heads_t = y_norm @ self.w_heads + self.b_heads # [Batch, 3]
+            scale_dir = torch.exp(torch.clamp(self.logit_scale, -2.0, 5.0))
+            dir_scaled = heads_t[:, 0:1] * scale_dir
+            heads_t = torch.cat([dir_scaled, heads_t[:, 1:]], dim=-1)
             outputs.append(heads_t.unsqueeze(1))
 
             h_prev = h_t
@@ -270,10 +275,12 @@ def fit_platt_temperature_calibration(model: nn.Module, val_loader: DataLoader, 
 
     for _ in range(200):
         optimizer.zero_grad()
-        temp_clamp = torch.clamp(temperature, min=0.05)
+        temp_clamp = torch.clamp(temperature, min=0.05, max=5.0)
         calibrated_logit = (platt_scale * logits_dev + platt_offset) / temp_clamp
         prob = torch.sigmoid(calibrated_logit)
-        loss = F.binary_cross_entropy(prob, target_dev)
+        bce_loss = F.binary_cross_entropy(prob, target_dev)
+        brier_loss = F.mse_loss(prob, target_dev)
+        loss = bce_loss + brier_loss
         loss.backward()
         optimizer.step()
 
@@ -518,6 +525,7 @@ def train_local_cfc():
         "d_skip": model.d_skip.detach().cpu().contiguous(),
         "w_heads": model.w_heads.detach().cpu().contiguous(),
         "b_heads": model.b_heads.detach().cpu().contiguous(),
+        "logit_scale": model.logit_scale.detach().cpu().contiguous(),
         # Platt & Temperature Calibration
         "platt_scale": torch.tensor([platt_scale], dtype=torch.float32),
         "platt_offset": torch.tensor([platt_offset], dtype=torch.float32),

@@ -908,21 +908,20 @@ impl AIEngine {
 
             // DEF-R1: Balanced microstructure logit modulation & SINGLE outer tanh WITHOUT temperature divisor
             let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
-            let mut dir = composite_logit.tanh();
 
-            // DEF-R2: Signed Directional Concordance Index (SDCI) — INDEPENDENT GATE
+            // DEF-R2: Signed Directional Concordance Index (SDCI) — Continuous Sigmoidal Soft-Gating
             let snr_score = signed_z.compute_sdci(dir_raw);
-
-            // QA-4204 SDCI GATE: If microstructure flow is discordant (SDCI < 0.50),
-            // forcefully reject the trade by zeroing direction. This prevents discordant-flow
-            // trades independent of the model's confidence.
-            if snr_score < 0.50 {
-                dir = 0.0;
-            }
+            let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
+            let dir = composite_logit.tanh() * sdci_gate;
 
             // QA-4204 FIX: Platt-scaled meta-logit confidence replaces self-referential percentile rank.
-            // conf = sigmoid(platt_scale * meta_logit + platt_offset)
-            let conf = compute_platt_confidence(meta_logit, platt_scale, platt_offset);
+            // conf = sigmoid((platt_scale * meta_logit + platt_offset) / temperature)
+            let conf = compute_platt_confidence(
+                meta_logit,
+                platt_scale,
+                platt_offset,
+                self.calibration_params.temperature,
+            );
             (dir, conf, horiz_sec * 1000.0)
         } else if let Some(cell) = &self.cell {
             if asset_idx >= self.hidden_states.read().unwrap_or_else(|e| e.into_inner()).len() {
@@ -942,13 +941,10 @@ impl AIEngine {
             let raw_direction = if num_elems > 0 { flat_out.get(0)?.to_scalar::<f32>()? as f64 } else { 0.0 };
             let horiz_ms = if num_elems > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
 
-            let mut dir = raw_direction.tanh();
-
-            // CfC path: SDCI independent gate
+            // CfC path: SDCI continuous sigmoidal soft-gate
             let snr_score = signed_z.compute_sdci(raw_direction);
-            if snr_score < 0.50 {
-                dir = 0.0;
-            }
+            let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
+            let dir = raw_direction.tanh() * sdci_gate;
 
             // CfC model has no native meta-logit head — use neutral confidence 0.50
             let conf = 0.50;
@@ -1063,16 +1059,15 @@ impl AIEngine {
             let obi = *features.get(8).ok_or_else(|| Error::Msg("Missing feature[8] for obi".to_string()))?;
             // DEF-4305: Use genuine OFI and Hawkes asymmetry, never aliasing spatial index 17 or 27
             let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
-            let mut dir = composite_logit.tanh();
-            // SDCI independent gate
+            // SDCI continuous sigmoidal soft-gate
             let snr_score = signed_z.compute_sdci(dir_raw);
-            if snr_score < 0.50 {
-                dir = 0.0;
-            }
+            let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
+            let dir = composite_logit.tanh() * sdci_gate;
             let conf = compute_platt_confidence(
                 meta_logit,
                 self.calibration_params.platt_scale,
                 self.calibration_params.platt_offset,
+                self.calibration_params.temperature,
             );
             return Ok((dir, conf));
         } else if let Some(cell) = &self.cell {
@@ -1080,12 +1075,10 @@ impl AIEngine {
             *hidden_guard = next_h;
             let flat = output_tensor.flatten_all()?;
             let raw_scalar = flat.get(0)?.to_scalar::<f32>()?;
-            let mut raw_dir = (raw_scalar as f64).tanh();
-            // CfC path: SDCI independent gate
-            let snr_score = signed_z.compute_sdci(raw_dir);
-            if snr_score < 0.50 {
-                raw_dir = 0.0;
-            }
+            // CfC path: SDCI continuous sigmoidal soft-gate
+            let snr_score = signed_z.compute_sdci(raw_scalar as f64);
+            let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
+            let raw_dir = (raw_scalar as f64).tanh() * sdci_gate;
             // CfC model has no native meta-logit head — use neutral confidence 0.50
             let conf = 0.50;
             return Ok((raw_dir, conf));
@@ -1140,18 +1133,17 @@ impl AIEngine {
             let ofi = sab.load_f64_asset(0, 138);
             let hawkes_asym = sab.load_f64_asset(0, 149);
             let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
-            let mut dir = composite_logit.tanh();
 
-            // SDCI independent gate
+            // SDCI continuous sigmoidal soft-gate
             let snr_score = signed_z.compute_sdci(dir_raw);
-            if snr_score < 0.50 {
-                dir = 0.0;
-            }
+            let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
+            let dir = composite_logit.tanh() * sdci_gate;
 
             let conf = compute_platt_confidence(
                 meta_logit,
                 self.calibration_params.platt_scale,
                 self.calibration_params.platt_offset,
+                self.calibration_params.temperature,
             );
             (dir, conf, horiz_sec * 1000.0, norm)
         } else if let Some(cell) = &self.cell {
@@ -1179,12 +1171,10 @@ impl AIEngine {
             let flat_out = output_tensor.flatten_all()?;
             let raw_dir = flat_out.get(0)?.to_scalar::<f32>()? as f64;
             let horiz = if flat_out.elem_count() > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
-            let mut dir = raw_dir.tanh();
-            // CfC path: SDCI independent gate
+            // CfC path: SDCI continuous sigmoidal soft-gate
             let snr_score = signed_z.compute_sdci(raw_dir);
-            if snr_score < 0.50 {
-                dir = 0.0;
-            }
+            let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
+            let dir = raw_dir.tanh() * sdci_gate;
             // CfC model has no native meta-logit head — neutral confidence 0.50
             let conf = 0.50;
             (dir, conf, horiz, norm)
@@ -1326,9 +1316,11 @@ pub fn compute_platt_confidence(
     meta_logit: f64,
     platt_scale: f64,
     platt_offset: f64,
+    temperature: f64,
 ) -> f64 {
     let s = platt_scale.clamp(0.1, 10.0);
-    let calibrated_logit = (s * meta_logit + platt_offset).clamp(-60.0, 60.0);
+    let t = temperature.clamp(0.05, 5.0);
+    let calibrated_logit = ((s * meta_logit + platt_offset) / t).clamp(-60.0, 60.0);
     let sig = 1.0 / (1.0 + (-calibrated_logit).exp());
     sig.clamp(1e-7, 1.0 - 1e-7)
 }
@@ -1620,12 +1612,21 @@ mod tests {
     }
 
     #[test]
+    fn test_sdci_continuous_sigmoidal_gate() {
+        let gate = |snr: f64| 1.0 / (1.0 + (-12.0 * (snr - 0.45)).exp());
+        assert!((gate(0.45) - 0.50).abs() < 1e-6);
+        assert!(gate(0.10) < 0.02);
+        assert!(gate(0.50) > 0.60 && gate(0.50) < 0.70);
+        assert!(gate(0.80) > 0.95);
+    }
+
+    #[test]
     fn test_platt_confidence_calibration() {
         // QA-4204: Platt-scaled confidence directly from model's meta-logit.
         // No rolling history, no percentile rank, no warmup needed.
 
         // Zero meta_logit with zero offset → sigmoid(0) = 0.50
-        let conf_zero = compute_platt_confidence(0.0, 1.0, 0.0);
+        let conf_zero = compute_platt_confidence(0.0, 1.0, 0.0, 1.0);
         assert!(
             (conf_zero - 0.50).abs() < 1e-6,
             "Zero meta_logit must produce 0.50 confidence, got {}",
@@ -1633,7 +1634,7 @@ mod tests {
         );
 
         // Positive meta_logit → confidence > 0.50
-        let conf_pos = compute_platt_confidence(1.0, 1.0, 0.0);
+        let conf_pos = compute_platt_confidence(1.0, 1.0, 0.0, 1.0);
         assert!(
             conf_pos > 0.50 && conf_pos < 1.0,
             "Positive meta_logit must yield confidence > 0.50, got {}",
@@ -1647,7 +1648,7 @@ mod tests {
         );
 
         // Negative meta_logit → confidence < 0.50
-        let conf_neg = compute_platt_confidence(-1.0, 1.0, 0.0);
+        let conf_neg = compute_platt_confidence(-1.0, 1.0, 0.0, 1.0);
         assert!(
             conf_neg < 0.50 && conf_neg > 0.0,
             "Negative meta_logit must yield confidence < 0.50, got {}",
@@ -1655,7 +1656,7 @@ mod tests {
         );
 
         // Platt scale amplifies: higher scale → more extreme confidence
-        let conf_high_scale = compute_platt_confidence(1.0, 3.0, 0.0);
+        let conf_high_scale = compute_platt_confidence(1.0, 3.0, 0.0, 1.0);
         assert!(
             conf_high_scale > conf_pos,
             "Higher platt_scale must amplify confidence: {} > {}",
@@ -1663,7 +1664,7 @@ mod tests {
         );
 
         // Platt offset shifts the decision boundary
-        let conf_with_offset = compute_platt_confidence(0.0, 1.0, 1.0);
+        let conf_with_offset = compute_platt_confidence(0.0, 1.0, 1.0, 1.0);
         assert!(
             conf_with_offset > 0.50,
             "Positive offset must shift confidence above 0.50 at zero logit, got {}",
@@ -1671,8 +1672,8 @@ mod tests {
         );
 
         // All outputs must be strictly in (0, 1)
-        let conf_extreme_pos = compute_platt_confidence(100.0, 10.0, 0.0);
-        let conf_extreme_neg = compute_platt_confidence(-100.0, 10.0, 0.0);
+        let conf_extreme_pos = compute_platt_confidence(100.0, 10.0, 0.0, 1.0);
+        let conf_extreme_neg = compute_platt_confidence(-100.0, 10.0, 0.0, 1.0);
         assert!(conf_extreme_pos > 0.0 && conf_extreme_pos < 1.0);
         assert!(conf_extreme_neg > 0.0 && conf_extreme_neg < 1.0);
     }
@@ -1779,15 +1780,15 @@ mod tests {
         // QA-4204: Verify mathematical correctness of Platt-scaled meta-logit confidence
 
         // Property 1: Monotonicity — higher meta_logit → higher confidence
-        let conf_low = compute_platt_confidence(-2.0, 1.0, 0.0);
-        let conf_mid = compute_platt_confidence(0.0, 1.0, 0.0);
-        let conf_high = compute_platt_confidence(2.0, 1.0, 0.0);
+        let conf_low = compute_platt_confidence(-2.0, 1.0, 0.0, 1.0);
+        let conf_mid = compute_platt_confidence(0.0, 1.0, 0.0, 1.0);
+        let conf_high = compute_platt_confidence(2.0, 1.0, 0.0, 1.0);
         assert!(conf_low < conf_mid, "Monotonicity violated: {} < {}", conf_low, conf_mid);
         assert!(conf_mid < conf_high, "Monotonicity violated: {} < {}", conf_mid, conf_high);
 
         // Property 2: Symmetry — sigmoid(-x) = 1 - sigmoid(x)
-        let conf_pos = compute_platt_confidence(1.5, 1.0, 0.0);
-        let conf_neg = compute_platt_confidence(-1.5, 1.0, 0.0);
+        let conf_pos = compute_platt_confidence(1.5, 1.0, 0.0, 1.0);
+        let conf_neg = compute_platt_confidence(-1.5, 1.0, 0.0, 1.0);
         assert!(
             (conf_pos + conf_neg - 1.0).abs() < 1e-10,
             "Symmetry violated: sigmoid(1.5) + sigmoid(-1.5) must equal 1.0, got {} + {} = {}",
@@ -1795,8 +1796,8 @@ mod tests {
         );
 
         // Property 3: Scale clamping — platt_scale is clamped to [0.1, 10.0]
-        let conf_tiny_scale = compute_platt_confidence(1.0, 0.001, 0.0);
-        let conf_min_scale = compute_platt_confidence(1.0, 0.1, 0.0);
+        let conf_tiny_scale = compute_platt_confidence(1.0, 0.001, 0.0, 1.0);
+        let conf_min_scale = compute_platt_confidence(1.0, 0.1, 0.0, 1.0);
         assert!(
             (conf_tiny_scale - conf_min_scale).abs() < 1e-10,
             "Scale below 0.1 must clamp to 0.1"
@@ -1804,7 +1805,7 @@ mod tests {
 
         // Property 4: Offset effectively shifts decision boundary
         // With offset = +2.0, even a zero meta_logit should have high confidence
-        let conf_offset_pos = compute_platt_confidence(0.0, 1.0, 2.0);
+        let conf_offset_pos = compute_platt_confidence(0.0, 1.0, 2.0, 1.0);
         assert!(
             conf_offset_pos > 0.80,
             "Positive offset of 2.0 at zero logit must produce high confidence, got {}",
@@ -1818,7 +1819,12 @@ mod tests {
         );
 
         // Property 5: Large negative meta_logit → low confidence < 0.10
-        let conf_very_low = compute_platt_confidence(-5.0, 1.0, 0.0);
+        let conf_very_low = compute_platt_confidence(-5.0, 1.0, 0.0, 1.0);
         assert!(conf_very_low < 0.01, "Large negative meta_logit must produce very low confidence, got {}", conf_very_low);
+
+        // Property 6: Temperature scaling — lower temperature sharpens confidence
+        let conf_cold = compute_platt_confidence(1.0, 1.0, 0.0, 0.5);
+        let conf_warm = compute_platt_confidence(1.0, 1.0, 0.0, 2.0);
+        assert!(conf_cold > conf_warm, "Lower temperature must sharpen positive confidence: {} > {}", conf_cold, conf_warm);
     }
 }
