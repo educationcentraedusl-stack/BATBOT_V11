@@ -559,7 +559,7 @@ export class MultiAssetCLIDashboard {
     const isTkanRunning = AutoRecalibrationManager.getInstance().isTkanTrainingActive();
     const isHighAlpha = rollingIc >= 0.0500;
     const isHealthy = rollingIc >= 0.0200;
-    const isAnyTrainingActive = (sampleCount >= 1000) && !isHighAlpha && (isDrifted || recalStatus.isRecalibrating || isTkanRunning);
+    const isAnyTrainingActive = (sampleCount >= 1000) && (recalStatus.isRecalibrating || isTkanRunning);
     const trainingProgress = readTrainingProgress();
 
     const icSign = rollingIc >= 0 ? "+" : "";
@@ -567,6 +567,8 @@ export class MultiAssetCLIDashboard {
     const ewmaSign = ewmaIc >= 0 ? "+" : "";
     const driftStateStr = isAnyTrainingActive
       ? `${red}${bold}[DRIFT DETECTED - RECALIBRATING]${reset}`
+      : isDrifted
+      ? `${yellow}${bold}[DRIFT DETECTED - STANDBY/COOLDOWN]${reset}`
       : isHighAlpha
       ? `${green}${bold}[EXCELLENT ALPHA - IN CONTROL]${reset}`
       : isHealthy
@@ -579,7 +581,7 @@ export class MultiAssetCLIDashboard {
       ? `${cyan}${bold}[T-KAN INIT ACTIVE]${reset}`
       : `${green}[STANDBY]${reset}`;
 
-    const progressVal = (isAnyTrainingActive && trainingProgress !== null) ? trainingProgress : (isAnyTrainingActive ? 50 : 0);
+    const progressVal = isAnyTrainingActive ? (trainingProgress !== null ? trainingProgress : 50) : 0;
     const totalBlocks = 20;
     const filledBlocks = Math.round((progressVal / 100) * totalBlocks);
     const emptyBlocks = totalBlocks - filledBlocks;

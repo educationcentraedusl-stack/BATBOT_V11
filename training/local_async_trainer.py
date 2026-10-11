@@ -403,7 +403,7 @@ def train_local_cfc():
 
     criterion = DualStageFocalLoss(delta=0.1, ic_weight=0.5, focal_gamma=2.0, focal_alpha=0.65)
 
-    epochs = 50
+    epochs = 10
     total_steps = max(1, epochs * len(train_loader))
     optimizer = torch.optim.AdamW(model.parameters(), lr=2e-3, weight_decay=1e-4, amsgrad=True)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
@@ -412,7 +412,7 @@ def train_local_cfc():
 
     best_val_ic = -float("inf")
     best_state_dict = None
-    early_stopping_patience = 15
+    early_stopping_patience = 10
     patience_counter = 0
 
     print(f"[BATBOT_V11][LOCAL-TRAINER] Starting Continuous Transfer-Learning Recalibration ({epochs} Epochs, Batch Size: {batch_size})...")

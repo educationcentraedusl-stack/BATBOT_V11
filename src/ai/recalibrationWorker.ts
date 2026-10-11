@@ -533,7 +533,7 @@ export class AutoRecalibrationManager {
         const prepResult = await execFileAsync(pythonCmd, [prepScript], {
           cwd: this.projectRoot,
           env: { ...process.env },
-          timeout: 300000,
+          timeout: 600000,
         });
 
         if (prepResult.stderr && prepResult.stderr.trim().length > 0) {
@@ -559,7 +559,7 @@ export class AutoRecalibrationManager {
       const trainResult = await execFileAsync(pythonCmd, [trainerScript], {
         cwd: this.projectRoot,
         env: { ...process.env, PYTHONUNBUFFERED: "1" },
-        timeout: 300000,
+        timeout: 600000,
       });
 
       if (trainResult.stderr && trainResult.stderr.trim().length > 0) {
@@ -640,6 +640,7 @@ export class AutoRecalibrationManager {
 
       return false;
     } finally {
+      this.cleanupLockAndProgressFiles();
       this.isRecalibrating = false;
       this.broadcastDriftState(false);
       // Do NOT set state to TRAINING_LOCK. Engine continues trading on last known good weights.

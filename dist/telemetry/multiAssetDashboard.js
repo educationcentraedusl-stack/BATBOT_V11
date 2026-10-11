@@ -513,24 +513,26 @@ class MultiAssetCLIDashboard {
         const isTkanRunning = recalibrationWorker_1.AutoRecalibrationManager.getInstance().isTkanTrainingActive();
         const isHighAlpha = rollingIc >= 0.0500;
         const isHealthy = rollingIc >= 0.0200;
-        const isAnyTrainingActive = (sampleCount >= 1000) && !isHighAlpha && (isDrifted || recalStatus.isRecalibrating || isTkanRunning);
+        const isAnyTrainingActive = (sampleCount >= 1000) && (recalStatus.isRecalibrating || isTkanRunning);
         const trainingProgress = readTrainingProgress();
         const icSign = rollingIc >= 0 ? "+" : "";
         const icColor = rollingIc >= 0.05 ? green + bold : rollingIc >= 0.02 ? cyan : red + bold;
         const ewmaSign = ewmaIc >= 0 ? "+" : "";
         const driftStateStr = isAnyTrainingActive
             ? `${red}${bold}[DRIFT DETECTED - RECALIBRATING]${reset}`
-            : isHighAlpha
-                ? `${green}${bold}[EXCELLENT ALPHA - IN CONTROL]${reset}`
-                : isHealthy
-                    ? `${green}${bold}[HEALTHY - CALIBRATED]${reset}`
-                    : `${yellow}${bold}[DEGRADED ALPHA - MONITORING]${reset}`;
+            : isDrifted
+                ? `${yellow}${bold}[DRIFT DETECTED - STANDBY/COOLDOWN]${reset}`
+                : isHighAlpha
+                    ? `${green}${bold}[EXCELLENT ALPHA - IN CONTROL]${reset}`
+                    : isHealthy
+                        ? `${green}${bold}[HEALTHY - CALIBRATED]${reset}`
+                        : `${yellow}${bold}[DEGRADED ALPHA - MONITORING]${reset}`;
         const trainerStateStr = (sampleCount >= 1000 && !isHighAlpha && recalStatus.isRecalibrating)
             ? `${yellow}${bold}[CfC TRAINING ACTIVE]${reset}`
             : (sampleCount >= 1000 && isTkanRunning)
                 ? `${cyan}${bold}[T-KAN INIT ACTIVE]${reset}`
                 : `${green}[STANDBY]${reset}`;
-        const progressVal = (isAnyTrainingActive && trainingProgress !== null) ? trainingProgress : (isAnyTrainingActive ? 50 : 0);
+        const progressVal = isAnyTrainingActive ? (trainingProgress !== null ? trainingProgress : 50) : 0;
         const totalBlocks = 20;
         const filledBlocks = Math.round((progressVal / 100) * totalBlocks);
         const emptyBlocks = totalBlocks - filledBlocks;
