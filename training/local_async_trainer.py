@@ -286,7 +286,7 @@ def fit_platt_temperature_calibration(model: nn.Module, val_loader: DataLoader, 
 
     final_scale = max(0.01, float(platt_scale.item()))
     final_offset = float(platt_offset.item())
-    final_temp = max(0.05, float(temperature.item()))
+    final_temp = float(torch.clamp(temperature, min=0.05, max=5.0).item())
 
     print(f"[BATBOT_V11][CALIBRATION SUCCESS] Empirical Platt Scale A: {final_scale:.4f} | Offset B: {final_offset:.4f} | Temperature T: {final_temp:.4f}")
     return final_scale, final_offset, final_temp

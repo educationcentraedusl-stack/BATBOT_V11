@@ -887,7 +887,7 @@ impl AIEngine {
             let sab_offset = sab.load_f64_asset(asset_idx, 129);
             let sab_temp = sab.load_f64_asset(asset_idx, 127);
 
-            let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.5, 5.0);
+            let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.05, 5.0);
             // DEF-4303: Restore Platt scaling fallbacks for uninitialized SAB telemetry (slot 128 & 129)
             let platt_scale = if sab_scale > 0.001 {
                 sab_scale
@@ -905,12 +905,14 @@ impl AIEngine {
 
             // QA-4204 FIX: Capture raw meta_logit from Mamba-2 head 1 for Platt-scaled confidence
             let (dir_raw, meta_logit, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, delta_t, temp);
+            let scale_dir = self.calibration_params.logit_scale.clamp(-2.0, 5.0).exp();
+            let scaled_dir = dir_raw * scale_dir;
 
             // DEF-R1: Balanced microstructure logit modulation & SINGLE outer tanh WITHOUT temperature divisor
-            let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
+            let composite_logit = scaled_dir + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
 
             // DEF-R2: Signed Directional Concordance Index (SDCI) — Continuous Sigmoidal Soft-Gating
-            let snr_score = signed_z.compute_sdci(dir_raw);
+            let snr_score = signed_z.compute_sdci(scaled_dir);
             let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
             let dir = composite_logit.tanh() * sdci_gate;
 
@@ -920,7 +922,7 @@ impl AIEngine {
                 meta_logit,
                 platt_scale,
                 platt_offset,
-                self.calibration_params.temperature,
+                temp,
             );
             (dir, conf, horiz_sec * 1000.0)
         } else if let Some(cell) = &self.cell {
@@ -940,11 +942,13 @@ impl AIEngine {
             let num_elems = flat_out.elem_count();
             let raw_direction = if num_elems > 0 { flat_out.get(0)?.to_scalar::<f32>()? as f64 } else { 0.0 };
             let horiz_ms = if num_elems > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
+            let scale_dir = self.calibration_params.logit_scale.clamp(-2.0, 5.0).exp();
+            let scaled_dir = raw_direction * scale_dir;
 
             // CfC path: SDCI continuous sigmoidal soft-gate
-            let snr_score = signed_z.compute_sdci(raw_direction);
+            let snr_score = signed_z.compute_sdci(scaled_dir);
             let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
-            let dir = raw_direction.tanh() * sdci_gate;
+            let dir = scaled_dir.tanh() * sdci_gate;
 
             // CfC model has no native meta-logit head — use neutral confidence 0.50
             let conf = 0.50;
@@ -1053,21 +1057,23 @@ impl AIEngine {
             if m_hidden_guard.len() != mamba.d_inner * mamba.d_state {
                 m_hidden_guard.resize(mamba.d_inner * mamba.d_state, 0.0f32);
             }
-            let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
+            let temp = self.calibration_params.temperature.clamp(0.05, 5.0);
             // QA-4204 FIX: Capture raw meta_logit for Platt-scaled confidence
             let (dir_raw, meta_logit, _) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.010, temp);
+            let scale_dir = self.calibration_params.logit_scale.clamp(-2.0, 5.0).exp();
+            let scaled_dir = dir_raw * scale_dir;
             let obi = *features.get(8).ok_or_else(|| Error::Msg("Missing feature[8] for obi".to_string()))?;
             // DEF-4305: Use genuine OFI and Hawkes asymmetry, never aliasing spatial index 17 or 27
-            let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
+            let composite_logit = scaled_dir + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
             // SDCI continuous sigmoidal soft-gate
-            let snr_score = signed_z.compute_sdci(dir_raw);
+            let snr_score = signed_z.compute_sdci(scaled_dir);
             let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
             let dir = composite_logit.tanh() * sdci_gate;
             let conf = compute_platt_confidence(
                 meta_logit,
                 self.calibration_params.platt_scale,
                 self.calibration_params.platt_offset,
-                self.calibration_params.temperature,
+                temp,
             );
             return Ok((dir, conf));
         } else if let Some(cell) = &self.cell {
@@ -1075,10 +1081,12 @@ impl AIEngine {
             *hidden_guard = next_h;
             let flat = output_tensor.flatten_all()?;
             let raw_scalar = flat.get(0)?.to_scalar::<f32>()?;
+            let scale_dir = self.calibration_params.logit_scale.clamp(-2.0, 5.0).exp();
+            let scaled_dir = (raw_scalar as f64) * scale_dir;
             // CfC path: SDCI continuous sigmoidal soft-gate
-            let snr_score = signed_z.compute_sdci(raw_scalar as f64);
+            let snr_score = signed_z.compute_sdci(scaled_dir);
             let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
-            let raw_dir = (raw_scalar as f64).tanh() * sdci_gate;
+            let raw_dir = scaled_dir.tanh() * sdci_gate;
             // CfC model has no native meta-logit head — use neutral confidence 0.50
             let conf = 0.50;
             return Ok((raw_dir, conf));
@@ -1112,7 +1120,8 @@ impl AIEngine {
             if m_hidden_guard.len() != mamba.d_inner * mamba.d_state {
                 m_hidden_guard.resize(mamba.d_inner * mamba.d_state, 0.0f32);
             }
-            let temp = self.calibration_params.temperature.clamp(0.5, 5.0);
+            let sab_temp = sab.load_f64_asset(0, 127);
+            let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.05, 5.0);
 
             let tkan_out = self.tkan.forward(&lob_features);
             if tkan_out.len() < 16 {
@@ -1127,15 +1136,17 @@ impl AIEngine {
             }
             // QA-4204 FIX: Capture raw meta_logit for Platt-scaled confidence
             let (dir_raw, meta_logit, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.010, temp);
+            let scale_dir = self.calibration_params.logit_scale.clamp(-2.0, 5.0).exp();
+            let scaled_dir = dir_raw * scale_dir;
 
             let norm = m_hidden_guard.iter().map(|v| v * v).sum::<f32>().sqrt() as f64;
             let obi = sab.load_f64_asset(0, 1);
             let ofi = sab.load_f64_asset(0, 138);
             let hawkes_asym = sab.load_f64_asset(0, 149);
-            let composite_logit = dir_raw + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
+            let composite_logit = scaled_dir + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
 
             // SDCI continuous sigmoidal soft-gate
-            let snr_score = signed_z.compute_sdci(dir_raw);
+            let snr_score = signed_z.compute_sdci(scaled_dir);
             let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
             let dir = composite_logit.tanh() * sdci_gate;
 
@@ -1143,7 +1154,7 @@ impl AIEngine {
                 meta_logit,
                 self.calibration_params.platt_scale,
                 self.calibration_params.platt_offset,
-                self.calibration_params.temperature,
+                temp,
             );
             (dir, conf, horiz_sec * 1000.0, norm)
         } else if let Some(cell) = &self.cell {
@@ -1171,10 +1182,12 @@ impl AIEngine {
             let flat_out = output_tensor.flatten_all()?;
             let raw_dir = flat_out.get(0)?.to_scalar::<f32>()? as f64;
             let horiz = if flat_out.elem_count() > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
+            let scale_dir = self.calibration_params.logit_scale.clamp(-2.0, 5.0).exp();
+            let scaled_dir = raw_dir * scale_dir;
             // CfC path: SDCI continuous sigmoidal soft-gate
-            let snr_score = signed_z.compute_sdci(raw_dir);
+            let snr_score = signed_z.compute_sdci(scaled_dir);
             let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
-            let dir = raw_dir.tanh() * sdci_gate;
+            let dir = scaled_dir.tanh() * sdci_gate;
             // CfC model has no native meta-logit head — neutral confidence 0.50
             let conf = 0.50;
             (dir, conf, horiz, norm)

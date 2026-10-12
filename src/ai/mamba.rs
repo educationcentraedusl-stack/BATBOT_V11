@@ -290,7 +290,7 @@ impl Mamba2Cell {
             horiz_logit += y_n * (self.w_heads_flat.get(i * 3 + 2).copied().unwrap_or(0.0) as f64);
         }
 
-        let t = temperature.clamp(0.5, 10.0);
+        let t = temperature.clamp(0.05, 5.0);
         let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().clamp(1.0, 300.0);
 
         Ok(((dir_logit, meta_logit, horizon_sec), h_next))
@@ -412,7 +412,7 @@ impl Mamba2Cell {
             horiz_logit += y_n * (self.w_heads_flat.get(j * 3 + 2).copied().unwrap_or(0.0) as f64);
         }
 
-        let t = temperature.clamp(0.5, 10.0);
+        let t = temperature.clamp(0.05, 5.0);
         // DEF-4301 & DEF-4302: Direct raw standardized logit passthrough without ssm_scale attenuation.
         let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().clamp(1.0, 300.0);
 
@@ -442,7 +442,7 @@ impl Mamba2Cell {
         let meta_logit = *vec.get(1).ok_or_else(|| Error::Msg("Missing head dimension 1 (meta)".to_string()))? as f64;
         let horiz_logit = *vec.get(2).ok_or_else(|| Error::Msg("Missing head dimension 2 (horizon)".to_string()))? as f64;
 
-        let t = temperature.clamp(0.5, 10.0);
+        let t = temperature.clamp(0.05, 5.0);
         // DEF-4301 & DEF-4302: Direct raw standardized logit passthrough without ssm_scale attenuation.
         let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().clamp(1.0, 300.0);
 

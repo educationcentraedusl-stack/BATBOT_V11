@@ -6,7 +6,7 @@
   "welford_window": 1000,
   "cfc_sequence_length": 32,
   "purge_buffer_ticks": 100,
-  "meta_win_rate_pct": 16.823324058047223,
+  "meta_win_rate_pct": 3.8488785667857113,
   "target_horizon_sec": 5.0,
   "target_type": "micro_horizon_continuous_5s",
   "tkan_features": {

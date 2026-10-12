@@ -131,8 +131,8 @@ def compute_micro_horizon_continuous_targets(
     Targets per sample [y_dir, y_win, y_horiz]:
       - y_dir in [-1.0, 1.0]: Continuous Direction Target = tanh(ret_5s / (2 * vol_5s + 1e-6))
       - y_win in [0.0, 1.0]: Conditional Directional Alignment Win Target:
-          * 1.0 if sign(y_dir) * ret_5s > 0.5 * friction_half_spread (profitable aligned trade)
-          * 0.50 if |ret_5s| <= 0.25 * friction_half_spread (neutral / quiet tick)
+          * 1.0 if pre_trade_dir * ret_5s > friction_half_spread (profitable aligned trade)
+          * 0.50 if |ret_5s| <= 0.5 * friction_half_spread (neutral / quiet tick)
           * 0.0 otherwise (adverse / friction-loss trade)
       - y_horiz in [5.0]: Constant 5.0 seconds micro-horizon target
 
@@ -186,11 +186,18 @@ def compute_micro_horizon_continuous_targets(
     y_dir = np.tanh(ret_5s / (2.0 * vol_5s + 1e-6))
     y_dir = np.nan_to_num(y_dir, nan=0.0, posinf=0.0, neginf=0.0)
 
-    # 5. Conditional Directional Alignment Win Target (y_win) replacing legacy unconditional tail breakout
-    # Friction threshold assumption: 2.5 bps (0.00025) half-spread barrier
-    dir_alignment = np.sign(y_dir) * ret_5s
-    cond_win = dir_alignment > (0.5 * friction_half_spread)
-    cond_neutral = np.abs(ret_5s) <= (0.25 * friction_half_spread)
+    # 5. Conditional Directional Alignment Win Target (y_win)
+    # Eradicates Algebraic Tautology: uses pre-trade 10-tick backward momentum (strictly historical, zero lookahead)
+    # to derive pre-trade directional indicator (pre_trade_dir) evaluating whether trading in trend direction covers friction.
+    backward_ret_10 = np.diff(np.log(curr_mid), prepend=np.log(curr_mid[0]))
+    bw_series_10 = pl.Series("ret", backward_ret_10).rolling_mean(window_size=10).fill_null(0.0).to_numpy()
+    pre_trade_dir = np.sign(bw_series_10)
+
+    # Realized trade return assuming execution aligned with pre-trade microstructure momentum
+    trade_pnl = pre_trade_dir * ret_5s
+    cond_win = trade_pnl > friction_half_spread
+    cond_neutral = np.abs(ret_5s) <= (0.5 * friction_half_spread)
+    cond_loss = trade_pnl < -friction_half_spread
     y_win = np.select([cond_win, cond_neutral], [1.0, 0.50], default=0.0).astype(np.float32)
 
     # 6. Horizon Target: 5.0 (constant)
