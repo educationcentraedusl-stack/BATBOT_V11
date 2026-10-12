@@ -305,6 +305,19 @@ impl Mamba2Cell {
         delta_t: f64,
         temperature: f64,
     ) -> (f64, f64, f64) {
+        // Anti-Collapse Guard: if SSM hidden state has collapsed to near-zero (< 1e-8) or NaN/Inf attractor
+        let h_norm_sq: f32 = h_state
+            .iter()
+            .take(self.d_inner * self.d_state)
+            .map(|x| x * x)
+            .sum();
+        if !h_norm_sq.is_finite() || h_norm_sq < 1e-8 {
+            // Zero-allocation: explicitly refill the slice with 0.0f32
+            for slot in h_state.iter_mut() {
+                *slot = 0.0f32;
+            }
+        }
+
         let dt_clamped = delta_t.clamp(0.0001, 10.0) as f32;
 
         let mut u = [0.0f32; 32];
@@ -568,6 +581,31 @@ mod tests {
 
         // QA-43.0 D-3: Must strictly fail and propagate error, never swallow silently via unwrap_or_default
         assert!(result.is_err(), "Mamba2Cell::new must return Err on corrupted/invalid weights");
+        Ok(())
+    }
+
+    #[test]
+    fn test_ssm_anti_collapse_guard() -> Result<()> {
+        let device = Device::Cpu;
+        let cell = Mamba2Cell::default_cell(16, 32, 16, &device)?;
+
+        let input = [0.1f32; 16];
+        // 1. Test NaN poisoning recovery
+        let mut h_state_poisoned = vec![f32::NAN; 32 * 16];
+        let (dir1, meta1, horiz1) = cell.forward_and_evaluate_fast(&input, &mut h_state_poisoned, 0.010, 1.0);
+        assert!(dir1.is_finite(), "Output must be finite after recovery from NaN attractor");
+        assert!(meta1.is_finite());
+        assert!(horiz1.is_finite());
+        assert!(h_state_poisoned.iter().all(|x| x.is_finite()), "Hidden state must be finite after recovery");
+
+        // 2. Test collapsed attractor (< 1e-8) refill
+        let mut h_state_collapsed = vec![1e-6f32; 32 * 16]; // norm_sq = 512 * 1e-12 = 5.12e-10 < 1e-8
+        let (dir2, meta2, horiz2) = cell.forward_and_evaluate_fast(&input, &mut h_state_collapsed, 0.010, 1.0);
+        assert!(dir2.is_finite());
+        assert!(meta2.is_finite());
+        assert!(horiz2.is_finite());
+        assert!(h_state_collapsed.iter().all(|x| x.is_finite()));
+
         Ok(())
     }
 }

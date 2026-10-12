@@ -85,8 +85,11 @@ export const SAB_SLOTS = {
   OMS_LONG_POSITION_QTY: 143,
   OMS_SHORT_POSITION_QTY: 144,
   OMS_LONG_AVG_ENTRY_PRICE: 145,
+  AI_META_LOGIT_ABS: 145, // Platt diagnostic: |meta_logit| magnitude for SSM health
   OMS_SHORT_AVG_ENTRY_PRICE: 146,
+  AI_CONF_VARIANCE: 146,  // Rolling variance of confidence values
   OMS_LONG_UNREALIZED_PNL: 147,
+  AI_PLATT_HEALTH: 147,   // 1.0 = healthy, 0.0 = collapsed / flatline detected
   OMS_SHORT_UNREALIZED_PNL: 148,
   HAWKES_ASYMMETRY: 149,
   SERVER_TIME_OFFSET_MS: 150,
@@ -98,4 +101,7 @@ export const {
   SURVIVAL_PROBABILITY,
   ROLLING_IC,
   IS_MODEL_DRIFTED,
+  AI_META_LOGIT_ABS,
+  AI_CONF_VARIANCE,
+  AI_PLATT_HEALTH,
 } = SAB_SLOTS;

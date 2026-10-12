@@ -905,6 +905,7 @@ impl AIEngine {
 
             // QA-4204 FIX: Capture raw meta_logit from Mamba-2 head 1 for Platt-scaled confidence
             let (dir_raw, meta_logit, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, delta_t, temp);
+            sab.store_f64_asset(asset_idx, 145, meta_logit.abs());
             let scale_dir = self.calibration_params.logit_scale.clamp(-2.0, 5.0).exp();
             let scaled_dir = dir_raw * scale_dir;
 
@@ -952,6 +953,7 @@ impl AIEngine {
 
             // CfC model has no native meta-logit head — use neutral confidence 0.50
             let conf = 0.50;
+            sab.store_f64_asset(asset_idx, 145, 0.0);
             (dir, conf, horiz_ms)
         } else {
             return Ok(());

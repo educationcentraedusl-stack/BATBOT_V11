@@ -113,6 +113,7 @@ pub struct ICTracker {
     current_ic: f64,
     ewma_ic: f64,
     ewma_var: f64,
+    pub ewma_initialized: bool,
     adaptive_threshold: f64,
     is_drifted: bool,
     alpha: f64,
@@ -129,6 +130,7 @@ impl ICTracker {
             current_ic: 0.0,
             ewma_ic: 0.0,
             ewma_var: 0.0,
+            ewma_initialized: false,
             adaptive_threshold: MODEL_DRIFT_FLOOR,
             is_drifted: false,
             alpha: 0.05,
@@ -202,8 +204,8 @@ impl ICTracker {
         let ic = self.compute_spearman_ic();
         self.current_ic = ic;
 
-        // Warm-up grace period (DEF-4306: Preserve CUSUM drift during warm-up)
-        if self.pairs.len() < self.window_size {
+        // Warm-up grace period (50-sample observation gate before allowing EWMA initialization)
+        if self.pairs.len() < 50 {
             self.is_drifted = self.cusum.is_drifted;
             if let Some(bridge) = sab {
                 bridge.store_f64_asset(asset_idx, 101, ic);
@@ -212,10 +214,11 @@ impl ICTracker {
             return ic;
         }
 
-        // EWMA update
-        if self.ewma_ic == 0.0 && self.ewma_var == 0.0 {
+        // EWMA update with cold-start guard
+        if !self.ewma_initialized {
             self.ewma_ic = ic;
             self.ewma_var = 0.0025;
+            self.ewma_initialized = true;
         } else {
             let delta = ic - self.ewma_ic;
             self.ewma_ic += self.alpha * delta;
@@ -290,6 +293,7 @@ impl ICTracker {
         self.current_ic = 0.0;
         self.ewma_ic = 0.0;
         self.ewma_var = 0.0;
+        self.ewma_initialized = false;
         self.adaptive_threshold = MODEL_DRIFT_FLOOR;
         self.is_drifted = false;
         self.cusum.reset();
@@ -303,6 +307,10 @@ impl ICTracker {
 
     pub fn ewma_ic(&self) -> f64 {
         self.ewma_ic
+    }
+
+    pub fn is_ewma_initialized(&self) -> bool {
+        self.ewma_initialized
     }
 
     pub fn adaptive_threshold(&self) -> f64 {
@@ -487,5 +495,25 @@ mod tests {
         // Recompute spearman during warm-up (80 < 1000 pairs)
         tracker.recompute_spearman_and_broadcast(None, 0);
         assert!(tracker.is_drifted(), "DEF-4306: Drift must be preserved during warm-up when CUSUM is drifted");
+    }
+
+    #[test]
+    fn test_ewma_cold_start_guard() {
+        let mut tracker = ICTracker::new(100);
+        for i in 1..49 {
+            tracker.add_observation(i as f64, i as f64, None);
+        }
+        assert_eq!(tracker.len(), 48);
+        assert!(!tracker.ewma_initialized, "EWMA should not be initialized under 50 samples");
+        assert_eq!(tracker.ewma_ic(), 0.0);
+
+        tracker.add_observation(49.0, 49.0, None);
+        assert_eq!(tracker.len(), 49);
+        assert!(!tracker.ewma_initialized);
+
+        tracker.add_observation(50.0, 50.0, None);
+        assert_eq!(tracker.len(), 50);
+        assert!(tracker.ewma_initialized, "EWMA should initialize at 50 samples");
+        assert!(tracker.ewma_ic() > 0.9, "EWMA IC should match initial IC (~1.0)");
     }
 }

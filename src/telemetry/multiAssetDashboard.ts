@@ -67,6 +67,12 @@ export class MultiAssetCLIDashboard {
   private bidBuffer = new Float64Array(40); // 20 price/qty pairs
   private askBuffer = new Float64Array(40); // 20 price/qty pairs
 
+  // Pre-allocated ring buffer for rolling 100-tick confidence standard deviation (zero-allocation)
+  private confHistory = new Float64Array(100);
+  private confHistoryIdx = 0;
+  private confHistoryCount = 0;
+  private isConfFlatlined = false;
+
   // Static pre-rendered Mini-Bar lookup table (0 to 10 filled blocks) to avoid .repeat() heap allocations on hot-path
   private static readonly MINI_BAR_CACHE: string[] = Array.from({ length: 11 }, (_, filled) => {
     const empty = 10 - filled;
@@ -589,6 +595,54 @@ export class MultiAssetCLIDashboard {
 
     out += ` IC (Spearman): ${icColor}${icSign}${rollingIc.toFixed(4)}${reset} | EWMA IC: ${ewmaSign}${ewmaIc.toFixed(4)} | Threshold: ${adaptiveThreshold.toFixed(4)} | Drift State: ${driftStateStr} | Window Pairs: ${sampleCount}/1000${clearLine}\n`;
     out += ` Auto-Trainer: ${trainerStateStr} | Drift Ticks: ${recalStatus.driftTickCounter}/50 | Recalibrations: ${recalStatus.totalRecalibrations} | Hot-Swap: ${green}[ACTIVE]${reset} | Training: [${progressBar}] ${progressVal}%${clearLine}\n`;
+
+    // Rolling 100-tick Confidence Flatline Monitor for Focused Asset (Zero-Allocation)
+    const currConf = this.client.getAIPredictionConfidence(this.focusedAssetIdx);
+    this.confHistory[this.confHistoryIdx] = currConf;
+    this.confHistoryIdx = (this.confHistoryIdx + 1) % 100;
+    if (this.confHistoryCount < 100) {
+      this.confHistoryCount++;
+    }
+
+    let confMean = 0;
+    for (let k = 0; k < this.confHistoryCount; k++) {
+      confMean += this.confHistory[k];
+    }
+    confMean /= this.confHistoryCount;
+
+    let confVar = 0;
+    for (let k = 0; k < this.confHistoryCount; k++) {
+      const diff = this.confHistory[k] - confMean;
+      confVar += diff * diff;
+    }
+    confVar /= Math.max(1, this.confHistoryCount);
+    const confStdDev = Math.sqrt(confVar);
+
+    const isFlatline = this.confHistoryCount >= 20 && confStdDev < 0.005;
+    if (isFlatline && !this.isConfFlatlined) {
+      this.isConfFlatlined = true;
+      this.pushNotification(`\x1b[31m[CONF_FLATLINE_DETECTED] Platt Calibration Flatline: StdDev=${(confStdDev * 100).toFixed(4)}% < 0.50%\x1b[0m`);
+    } else if (!isFlatline && this.isConfFlatlined && confStdDev >= 0.005) {
+      this.isConfFlatlined = false;
+    }
+
+    const plattA = this.client.getAiPlattScale(this.focusedAssetIdx);
+    const plattB = this.client.getAiPlattOffset(this.focusedAssetIdx);
+    const plattT = this.client.getAiTemperature(this.focusedAssetIdx);
+    const metaLogitAbs = this.client.getAiMetaLogitAbs(this.focusedAssetIdx);
+
+    // Sync to SAB diagnostic slots 146 & 147
+    this.client.writeAtomicFloat64Asset(this.focusedAssetIdx, 146, confVar);
+    this.client.writeAtomicFloat64Asset(this.focusedAssetIdx, 147, isFlatline || plattA < 0.5 ? 0.0 : 1.0);
+
+    // AI Calibration Health Monitor (TUI Section)
+    out += MultiAssetCLIDashboard.SUB_DIVIDER;
+    out += `${bold}--- AI CALIBRATION HEALTH MONITOR (PLATT SCALE & CONF DIVERSITY) ---${reset}${clearLine}\n`;
+    const calibHealthStr = (isFlatline || plattA < 0.5)
+      ? `${red}${bold}[COLLAPSED ⚠️ - CONF_FLATLINE_DETECTED]${reset}`
+      : `${green}${bold}[HEALTHY ✅ - OPTIMAL DISPERSION]${reset}`;
+    out += ` Platt Scale (A): ${plattA >= 0.8 ? green + bold : plattA >= 0.5 ? yellow : red + bold}${plattA.toFixed(4)}${reset} | Platt Offset (B): ${plattB.toFixed(4)} | Temperature (T): ${plattT.toFixed(4)}${clearLine}\n`;
+    out += ` Meta-Logit |μ|: ${metaLogitAbs.toFixed(4)} | Conf% StdDev: ${(confStdDev * 100).toFixed(3)}% (N=${this.confHistoryCount}) | Health: ${calibHealthStr}${clearLine}\n`;
 
     out += MultiAssetCLIDashboard.BORDER;
     out += "\x1b[J";
