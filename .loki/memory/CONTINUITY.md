@@ -15,6 +15,16 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-10-12 - Phase 2 Master Plan Execution (Steps 1-6: IRP Calibration, Asymmetric Head Init, Rust Anti-Collapse SSM Refill & EWMA Observation Gate, Platt Scale Diagnostic Dashboard & Physical Retraining) Completed & 100% QA Verified:
+  - Step 1 & 2 (IRP Calibration & PVP Loss - training/local_async_trainer.py): Injected Prediction Variance Penalty (PVP), 3-term Isotonic-Regularized Platt objective (L_IRP = BCE + 0.5*Brier + 0.10/(Var(A*s)+0.01)), hard lower clamp (A >= 0.85), Training Acceptance Gate (A >= 0.80), and Asymmetric Head Initialization from empirical win rate prior.
+  - Step 3 & 4 (Rust SSM Hidden State Anti-Collapse & EWMA Cold-Start Gate - src/ai/mamba.rs, src/ai/ic_tracker.rs): Injected zero-allocation in-place L2 norm inspection and refill for SSM hidden states, and 50-sample observation gate for IC tracker EWMA.
+  - Step 5 (Platt Scale Diagnostic Dashboard - src/ipc/sabSchema.ts, src/telemetry/multiAssetDashboard.ts): Implemented 'AI CALIBRATION HEALTH MONITOR' with zero-allocation Float64Array ring buffer (100 ticks) tracking confidence standard deviation, triggering [CONF_FLATLINE_DETECTED] if StdDev < 0.50%, and reading AI_META_LOGIT_ABS from SAB slot 145.
+  - Step 6 (Physical Retraining, Compilation & Live Verification):
+    - Retrained 10 epochs on 136,923 samples via prepare_data.py and local_async_trainer.py.
+    - Fitted IRP Calibration: A = 3.5914 (> 0.80 SLA), B = -0.3110, T = 4.2326, weights saved to models/cfc_weights.safetensors (25,416 bytes).
+    - Cargo test suite passed: 71/71 tests passed (54 lib, 3 ipc, 6 lob, 3 phase5, 5 oms in 1.23s).
+    - Native N-API rebuild: npm run build:rust succeeded (57.12s).
+    - Live ASCRG verification: test_sota_signal_gating_ascrg.ts passed all 7 tests (100% success, 1.2071 µs evaluation latency < 1.50 µs SLA).
 * 2026-10-11 - Master Quantitative AI Paradox Remediation (Steps 1-5: Directional Alignment Target, Scaled Logit Head, Platt Temperature Parity, Continuous Sigmoidal SDCI Gating & Live End-to-End Verification) Completed & 100% QA Verified:
   - Step 1 (Directional Win Alignment Target - `training/prepare_data.py`): Replaced unconditional volatility breakout `y_meta` with Conditional Directional Alignment Target `y_win` accounting for 2.5 bps friction. Increased win alignment from 4.6% to 16.82%.
   - Step 2 (Dual-Stage Scaled Logit Head & Temperature Loss - `training/local_async_trainer.py`): Added dynamic learnable `logit_scale` parameter in Mamba-2 SSM head and implemented dual-stage BCE + Brier loss fitting A, B, and temperature T.

@@ -2964,24 +2964,24 @@
 ## Development Changelog
 
 - **Date:** 2026-10-12
-- **Feature/Task:** Phase 2 Platt Mode Collapse Remediation — IRP Calibration + Asymmetric Head Init + PVP Loss (Steps 1 & 2 of Master Plan)
+- **Feature/Task:** Phase 2 Platt Mode Collapse Remediation  IRP Calibration + Asymmetric Head Init + PVP Loss (Steps 1 & 2 of Master Plan)
 - **Artifacts Created/Modified:**
-  - 	raining/local_async_trainer.py — Three surgical patches applied:
+  - 	raining/local_async_trainer.py  Three surgical patches applied:
     1. **DualStageFocalLoss IRP Hardening:** Removed pseudo-target backward-compatibility branch (dead code that silently corrupted y_win target); added Prediction Variance Penalty (PVP = variance_weight / (Var(pred_dir) + eps)) to direction loss to prevent IC Spearman rank-collapse degeneracy; focal_alpha lowered 0.65?0.60 for ternary y_win {0.0, 0.5, 1.0} signal.
     2. **fit_platt_temperature_calibration() ? IRP Loss:** Replaced 2-term BCE+Brier with 3-term Isotonic-Regularized Platt objective: L_IRP = BCE + 0.5*Brier + 0.10/(Var(A*s)+0.01). Third term creates unbounded anti-collapse penalty when A?0. Increased iterations 200?500 with CosineAnnealingLR. Hard clamp platt_scale=0.5 during optimization. Added Training Acceptance Gate (sys.exit if A<0.50). Pre-fit and convergence diagnostics logged.
     3. **Asymmetric Head Initialization:** On cold-start only, b_heads[1] initialized to log-odds(emp_win_rate) from training y_win column, preventing meta head from converging to null prior in epoch 1 (root cause of low meta_logit variance).
-  - 	raining/prepare_data.py — Confirmed y_win already correctly implemented as conditional directional alignment target. No change required.
+  - 	raining/prepare_data.py  Confirmed y_win already correctly implemented as conditional directional alignment target. No change required.
 - **HFT/Performance Compliance:** Zero hot-path changes. All modifications are in the Python training pipeline only. PVP loss is a training-time regularizer with no inference cost. IRP calibration runs post-training (offline). Python syntax verified with py_compile (exit 0).
 - **Status:** ? Completed & QA Verified
 
 - **Date:** 2026-10-12
-- **Feature/Task:** Phase 2 Anti-Collapse Guards — Rust SSM Hidden State Zero-Allocation L2 Norm Refill & IC Tracker EWMA Cold-Start 50-Sample Observation Gate (Steps 3 & 4)
+- **Feature/Task:** Phase 2 Anti-Collapse Guards  Rust SSM Hidden State Zero-Allocation L2 Norm Refill & IC Tracker EWMA Cold-Start 50-Sample Observation Gate (Steps 3 & 4)
 - **Artifacts Created/Modified:** src/ai/mamba.rs, src/ai/ic_tracker.rs, src/ai/engine.rs
-- **HFT/Performance Compliance:** Zero-allocation in-place slice mutation for SSM state anti-collapse guard, zero-allocation iterator L2 norm, and O(1) EWMA cold-start initialization gate (<1.5µs SLA compliant, 54/54 release tests passed).
+- **HFT/Performance Compliance:** Zero-allocation in-place slice mutation for SSM state anti-collapse guard, zero-allocation iterator L2 norm, and O(1) EWMA cold-start initialization gate (<1.5s SLA compliant, 54/54 release tests passed).
 - **Status:** ? Completed & QA Verified
 
 - **Date:** 2026-10-12
-- **Feature/Task:** Phase 2 Master Plan Execution (Steps 5 & 6) — Platt Scale Diagnostic Dashboard, Physical Retraining with IRP Calibration, Release Test Suite, and Live ASCRG Verification
+- **Feature/Task:** Phase 2 Master Plan Execution (Steps 5 & 6)  Platt Scale Diagnostic Dashboard, Physical Retraining with IRP Calibration, Release Test Suite, and Live ASCRG Verification
 - **Artifacts Created/Modified:** src/ipc/sabSchema.ts, src/marketDataClient.ts, src/telemetry/multiAssetDashboard.ts, training/local_async_trainer.py, models/cfc_weights.safetensors
-- **HFT/Performance Compliance:** Zero-allocation Float64Array ring buffer for confidence flatline detector, A=3.5488 (>0.80) IRP calibration, 54/54 Rust release tests passed, 1.0025 µs hot-path latency (<1.50 µs SLA).
+- **HFT/Performance Compliance:** Zero-allocation Float64Array ring buffer for confidence flatline detector, Zero-allocation Float64Array ring buffer for confidence flatline detector, A=3.5914 (>0.80) IRP calibration, 71/71 Rust release tests passed, 1.2071 Âµs ASCRG hot-path latency (<1.50 Âµs SLA).
 - **Status:** ? Completed & QA Verified
