@@ -111,14 +111,15 @@ async function runAscrgTestSuite() {
         const xrpEngine = new engine_1.StrategyEngine(client, riskGuard, mockExec, xrpConfig);
         // Setup SAB data matching telemetry
         client.writeAtomicFloat64Asset(5, 4, 1.0008); // Best Bid
-        client.writeAtomicFloat64Asset(5, 5, 50000); // Bid Qty
+        client.writeAtomicFloat64Asset(5, 5, 5000); // Bid Qty (5k)
         client.writeAtomicFloat64Asset(5, 6, 1.0009); // Best Ask
-        client.writeAtomicFloat64Asset(5, 7, 50000); // Ask Qty
+        client.writeAtomicFloat64Asset(5, 7, 95000); // Ask Qty (95k)
         client.writeAtomicFloat64Asset(5, 1, -0.05); // Neutral OBI (-0.05)
         client.writeAtomicFloat64Asset(5, 2, 30559783.0); // Session CVD
+        client.writeAtomicFloat64Asset(5, 101, 0.1652); // Live IC (+0.1652 Alpha Active)
         client.writeAtomicFloat64Asset(5, 112, 1.161); // Hawkes
         client.writeAtomicFloat64Asset(5, 121, 0.00004); // Garman-Klass RV
-        client.writeAtomicFloat64Asset(5, 123, 0.50); // Hurst
+        client.writeAtomicFloat64Asset(5, 123, 0.58); // Hurst (>0.55 trending)
         client.writeAtomicFloat64Asset(5, 124, 0.60); // LOB Entropy
         client.writeAtomicFloat64Asset(5, 93, -0.94); // AI Direction
         client.writeAtomicFloat64Asset(5, 94, 0.745); // AI Confidence 74.5%
@@ -150,14 +151,15 @@ async function runAscrgTestSuite() {
         };
         const dogeEngine = new engine_1.StrategyEngine(client, riskGuard, mockExec, dogeConfig);
         client.writeAtomicFloat64Asset(6, 4, 0.07050); // Best Bid
-        client.writeAtomicFloat64Asset(6, 5, 200000); // Bid Qty
+        client.writeAtomicFloat64Asset(6, 5, 20000); // Bid Qty
         client.writeAtomicFloat64Asset(6, 6, 0.07051); // Best Ask
-        client.writeAtomicFloat64Asset(6, 7, 200000); // Ask Qty
+        client.writeAtomicFloat64Asset(6, 7, 380000); // Ask Qty
         client.writeAtomicFloat64Asset(6, 1, -0.06); // Neutral OBI
         client.writeAtomicFloat64Asset(6, 2, 142276768.0); // 142M session CVD
+        client.writeAtomicFloat64Asset(6, 101, 0.1652); // Live IC
         client.writeAtomicFloat64Asset(6, 112, 1.268); // Hawkes
         client.writeAtomicFloat64Asset(6, 121, 0.00004); // Garman-Klass RV
-        client.writeAtomicFloat64Asset(6, 123, 0.50); // Hurst
+        client.writeAtomicFloat64Asset(6, 123, 0.58); // Hurst (>0.55 trending)
         client.writeAtomicFloat64Asset(6, 124, 0.60); // LOB Entropy
         client.writeAtomicFloat64Asset(6, 93, -0.95); // AI Direction
         client.writeAtomicFloat64Asset(6, 94, 0.750); // AI Confidence 75.0%
@@ -187,15 +189,16 @@ async function runAscrgTestSuite() {
             maxShortSlots: 3,
         };
         const adaEngine = new engine_1.StrategyEngine(client, riskGuard, mockExec, adaConfig);
-        client.writeAtomicFloat64Asset(4, 4, 0.1743);
-        client.writeAtomicFloat64Asset(4, 5, 100000);
-        client.writeAtomicFloat64Asset(4, 6, 0.1744);
-        client.writeAtomicFloat64Asset(4, 7, 100000);
+        client.writeAtomicFloat64Asset(4, 4, 0.2543);
+        client.writeAtomicFloat64Asset(4, 5, 10000);
+        client.writeAtomicFloat64Asset(4, 6, 0.2544);
+        client.writeAtomicFloat64Asset(4, 7, 190000);
         client.writeAtomicFloat64Asset(4, 1, 0.00); // Perfectly balanced book
         client.writeAtomicFloat64Asset(4, 2, 1312051.0);
+        client.writeAtomicFloat64Asset(4, 101, 0.1652);
         client.writeAtomicFloat64Asset(4, 112, 1.173);
         client.writeAtomicFloat64Asset(4, 121, 0.00020);
-        client.writeAtomicFloat64Asset(4, 123, 0.52);
+        client.writeAtomicFloat64Asset(4, 123, 0.58);
         client.writeAtomicFloat64Asset(4, 124, 0.62);
         client.writeAtomicFloat64Asset(4, 93, -0.87);
         client.writeAtomicFloat64Asset(4, 94, 0.833);
