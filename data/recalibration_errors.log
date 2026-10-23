@@ -111,3 +111,21 @@ IndexError: index 1 is out of bounds for dimension 1 with size 1
 [BATBOT Epoch 04/50] Loss: 0.509109 | Focal: 0.002507 | Grad Norm: 1.0567 | Best Val IC: +0.0760
 [BATBOT Epoch 05/50] Loss: 0.504444 | Focal: 0.002652 | Grad Norm: 0.9970 | Best Val IC: +0.0760
 [BATBOT Epoch 06/50] Loss: 0.508491 | Focal: 0.004748 | Grad Norm: 1.0006 | Best Val IC: +0.0760
+[2026-10-23T15:24:20.622Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDOUT LOG ---
+[BATBOT_V11][LOCAL-TRAINER] Ingesting SafeTensors dataset: 'D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\data\cfc_features.safetensors' (10398884 bytes)...
+[BATBOT_V11][LOCAL-TRAINER] Hardware Acceleration: CPU Vectorized (8 Threads)
+[BATBOT_V11][LOCAL-TRAINER] Unfolded 2D feature matrix into 3D sequences: train=torch.Size([19969, 32, 16]), val=torch.Size([4969, 32, 16])
+[BATBOT_V11][LOCAL-TRAINER] Sequence Dataset Ready: 19969 train samples, 4969 val samples.
+[BATBOT_V11][WARM-START] Successfully loaded 13/13 parameter tensors from 'D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\models\cfc_weights.safetensors' (Transfer Learning Active).
+[BATBOT_V11][ASYM-HEAD-INIT] Meta head re-anchored to win-rate prior: emp_win_rate=0.4757 -> b_heads[1]=-0.0975 (log-odds prior)
+[BATBOT_V11][LOCAL-TRAINER] Starting Continuous Transfer-Learning Recalibration (10 Epochs, Batch Size: 256)...
+[BATBOT Epoch 01/10] Loss: 0.730105 | Focal: 0.054992 | Grad Norm: 1.5139 | Best Val IC: +0.0782
+[BATBOT Epoch 02/10] Loss: 0.771093 | Focal: 0.086979 | Grad Norm: 1.7297 | Best Val IC: +0.0782
+[BATBOT Epoch 03/10] Loss: 0.769547 | Focal: 0.086678 | Grad Norm: 1.5050 | Best Val IC: +0.0782
+[BATBOT Epoch 04/10] Loss: 0.768976 | Focal: 0.086648 | Grad Norm: 1.5733 | Best Val IC: +0.0782
+[BATBOT Epoch 05/10] Loss: 0.768313 | Focal: 0.086706 | Grad Norm: 1.5798 | Best Val IC: +0.0782
+[BATBOT Epoch 06/10] Loss: 0.769859 | Focal: 0.086975 | Grad Norm: 1.6365 | Best Val IC: +0.0782
+[BATBOT Epoch 07/10] Loss: 0.768465 | Focal: 0.086810 | Grad Norm: 1.6173 | Best Val IC: +0.0782
+[BATBOT Epoch 08/10] Loss: 0.773204 | Focal: 0.086714 | Grad Norm: 1.6685 | Best Val IC: +0.0782

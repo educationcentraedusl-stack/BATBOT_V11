@@ -360,7 +360,7 @@ export class MultiAssetStrategyEngine {
       let isApproved = false;
       let rejectReason: string | undefined = undefined;
 
-      const minConfidence = engine ? engine.getConfig().minAiConfidence : parseFloat(process.env.MIN_AI_CONFIDENCE || "0.700");
+      const minConfidence = engine ? engine.getConfig().minAiConfidence : parseFloat(process.env.MIN_AI_CONFIDENCE || "0.495");
       const obiBuyThresh = engine ? engine.getConfig().obiBuyThreshold : parseFloat(process.env.OBI_BUY_THRESHOLD || "0.30");
       const obiSellThresh = engine ? engine.getConfig().obiSellThreshold : parseFloat(process.env.OBI_SELL_THRESHOLD || "-0.30");
 

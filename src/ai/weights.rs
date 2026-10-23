@@ -15,6 +15,7 @@ pub struct CalibrationParams {
     pub platt_scale: f64,
     pub platt_offset: f64,
     pub logit_scale: f64,
+    pub meta_logit_scale: f64,
 }
 
 impl Default for CalibrationParams {
@@ -24,6 +25,7 @@ impl Default for CalibrationParams {
             platt_scale: 1.0,
             platt_offset: 0.0,
             logit_scale: 1.0,
+            meta_logit_scale: 1.0,
         }
     }
 }
@@ -132,11 +134,21 @@ impl AiEngine {
             .map(|v| v as f64)
             .unwrap_or(1.0);
 
+        let meta_logit_scale_val = mmaped
+            .load("meta_logit_scale", &device)
+            .ok()
+            .and_then(|t| t.flatten_all().ok())
+            .and_then(|t| t.get(0).ok())
+            .and_then(|t| t.to_scalar::<f32>().ok())
+            .map(|v| v as f64)
+            .unwrap_or(1.0);
+
         let calibration_params = CalibrationParams {
             temperature: temp_val,
             platt_scale: scale_val,
             platt_offset: offset_val,
             logit_scale: logit_scale_val,
+            meta_logit_scale: meta_logit_scale_val,
         };
 
         // If Mamba-2 tensors are present

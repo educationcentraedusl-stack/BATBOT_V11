@@ -352,7 +352,7 @@ export class MultiAssetCLIDashboard {
 
       const aiConf = this.client.getAIPredictionConfidence(i);
       const rawConf = (aiConf * 100).toFixed(1) + "%";
-      const confColor = aiConf >= 0.75 ? green + bold : aiConf >= 0.65 ? yellow : aiConf >= 0.55 ? cyan : gray;
+      const confColor = aiConf >= 0.52 ? green + bold : aiConf >= 0.495 ? yellow : aiConf >= 0.47 ? cyan : gray;
       const confStr = " " + confColor + this.formatCell(rawConf, 6) + reset + " ";
 
       // Zero-Hallucination Signal Display: Read exact finalized signal state directly from Strategy Engine SAB Slot 137

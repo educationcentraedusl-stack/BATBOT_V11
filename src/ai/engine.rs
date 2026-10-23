@@ -1023,7 +1023,9 @@ impl AIEngine {
             let hawkes_asym = sab.load_f64_asset(asset_idx, 149);
 
             // QA-4204 FIX: Capture raw meta_logit from Mamba-2 head 1 for Platt-scaled confidence
-            let (dir_raw, meta_logit, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, delta_t, temp);
+            let (dir_raw, meta_logit_raw, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, delta_t, temp);
+            let scale_meta = self.calibration_params.meta_logit_scale.clamp(-2.0, 5.0).exp();
+            let meta_logit = meta_logit_raw * scale_meta;
             sab.store_f64_asset(asset_idx, 152, meta_logit.abs());
             let scale_dir = self.calibration_params.logit_scale.clamp(-2.0, 5.0).exp();
             let scaled_dir = dir_raw * scale_dir;
@@ -1193,7 +1195,9 @@ impl AIEngine {
             }
             let temp = self.calibration_params.temperature.clamp(0.05, 5.0);
             // QA-4204 FIX: Capture raw meta_logit for Platt-scaled confidence
-            let (dir_raw, meta_logit, _) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.010, temp);
+            let (dir_raw, meta_logit_raw, _) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.010, temp);
+            let scale_meta = self.calibration_params.meta_logit_scale.clamp(-2.0, 5.0).exp();
+            let meta_logit = meta_logit_raw * scale_meta;
             let scale_dir = self.calibration_params.logit_scale.clamp(-2.0, 5.0).exp();
             let scaled_dir = dir_raw * scale_dir;
             let obi = *features.get(8).ok_or_else(|| Error::Msg("Missing feature[8] for obi".to_string()))?;
@@ -1268,7 +1272,9 @@ impl AIEngine {
                 }
             }
             // QA-4204 FIX: Capture raw meta_logit for Platt-scaled confidence
-            let (dir_raw, meta_logit, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.010, temp);
+            let (dir_raw, meta_logit_raw, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.010, temp);
+            let scale_meta = self.calibration_params.meta_logit_scale.clamp(-2.0, 5.0).exp();
+            let meta_logit = meta_logit_raw * scale_meta;
             let scale_dir = self.calibration_params.logit_scale.clamp(-2.0, 5.0).exp();
             let scaled_dir = dir_raw * scale_dir;
 

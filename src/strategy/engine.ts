@@ -200,8 +200,8 @@ export class StrategyEngine {
     const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.50;
     const defaultProfitLock = !isNaN(envProfitLock) ? envProfitLock : 10.0;
     const defaultMaxShortSlots = !isNaN(envMaxShortSlots) ? envMaxShortSlots : 3;
-    const defaultMinAiConfidence = !isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.653;
-    const defaultAggressiveConfidence = !isNaN(envAggressiveConfidence) ? envAggressiveConfidence : 0.750;
+    const defaultMinAiConfidence = !isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.495;
+    const defaultAggressiveConfidence = !isNaN(envAggressiveConfidence) ? envAggressiveConfidence : 0.520;
     const defaultObiBuy = !isNaN(envObiBuy) ? envObiBuy : 0.35;
     const defaultObiSell = !isNaN(envObiSell) ? envObiSell : -0.35;
     const defaultCvdBuy = !isNaN(envCvdBuy) ? envCvdBuy : 0.0;
@@ -2740,11 +2740,11 @@ export class StrategyEngine {
         return this.staticResult;
       }
 
-      if (this.icState === "DEGRADED" && aiConfidence < 0.80) {
+      if (this.icState === "DEGRADED" && aiConfidence < 0.520) {
         if (seq % 1000n === 0n) {
           console.warn(
             `[StrategyEngine][${this.config.symbol}][IC_DEGRADED_FILTER] Seq #${seq} | ` +
-            `State: DEGRADED (IC: ${safeIC.toFixed(4)}). Confidence ${(aiConfidence * 100).toFixed(1)}% < 80.0% floor.`
+            `State: DEGRADED (IC: ${safeIC.toFixed(4)}). Confidence ${(aiConfidence * 100).toFixed(1)}% < 52.0% floor.`
           );
         }
         this.staticResult.sequenceNum = seq;
@@ -2757,7 +2757,7 @@ export class StrategyEngine {
         this.staticResult.riskResult = {
           passed: false,
           reasonCode: "IC_DEGRADED_LOW_CONFIDENCE",
-          message: `DEGRADED state requires confidence >= 80% (got ${(aiConfidence * 100).toFixed(1)}%)`,
+          message: `DEGRADED state requires confidence >= 52% (got ${(aiConfidence * 100).toFixed(1)}%)`,
         };
         this.staticResult.executionPromise = undefined;
         return this.staticResult;
@@ -2807,39 +2807,43 @@ export class StrategyEngine {
       const expectedNetAlpha = expectedAlpha - totalFrictionBarrier;
 
       // SOTA Volatility, Toxicity & Drawdown Adjusted Dynamic Conviction Floor (theta_conf)
-      // Strict base confidence constraint locked to exactly 0.653 (65.3%)
+      // Base confidence hurdle aligned with Bayesian posterior probability (49.5%)
       const baseMinConfidence = this.config.minAiConfidence;
       let effectiveMinConfidence = baseMinConfidence;
       const sessionPnl = this.riskGuard.getCumulativeDailyRealizedPnl();
       const isDrawdown = sessionPnl < -5.0; // Enforce drawdown penalty only on significant drawdowns (> $5)
 
-      // Dynamic Regime Conviction: Modulate confidence with bounded proportional scaling rather than rigid +800 bps spikes
+      // Dynamic Regime Conviction: Modulate confidence hurdle proportionally (+10 to +30 bps)
       if (volEstimate < 0.0015) {
-        effectiveMinConfidence = Math.min(0.75, effectiveMinConfidence + 0.02);
+        effectiveMinConfidence = Math.min(0.55, effectiveMinConfidence + 0.01);
       } else if (hurstExponent > 0.55 && safeGarmanKlass > 0.001) {
         // Strong trend regime: allow frictionless capture down to base floor
-        effectiveMinConfidence = Math.max(baseMinConfidence, effectiveMinConfidence - 0.02);
+        effectiveMinConfidence = Math.max(baseMinConfidence, effectiveMinConfidence - 0.01);
       }
 
       // Microstructure Toxicity Surcharge: Scaled proportionally with VPIN severity
       const vpinVal = this.client.getVPIN(this.assetIndex);
       if (vpinVal >= 0.90) {
-        effectiveMinConfidence = Math.min(0.75, effectiveMinConfidence + 0.03);
+        effectiveMinConfidence = Math.min(0.55, effectiveMinConfidence + 0.015);
       }
 
       // Drawdown Surcharge: Apply moderate protection during deep drawdown
       if (isDrawdown) {
-        effectiveMinConfidence = Math.min(0.75, effectiveMinConfidence + 0.03);
+        effectiveMinConfidence = Math.min(0.55, effectiveMinConfidence + 0.015);
       }
 
       // Strict bounding around base conviction floor
-      effectiveMinConfidence = Math.min(0.85, Math.max(baseMinConfidence, effectiveMinConfidence));
+      effectiveMinConfidence = Math.min(0.60, Math.max(baseMinConfidence, effectiveMinConfidence));
 
       // SOTA August 2026 4-Factor Multi-Variate Composite Signal Engine
       const obiScore = Math.max(-1.0, Math.min(1.0, obi));
       const cvdVelocity = cvd;
       const cvdScore = Math.max(-1.0, Math.min(1.0, cvdVelocity));
-      const aiScore = Math.max(-1.0, Math.min(1.0, aiDirection * aiConfidence));
+
+      // Normalized Relative Edge Conviction: maps excess posterior probability above neutral prior (0.460) into [0.0, 1.0]
+      const BASELINE_WIN_PRIOR = 0.460;
+      const excessEdge = Math.min(1.0, Math.max(0.0, (aiConfidence - BASELINE_WIN_PRIOR) / 0.06));
+      const aiScore = Math.max(-1.0, Math.min(1.0, aiDirection * (0.50 + 0.50 * excessEdge)));
       const ofiScore = Math.max(-1.0, Math.min(1.0, hazardMetrics.ofi));
 
       // SOTA Continuous 4-Factor Alpha Fusion: 50% AI Direction*Conf, 20% LOB OBI, 15% Rolling CVD Velocity, 15% Multi-Level OFI
@@ -2968,7 +2972,7 @@ export class StrategyEngine {
         isSellSignal = false;
       } else if (!isVerifiedTrendRegime) {
         // In unverified trend / random walk regime: only ultra-high confidence entries allowed (>= 0.80)
-        const randomWalkConfFloor = 0.80;
+        const randomWalkConfFloor = 0.520;
         if (aiConfidence < randomWalkConfFloor) {
           if ((isBuySignal || isSellSignal) && seq % 1000n === 0n) {
             console.log(

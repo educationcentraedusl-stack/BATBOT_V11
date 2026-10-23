@@ -186,9 +186,9 @@ def compute_micro_horizon_continuous_targets(
     y_dir = np.tanh(ret_5s / (2.0 * vol_5s + 1e-6))
     y_dir = np.nan_to_num(y_dir, nan=0.0, posinf=0.0, neginf=0.0)
 
-    # 5. Conditional Directional Alignment Win Target (y_win)
-    # Eradicates Algebraic Tautology: uses pre-trade 10-tick backward momentum (strictly historical, zero lookahead)
-    # to derive pre-trade directional indicator (pre_trade_dir) evaluating whether trading in trend direction covers friction.
+    # 5. Strict Binary Win Target (y_win) & Chop Mask (meta_weight)
+    # Eradicates the 5-Sigma Execution Paradox & Degenerate Minimum (0.50 label collapse).
+    # Uses pre-trade 10-tick backward momentum to derive pre-trade directional indicator.
     backward_ret_10 = np.diff(np.log(curr_mid), prepend=np.log(curr_mid[0]))
     bw_series_10 = pl.Series("ret", backward_ret_10).rolling_mean(window_size=10).fill_null(0.0).to_numpy()
     pre_trade_dir = np.sign(bw_series_10)
@@ -196,15 +196,18 @@ def compute_micro_horizon_continuous_targets(
     # Realized trade return assuming execution aligned with pre-trade microstructure momentum
     trade_pnl = pre_trade_dir * ret_5s
     cond_win = trade_pnl > friction_half_spread
-    cond_neutral = np.abs(ret_5s) <= (0.5 * friction_half_spread)
     cond_loss = trade_pnl < -friction_half_spread
-    y_win = np.select([cond_win, cond_neutral], [1.0, 0.50], default=0.0).astype(np.float32)
+    # Strict binary classification: 1.0 for winning breakout, 0.0 for loss/chop
+    y_win = np.where(cond_win, 1.0, 0.0).astype(np.float32)
+    # Chop/neutral ticks zero-weighted to prevent degenerate prior collapse on noise
+    cond_chop = ~cond_win & ~cond_loss
+    meta_weight = np.where(cond_chop, 0.0, 1.0).astype(np.float32)
 
     # 6. Horizon Target: 5.0 (constant)
     y_horiz = np.full_like(ret_5s, 5.0, dtype=np.float32)
 
-    # Assemble [y_dir, y_win, y_horiz] matrix
-    targets = np.stack([y_dir, y_win, y_horiz], axis=1).astype(np.float32)
+    # Assemble [y_dir, y_win, y_horiz, meta_weight] matrix (4 columns)
+    targets = np.stack([y_dir, y_win, y_horiz, meta_weight], axis=1).astype(np.float32)
     return targets
 
 
@@ -438,8 +441,11 @@ def load_and_preprocess_lob_data():
         friction_half_spread=0.00025,
     )
 
-    meta_sig_rate = float((y_targets[:, 1] > 0.5).mean() * 100.0)
-    print(f"[Label Engine] Micro-Horizon Labeling Complete: Directional Win Alignment Rate = {meta_sig_rate:.2f}%")
+    active_mask = y_targets[:, 3] > 0.5
+    active_count = int(active_mask.sum())
+    meta_sig_rate = float((y_targets[active_mask, 1] > 0.5).mean() * 100.0) if active_count > 0 else 0.0
+    chop_pct = float((~active_mask).mean() * 100.0)
+    print(f"[Label Engine] Micro-Horizon Labeling Complete: Active Win Rate = {meta_sig_rate:.2f}% (Active Samples: {active_count}, Chop Masked: {chop_pct:.2f}%)")
 
     # Perform SIMD-Accelerated Rolling Z-Score + Tanh Bounding entirely in Rust/Polars
     print("[Normalization] Executing SIMD Polars Rolling Z-Scores (Rust Welford) + Symmetrical Tanh Bounding...")

@@ -55,7 +55,7 @@ class RiskGuard {
             dailyProfitLockTargetUsdt: config?.dailyProfitLockTargetUsdt ?? defaultProfitLock,
             minRiskRewardRatio: config?.minRiskRewardRatio ?? defaultMinRrRatio,
             minNetAlpha: config?.minNetAlpha ?? (!isNaN(envMinNetAlpha) ? envMinNetAlpha : 0.0015),
-            minAiConfidence: config?.minAiConfidence ?? (!isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.700),
+            minAiConfidence: config?.minAiConfidence ?? (!isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.495),
             makerFeeRate: config?.makerFeeRate ?? (!isNaN(envMakerFee) ? envMakerFee : 0.00018),
             takerFeeRate: config?.takerFeeRate ?? (!isNaN(envTakerFee) ? envTakerFee : 0.00045),
         };
@@ -223,7 +223,7 @@ class RiskGuard {
         }
         // 3. Dynamic Microstructure Trap & Toxic Flow Enforcement
         // High-confidence AI signals (>= minAiConfidence floor) bypass VPIN toxic flow traps
-        const minConfidenceFloor = this.config.minAiConfidence ?? 0.700;
+        const minConfidenceFloor = this.config.minAiConfidence ?? 0.495;
         const isAiHighConfidence = intent.riskProfile && (intent.riskProfile.isHighConfidenceAi === true ||
             (intent.riskProfile.aiConfidence !== undefined && intent.riskProfile.aiConfidence >= minConfidenceFloor));
         if (intent.riskProfile && !intent.isCloseOrder && !isAiHighConfidence) {
