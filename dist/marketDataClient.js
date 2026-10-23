@@ -480,6 +480,25 @@ class MarketDataClient {
     setAiPlattOffset(val, assetIdx = 0) {
         this.writeAtomicFloat64Asset(assetIdx, 129, val);
     }
+    // --- Slots 152 to 154: AI Calibration Health & Flatline Telemetry (ISOLATED from OMS) ---
+    getAiMetaLogitAbs(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 152);
+    }
+    setAiMetaLogitAbs(val, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 152, val);
+    }
+    getAiConfVariance(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 153);
+    }
+    setAiConfVariance(val, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 153, val);
+    }
+    getAiPlattHealth(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 154);
+    }
+    setAiPlattHealth(val, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 154, val);
+    }
     // --- Slots 130 to 133: Atomic Interactive Control Flags & Emergency Kill Switches ---
     getKillSwitchFlag(assetIdx = 0) {
         return this.readAtomicFloat64Asset(assetIdx, 130) > 0.5;

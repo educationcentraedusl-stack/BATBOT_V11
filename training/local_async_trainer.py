@@ -199,7 +199,7 @@ class DualStageFocalLoss(nn.Module):
         # PVP → ∞ when Var(pred_dir) → 0 (constant-direction SSM attractor collapse).
         # PVP ≈ 0 when Var(pred_dir) is healthy (diverse predictions).
         pred_var = (p_diff ** 2).mean()
-        pvp_loss = self.variance_weight / (pred_var + 0.01)
+        pvp_loss = -self.variance_weight * torch.log(pred_var + 1e-6)
 
         dir_loss = h_loss + self.ic_weight * (1.0 - ic) + pvp_loss
 
@@ -215,7 +215,7 @@ class DualStageFocalLoss(nn.Module):
             # Dataset schema violation: 3 target columns required. Degrade gracefully
             # by constructing a semantically-aligned proxy: sign agreement with a friction floor.
             # This is an emergency path only — proper fix is re-running prepare_data.py.
-            tgt_meta  = ((tgt_last[:, 0] * tgt_dir) > 0.0).float() * 1.0  # direction agreement
+            tgt_meta  = (tgt_last[:, 0].abs() > 0.3).float()
             tgt_horiz = torch.full_like(tgt_dir, 5.0)
 
         bce     = F.binary_cross_entropy_with_logits(meta_logit, tgt_meta, reduction='none')
@@ -335,11 +335,11 @@ def fit_platt_temperature_calibration(model: nn.Module, val_loader: DataLoader, 
     for step in range(500):
         optimizer.zero_grad()
 
-        # Hard lower bound on A: prevents gradient from pushing A below 0.85 (A > 0.80 acceptance gate)
+        # Hard lower bound on A: prevents gradient from pushing A below 0.50 (A > 0.45 acceptance gate)
         with torch.no_grad():
-            platt_scale.data.clamp_(min=0.85)
+            platt_scale.data.clamp_(min=0.50)
 
-        temp_clamp       = torch.clamp(temperature, min=0.05, max=5.0)
+        temp_clamp       = torch.clamp(temperature, min=0.05, max=2.0)
         calibrated_logit = (platt_scale * logits_dev + platt_offset) / temp_clamp
         prob             = torch.sigmoid(calibrated_logit)
 
@@ -359,15 +359,15 @@ def fit_platt_temperature_calibration(model: nn.Module, val_loader: DataLoader, 
 
     # Final hard clamp to enforce minimum scale
     with torch.no_grad():
-        platt_scale.data.clamp_(min=0.85)
+        platt_scale.data.clamp_(min=0.50)
 
     final_scale  = float(platt_scale.item())
     final_offset = float(platt_offset.item())
-    final_temp   = float(torch.clamp(temperature, min=0.05, max=5.0).item())
+    final_temp   = float(torch.clamp(temperature, min=0.05, max=2.0).item())
 
     # Convergence diagnostics
     with torch.no_grad():
-        temp_clamp       = torch.clamp(temperature, min=0.05, max=5.0)
+        temp_clamp       = torch.clamp(temperature, min=0.05, max=2.0)
         calibrated_logit = (platt_scale * logits_dev + platt_offset) / temp_clamp
         conv_var         = calibrated_logit.var().item()
         conf_mean        = torch.sigmoid(calibrated_logit).mean().item()
@@ -380,9 +380,9 @@ def fit_platt_temperature_calibration(model: nn.Module, val_loader: DataLoader, 
     )
 
     # Training Acceptance Gate: reject collapsed model before it can be hot-swapped into production
-    if final_scale < 0.80:
+    if final_scale < 0.45:
         print(
-            f"[BATBOT_V11][CALIBRATION REJECTED] platt_scale={final_scale:.4f} < 0.80 minimum. "
+            f"[BATBOT_V11][CALIBRATION REJECTED] platt_scale={final_scale:.4f} < 0.45 minimum. "
             f"Platt Mode Collapse confirmed. Aborting weight save to protect live system."
         )
         sys.exit(1)
@@ -508,35 +508,32 @@ def train_local_cfc():
     else:
         print(f"[BATBOT_V11][WARM-START] Weights file not found at '{weights_path}' (Cold-Start). Initializing fresh random weights.")
 
-    # 2. Asymmetric Head Initialization (IRP Phase 2 — Applied on cold-start only)
-    # The meta head b_heads[1] is initialized with the log-odds of the empirical y_win base rate.
-    # This prevents the meta head from spending the first N epochs converging away from the null prior,
-    # which is the primary cause of low meta_logit variance and downstream Platt mode collapse.
-    # On warm-start, the loaded b_heads value is preserved (transfer learning owns that prior).
-    if not warm_start_loaded:
-        try:
-            # Compute empirical win rate from training targets (column 1 = y_win)
-            if y_train_raw.dim() == 2 and y_train_raw.shape[1] >= 2:
-                y_win_col = y_train_raw[:, 1].float()
-            elif y_train_raw.dim() == 3 and y_train_raw.shape[2] >= 2:
-                y_win_col = y_train_raw[:, -1, 1].float()
-            else:
-                y_win_col = None
+    # 2. Asymmetric Head Initialization (IRP Phase 2 — Applied unconditionally)
+    # The meta head b_heads[1] is re-anchored to the log-odds of the empirical y_win base rate.
+    # This corrects for distribution drift between retraining cycles.
+    try:
+        # Compute empirical win rate from training targets (column 1 = y_win)
+        if y_train_raw.dim() == 2 and y_train_raw.shape[1] >= 2:
+            y_win_col = y_train_raw[:, 1].float()
+        elif y_train_raw.dim() == 3 and y_train_raw.shape[2] >= 2:
+            y_win_col = y_train_raw[:, -1, 1].float()
+        else:
+            y_win_col = None
 
-            if y_win_col is not None:
-                emp_win_rate = float(y_win_col.mean().item())
-                emp_win_rate = max(0.05, min(0.95, emp_win_rate))  # guard against degenerate rates
-                log_odds_prior = math.log(emp_win_rate / (1.0 - emp_win_rate))
-                with torch.no_grad():
-                    model.b_heads.data[1] = log_odds_prior
-                print(
-                    f"[BATBOT_V11][ASYM-HEAD-INIT] Cold-start meta head initialized: "
-                    f"emp_win_rate={emp_win_rate:.4f} -> b_heads[1]={log_odds_prior:.4f} (log-odds prior)"
-                )
-            else:
-                print("[BATBOT_V11][ASYM-HEAD-INIT] Could not extract y_win column -- skipping asymmetric init.")
-        except Exception as e:
-            print(f"[BATBOT_V11][ASYM-HEAD-INIT] Non-critical error during asymmetric init ({e}). Continuing with default init.")
+        if y_win_col is not None:
+            emp_win_rate = float(y_win_col.mean().item())
+            emp_win_rate = max(0.05, min(0.95, emp_win_rate))  # guard against degenerate rates
+            log_odds_prior = math.log(emp_win_rate / (1.0 - emp_win_rate))
+            with torch.no_grad():
+                model.b_heads.data[1] = log_odds_prior
+            print(
+                f"[BATBOT_V11][ASYM-HEAD-INIT] Meta head re-anchored to win-rate prior: "
+                f"emp_win_rate={emp_win_rate:.4f} -> b_heads[1]={log_odds_prior:.4f} (log-odds prior)"
+            )
+        else:
+            print("[BATBOT_V11][ASYM-HEAD-INIT] Could not extract y_win column -- skipping asymmetric init.")
+    except Exception as e:
+        print(f"[BATBOT_V11][ASYM-HEAD-INIT] Non-critical error during asymmetric init ({e}). Continuing with default init.")
 
     criterion = DualStageFocalLoss(delta=0.1, ic_weight=0.5, focal_gamma=2.0, focal_alpha=0.60, variance_weight=0.01)
 

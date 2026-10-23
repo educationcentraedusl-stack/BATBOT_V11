@@ -67,11 +67,11 @@ export class MultiAssetCLIDashboard {
   private bidBuffer = new Float64Array(40); // 20 price/qty pairs
   private askBuffer = new Float64Array(40); // 20 price/qty pairs
 
-  // Pre-allocated ring buffer for rolling 100-tick confidence standard deviation (zero-allocation)
-  private confHistory = new Float64Array(100);
-  private confHistoryIdx = 0;
-  private confHistoryCount = 0;
-  private isConfFlatlined = false;
+  // Pre-allocated per-asset ring buffers for rolling 100-tick confidence standard deviation (zero-allocation)
+  private confHistories: Float64Array[];
+  private confHistoryIdxs: number[];
+  private confHistoryCounts: number[];
+  private isConfFlatlined: boolean[];
 
   // Static pre-rendered Mini-Bar lookup table (0 to 10 filled blocks) to avoid .repeat() heap allocations on hot-path
   private static readonly MINI_BAR_CACHE: string[] = Array.from({ length: 11 }, (_, filled) => {
@@ -94,6 +94,12 @@ export class MultiAssetCLIDashboard {
     this.client = client;
     this.enabled = enabled;
     this.assetSymbols = customSymbols;
+
+    const maxAssets = this.client.maxAssets || 10;
+    this.confHistories = Array.from({ length: maxAssets }, () => new Float64Array(100));
+    this.confHistoryIdxs = new Array(maxAssets).fill(0);
+    this.confHistoryCounts = new Array(maxAssets).fill(0);
+    this.isConfFlatlined = new Array(maxAssets).fill(false);
 
     this.originalConsoleLog = console.log.bind(console);
     this.originalConsoleWarn = console.warn.bind(console);
@@ -597,43 +603,46 @@ export class MultiAssetCLIDashboard {
     out += ` Auto-Trainer: ${trainerStateStr} | Drift Ticks: ${recalStatus.driftTickCounter}/50 | Recalibrations: ${recalStatus.totalRecalibrations} | Hot-Swap: ${green}[ACTIVE]${reset} | Training: [${progressBar}] ${progressVal}%${clearLine}\n`;
 
     // Rolling 100-tick Confidence Flatline Monitor for Focused Asset (Zero-Allocation)
-    const currConf = this.client.getAIPredictionConfidence(this.focusedAssetIdx);
-    this.confHistory[this.confHistoryIdx] = currConf;
-    this.confHistoryIdx = (this.confHistoryIdx + 1) % 100;
-    if (this.confHistoryCount < 100) {
-      this.confHistoryCount++;
+    const assetIdx = this.focusedAssetIdx;
+    const currConf = this.client.getAIPredictionConfidence(assetIdx);
+    const assetConfHistory = this.confHistories[assetIdx];
+    assetConfHistory[this.confHistoryIdxs[assetIdx]] = currConf;
+    this.confHistoryIdxs[assetIdx] = (this.confHistoryIdxs[assetIdx] + 1) % 100;
+    if (this.confHistoryCounts[assetIdx] < 100) {
+      this.confHistoryCounts[assetIdx]++;
     }
 
+    const count = this.confHistoryCounts[assetIdx];
     let confMean = 0;
-    for (let k = 0; k < this.confHistoryCount; k++) {
-      confMean += this.confHistory[k];
+    for (let k = 0; k < count; k++) {
+      confMean += assetConfHistory[k];
     }
-    confMean /= this.confHistoryCount;
+    confMean /= count;
 
     let confVar = 0;
-    for (let k = 0; k < this.confHistoryCount; k++) {
-      const diff = this.confHistory[k] - confMean;
+    for (let k = 0; k < count; k++) {
+      const diff = assetConfHistory[k] - confMean;
       confVar += diff * diff;
     }
-    confVar /= Math.max(1, this.confHistoryCount);
+    confVar /= Math.max(1, count);
     const confStdDev = Math.sqrt(confVar);
 
-    const isFlatline = this.confHistoryCount >= 20 && confStdDev < 0.005;
-    if (isFlatline && !this.isConfFlatlined) {
-      this.isConfFlatlined = true;
-      this.pushNotification(`\x1b[31m[CONF_FLATLINE_DETECTED] Platt Calibration Flatline: StdDev=${(confStdDev * 100).toFixed(4)}% < 0.50%\x1b[0m`);
-    } else if (!isFlatline && this.isConfFlatlined && confStdDev >= 0.005) {
-      this.isConfFlatlined = false;
+    const isFlatline = count >= 20 && confStdDev < 0.0002;
+    if (isFlatline && !this.isConfFlatlined[assetIdx]) {
+      this.isConfFlatlined[assetIdx] = true;
+      this.pushNotification(`\x1b[31m[CONF_FLATLINE_DETECTED] Asset #${assetIdx} (${this.assetSymbols[assetIdx] || "ASSET"}) Platt Calibration Flatline: StdDev=${(confStdDev * 100).toFixed(4)}% < 0.02%\x1b[0m`);
+    } else if (!isFlatline && this.isConfFlatlined[assetIdx] && confStdDev >= 0.0002) {
+      this.isConfFlatlined[assetIdx] = false;
     }
 
-    const plattA = this.client.getAiPlattScale(this.focusedAssetIdx);
-    const plattB = this.client.getAiPlattOffset(this.focusedAssetIdx);
-    const plattT = this.client.getAiTemperature(this.focusedAssetIdx);
-    const metaLogitAbs = this.client.getAiMetaLogitAbs(this.focusedAssetIdx);
+    const plattA = this.client.getAiPlattScale(assetIdx);
+    const plattB = this.client.getAiPlattOffset(assetIdx);
+    const plattT = this.client.getAiTemperature(assetIdx);
+    const metaLogitAbs = this.client.getAiMetaLogitAbs(assetIdx);
 
-    // Sync to SAB diagnostic slots 146 & 147
-    this.client.writeAtomicFloat64Asset(this.focusedAssetIdx, 146, confVar);
-    this.client.writeAtomicFloat64Asset(this.focusedAssetIdx, 147, isFlatline || plattA < 0.5 ? 0.0 : 1.0);
+    // Sync to SAB diagnostic slots 153 & 154 (ISOLATED from OMS)
+    this.client.writeAtomicFloat64Asset(assetIdx, 153, confVar);
+    this.client.writeAtomicFloat64Asset(assetIdx, 154, isFlatline || plattA < 0.5 ? 0.0 : 1.0);
 
     // AI Calibration Health Monitor (TUI Section)
     out += MultiAssetCLIDashboard.SUB_DIVIDER;
@@ -642,7 +651,7 @@ export class MultiAssetCLIDashboard {
       ? `${red}${bold}[COLLAPSED ⚠️ - CONF_FLATLINE_DETECTED]${reset}`
       : `${green}${bold}[HEALTHY ✅ - OPTIMAL DISPERSION]${reset}`;
     out += ` Platt Scale (A): ${plattA >= 0.8 ? green + bold : plattA >= 0.5 ? yellow : red + bold}${plattA.toFixed(4)}${reset} | Platt Offset (B): ${plattB.toFixed(4)} | Temperature (T): ${plattT.toFixed(4)}${clearLine}\n`;
-    out += ` Meta-Logit |μ|: ${metaLogitAbs.toFixed(4)} | Conf% StdDev: ${(confStdDev * 100).toFixed(3)}% (N=${this.confHistoryCount}) | Health: ${calibHealthStr}${clearLine}\n`;
+    out += ` Meta-Logit |μ|: ${metaLogitAbs.toFixed(4)} | Conf% StdDev: ${(confStdDev * 100).toFixed(3)}% (N=${count}) | Health: ${calibHealthStr}${clearLine}\n`;
 
     out += MultiAssetCLIDashboard.BORDER;
     out += "\x1b[J";

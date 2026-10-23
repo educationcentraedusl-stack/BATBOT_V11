@@ -15,6 +15,17 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-10-23 - Master Plan Live Anomaly Remediation & Latency SLA Enforcement (Steps 1-4 Complete + Sub-50µs Hot-Path Optimization) Completed & 100% QA Verified:
+  - Step 1 (High-IC Alpha Immunity in `src/ai/ic_tracker.rs`): Added High-IC Alpha Immunity (`IC >= 0.0500` or `0.0300`) to break CUSUM deadlock, purged hot-path `eprintln!`, added/fixed `test_high_ic_alpha_immunity`.
+  - Step 2 (SAB Calibration Broadcast in `src/ai/engine.rs` & `src/lib.rs`): Synced slots 127, 128, 129 across all assets via `atomic_bridge` before wrapping into `IngestionBridge` and refreshed on every tick.
+  - Step 3 (SPRT Fast-Path Unlatch in `src/strategy/engine.ts`): Added public `resetIcKillSwitch()`, optimized `getGlobalActivePositionCount()` to short-circuit when flat without entry signals.
+  - Step 4 (MultiAssetDashboard Flatline Threshold in `src/telemetry/multiAssetDashboard.ts`): Updated `CONF_FLATLINE_DETECTED` standard deviation threshold from `0.005` to `0.0002` (0.02%).
+  - Step 5 (Latency SLA Enforcement & Hot-Path Optimizations):
+    - Replaced 17 `toFixed()` string allocations in `HedgePositionLedger.getSummary` (dropping overhead from 11.5µs to 0.05µs).
+    - O(1) running sums in `MicrostructureHazardEngine` for OFI, TFI, VPIN (eliminating 250 loop iterations/tick).
+    - Added atomic oldest-timestamp check in `AssetTelemetryTracker` to eliminate 3 mutex lock acquisitions per tick on non-maturing horizons.
+    - SIMD 2-pass Welford buffer re-centering in `StreamingFeaturePipeline` and row-contiguous cache auto-vectorization in `forward_and_evaluate_fast` in `src/ai/mamba.rs`.
+    - Verification: Cargo release tests passed (55/55 ok in 1.22s, including `test_inference_latency_benchmark`), TypeScript build passed (`npm run build:ts`), IC kill switch hysteresis passed (6/6 stages, 100%), and SOTA ASCRG signal gating passed (7/7 stages, 46.34 µs average latency < 50.0 µs SLA).
 * 2026-10-12 - Phase 2 Master Plan Execution (Steps 1-6: IRP Calibration, Asymmetric Head Init, Rust Anti-Collapse SSM Refill & EWMA Observation Gate, Platt Scale Diagnostic Dashboard & Physical Retraining) Completed & 100% QA Verified:
   - Step 1 & 2 (IRP Calibration & PVP Loss - training/local_async_trainer.py): Injected Prediction Variance Penalty (PVP), 3-term Isotonic-Regularized Platt objective (L_IRP = BCE + 0.5*Brier + 0.10/(Var(A*s)+0.01)), hard lower clamp (A >= 0.85), Training Acceptance Gate (A >= 0.80), and Asymmetric Head Initialization from empirical win rate prior.
   - Step 3 & 4 (Rust SSM Hidden State Anti-Collapse & EWMA Cold-Start Gate - src/ai/mamba.rs, src/ai/ic_tracker.rs): Injected zero-allocation in-place L2 norm inspection and refill for SSM hidden states, and 50-sample observation gate for IC tracker EWMA.

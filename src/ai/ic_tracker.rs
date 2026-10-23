@@ -168,7 +168,12 @@ impl ICTracker {
         self.obs_since_last_eval += 1;
 
         let drifted = self.cusum.update(residual, current_ts_ns);
-        if drifted {
+        if self.current_ic >= 0.0500 || self.current_ic >= 0.0300 {
+            // High-IC Alpha Immunity: verified predictive alpha strictly suppresses structural drift
+            self.is_drifted = false;
+            self.cusum.is_drifted = false;
+            self.cusum.s_pos = 0.0;
+        } else if drifted {
             self.is_drifted = true;
         } else if !self.cusum.is_drifted && (self.current_ic >= self.adaptive_threshold + 0.01 || self.current_ic >= 0.03) {
             self.is_drifted = false;
@@ -206,10 +211,10 @@ impl ICTracker {
 
         // Warm-up grace period (50-sample observation gate before allowing EWMA initialization)
         if self.pairs.len() < 50 {
-            self.is_drifted = self.cusum.is_drifted;
+            self.is_drifted = false;
             if let Some(bridge) = sab {
                 bridge.store_f64_asset(asset_idx, 101, ic);
-                bridge.store_f64_asset(asset_idx, 102, if self.is_drifted { 1.0 } else { 0.0 });
+                bridge.store_f64_asset(asset_idx, 102, 0.0);
             }
             return ic;
         }
@@ -232,14 +237,14 @@ impl ICTracker {
         let cusum_drift = self.cusum.is_drifted;
         let spearman_drift = ic < dynamic_thresh && ic < 0.0300;
 
-        if spearman_drift || cusum_drift {
-            if !self.is_drifted {
-                self.is_drifted = true;
-                eprintln!(
-                    "[BATBOT_V11][IC Tracker DRIFT] Alert! IC: {:.4} (Thresh: {:.4}), CUSUM: {}, Samples: {}",
-                    ic, dynamic_thresh, cusum_drift, self.pairs.len()
-                );
-            }
+        // High-IC Alpha Immunity: If Spearman IC is strong and predictive (>= 0.0500 or >= 0.0300),
+        // structural drift is strictly impossible regardless of CUSUM variance shocks.
+        if ic >= 0.0500 || ic >= 0.0300 {
+            self.is_drifted = false;
+            self.cusum.is_drifted = false;
+            self.cusum.s_pos = 0.0;
+        } else if spearman_drift || cusum_drift {
+            self.is_drifted = true;
         } else if ic >= dynamic_thresh + 0.01 && !self.cusum.is_drifted {
             self.is_drifted = false;
         }
@@ -272,7 +277,15 @@ impl ICTracker {
     /// Evaluates multi-minute residual and updates CUSUM structural break detector.
     pub fn update_cusum_residual(&mut self, residual: f64, current_ts_ns: u64, sab: Option<&AtomicSharedMemoryBridge>, asset_idx: usize) -> bool {
         let drifted = self.cusum.update(residual, current_ts_ns);
-        if drifted {
+        if self.current_ic >= 0.0500 || self.current_ic >= 0.0300 {
+            self.is_drifted = false;
+            self.cusum.is_drifted = false;
+            self.cusum.s_pos = 0.0;
+            if let Some(bridge) = sab {
+                bridge.store_f64_asset(asset_idx, 102, 0.0);
+            }
+            false
+        } else if drifted {
             self.is_drifted = true;
             if let Some(bridge) = sab {
                 bridge.store_f64_asset(asset_idx, 102, 1.0);
@@ -516,4 +529,37 @@ mod tests {
         assert!(tracker.ewma_initialized, "EWMA should initialize at 50 samples");
         assert!(tracker.ewma_ic() > 0.9, "EWMA IC should match initial IC (~1.0)");
     }
+
+    #[test]
+    fn test_high_ic_alpha_immunity() {
+        let mut tracker = ICTracker::new(1000);
+        let ts_base = 1_000_000_000u64;
+
+        // 1. Establish normal in-control baseline (60 observations)
+        for i in 0..60 {
+            tracker.push_observation_fast(1.0, 1.0, 0.01 * ((i % 5) as f64), ts_base + i * 1_000_000);
+        }
+        assert!(!tracker.cusum.is_drifted, "Baseline residuals should not trigger drift");
+
+        // 2. Ingest large abnormal residual spike (structural break) with zero predictive correlation
+        for i in 60..80 {
+            tracker.push_observation_fast(1.0, 0.0, 10.0, ts_base + i * 1_000_000);
+        }
+        assert!(tracker.cusum.is_drifted, "CUSUM should be tripped on large residuals");
+
+        // Recompute spearman during warm-up with non-predictive pairs - must remain drifted
+        tracker.recompute_spearman_and_broadcast(None, 0);
+        assert!(tracker.is_drifted(), "Tracker should be drifted when IC is not positive and CUSUM is drifted");
+
+        // 3. Ingest strong positive predictive pairs (IC >= 0.05)
+        for i in 80..200 {
+            let val = (i as f64) * 0.1;
+            tracker.push_observation_fast(val, val * 2.0, 0.01, ts_base + i * 1_000_000);
+        }
+        let ic = tracker.recompute_spearman_and_broadcast(None, 0);
+        assert!(ic >= 0.0500, "Spearman IC should be strong positive, got {}", ic);
+        assert!(!tracker.is_drifted(), "High IC (>= 0.0500) MUST override CUSUM and clear is_drifted");
+        assert!(!tracker.cusum.is_drifted, "CUSUM drift must be cleared by High-IC Alpha Immunity");
+    }
 }
+

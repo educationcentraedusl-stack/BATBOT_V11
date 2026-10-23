@@ -7,6 +7,7 @@ export declare function initCore(): string
 export declare function createLobEngine(): boolean
 export declare function loadAiModel(weightsPath: string, sabBuffer?: Buffer | undefined | null): boolean
 export declare function loadAiModelFull(weightsPath: string, tkanPath: string, sabBuffer?: Buffer | undefined | null): boolean
+export declare function runAiInferenceAssetNapi(sabBuffer: Buffer, assetIdx: number): boolean
 export declare function bumpHotswapEpoch(sabBuffer: Buffer): number
 export declare function resetIcTracker(): boolean
 export declare function recordTradeIc(prediction: number, realizedReturn: number, assetIdx?: number | undefined | null): boolean

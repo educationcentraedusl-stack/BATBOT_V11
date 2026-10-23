@@ -370,6 +370,12 @@ class StrategyEngine {
     getIcEvidenceScore() {
         return this.icEvidenceScore;
     }
+    resetIcKillSwitch() {
+        this.icState = "ALPHA_ACTIVE";
+        this.icStateEnteredAt = Date.now();
+        this.icConditionMetSince = 0;
+        this.icEvidenceScore = 1.0;
+    }
     getVrClassifier() {
         return this.vrClassifier;
     }
@@ -2402,7 +2408,7 @@ class StrategyEngine {
                     isSellSignal = compositeScore < -0.15 && isLeadingConfirmationSell;
                 }
             }
-            else if (seq % 1000n === 0n) {
+            else if (seq % 1000n === 0n && process.env.ENABLE_HFT_DEBUG === "true") {
                 const netAlphaBps = (expectedNetAlpha * 10000).toFixed(1);
                 const hurdleBps = (minNetAlpha * 10000).toFixed(1);
                 const confPct = (aiConfidence * 100).toFixed(1);
@@ -2488,16 +2494,19 @@ class StrategyEngine {
             const hasActiveShortSlot = this.hedgeLedger.getShortSlots().some((s) => s.isOccupied || s.lifecycleState === "PENDING_ENTRY");
             const hasPendingShort = this.hasPendingEntryForSide("SHORT");
             const isShortActiveOrPending = hasActiveShortSlot || hasPendingShort;
-            const globalActivePositions = this.getGlobalActivePositionCount();
-            const isPortfolioCapacityReached = globalActivePositions >= this.client.maxAssets;
             const hasExistingPositionForThisSymbol = isLongActiveOrPending || isShortActiveOrPending;
+            let isPortfolioCapacityReached = false;
             // 1. Capacity Lock: If portfolio capacity (10/10) is reached and this symbol is FLAT, block entries
-            if (isPortfolioCapacityReached && !hasExistingPositionForThisSymbol) {
-                if ((isBuySignal || isSellSignal) && seq % 1000n === 0n) {
-                    console.warn(`[PORTFOLIO_CAPACITY_LOCK][BLOCKED] [${this.config.symbol}] Portfolio hard cap reached (${globalActivePositions}/${this.client.maxAssets} active positions). Entry blocked.`);
+            if ((isBuySignal || isSellSignal) && !hasExistingPositionForThisSymbol) {
+                const globalActivePositions = this.getGlobalActivePositionCount();
+                isPortfolioCapacityReached = globalActivePositions >= this.client.maxAssets;
+                if (isPortfolioCapacityReached) {
+                    if (seq % 1000n === 0n) {
+                        console.warn(`[PORTFOLIO_CAPACITY_LOCK][BLOCKED] [${this.config.symbol}] Portfolio hard cap reached (${globalActivePositions}/${this.client.maxAssets} active positions). Entry blocked.`);
+                    }
+                    isBuySignal = false;
+                    isSellSignal = false;
                 }
-                isBuySignal = false;
-                isSellSignal = false;
             }
             // 2. Unidirectional Mutex Lock:
             // If ANY Short position/pending order exists on this symbol, BUY is 100% blocked
@@ -2601,7 +2610,7 @@ class StrategyEngine {
                 }
             }
             if (signalType === "NONE") {
-                if (seq % 10000n === 0n) {
+                if (seq % 10000n === 0n && process.env.ENABLE_HFT_DEBUG === "true") {
                     console.log(`[StrategyEngine][${this.config.symbol}][SignalGate] Seq #${seq} | Composite: ${compositeScore.toFixed(4)} | AI: (dir=${aiDirection.toFixed(2)}, conf=${(aiConfidence * 100).toFixed(0)}%) | OBI: ${obi.toFixed(2)} | CVD: ${(cvd >= 0 ? "+" : "") + cvd.toFixed(4)} | Status: NO SIGNAL TRIGGERED`);
                 }
                 this.staticResult.sequenceNum = seq;

@@ -193,7 +193,11 @@ impl Mamba2Cell {
 
         let input_outer = u_3d.broadcast_mul(&b_3d)?; // [1, d_inner, d_state]
         let input_scaled = input_outer.broadcast_mul(&one_minus_decay_3d)?; // [1, d_inner, d_state]
-        let h_next = (&h_decayed + &input_scaled)?; // [1, d_inner, d_state]
+        let mut h_next = (&h_decayed + &input_scaled)?; // [1, d_inner, d_state]
+        let h_norm_sq = h_next.sqr()?.sum_all()?.to_scalar::<f32>()?;
+        if !h_norm_sq.is_finite() {
+            h_next = Tensor::zeros((1, self.d_inner, self.d_state), DType::F32, input.device())?;
+        }
 
         // 5. Output Gating with C_t Projection: Contraction across d_state dimension
         let h_contracted = h_next.broadcast_mul(&c_3d)?.sum(2)?; // [1, d_inner]
@@ -258,7 +262,11 @@ impl Mamba2Cell {
 
         let input_outer = u_3d.broadcast_mul(&b_3d)?; // [1, d_inner, d_state]
         let input_scaled = input_outer.broadcast_mul(&one_minus_decay_3d)?; // [1, d_inner, d_state]
-        let h_next = (&h_decayed + &input_scaled)?; // [1, d_inner, d_state]
+        let mut h_next = (&h_decayed + &input_scaled)?; // [1, d_inner, d_state]
+        let h_norm_sq = h_next.sqr()?.sum_all()?.to_scalar::<f32>()?;
+        if !h_norm_sq.is_finite() {
+            h_next = Tensor::zeros((1, self.d_inner, self.d_state), DType::F32, input.device())?;
+        }
 
         // 5. Output Gating with C_t Projection: Contraction across d_state dimension
         let h_contracted = h_next.broadcast_mul(&c_3d)?.sum(2)?; // [1, d_inner]
@@ -305,13 +313,14 @@ impl Mamba2Cell {
         delta_t: f64,
         temperature: f64,
     ) -> (f64, f64, f64) {
-        // Anti-Collapse Guard: if SSM hidden state has collapsed to near-zero (< 1e-8) or NaN/Inf attractor
+        // Anti-Collapse Guard: only reset if NaN/Inf (genuinely corrupted non-finite state).
+        // Do NOT reset near-zero states, as they build naturally from zero initialization.
         let h_norm_sq: f32 = h_state
             .iter()
             .take(self.d_inner * self.d_state)
             .map(|x| x * x)
             .sum();
-        if !h_norm_sq.is_finite() || h_norm_sq < 1e-8 {
+        if !h_norm_sq.is_finite() {
             // Zero-allocation: explicitly refill the slice with 0.0f32
             for slot in h_state.iter_mut() {
                 *slot = 0.0f32;
@@ -319,96 +328,108 @@ impl Mamba2Cell {
         }
 
         let dt_clamped = delta_t.clamp(0.0001, 10.0) as f32;
+        let d_in = self.d_inner.min(32);
+        let d_st = self.d_state.min(16);
 
         let mut u = [0.0f32; 32];
-        for j in 0..self.d_inner.min(32) {
-            let mut sum = self.b_in_flat.get(j).copied().unwrap_or(0.0);
-            for i in 0..self.input_dim.min(16) {
-                sum += input.get(i).copied().unwrap_or(0.0) * self.w_in_flat.get(i * self.d_inner + j).copied().unwrap_or(0.0);
-            }
-            if let Some(slot) = u.get_mut(j) {
-                *slot = sum;
+        for j in 0..d_in {
+            u[j] = self.b_in_flat.get(j).copied().unwrap_or(0.0);
+        }
+        for i in 0..self.input_dim.min(16) {
+            let inp = input[i];
+            let row_offset = i * self.d_inner;
+            if row_offset + d_in <= self.w_in_flat.len() {
+                for j in 0..d_in {
+                    u[j] += inp * self.w_in_flat[row_offset + j];
+                }
             }
         }
 
         let mut decay = [0.0f32; 32];
         let mut one_minus_decay = [0.0f32; 32];
-        for j in 0..self.d_inner.min(32) {
+        for j in 0..d_in {
             let a_sp = self.a_softplus_flat.get(j).copied().unwrap_or(0.0);
             let da = a_sp * dt_clamped;
             let dec = (-da).exp();
-            if let Some(slot) = decay.get_mut(j) {
-                *slot = dec;
-            }
-            if let Some(slot) = one_minus_decay.get_mut(j) {
-                *slot = 1.0 - dec;
-            }
+            decay[j] = dec;
+            one_minus_decay[j] = 1.0 - dec;
         }
 
         let mut b_proj = [0.0f32; 16];
-        for k in 0..self.d_state.min(16) {
-            let mut sum = self.b_b_flat.get(k).copied().unwrap_or(0.0);
-            for j in 0..self.d_inner.min(32) {
-                sum += u.get(j).copied().unwrap_or(0.0) * self.w_b_flat.get(j * self.d_state + k).copied().unwrap_or(0.0);
-            }
-            if let Some(slot) = b_proj.get_mut(k) {
-                *slot = sum;
+        for k in 0..d_st {
+            b_proj[k] = self.b_b_flat.get(k).copied().unwrap_or(0.0);
+        }
+        for j in 0..d_in {
+            let u_val = u[j];
+            let row_offset = j * self.d_state;
+            if row_offset + d_st <= self.w_b_flat.len() {
+                for k in 0..d_st {
+                    b_proj[k] += u_val * self.w_b_flat[row_offset + k];
+                }
             }
         }
 
         let mut c_proj = [0.0f32; 16];
-        for k in 0..self.d_state.min(16) {
-            let mut sum = self.b_c_flat.get(k).copied().unwrap_or(0.0);
-            for j in 0..self.d_inner.min(32) {
-                sum += u.get(j).copied().unwrap_or(0.0) * self.w_c_flat.get(j * self.d_state + k).copied().unwrap_or(0.0);
-            }
-            if let Some(slot) = c_proj.get_mut(k) {
-                *slot = sum;
+        for k in 0..d_st {
+            c_proj[k] = self.b_c_flat.get(k).copied().unwrap_or(0.0);
+        }
+        for j in 0..d_in {
+            let u_val = u[j];
+            let row_offset = j * self.d_state;
+            if row_offset + d_st <= self.w_c_flat.len() {
+                for k in 0..d_st {
+                    c_proj[k] += u_val * self.w_c_flat[row_offset + k];
+                }
             }
         }
 
         let mut h_contracted = [0.0f32; 32];
-        for j in 0..self.d_inner.min(32) {
-            let u_val = u.get(j).copied().unwrap_or(0.0);
-            let dec = decay.get(j).copied().unwrap_or(0.0);
-            let omd = one_minus_decay.get(j).copied().unwrap_or(0.0);
+        for j in 0..d_in {
+            let u_val = u[j];
+            let dec = decay[j];
+            let omd = one_minus_decay[j];
             let mut c_sum = 0.0f32;
-            for k in 0..self.d_state.min(16) {
-                let idx = j * self.d_state + k;
-                let h_prev_val = h_state.get(idx).copied().unwrap_or(0.0);
-                let b_proj_k = b_proj.get(k).copied().unwrap_or(0.0);
-                let h_next_val = h_prev_val * dec + (u_val * b_proj_k * omd);
-                if let Some(slot) = h_state.get_mut(idx) {
-                    *slot = h_next_val;
+            let row_offset = j * self.d_state;
+            for k in 0..d_st {
+                let idx = row_offset + k;
+                if idx < h_state.len() {
+                    let h_prev_val = h_state[idx];
+                    let h_next_val = h_prev_val * dec + (u_val * b_proj[k] * omd);
+                    h_state[idx] = h_next_val;
+                    c_sum += h_next_val * c_proj[k];
                 }
-                c_sum += h_next_val * c_proj.get(k).copied().unwrap_or(0.0);
             }
-            if let Some(slot) = h_contracted.get_mut(j) {
-                *slot = c_sum;
-            }
+            h_contracted[j] = c_sum;
         }
 
         let mut y = [0.0f32; 32];
         let has_w_out = self.w_out_flat.len() == self.d_inner * self.d_inner;
-        for j in 0..self.d_inner.min(32) {
-            let mut ssm_val = self.b_out_flat.get(j).copied().unwrap_or(0.0);
-            if has_w_out {
-                for i in 0..self.d_inner.min(32) {
-                    ssm_val += h_contracted.get(i).copied().unwrap_or(0.0) * self.w_out_flat.get(i * self.d_inner + j).copied().unwrap_or(0.0);
+        for j in 0..d_in {
+            y[j] = self.b_out_flat.get(j).copied().unwrap_or(0.0);
+        }
+        if has_w_out {
+            for i in 0..d_in {
+                let h_val = h_contracted[i];
+                let row_offset = i * self.d_inner;
+                if row_offset + d_in <= self.w_out_flat.len() {
+                    for j in 0..d_in {
+                        y[j] += h_val * self.w_out_flat[row_offset + j];
+                    }
                 }
-            } else {
-                ssm_val += h_contracted.get(j).copied().unwrap_or(0.0);
             }
-            let skip_val = u.get(j).copied().unwrap_or(0.0) * self.d_skip_flat.get(j).copied().unwrap_or(0.0);
-            if let Some(slot) = y.get_mut(j) {
-                *slot = ssm_val + skip_val;
+        } else {
+            for j in 0..d_in {
+                y[j] += h_contracted[j];
             }
+        }
+        for j in 0..d_in {
+            let skip_val = u[j] * self.d_skip_flat.get(j).copied().unwrap_or(0.0);
+            y[j] += skip_val;
         }
 
         let mut sum_sq = 0.0f32;
-        for j in 0..self.d_inner.min(32) {
-            let y_val = y.get(j).copied().unwrap_or(0.0);
-            sum_sq += y_val * y_val;
+        for j in 0..d_in {
+            sum_sq += y[j] * y[j];
         }
         let mean_sq = sum_sq / (self.d_inner as f32);
         let rms_inv = 1.0f32 / (mean_sq + 1e-6f32).sqrt();
@@ -417,9 +438,8 @@ impl Mamba2Cell {
         let mut meta_logit = self.b_heads_flat.get(1).copied().unwrap_or(0.0) as f64;
         let mut horiz_logit = self.b_heads_flat.get(2).copied().unwrap_or(0.0) as f64;
 
-        for j in 0..self.d_inner.min(32) {
-            let y_val = y.get(j).copied().unwrap_or(0.0);
-            let y_n = (y_val * rms_inv) as f64;
+        for j in 0..d_in {
+            let y_n = (y[j] * rms_inv) as f64;
             dir_logit += y_n * (self.w_heads_flat.get(j * 3 + 0).copied().unwrap_or(0.0) as f64);
             meta_logit += y_n * (self.w_heads_flat.get(j * 3 + 1).copied().unwrap_or(0.0) as f64);
             horiz_logit += y_n * (self.w_heads_flat.get(j * 3 + 2).copied().unwrap_or(0.0) as f64);

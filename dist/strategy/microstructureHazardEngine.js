@@ -36,6 +36,12 @@ class MicrostructureHazardEngine {
     currentBucketBuyVol = 0;
     currentBucketSellVol = 0;
     currentBucketTotalVol = 0;
+    // Running sum accumulators for O(1) hot-path evaluation
+    runningSumOFI = 0;
+    runningSumDepth = 0;
+    runningSumBuy = 0;
+    runningSumSell = 0;
+    runningSumImbalance = 0;
     // Hazard Configuration Threshold
     hazardThreshold;
     // Zero-GC Pre-allocated Cached Metrics Payload Ring Buffer
@@ -73,6 +79,8 @@ class MicrostructureHazardEngine {
         this.depthRingBuffer.fill(0);
         this.ofiRingIdx = 0;
         this.depthSampleCount = 0;
+        this.runningSumOFI = 0;
+        this.runningSumDepth = 0;
         this.prevBidPx = 0;
         this.prevBidQty = 0;
         this.prevAskPx = 0;
@@ -81,8 +89,11 @@ class MicrostructureHazardEngine {
         this.tradeBuyQtyRing.fill(0);
         this.tradeSellQtyRing.fill(0);
         this.tradeRingIdx = 0;
+        this.runningSumBuy = 0;
+        this.runningSumSell = 0;
         this.vpinBucketRing.fill(0);
         this.vpinRingIdx = 0;
+        this.runningSumImbalance = 0;
         this.currentBucketBuyVol = 0;
         this.currentBucketSellVol = 0;
         this.currentBucketTotalVol = 0;
@@ -124,9 +135,13 @@ class MicrostructureHazardEngine {
         }
         const instantOFI = eBid - eAsk;
         const instantDepth = (bestBidQty + bestAskQty) * 0.5;
-        // Zero-GC insertion into circular ring buffers
+        // Zero-GC insertion into circular ring buffers with O(1) running sums
+        const oldOFI = this.ofiRingBuffer[this.ofiRingIdx];
+        const oldDepth = this.depthRingBuffer[this.ofiRingIdx];
         this.ofiRingBuffer[this.ofiRingIdx] = instantOFI;
         this.depthRingBuffer[this.ofiRingIdx] = instantDepth;
+        this.runningSumOFI += instantOFI - oldOFI;
+        this.runningSumDepth += instantDepth - oldDepth;
         this.ofiRingIdx = (this.ofiRingIdx + 1) % this.ofiBufferSize;
         if (this.depthSampleCount < this.ofiBufferSize) {
             this.depthSampleCount++;
@@ -144,9 +159,13 @@ class MicrostructureHazardEngine {
     updateTrade(price, qty, isBuyerMaker) {
         const buyQty = isBuyerMaker ? 0 : qty; // Taker Buy
         const sellQty = isBuyerMaker ? qty : 0; // Taker Sell
-        // 1. Update Trade Flow Imbalance Ring Buffer
+        // 1. Update Trade Flow Imbalance Ring Buffer with O(1) running sums
+        const oldBuy = this.tradeBuyQtyRing[this.tradeRingIdx];
+        const oldSell = this.tradeSellQtyRing[this.tradeRingIdx];
         this.tradeBuyQtyRing[this.tradeRingIdx] = buyQty;
         this.tradeSellQtyRing[this.tradeRingIdx] = sellQty;
+        this.runningSumBuy += buyQty - oldBuy;
+        this.runningSumSell += sellQty - oldSell;
         this.tradeRingIdx = (this.tradeRingIdx + 1) % this.tradeBufferSize;
         // 2. Accumulate VPIN Volume Buckets
         let remainingQty = qty;
@@ -163,7 +182,9 @@ class MicrostructureHazardEngine {
             remainingQty -= fillAmount;
             if (this.currentBucketTotalVol >= this.bucketVolume) {
                 const bucketImbalance = Math.abs(this.currentBucketBuyVol - this.currentBucketSellVol);
+                const oldBucket = this.vpinBucketRing[this.vpinRingIdx];
                 this.vpinBucketRing[this.vpinRingIdx] = bucketImbalance;
+                this.runningSumImbalance += bucketImbalance - oldBucket;
                 this.vpinRingIdx = (this.vpinRingIdx + 1) % this.vpinBucketCount;
                 // Reset current bucket state
                 this.currentBucketBuyVol = 0;
@@ -173,49 +194,33 @@ class MicrostructureHazardEngine {
         }
     }
     /**
-     * Calculates normalized Order Flow Imbalance (OFI) [-1.0, 1.0] using rolling historical depth moving average.
+     * Calculates normalized Order Flow Imbalance (OFI) [-1.0, 1.0] in O(1) using running sums.
      */
     getNormalizedOFI() {
-        let sumOFI = 0;
-        let sumDepth = 0;
         const samples = Math.min(this.ofiBufferSize, Math.max(1, this.depthSampleCount));
-        for (let i = 0; i < samples; i++) {
-            sumOFI += this.ofiRingBuffer[i];
-            sumDepth += this.depthRingBuffer[i];
-        }
-        const avgDepth = sumDepth / samples;
+        const avgDepth = this.runningSumDepth / samples;
         if (avgDepth <= 0)
             return 0;
-        const rawNorm = sumOFI / (avgDepth * samples);
+        const rawNorm = this.runningSumOFI / (avgDepth * samples);
         return Math.max(-1.0, Math.min(1.0, rawNorm));
     }
     /**
-     * Calculates Trade Flow Imbalance (TFI) [-1.0, 1.0]
+     * Calculates Trade Flow Imbalance (TFI) [-1.0, 1.0] in O(1) using running sums.
      */
     getTFI() {
-        let sumBuy = 0;
-        let sumSell = 0;
-        for (let i = 0; i < this.tradeBufferSize; i++) {
-            sumBuy += this.tradeBuyQtyRing[i];
-            sumSell += this.tradeSellQtyRing[i];
-        }
-        const totalVol = sumBuy + sumSell;
+        const totalVol = this.runningSumBuy + this.runningSumSell;
         if (totalVol <= 0)
             return 0;
-        return (sumBuy - sumSell) / totalVol;
+        return (this.runningSumBuy - this.runningSumSell) / totalVol;
     }
     /**
-     * Calculates Volume-Synchronized Probability of Toxicity (VPIN) [0.0, 1.0]
+     * Calculates Volume-Synchronized Probability of Toxicity (VPIN) [0.0, 1.0] in O(1) using running sums.
      */
     getVPIN() {
-        let sumImbalance = 0;
-        for (let i = 0; i < this.vpinBucketCount; i++) {
-            sumImbalance += this.vpinBucketRing[i];
-        }
         const maxCapacity = this.vpinBucketCount * this.bucketVolume;
         if (maxCapacity <= 0)
             return 0;
-        return Math.max(0.0, Math.min(1.0, sumImbalance / maxCapacity));
+        return Math.max(0.0, Math.min(1.0, this.runningSumImbalance / maxCapacity));
     }
     /**
      * Fast zero-GC evaluation of Cox Proportional Hazard rate h(t) = h0(t) * exp(theta^T * X_t)

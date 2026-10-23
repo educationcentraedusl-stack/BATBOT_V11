@@ -230,6 +230,16 @@ async function runProductionTuiLauncher() {
             // Physical Hard Gate: Clamp drift to false during warm-up period (< 1000 pairs)
             if (sampleCount < 1000) {
                 isDrifted = false;
+                for (let i = 0; i < maxAssets; i++) {
+                    client.setIsModelDrifted(false, i);
+                }
+            }
+            // Unconditional High-IC Alpha Immunity: strong positive alpha suppresses drift
+            if (rollingIc >= 0.0500) {
+                isDrifted = false;
+                for (let i = 0; i < maxAssets; i++) {
+                    client.setIsModelDrifted(false, i);
+                }
             }
             const seqNum = client.getSequenceNum(0);
             if (riskGuard.isProfitLockedState()) {

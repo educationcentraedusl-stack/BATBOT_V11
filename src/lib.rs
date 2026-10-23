@@ -88,13 +88,18 @@ pub fn load_ai_model(weights_path: String, sab_buffer: Option<Buffer>) -> bool {
         if let Ok(bridge) = AtomicSharedMemoryBridge::new(buf.as_ptr() as *mut u8, buf.len()) {
             let max_assets = bridge.max_assets();
             let next = bridge.load_f64_asset(0, HOTSWAP_EPOCH_SLOT) + 1.0;
-            for i in 0..max_assets {
-                bridge.store_f64_asset(i, HOTSWAP_EPOCH_SLOT, next);
-                bridge.store_f64_asset(i, ROLLING_IC_SLOT, 0.0);
-                bridge.store_f64_asset(i, IS_MODEL_DRIFTED_SLOT, 0.0);
+            if let Some(engine) = GLOBAL_AI_ENGINE.load().as_ref() {
+                for i in 0..max_assets {
+                    bridge.store_f64_asset(i, HOTSWAP_EPOCH_SLOT, next);
+                    bridge.store_f64_asset(i, ROLLING_IC_SLOT, 0.0);
+                    bridge.store_f64_asset(i, IS_MODEL_DRIFTED_SLOT, 0.0);
+                    bridge.store_f64_asset(i, 127, engine.calibration_params.temperature);
+                    bridge.store_f64_asset(i, 128, engine.calibration_params.platt_scale);
+                    bridge.store_f64_asset(i, 129, engine.calibration_params.platt_offset);
+                }
             }
             println!(
-                "[BATBOT_V11][N-API RCU] HOTSWAP_EPOCH bumped to {} across {} assets after load_ai_model (cleared ROLLING_IC and IS_MODEL_DRIFTED to 0.0).",
+                "[BATBOT_V11][N-API RCU] HOTSWAP_EPOCH bumped to {} across {} assets after load_ai_model (cleared ROLLING_IC and IS_MODEL_DRIFTED to 0.0, synced calibration slots 127-129).",
                 next, max_assets
             );
         }
@@ -123,13 +128,18 @@ pub fn load_ai_model_full(weights_path: String, tkan_path: String, sab_buffer: O
         if let Ok(bridge) = AtomicSharedMemoryBridge::new(buf.as_ptr() as *mut u8, buf.len()) {
             let max_assets = bridge.max_assets();
             let next = bridge.load_f64_asset(0, HOTSWAP_EPOCH_SLOT) + 1.0;
-            for i in 0..max_assets {
-                bridge.store_f64_asset(i, HOTSWAP_EPOCH_SLOT, next);
-                bridge.store_f64_asset(i, ROLLING_IC_SLOT, 0.0);
-                bridge.store_f64_asset(i, IS_MODEL_DRIFTED_SLOT, 0.0);
+            if let Some(engine) = GLOBAL_AI_ENGINE.load().as_ref() {
+                for i in 0..max_assets {
+                    bridge.store_f64_asset(i, HOTSWAP_EPOCH_SLOT, next);
+                    bridge.store_f64_asset(i, ROLLING_IC_SLOT, 0.0);
+                    bridge.store_f64_asset(i, IS_MODEL_DRIFTED_SLOT, 0.0);
+                    bridge.store_f64_asset(i, 127, engine.calibration_params.temperature);
+                    bridge.store_f64_asset(i, 128, engine.calibration_params.platt_scale);
+                    bridge.store_f64_asset(i, 129, engine.calibration_params.platt_offset);
+                }
             }
             println!(
-                "[BATBOT_V11][N-API RCU] HOTSWAP_EPOCH bumped to {} across {} assets after load_ai_model_full (cleared ROLLING_IC and IS_MODEL_DRIFTED to 0.0).",
+                "[BATBOT_V11][N-API RCU] HOTSWAP_EPOCH bumped to {} across {} assets after load_ai_model_full (cleared ROLLING_IC and IS_MODEL_DRIFTED to 0.0, synced calibration slots 127-129).",
                 next, max_assets
             );
         }
@@ -141,6 +151,22 @@ pub fn load_ai_model_full(weights_path: String, tkan_path: String, sab_buffer: O
         if success { "CALIBRATED" } else { "UNCALIBRATED" }
     );
     success
+}
+
+#[napi]
+pub fn run_ai_inference_asset_napi(sab_buffer: Buffer, asset_idx: u32) -> napi::Result<bool> {
+    let raw_ptr = sab_buffer.as_ptr() as *mut u8;
+    let len = sab_buffer.len();
+    let bridge = AtomicSharedMemoryBridge::new(raw_ptr, len)
+        .map_err(|err| napi::Error::from_reason(err.to_string()))?;
+    if let Some(engine) = GLOBAL_AI_ENGINE.load().as_ref() {
+        engine
+            .run_inference_asset(&bridge, asset_idx as usize)
+            .map_err(|err| napi::Error::from_reason(err.to_string()))?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 #[napi]
@@ -375,6 +401,23 @@ pub fn start_ingestion(sab_buffer: Buffer, symbols: Option<Vec<String>>) -> napi
         ]
     });
 
+
+    // Synchronize initial AI Calibration parameters to SAB diagnostic slots 127, 128, 129 across all assets
+    if let Some(engine) = GLOBAL_AI_ENGINE.load().as_ref() {
+        let max_assets = atomic_bridge.max_assets();
+        for i in 0..max_assets {
+            atomic_bridge.store_f64_asset(i, 127, engine.calibration_params.temperature);
+            atomic_bridge.store_f64_asset(i, 128, engine.calibration_params.platt_scale);
+            atomic_bridge.store_f64_asset(i, 129, engine.calibration_params.platt_offset);
+        }
+        println!(
+            "[BATBOT_V11][SAB_INIT] Synced AI Calibration to SAB across {} assets: Temp={:.4}, Scale={:.4}, Offset={:.4}",
+            max_assets,
+            engine.calibration_params.temperature,
+            engine.calibration_params.platt_scale,
+            engine.calibration_params.platt_offset
+        );
+    }
 
     let bridge = Arc::new(IngestionBridge::new(atomic_bridge));
     GLOBAL_INGESTION_BRIDGE.store(Some(bridge.clone()));

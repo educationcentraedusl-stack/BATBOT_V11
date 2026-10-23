@@ -612,30 +612,30 @@ export class MarketDataClient {
     this.writeAtomicFloat64Asset(assetIdx, 129, val);
   }
 
-  // --- Slots 145 to 147: AI Calibration Health & Flatline Telemetry ---
+  // --- Slots 152 to 154: AI Calibration Health & Flatline Telemetry (ISOLATED from OMS) ---
 
   public getAiMetaLogitAbs(assetIdx: number = 0): number {
-    return this.readAtomicFloat64Asset(assetIdx, 145);
+    return this.readAtomicFloat64Asset(assetIdx, 152);
   }
 
   public setAiMetaLogitAbs(val: number, assetIdx: number = 0): void {
-    this.writeAtomicFloat64Asset(assetIdx, 145, val);
+    this.writeAtomicFloat64Asset(assetIdx, 152, val);
   }
 
   public getAiConfVariance(assetIdx: number = 0): number {
-    return this.readAtomicFloat64Asset(assetIdx, 146);
+    return this.readAtomicFloat64Asset(assetIdx, 153);
   }
 
   public setAiConfVariance(val: number, assetIdx: number = 0): void {
-    this.writeAtomicFloat64Asset(assetIdx, 146, val);
+    this.writeAtomicFloat64Asset(assetIdx, 153, val);
   }
 
   public getAiPlattHealth(assetIdx: number = 0): number {
-    return this.readAtomicFloat64Asset(assetIdx, 147);
+    return this.readAtomicFloat64Asset(assetIdx, 154);
   }
 
   public setAiPlattHealth(val: number, assetIdx: number = 0): void {
-    this.writeAtomicFloat64Asset(assetIdx, 147, val);
+    this.writeAtomicFloat64Asset(assetIdx, 154, val);
   }
 
   // --- Slots 130 to 133: Atomic Interactive Control Flags & Emergency Kill Switches ---
