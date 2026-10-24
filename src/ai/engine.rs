@@ -1030,7 +1030,7 @@ impl AIEngine {
             let composite_logit = scaled_dir + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
 
             // DEF-R2: Signed Directional Concordance Index (SDCI) — Continuous Sigmoidal Soft-Gating
-            let snr_score = signed_z.compute_sdci(scaled_dir);
+            let snr_score = signed_z.compute_sdci(composite_logit);
             let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
             let dir = composite_logit.tanh() * sdci_gate;
 
@@ -1196,7 +1196,7 @@ impl AIEngine {
             // DEF-4305: Use genuine OFI and Hawkes asymmetry, never aliasing spatial index 17 or 27
             let composite_logit = scaled_dir + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
             // SDCI continuous sigmoidal soft-gate
-            let snr_score = signed_z.compute_sdci(scaled_dir);
+            let snr_score = signed_z.compute_sdci(composite_logit);
             let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
             let dir = composite_logit.tanh() * sdci_gate;
             let conf = compute_platt_confidence(

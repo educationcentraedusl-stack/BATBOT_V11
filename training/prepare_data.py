@@ -128,23 +128,22 @@ def compute_micro_horizon_continuous_targets(
     Computes SOTA HFT Micro-Horizon Continuous Return Targets (5-Second Horizon).
     Eradicates QA-4202 & DEF-2026-01 (Bayesian Base-Rate Prior Collapse in Meta-Labeling).
 
-    Targets per sample [y_dir, y_win, y_horiz]:
+    Targets per sample [y_dir, y_win, y_horiz, meta_weight]:
       - y_dir in [-1.0, 1.0]: Continuous Direction Target = tanh(ret_5s / (2 * vol_5s + 1e-6))
-      - y_win in [0.0, 1.0]: Conditional Directional Alignment Win Target:
+      - y_win in {0.0, 1.0}: Strict Binary Directional Alignment Win Target:
           * 1.0 if pre_trade_dir * ret_5s > friction_half_spread (profitable aligned trade)
-          * 0.50 if |ret_5s| <= 0.5 * friction_half_spread (neutral / quiet tick)
-          * 0.0 otherwise (adverse / friction-loss trade)
+          * 0.0 otherwise (adverse / friction-loss or quiet trade)
       - y_horiz in [5.0]: Constant 5.0 seconds micro-horizon target
+      - meta_weight in {0.0, 1.0}: Chop/noise sample mask (0.0 for quiet ticks, 1.0 for active trades)
 
     Guarantees:
       - Strict 5-second forward lookahead: ret_5s = ln(P_{t + 5s} / P_t).
       - Zero look-ahead bias: vol_5s is strictly computed from backward historical data.
-      - Calibration alignment: ground truth prior E[y_win] ~ 50-54%, perfectly aligning
-        Platt scaling outputs with the StrategyEngine conviction floor (65.3%).
+      - Binary formulation: eliminates degenerate prior collapse on orderbook noise.
     """
     n = len(mid_prices)
     if n == 0:
-        return np.empty((0, 3), dtype=np.float32)
+        return np.empty((0, 4), dtype=np.float32)
 
     # 1. Calculate strict 5-second forward index using searchsorted
     if n > 1 and ts_ms is not None and len(ts_ms) == n and (ts_ms[-1] - ts_ms[0] >= horizon_ms):
@@ -507,7 +506,7 @@ def load_and_preprocess_lob_data():
         "val_targets": tkan_val_tgt.contiguous(),
     }
 
-    # Prepare compact 2D CfC / Mamba-2 Tensors [N, 16] & Targets [N, 3]
+    # Prepare compact 2D CfC / Mamba-2 Tensors [N, 16] & Targets [N, 4]
     cfc_train_in = torch.from_numpy(cfc_norm[:split_idx]).contiguous()
     cfc_train_tgt = torch.from_numpy(y_targets[:split_idx]).contiguous()
     cfc_val_in = torch.from_numpy(cfc_norm[val_start_idx:]).contiguous()

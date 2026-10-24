@@ -479,26 +479,25 @@ impl Mamba2Cell {
     /// Evaluates scalar predictions directly for ultra-low latency (<1.0 µs).
     pub fn evaluate_scalar_heads(
         &self,
-        raw_heads: &Tensor,
+        heads: &Tensor,
     ) -> Result<(f64, f64, f64)> {
-        self.evaluate_scalar_heads_with_temp(raw_heads, 1.0)
+        self.evaluate_scalar_heads_with_temp(heads, 1.0)
     }
 
     /// Evaluates scalar predictions with explicit Softmax Temperature scaling.
+    /// Expects `heads` to be the output of `forward()` (which natively applies logit_scale and meta_logit_scale).
     pub fn evaluate_scalar_heads_with_temp(
         &self,
-        raw_heads: &Tensor,
+        heads: &Tensor,
         temperature: f64,
     ) -> Result<(f64, f64, f64)> {
-        let vec = raw_heads.flatten_all()?.to_vec1::<f32>()?;
+        let vec = heads.flatten_all()?.to_vec1::<f32>()?;
         if vec.len() < 3 {
             return Err(Error::Msg("INSUFFICIENT_HEAD_DIMENSIONS".to_string()));
         }
 
-        let scale_dir = (self.logit_scale.clamp(-2.0, 5.0)).exp() as f64;
-        let scale_meta = (self.meta_logit_scale.clamp(-2.0, 5.0)).exp() as f64;
-        let dir_logit = (*vec.get(0).ok_or_else(|| Error::Msg("Missing head dimension 0 (direction)".to_string()))? as f64) * scale_dir;
-        let meta_logit = (*vec.get(1).ok_or_else(|| Error::Msg("Missing head dimension 1 (meta)".to_string()))? as f64) * scale_meta;
+        let dir_logit = *vec.get(0).ok_or_else(|| Error::Msg("Missing head dimension 0 (direction)".to_string()))? as f64;
+        let meta_logit = *vec.get(1).ok_or_else(|| Error::Msg("Missing head dimension 1 (meta)".to_string()))? as f64;
         let horiz_logit = *vec.get(2).ok_or_else(|| Error::Msg("Missing head dimension 2 (horizon)".to_string()))? as f64;
 
         let t = temperature.clamp(0.05, 50.0);
@@ -596,6 +595,21 @@ mod tests {
         assert!(dir >= -1.0 && dir <= 1.0);
         assert!(dir > 0.90 && dir <= 1.0);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_mamba_scale_contract_single_multiplication() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cell = Mamba2Cell::default_cell(16, 32, 16, &device)?;
+        cell.set_scales(1.5, 2.0);
+
+        let heads = Tensor::from_slice(&[2.0f32, 3.0f32, 5.0f32], (1, 3), &device)?;
+        let (dir, meta, horiz) = cell.evaluate_scalar_heads_with_temp(&heads, 1.0)?;
+
+        assert_eq!(dir, 2.0);
+        assert_eq!(meta, 3.0);
+        assert!((horiz - 5.0).abs() < 0.1);
         Ok(())
     }
 

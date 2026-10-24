@@ -15,6 +15,18 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-10-24 - Emergency Architectural Remediation (Phase 5: Mock Data Injection Eradication, Double-Scaling Elimination, Dynamic Conviction Unsquashing, Target Shape Consistency & SDCI Composite Logit Concordance) Completed & 100% QA Verified:
+  - Step 1 (Empty Target Shape in `training/prepare_data.py`): Fixed empty array fallback return shape from `np.empty((0, 3))` to `np.empty((0, 4), dtype=np.float32)`, preserving the 4-column contract `[y_dir, y_win, y_horiz, meta_weight]`.
+  - Step 2 (Double-Scaling Eradication in `src/ai/mamba.rs`): Eradicated redundant second multiplication of `scale_dir` and `scale_meta` in `evaluate_scalar_heads_with_temp()`, establishing 1:1 parity between `forward()` and `forward_and_evaluate_fast()`. Added unit test `test_mamba_scale_contract_single_multiplication`.
+  - Step 3 (Dynamic Strategy Thresholds in `src/strategy/engine.ts`): Eradicated hardcoded `0.520` literal and squashing ternary clamps (`> 0.60 ? 0.495 : ...`), enforcing dynamic configuration via `this.config.minAiConfidence` and `this.config.aggressiveConfidenceThreshold`.
+  - Step 4 (SDCI Composite Logit Concordance in `src/ai/engine.rs`): Harmonized Signed Directional Concordance Index (SDCI) soft-gating to evaluate the composite logit `composite_logit` rather than raw pre-modulated `scaled_dir`, enabling concordant bearish orderflow to execute short signals seamlessly.
+  - Step 5 (Zero Mock Invariant in `src/tests/test_lci_microprice_entry_timing.ts`): Completely rewrote test suite to eradicate all synthetic SAB writes (`AI_DIRECTION`, `AI_CONFIDENCE`), load production native AIEngine weights (`loadAiModelFull`), and execute genuine N-API physical model inference (`runAiInferenceAssetNapi`). Validated Tick 0 initialization guard (NONE), initiation breakout entry (BUY with Direction=+0.2099, Confidence=60.41%), micro-top exhaustion filter (NONE), and symmetric breakdown entry (SELL with Direction=-0.2189, Confidence=54.71%).
+  - Step 6 (100% Verification & Latency Compliance):
+    - Rebuilt native release binary (`npm run build:rust`).
+    - Passed all 56 Rust release unit tests (`cargo test --release --lib` in 1.51s).
+    - Compiled strict TypeScript with 0 errors (`npm run build:ts`).
+    - Verified all 7 ASCRG tests passing at 37.73 µs (< 100.0 µs SLA).
+    - Verified all 4 LCI timing stages passing with zero network errors.
 * 2026-10-24 - Confidence Remediation Master Plan (Steps 1-4 Complete: Strict Binary Targets, Meta Logit Scaling, Dynamic Relative Edge Conviction & 5-Sigma Execution Lockout Eradication) Completed & 100% QA Verified:
   - Step 1 (Strict Binary Targets in `training/prepare_data.py`): Eliminated 0.50 neutral targets; set strict 1.0 (win) and 0.0 (loss) targets with zero-weight masking on chop ticks (4-column targets `[y_dir, y_win, y_horiz, meta_weight]`).
   - Step 2 (Dynamic Meta Logit Scaling & Relaxed Temperature in `src/ai/mamba.rs`, `src/ai/weights.rs`, `src/ai/engine.rs`, `training/local_async_trainer.py`): Added `meta_logit_scale` parameter scaling head 1 during inference, relaxed temperature clamp to 50.0. Retrained model over 10 epochs achieving peak holdout IC +0.0626, Platt scaling $A = 2.9883 \gg 0.50$, $B = 1.8554$, $T = 3.6864$, with active confidence mean of 0.5891 and std 0.0537.

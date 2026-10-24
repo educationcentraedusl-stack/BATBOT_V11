@@ -120,8 +120,8 @@ class StrategyEngine {
         const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.50;
         const defaultProfitLock = !isNaN(envProfitLock) ? envProfitLock : 10.0;
         const defaultMaxShortSlots = !isNaN(envMaxShortSlots) ? envMaxShortSlots : 3;
-        const defaultMinAiConfidence = !isNaN(envMinAiConfidence) && envMinAiConfidence <= 0.60 ? envMinAiConfidence : 0.495;
-        const defaultAggressiveConfidence = !isNaN(envAggressiveConfidence) && envAggressiveConfidence <= 0.65 ? envAggressiveConfidence : 0.520;
+        const defaultMinAiConfidence = !isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.495;
+        const defaultAggressiveConfidence = !isNaN(envAggressiveConfidence) ? envAggressiveConfidence : 0.520;
         const defaultObiBuy = !isNaN(envObiBuy) ? envObiBuy : 0.35;
         const defaultObiSell = !isNaN(envObiSell) ? envObiSell : -0.35;
         const defaultCvdBuy = !isNaN(envCvdBuy) ? envCvdBuy : 0.0;
@@ -267,7 +267,7 @@ class StrategyEngine {
      * - ALPHA_ACTIVE: Normal entries (1.0x sizing).
      *   Transition to MODEL_BROKEN if isDriftFlagged or safeIC <= -0.02.
      *   Transition to DEGRADED if safeIC < 0.01 sustained for >= 30s.
-     * - DEGRADED: Reduced entries (aiConfidence >= 0.80 only, 0.50x sizing).
+     * - DEGRADED: Reduced entries (aggressive confidence hurdle only, 0.50x sizing).
      *   Transition to MODEL_BROKEN if safeIC <= -0.02 or CUSUM drift flag is active.
      *   Recovery to ALPHA_ACTIVE if safeIC >= 0.03 sustained for >= 60s without drift or evidence >= 0.95.
      * - MODEL_BROKEN: ALL entries blocked (0.0x sizing).
@@ -2245,10 +2245,10 @@ class StrategyEngine {
                 this.staticResult.executionPromise = undefined;
                 return this.staticResult;
             }
-            if (this.icState === "DEGRADED" && aiConfidence < 0.520) {
+            if (this.icState === "DEGRADED" && aiConfidence < this.config.aggressiveConfidenceThreshold) {
                 if (seq % 1000n === 0n) {
                     console.warn(`[StrategyEngine][${this.config.symbol}][IC_DEGRADED_FILTER] Seq #${seq} | ` +
-                        `State: DEGRADED (IC: ${safeIC.toFixed(4)}). Confidence ${(aiConfidence * 100).toFixed(1)}% < 52.0% floor.`);
+                        `State: DEGRADED (IC: ${safeIC.toFixed(4)}). Confidence ${(aiConfidence * 100).toFixed(1)}% < ${(this.config.aggressiveConfidenceThreshold * 100).toFixed(1)}% floor.`);
                 }
                 this.staticResult.sequenceNum = seq;
                 this.staticResult.signalType = "NONE";
@@ -2260,7 +2260,7 @@ class StrategyEngine {
                 this.staticResult.riskResult = {
                     passed: false,
                     reasonCode: "IC_DEGRADED_LOW_CONFIDENCE",
-                    message: `DEGRADED state requires confidence >= 52% (got ${(aiConfidence * 100).toFixed(1)}%)`,
+                    message: `DEGRADED state requires confidence >= ${(this.config.aggressiveConfidenceThreshold * 100).toFixed(1)}% (got ${(aiConfidence * 100).toFixed(1)}%)`,
                 };
                 this.staticResult.executionPromise = undefined;
                 return this.staticResult;
@@ -2303,8 +2303,7 @@ class StrategyEngine {
             // SOTA Volatility, Toxicity & Drawdown Adjusted Dynamic Conviction Floor (theta_conf)
             // Base confidence hurdle aligned with empirical Bayesian hurdle (~0.495)
             // Eradicates the 5-Sigma Execution Paradox: Never allow legacy >0.60 hurdle to lock out trading.
-            const rawMinConfidence = this.config.minAiConfidence;
-            const baseMinConfidence = rawMinConfidence > 0.60 ? 0.495 : rawMinConfidence;
+            const baseMinConfidence = this.config.minAiConfidence;
             let effectiveMinConfidence = baseMinConfidence;
             const sessionPnl = this.riskGuard.getCumulativeDailyRealizedPnl();
             const isDrawdown = sessionPnl < -5.0; // Enforce drawdown penalty only on significant drawdowns (> $5)
@@ -2338,8 +2337,7 @@ class StrategyEngine {
             const ofiScore = Math.max(-1.0, Math.min(1.0, hazardMetrics.ofi));
             // SOTA Continuous 4-Factor Alpha Fusion: 50% AI Direction*Conf, 20% LOB OBI, 15% Rolling CVD Velocity, 15% Multi-Level OFI
             const compositeScore = 0.50 * aiScore + 0.20 * obiScore + 0.15 * cvdScore + 0.15 * ofiScore;
-            const rawAggressiveThreshold = this.config.aggressiveConfidenceThreshold;
-            const effectiveAggressiveThreshold = rawAggressiveThreshold > 0.65 ? 0.520 : rawAggressiveThreshold;
+            const effectiveAggressiveThreshold = this.config.aggressiveConfidenceThreshold;
             const isHighConfidenceAi = aiConfidence >= Math.max(effectiveAggressiveThreshold, effectiveMinConfidence);
             // DEF-R4: Information Ratio Gate (IR = IC * sqrt(breadth))
             // Approximate breadth: ~720 independent 5s predictions per hour
@@ -2447,12 +2445,12 @@ class StrategyEngine {
                 isSellSignal = false;
             }
             else if (!isVerifiedTrendRegime) {
-                // In unverified trend / random walk regime: only ultra-high confidence entries allowed (>= 0.80)
-                const randomWalkConfFloor = 0.520;
+                // In unverified trend / random walk regime: only aggressive confidence entries allowed
+                const randomWalkConfFloor = effectiveAggressiveThreshold;
                 if (aiConfidence < randomWalkConfFloor) {
                     if ((isBuySignal || isSellSignal) && seq % 1000n === 0n) {
                         console.log(`[StrategyEngine][${this.config.symbol}][REGIME_GATE][BLOCKED] Seq #${seq} | ` +
-                            `VR=${varianceRatio.toFixed(3)} (State: ${regimeState}, H: ${hurstExponent.toFixed(3)}, S_LOB: ${lobEntropy.toFixed(3)}). Confidence ${(aiConfidence * 100).toFixed(1)}% < ${randomWalkConfFloor * 100}% floor.`);
+                            `VR=${varianceRatio.toFixed(3)} (State: ${regimeState}, H: ${hurstExponent.toFixed(3)}, S_LOB: ${lobEntropy.toFixed(3)}). Confidence ${(aiConfidence * 100).toFixed(1)}% < ${(randomWalkConfFloor * 100).toFixed(1)}% floor.`);
                     }
                     isBuySignal = false;
                     isSellSignal = false;
