@@ -1000,7 +1000,7 @@ impl AIEngine {
             let sab_offset = sab.load_f64_asset(asset_idx, 129);
             let sab_temp = sab.load_f64_asset(asset_idx, 127);
 
-            let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.05, 5.0);
+            let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.05, 50.0);
             // DEF-4303: Restore Platt scaling fallbacks for uninitialized SAB telemetry (slot 128 & 129)
             let platt_scale = if sab_scale > 0.001 {
                 sab_scale
@@ -1022,13 +1022,9 @@ impl AIEngine {
             let ofi = sab.load_f64_asset(asset_idx, 138);
             let hawkes_asym = sab.load_f64_asset(asset_idx, 149);
 
-            // QA-4204 FIX: Capture raw meta_logit from Mamba-2 head 1 for Platt-scaled confidence
-            let (dir_raw, meta_logit_raw, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, delta_t, temp);
-            let scale_meta = self.calibration_params.meta_logit_scale.clamp(-2.0, 5.0).exp();
-            let meta_logit = meta_logit_raw * scale_meta;
+            // QA-4204 FIX: Capture scaled meta_logit and dir from Mamba-2 for Platt-scaled confidence
+            let (scaled_dir, meta_logit, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, delta_t, temp);
             sab.store_f64_asset(asset_idx, 152, meta_logit.abs());
-            let scale_dir = self.calibration_params.logit_scale.clamp(-2.0, 5.0).exp();
-            let scaled_dir = dir_raw * scale_dir;
 
             // DEF-R1: Balanced microstructure logit modulation & SINGLE outer tanh WITHOUT temperature divisor
             let composite_logit = scaled_dir + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
@@ -1193,13 +1189,9 @@ impl AIEngine {
             if m_hidden_guard.len() != mamba.d_inner * mamba.d_state {
                 m_hidden_guard.resize(mamba.d_inner * mamba.d_state, 0.0f32);
             }
-            let temp = self.calibration_params.temperature.clamp(0.05, 5.0);
-            // QA-4204 FIX: Capture raw meta_logit for Platt-scaled confidence
-            let (dir_raw, meta_logit_raw, _) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.010, temp);
-            let scale_meta = self.calibration_params.meta_logit_scale.clamp(-2.0, 5.0).exp();
-            let meta_logit = meta_logit_raw * scale_meta;
-            let scale_dir = self.calibration_params.logit_scale.clamp(-2.0, 5.0).exp();
-            let scaled_dir = dir_raw * scale_dir;
+            let temp = self.calibration_params.temperature.clamp(0.05, 50.0);
+            // QA-4204 FIX: Capture scaled meta_logit and dir from Mamba-2 for Platt-scaled confidence
+            let (scaled_dir, meta_logit, _) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.010, temp);
             let obi = *features.get(8).ok_or_else(|| Error::Msg("Missing feature[8] for obi".to_string()))?;
             // DEF-4305: Use genuine OFI and Hawkes asymmetry, never aliasing spatial index 17 or 27
             let composite_logit = scaled_dir + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
@@ -1258,7 +1250,7 @@ impl AIEngine {
                 m_hidden_guard.resize(mamba.d_inner * mamba.d_state, 0.0f32);
             }
             let sab_temp = sab.load_f64_asset(0, 127);
-            let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.05, 5.0);
+            let temp = if sab_temp > 0.05 { sab_temp } else { self.calibration_params.temperature }.clamp(0.05, 50.0);
 
             let tkan_out = self.tkan.forward(&lob_features);
             if tkan_out.len() < 16 {
@@ -1271,12 +1263,8 @@ impl AIEngine {
                     *slot = val as f32;
                 }
             }
-            // QA-4204 FIX: Capture raw meta_logit for Platt-scaled confidence
-            let (dir_raw, meta_logit_raw, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.010, temp);
-            let scale_meta = self.calibration_params.meta_logit_scale.clamp(-2.0, 5.0).exp();
-            let meta_logit = meta_logit_raw * scale_meta;
-            let scale_dir = self.calibration_params.logit_scale.clamp(-2.0, 5.0).exp();
-            let scaled_dir = dir_raw * scale_dir;
+            // QA-4204 FIX: Capture scaled meta_logit and dir from Mamba-2 for Platt-scaled confidence
+            let (scaled_dir, meta_logit, horiz_sec) = mamba.forward_and_evaluate_fast(&tkan_f32, &mut *m_hidden_guard, 0.010, temp);
 
             let norm = m_hidden_guard.iter().map(|v| v * v).sum::<f32>().sqrt() as f64;
             let obi = sab.load_f64_asset(0, 1);
@@ -1471,7 +1459,7 @@ pub fn compute_platt_confidence(
     temperature: f64,
 ) -> f64 {
     let s = platt_scale.clamp(0.1, 10.0);
-    let t = temperature.clamp(0.05, 5.0);
+    let t = temperature.clamp(0.05, 50.0);
     let calibrated_logit = ((s * meta_logit + platt_offset) / t).clamp(-60.0, 60.0);
     let sig = 1.0 / (1.0 + (-calibrated_logit).exp());
     sig.clamp(1e-7, 1.0 - 1e-7)

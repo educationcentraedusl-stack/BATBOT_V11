@@ -120,8 +120,8 @@ class StrategyEngine {
         const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.50;
         const defaultProfitLock = !isNaN(envProfitLock) ? envProfitLock : 10.0;
         const defaultMaxShortSlots = !isNaN(envMaxShortSlots) ? envMaxShortSlots : 3;
-        const defaultMinAiConfidence = !isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.495;
-        const defaultAggressiveConfidence = !isNaN(envAggressiveConfidence) ? envAggressiveConfidence : 0.520;
+        const defaultMinAiConfidence = !isNaN(envMinAiConfidence) && envMinAiConfidence <= 0.60 ? envMinAiConfidence : 0.495;
+        const defaultAggressiveConfidence = !isNaN(envAggressiveConfidence) && envAggressiveConfidence <= 0.65 ? envAggressiveConfidence : 0.520;
         const defaultObiBuy = !isNaN(envObiBuy) ? envObiBuy : 0.35;
         const defaultObiSell = !isNaN(envObiSell) ? envObiSell : -0.35;
         const defaultCvdBuy = !isNaN(envCvdBuy) ? envCvdBuy : 0.0;
@@ -2301,30 +2301,32 @@ class StrategyEngine {
             const totalFrictionBarrier = (2.0 * makerFeeRate) + halfSpreadBps + estimatedSlippage;
             const expectedNetAlpha = expectedAlpha - totalFrictionBarrier;
             // SOTA Volatility, Toxicity & Drawdown Adjusted Dynamic Conviction Floor (theta_conf)
-            // Base confidence hurdle aligned with Bayesian posterior probability (49.5%)
-            const baseMinConfidence = this.config.minAiConfidence;
+            // Base confidence hurdle aligned with empirical Bayesian hurdle (~0.495)
+            // Eradicates the 5-Sigma Execution Paradox: Never allow legacy >0.60 hurdle to lock out trading.
+            const rawMinConfidence = this.config.minAiConfidence;
+            const baseMinConfidence = rawMinConfidence > 0.60 ? 0.495 : rawMinConfidence;
             let effectiveMinConfidence = baseMinConfidence;
             const sessionPnl = this.riskGuard.getCumulativeDailyRealizedPnl();
             const isDrawdown = sessionPnl < -5.0; // Enforce drawdown penalty only on significant drawdowns (> $5)
             // Dynamic Regime Conviction: Modulate confidence hurdle proportionally (+10 to +30 bps)
             if (volEstimate < 0.0015) {
-                effectiveMinConfidence = Math.min(0.55, effectiveMinConfidence + 0.01);
+                effectiveMinConfidence = Math.min(0.525, effectiveMinConfidence + 0.005);
             }
             else if (hurstExponent > 0.55 && safeGarmanKlass > 0.001) {
                 // Strong trend regime: allow frictionless capture down to base floor
-                effectiveMinConfidence = Math.max(baseMinConfidence, effectiveMinConfidence - 0.01);
+                effectiveMinConfidence = Math.max(baseMinConfidence, effectiveMinConfidence - 0.005);
             }
             // Microstructure Toxicity Surcharge: Scaled proportionally with VPIN severity
             const vpinVal = this.client.getVPIN(this.assetIndex);
             if (vpinVal >= 0.90) {
-                effectiveMinConfidence = Math.min(0.55, effectiveMinConfidence + 0.015);
+                effectiveMinConfidence = Math.min(0.525, effectiveMinConfidence + 0.010);
             }
             // Drawdown Surcharge: Apply moderate protection during deep drawdown
             if (isDrawdown) {
-                effectiveMinConfidence = Math.min(0.55, effectiveMinConfidence + 0.015);
+                effectiveMinConfidence = Math.min(0.525, effectiveMinConfidence + 0.010);
             }
-            // Strict bounding around base conviction floor
-            effectiveMinConfidence = Math.min(0.60, Math.max(baseMinConfidence, effectiveMinConfidence));
+            // Strict bounding around base conviction floor (capped at 0.530)
+            effectiveMinConfidence = Math.min(0.530, Math.max(baseMinConfidence, effectiveMinConfidence));
             // SOTA August 2026 4-Factor Multi-Variate Composite Signal Engine
             const obiScore = Math.max(-1.0, Math.min(1.0, obi));
             const cvdVelocity = cvd;
@@ -2336,7 +2338,9 @@ class StrategyEngine {
             const ofiScore = Math.max(-1.0, Math.min(1.0, hazardMetrics.ofi));
             // SOTA Continuous 4-Factor Alpha Fusion: 50% AI Direction*Conf, 20% LOB OBI, 15% Rolling CVD Velocity, 15% Multi-Level OFI
             const compositeScore = 0.50 * aiScore + 0.20 * obiScore + 0.15 * cvdScore + 0.15 * ofiScore;
-            const isHighConfidenceAi = aiConfidence >= Math.max(this.config.aggressiveConfidenceThreshold, effectiveMinConfidence);
+            const rawAggressiveThreshold = this.config.aggressiveConfidenceThreshold;
+            const effectiveAggressiveThreshold = rawAggressiveThreshold > 0.65 ? 0.520 : rawAggressiveThreshold;
+            const isHighConfidenceAi = aiConfidence >= Math.max(effectiveAggressiveThreshold, effectiveMinConfidence);
             // DEF-R4: Information Ratio Gate (IR = IC * sqrt(breadth))
             // Approximate breadth: ~720 independent 5s predictions per hour
             const breadthPerHour = 720;

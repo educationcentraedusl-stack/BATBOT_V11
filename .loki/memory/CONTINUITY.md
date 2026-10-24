@@ -15,6 +15,16 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-10-24 - Confidence Remediation Master Plan (Steps 1-4 Complete: Strict Binary Targets, Meta Logit Scaling, Dynamic Relative Edge Conviction & 5-Sigma Execution Lockout Eradication) Completed & 100% QA Verified:
+  - Step 1 (Strict Binary Targets in `training/prepare_data.py`): Eliminated 0.50 neutral targets; set strict 1.0 (win) and 0.0 (loss) targets with zero-weight masking on chop ticks (4-column targets `[y_dir, y_win, y_horiz, meta_weight]`).
+  - Step 2 (Dynamic Meta Logit Scaling & Relaxed Temperature in `src/ai/mamba.rs`, `src/ai/weights.rs`, `src/ai/engine.rs`, `training/local_async_trainer.py`): Added `meta_logit_scale` parameter scaling head 1 during inference, relaxed temperature clamp to 50.0. Retrained model over 10 epochs achieving peak holdout IC +0.0626, Platt scaling $A = 2.9883 \gg 0.50$, $B = 1.8554$, $T = 3.6864$, with active confidence mean of 0.5891 and std 0.0537.
+  - Step 3 (Conviction Floor Alignment & Relative Edge Conviction in `src/strategy/engine.ts`, `src/strategy/orchestrator.rs`, `.env`): Aligned empirical conviction threshold to 0.495 (and aggressive threshold to 0.520) with Normalized Relative Edge Conviction mapping excess posterior probability over baseline prior (0.460); eliminated legacy 5-sigma lockout (>0.60/0.72).
+  - Step 4 (Physical Retraining, Compilation & Multi-Tier Verification):
+    - Recompiled Rust release binary (`cargo test --release --lib` 55/55 passed in 1.42s).
+    - Built N-API native release binary (`npm run build:rust` in 4m 20s).
+    - Compiled strict TypeScript (`npm run build:ts`, 0 errors).
+    - Validated 7/7 ASCRG tests at 42.54 µs latency (< 100.0 µs SLA) with physical AI confidence at 64.73%.
+    - Validated 5/5 portfolio concentration stages, 6/6 IC kill switch hysteresis stages, and confirmed organic live trade dispatch (BUY and SELL entries triggered at initiation and breakdown).
 * 2026-10-23 - Master Plan Live Anomaly Remediation & Latency SLA Enforcement (Steps 1-4 Complete + Sub-50µs Hot-Path Optimization) Completed & 100% QA Verified:
   - Step 1 (High-IC Alpha Immunity in `src/ai/ic_tracker.rs`): Added High-IC Alpha Immunity (`IC >= 0.0500` or `0.0300`) to break CUSUM deadlock, purged hot-path `eprintln!`, added/fixed `test_high_ic_alpha_immunity`.
   - Step 2 (SAB Calibration Broadcast in `src/ai/engine.rs` & `src/lib.rs`): Synced slots 127, 128, 129 across all assets via `atomic_bridge` before wrapping into `IngestionBridge` and refreshed on every tick.

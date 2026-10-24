@@ -176,13 +176,16 @@ impl AiEngine {
                 w_in, b_in, a_log, w_b, b_b, w_c, b_c, w_out, b_out, d_skip, w_heads, b_heads,
                 input_dim, d_inner, d_state,
             ) {
-                Ok(mamba_cell) => {
+                Ok(mut mamba_cell) => {
+                    mamba_cell.set_scales(logit_scale_val as f32, meta_logit_scale_val as f32);
                     println!(
-                        "[BATBOT_V11][AI Engine Zero-Copy] Loaded SOTA Mamba-2 SSM weights from {} via mmap. Status: CALIBRATED (Mamba-2: in={}, inner={}, state={}).",
+                        "[BATBOT_V11][AI Engine Zero-Copy] Loaded SOTA Mamba-2 SSM weights from {} via mmap. Status: CALIBRATED (Mamba-2: in={}, inner={}, state={}, logit_scale={:.4}, meta_scale={:.4}).",
                         path_ref.display(),
                         input_dim,
                         d_inner,
-                        d_state
+                        d_state,
+                        logit_scale_val,
+                        meta_logit_scale_val
                     );
                     Self {
                         cell: None,

@@ -355,7 +355,7 @@ def fit_platt_temperature_calibration(model: nn.Module, val_loader: DataLoader, 
         with torch.no_grad():
             platt_scale.data.clamp_(min=0.50)
 
-        temp_clamp       = torch.clamp(temperature, min=0.05, max=5.0)
+        temp_clamp       = torch.clamp(temperature, min=0.05, max=50.0)
         calibrated_logit = (platt_scale * logits_dev + platt_offset) / temp_clamp
         prob             = torch.sigmoid(calibrated_logit)
 
@@ -380,11 +380,11 @@ def fit_platt_temperature_calibration(model: nn.Module, val_loader: DataLoader, 
 
     final_scale  = float(platt_scale.item())
     final_offset = float(platt_offset.item())
-    final_temp   = float(torch.clamp(temperature, min=0.05, max=5.0).item())
+    final_temp   = float(torch.clamp(temperature, min=0.05, max=50.0).item())
 
     # Convergence diagnostics
     with torch.no_grad():
-        temp_clamp       = torch.clamp(temperature, min=0.05, max=5.0)
+        temp_clamp       = torch.clamp(temperature, min=0.05, max=50.0)
         calibrated_logit = (platt_scale * active_logits + platt_offset) / temp_clamp
         conv_var         = calibrated_logit.var().item()
         conf_mean        = torch.sigmoid(calibrated_logit).mean().item()

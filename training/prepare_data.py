@@ -159,7 +159,7 @@ def compute_micro_horizon_continuous_targets(
         min_forward_shift = max(50, CFC_SEQ_LEN + 1)
         if n <= min_forward_shift:
             # Dataset too small to provide a clean forward target beyond sequence window: return clean neutral targets
-            return np.zeros((n, 3), dtype=np.float32)
+            return np.zeros((n, 4), dtype=np.float32)
         shift_ticks = min_forward_shift
         raw_idx = np.arange(n) + shift_ticks
         valid_forward = raw_idx < n
@@ -280,7 +280,7 @@ def create_cfc_sequences_strided(features: np.ndarray, targets: np.ndarray, seq_
     Returns PyTorch tensors of shape [Batch, SeqLen, Features] and [Batch, SeqLen, 3].
     """
     assert features.shape[1] == TKAN_OUTPUT_DIM, f"Features dim mismatch: expected {TKAN_OUTPUT_DIM}, got {features.shape[1]}"
-    assert targets.shape[1] == 3, f"Targets dim mismatch: expected 3, got {targets.shape[1]}"
+    assert targets.shape[1] in (3, 4), f"Targets dim mismatch: expected 3 or 4, got {targets.shape[1]}"
 
     num_samples = len(features) - seq_len + 1
     if num_samples <= 0:

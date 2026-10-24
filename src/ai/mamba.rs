@@ -45,6 +45,8 @@ pub struct Mamba2Cell {
     pub w_out_flat: Vec<f32>,
     pub b_out_flat: Vec<f32>,
     pub d_skip_flat: Vec<f32>,
+    pub logit_scale: f32,
+    pub meta_logit_scale: f32,
     pub input_dim: usize,
     pub d_inner: usize,
     pub d_state: usize,
@@ -108,10 +110,17 @@ impl Mamba2Cell {
             w_out_flat,
             b_out_flat,
             d_skip_flat,
+            logit_scale: 0.0f32,
+            meta_logit_scale: 0.0f32,
             input_dim,
             d_inner,
             d_state,
         })
+    }
+
+    pub fn set_scales(&mut self, logit_scale: f32, meta_logit_scale: f32) {
+        self.logit_scale = logit_scale;
+        self.meta_logit_scale = meta_logit_scale;
     }
 
     /// Creates a default initialized Mamba-2 cell on the specified device.
@@ -221,7 +230,12 @@ impl Mamba2Cell {
 
         let raw_heads = y_norm.matmul(&self.w_heads)?.broadcast_add(&self.b_heads)?; // [1, 3]
 
-        Ok((raw_heads, h_next))
+        let scale_dir = (self.logit_scale.clamp(-2.0, 5.0)).exp();
+        let scale_meta = (self.meta_logit_scale.clamp(-2.0, 5.0)).exp();
+        let scales = Tensor::from_slice(&[scale_dir, scale_meta, 1.0f32], (1, 3), input.device())?;
+        let scaled_heads = raw_heads.broadcast_mul(&scales)?;
+
+        Ok((scaled_heads, h_next))
     }
 
     /// Zero-tensor-allocation combined forward pass and head evaluation for ultra-low latency (<50 µs).
@@ -298,7 +312,12 @@ impl Mamba2Cell {
             horiz_logit += y_n * (self.w_heads_flat.get(i * 3 + 2).copied().unwrap_or(0.0) as f64);
         }
 
-        let t = temperature.clamp(0.05, 5.0);
+        let scale_dir = (self.logit_scale.clamp(-2.0, 5.0)).exp() as f64;
+        let scale_meta = (self.meta_logit_scale.clamp(-2.0, 5.0)).exp() as f64;
+        dir_logit *= scale_dir;
+        meta_logit *= scale_meta;
+
+        let t = temperature.clamp(0.05, 50.0);
         let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().clamp(1.0, 300.0);
 
         Ok(((dir_logit, meta_logit, horizon_sec), h_next))
@@ -445,7 +464,12 @@ impl Mamba2Cell {
             horiz_logit += y_n * (self.w_heads_flat.get(j * 3 + 2).copied().unwrap_or(0.0) as f64);
         }
 
-        let t = temperature.clamp(0.05, 5.0);
+        let scale_dir = (self.logit_scale.clamp(-2.0, 5.0)).exp() as f64;
+        let scale_meta = (self.meta_logit_scale.clamp(-2.0, 5.0)).exp() as f64;
+        dir_logit *= scale_dir;
+        meta_logit *= scale_meta;
+
+        let t = temperature.clamp(0.05, 50.0);
         // DEF-4301 & DEF-4302: Direct raw standardized logit passthrough without ssm_scale attenuation.
         let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().clamp(1.0, 300.0);
 
@@ -471,11 +495,13 @@ impl Mamba2Cell {
             return Err(Error::Msg("INSUFFICIENT_HEAD_DIMENSIONS".to_string()));
         }
 
-        let dir_logit = *vec.get(0).ok_or_else(|| Error::Msg("Missing head dimension 0 (direction)".to_string()))? as f64;
-        let meta_logit = *vec.get(1).ok_or_else(|| Error::Msg("Missing head dimension 1 (meta)".to_string()))? as f64;
+        let scale_dir = (self.logit_scale.clamp(-2.0, 5.0)).exp() as f64;
+        let scale_meta = (self.meta_logit_scale.clamp(-2.0, 5.0)).exp() as f64;
+        let dir_logit = (*vec.get(0).ok_or_else(|| Error::Msg("Missing head dimension 0 (direction)".to_string()))? as f64) * scale_dir;
+        let meta_logit = (*vec.get(1).ok_or_else(|| Error::Msg("Missing head dimension 1 (meta)".to_string()))? as f64) * scale_meta;
         let horiz_logit = *vec.get(2).ok_or_else(|| Error::Msg("Missing head dimension 2 (horizon)".to_string()))? as f64;
 
-        let t = temperature.clamp(0.05, 5.0);
+        let t = temperature.clamp(0.05, 50.0);
         // DEF-4301 & DEF-4302: Direct raw standardized logit passthrough without ssm_scale attenuation.
         let horizon_sec = ((horiz_logit / t).exp() + 1.0).ln().clamp(1.0, 300.0);
 

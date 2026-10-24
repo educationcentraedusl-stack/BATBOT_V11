@@ -179,8 +179,8 @@ impl StrategyOrchestrator {
                                         }
                                     };
 
-                                    // If signal confidence exceeds threshold (e.g. 0.65)
-                                    if confidence >= 0.65 && signal_direction.abs() > 0.5 {
+                                    // If signal confidence exceeds empirical hurdle (0.495)
+                                    if confidence >= 0.495 && signal_direction.abs() > 0.5 {
                                         // Dynamic price derivation from live top of L2 orderbook
                                         if let Some((best_bid, best_ask, mid_price)) = top_of_book {
                                             let is_buy = signal_direction > 0.0;
