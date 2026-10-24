@@ -354,6 +354,17 @@ export class StrategyEngine {
   }
 
   /**
+   * Resets the Composite Leading Confirmation Index (LCI) baseline state.
+   * Forces re-initialization on the next tick (Stage 0 guard).
+   */
+  public resetLciBaseline(): void {
+    this.isLciInitialized = false;
+    this.prevOBI = 0;
+    this.prevOBIVelocity = 0;
+    this.prevTickMs = 0;
+  }
+
+  /**
    * DEF-R7 & SOTA Anomaly Resolution:
    * 3-State Hysteresis CUSUM-SPRT IC Kill Switch with High-Alpha Fast-Path Unlatch & Leaky-Bucket Accumulator
    *
@@ -2815,8 +2826,10 @@ export class StrategyEngine {
       const isDrawdown = sessionPnl < -5.0; // Enforce drawdown penalty only on significant drawdowns (> $5)
 
       // Dynamic Regime Conviction: Modulate confidence hurdle proportionally (+10 to +30 bps)
+      // Bounded relative to baseMinConfidence (never squashing caller configuration)
+      const maxDynamicCeiling = Math.min(1.0, baseMinConfidence + 0.035);
       if (volEstimate < 0.0015) {
-        effectiveMinConfidence = Math.min(0.525, effectiveMinConfidence + 0.005);
+        effectiveMinConfidence = Math.min(maxDynamicCeiling, effectiveMinConfidence + 0.005);
       } else if (hurstExponent > 0.55 && safeGarmanKlass > 0.001) {
         // Strong trend regime: allow frictionless capture down to base floor
         effectiveMinConfidence = Math.max(baseMinConfidence, effectiveMinConfidence - 0.005);
@@ -2825,16 +2838,16 @@ export class StrategyEngine {
       // Microstructure Toxicity Surcharge: Scaled proportionally with VPIN severity
       const vpinVal = this.client.getVPIN(this.assetIndex);
       if (vpinVal >= 0.90) {
-        effectiveMinConfidence = Math.min(0.525, effectiveMinConfidence + 0.010);
+        effectiveMinConfidence = Math.min(maxDynamicCeiling, effectiveMinConfidence + 0.010);
       }
 
       // Drawdown Surcharge: Apply moderate protection during deep drawdown
       if (isDrawdown) {
-        effectiveMinConfidence = Math.min(0.525, effectiveMinConfidence + 0.010);
+        effectiveMinConfidence = Math.min(maxDynamicCeiling, effectiveMinConfidence + 0.010);
       }
 
-      // Strict bounding around base conviction floor (capped at 0.530)
-      effectiveMinConfidence = Math.min(0.530, Math.max(baseMinConfidence, effectiveMinConfidence));
+      // Strict bounding around base conviction floor with dynamic relative ceiling
+      effectiveMinConfidence = Math.min(maxDynamicCeiling, Math.max(baseMinConfidence, effectiveMinConfidence));
 
       // SOTA August 2026 4-Factor Multi-Variate Composite Signal Engine
       const obiScore = Math.max(-1.0, Math.min(1.0, obi));

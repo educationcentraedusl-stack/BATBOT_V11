@@ -153,7 +153,7 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   console.log("[STAGE 0] Testing Tick 0 Initialization Guard (No spurious signal on uninitialized state)...");
   engine.annihilateRestingEntryOrders("STAGE_0_INIT");
   engine.getHedgeLedger().clearSlots();
-  (engine as unknown as { isLciInitialized: boolean }).isLciInitialized = false;
+  engine.resetLciBaseline();
 
   await new Promise((r) => setTimeout(r, 10));
   let nowMs = timeSynchronizer.getAdjustedNowMs();
@@ -323,6 +323,7 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   console.log("  ✅ ALL 4 TEST STAGES PASSED (100% SOTA DEF-R8 & DEF-3102 SPECIFICATION COMPLIANCE)");
   console.log("  Zero Mock Invariant: 100% Proven via Physical Native Rust AI Inference");
   console.log("================================================================================\n");
+  process.exit(0);
 }
 
 runLCIMicropriceTimingTestSuite().catch((err) => {
