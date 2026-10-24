@@ -1592,13 +1592,17 @@ export class HedgePositionLedger {
       }
     }
 
+    // Enforce SOTA Payoff Ratio Barrier: R:R >= 0.85
+    const minPayoffRatio = 0.85;
+    const effectiveTpPercent = Math.max(tpPercent, slPercent * minPayoffRatio);
+
     if (isAuthoritativeSnapshot) {
       this.coreLong.isOccupied = true;
       this.coreLong.lifecycleState = "OCCUPIED";
       this.coreLong.quantity = quantity;
       this.coreLong.initialQuantity = quantity;
       this.coreLong.entryPrice = entryPrice;
-      this.coreLong.takeProfitPercent = tpPercent;
+      this.coreLong.takeProfitPercent = effectiveTpPercent;
       this.coreLong.stopLossPercent = slPercent;
       if (!this.coreLong.openTime || this.coreLong.openTime === 0) {
         this.coreLong.openTime = Date.now();
@@ -1607,15 +1611,15 @@ export class HedgePositionLedger {
       const takerFee = this.sizingCalc.getTakerFeeRate();
       const feeMultiplier = (makerFee + takerFee) * 2.5;
       this.coreLong.breakEvenPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1.0 + feeMultiplier));
-      this.coreLong.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tpPercent / 100));
+      this.coreLong.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + effectiveTpPercent / 100));
       const rawSl = entryPrice * (1 - slPercent / 100);
       this.applyMonotonicStopLoss(this.coreLong, rawSl);
       this.coreLong.lastSyncedSlPrice = this.coreLong.stopLossPrice;
-      const tp1Pct = Math.min(2.0, tpPercent * 1.0);
-      const tp2Pct = Math.min(3.0, tpPercent * 2.0);
-      const tp3Pct = Math.min(5.0, tpPercent * 4.0);
-      const tp4Pct = Math.min(8.0, tpPercent * 6.0);
-      const tp5Pct = Math.min(12.0, tpPercent * 10.0);
+      const tp1Pct = Math.min(2.0, effectiveTpPercent * 1.0);
+      const tp2Pct = Math.min(3.0, effectiveTpPercent * 2.0);
+      const tp3Pct = Math.min(5.0, effectiveTpPercent * 4.0);
+      const tp4Pct = Math.min(8.0, effectiveTpPercent * 6.0);
+      const tp5Pct = Math.min(12.0, effectiveTpPercent * 10.0);
       this.coreLong.tpPrices = [
         SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tp1Pct / 100)),
         SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tp2Pct / 100)),
@@ -1645,16 +1649,16 @@ export class HedgePositionLedger {
       const takerFee = this.sizingCalc.getTakerFeeRate();
       const feeMultiplier = (makerFee + takerFee) * 2.5;
       this.coreLong.breakEvenPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1.0 + feeMultiplier));
-      this.coreLong.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + tpPercent / 100));
+      this.coreLong.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + effectiveTpPercent / 100));
       const rawSl = newAvgEntry * (1 - slPercent / 100);
       this.applyMonotonicStopLoss(this.coreLong, rawSl);
       this.coreLong.lastSyncedSlPrice = this.coreLong.stopLossPrice;
 
-      const tp1Pct = Math.min(2.0, tpPercent * 1.0);
-      const tp2Pct = Math.min(3.0, tpPercent * 2.0);
-      const tp3Pct = Math.min(5.0, tpPercent * 4.0);
-      const tp4Pct = Math.min(8.0, tpPercent * 6.0);
-      const tp5Pct = Math.min(12.0, tpPercent * 10.0);
+      const tp1Pct = Math.min(2.0, effectiveTpPercent * 1.0);
+      const tp2Pct = Math.min(3.0, effectiveTpPercent * 2.0);
+      const tp3Pct = Math.min(5.0, effectiveTpPercent * 4.0);
+      const tp4Pct = Math.min(8.0, effectiveTpPercent * 6.0);
+      const tp5Pct = Math.min(12.0, effectiveTpPercent * 10.0);
 
       this.coreLong.tpPrices = [
         SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + tp1Pct / 100)),
@@ -1676,7 +1680,7 @@ export class HedgePositionLedger {
     this.coreLong.initialQuantity = quantity;
     this.coreLong.entryPrice = entryPrice;
     this.coreLong.openTime = Date.now();
-    this.coreLong.takeProfitPercent = tpPercent;
+    this.coreLong.takeProfitPercent = effectiveTpPercent;
     this.coreLong.stopLossPercent = slPercent;
     this.coreLong.tpStageReached = 0;
     this.coreLong.breakEvenLocked = false;
@@ -1690,17 +1694,17 @@ export class HedgePositionLedger {
     const takerFee = this.sizingCalc.getTakerFeeRate();
     const feeMultiplier = (makerFee + takerFee) * 2.5; // Fee-adjusted zero-loss buffer loaded from .env
     this.coreLong.breakEvenPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1.0 + feeMultiplier));
-    this.coreLong.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tpPercent / 100));
+    this.coreLong.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + effectiveTpPercent / 100));
     const rawSl = entryPrice * (1 - slPercent / 100);
     this.applyMonotonicStopLoss(this.coreLong, rawSl);
     this.coreLong.lastSyncedSlPrice = this.coreLong.stopLossPrice;
 
     // 5-Stage TP Micro-Ladder Targets: 0.25%, 0.50%, 1.00%, 1.50%, 2.50% price moves (tpPercent * 1.0, 2.0, 4.0, 6.0, 10.0)
-    const tp1Pct = Math.min(2.0, tpPercent * 1.0);
-    const tp2Pct = Math.min(3.0, tpPercent * 2.0);
-    const tp3Pct = Math.min(5.0, tpPercent * 4.0);
-    const tp4Pct = Math.min(8.0, tpPercent * 6.0);
-    const tp5Pct = Math.min(12.0, tpPercent * 10.0);
+    const tp1Pct = Math.min(2.0, effectiveTpPercent * 1.0);
+    const tp2Pct = Math.min(3.0, effectiveTpPercent * 2.0);
+    const tp3Pct = Math.min(5.0, effectiveTpPercent * 4.0);
+    const tp4Pct = Math.min(8.0, effectiveTpPercent * 6.0);
+    const tp5Pct = Math.min(12.0, effectiveTpPercent * 10.0);
 
     this.coreLong.tpPrices = [
       SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + tp1Pct / 100)),
@@ -1901,13 +1905,17 @@ export class HedgePositionLedger {
 
     const slot = this.shortSlots[slotIndex];
 
+    // Enforce SOTA Payoff Ratio Barrier: R:R >= 0.85
+    const minPayoffRatio = 0.85;
+    const effectiveTpPercent = Math.max(tpPercent, slPercent * minPayoffRatio);
+
     if (isAuthoritativeSnapshot) {
       slot.isOccupied = true;
       slot.lifecycleState = "OCCUPIED";
       slot.quantity = quantity;
       slot.initialQuantity = quantity;
       slot.entryPrice = entryPrice;
-      slot.takeProfitPercent = tpPercent;
+      slot.takeProfitPercent = effectiveTpPercent;
       slot.stopLossPercent = slPercent;
       if (!slot.openTime || slot.openTime === 0) {
         slot.openTime = Date.now();
@@ -1916,17 +1924,17 @@ export class HedgePositionLedger {
       const takerFee = this.sizingCalc.getTakerFeeRate();
       const feeMultiplier = (makerFee + takerFee) * 2.5;
       slot.breakEvenPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1.0 - feeMultiplier));
-      slot.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tpPercent / 100));
+      slot.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - effectiveTpPercent / 100));
       const rawSl = entryPrice * (1 + slPercent / 100);
       this.applyMonotonicStopLoss(slot, rawSl);
       slot.lastSyncedSlPrice = slot.stopLossPrice;
       slot.reversalTickCounter = 0;
       slot.reversalStartTs = 0;
-      const tp1Pct = Math.min(2.0, tpPercent * 1.0);
-      const tp2Pct = Math.min(3.0, tpPercent * 2.0);
-      const tp3Pct = Math.min(5.0, tpPercent * 4.0);
-      const tp4Pct = Math.min(8.0, tpPercent * 6.0);
-      const tp5Pct = Math.min(12.0, tpPercent * 10.0);
+      const tp1Pct = Math.min(2.0, effectiveTpPercent * 1.0);
+      const tp2Pct = Math.min(3.0, effectiveTpPercent * 2.0);
+      const tp3Pct = Math.min(5.0, effectiveTpPercent * 4.0);
+      const tp4Pct = Math.min(8.0, effectiveTpPercent * 6.0);
+      const tp5Pct = Math.min(12.0, effectiveTpPercent * 10.0);
       slot.tpPrices = [
         SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tp1Pct / 100)),
         SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tp2Pct / 100)),
@@ -1958,16 +1966,16 @@ export class HedgePositionLedger {
       const takerFee = this.sizingCalc.getTakerFeeRate();
       const feeMultiplier = (makerFee + takerFee) * 2.5;
       slot.breakEvenPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1.0 - feeMultiplier));
-      slot.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - tpPercent / 100));
+      slot.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - effectiveTpPercent / 100));
       const rawSl = newAvgEntry * (1 + slPercent / 100);
       this.applyMonotonicStopLoss(slot, rawSl);
       slot.lastSyncedSlPrice = slot.stopLossPrice;
 
-      const tp1Pct = Math.min(2.0, tpPercent * 1.0);
-      const tp2Pct = Math.min(3.0, tpPercent * 2.0);
-      const tp3Pct = Math.min(5.0, tpPercent * 4.0);
-      const tp4Pct = Math.min(8.0, tpPercent * 6.0);
-      const tp5Pct = Math.min(12.0, tpPercent * 10.0);
+      const tp1Pct = Math.min(2.0, effectiveTpPercent * 1.0);
+      const tp2Pct = Math.min(3.0, effectiveTpPercent * 2.0);
+      const tp3Pct = Math.min(5.0, effectiveTpPercent * 4.0);
+      const tp4Pct = Math.min(8.0, effectiveTpPercent * 6.0);
+      const tp5Pct = Math.min(12.0, effectiveTpPercent * 10.0);
 
       slot.tpPrices = [
         SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - tp1Pct / 100)),
@@ -1989,7 +1997,7 @@ export class HedgePositionLedger {
     slot.initialQuantity = quantity;
     slot.entryPrice = entryPrice;
     slot.openTime = Date.now();
-    slot.takeProfitPercent = tpPercent;
+    slot.takeProfitPercent = effectiveTpPercent;
     slot.stopLossPercent = slPercent;
     slot.tpStageReached = 0;
     slot.breakEvenLocked = false;
@@ -2003,16 +2011,16 @@ export class HedgePositionLedger {
     const takerFee = this.sizingCalc.getTakerFeeRate();
     const feeMultiplier = (makerFee + takerFee) * 2.5; // Fee-adjusted zero-loss buffer loaded from .env
     slot.breakEvenPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1.0 - feeMultiplier));
-    slot.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tpPercent / 100));
+    slot.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - effectiveTpPercent / 100));
     const rawSl = entryPrice * (1 + slPercent / 100);
     this.applyMonotonicStopLoss(slot, rawSl);
     slot.lastSyncedSlPrice = slot.stopLossPrice;
 
-    const tp1Pct = Math.min(2.0, tpPercent * 1.0);
-    const tp2Pct = Math.min(3.0, tpPercent * 2.0);
-    const tp3Pct = Math.min(5.0, tpPercent * 4.0);
-    const tp4Pct = Math.min(8.0, tpPercent * 6.0);
-    const tp5Pct = Math.min(12.0, tpPercent * 10.0);
+    const tp1Pct = Math.min(2.0, effectiveTpPercent * 1.0);
+    const tp2Pct = Math.min(3.0, effectiveTpPercent * 2.0);
+    const tp3Pct = Math.min(5.0, effectiveTpPercent * 4.0);
+    const tp4Pct = Math.min(8.0, effectiveTpPercent * 6.0);
+    const tp5Pct = Math.min(12.0, effectiveTpPercent * 10.0);
 
     slot.tpPrices = [
       SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - tp1Pct / 100)),

@@ -3034,3 +3034,13 @@
   4. **Physical Verification Telemetry:** Full Rust lib test suite (56/56 passed in 1.27s), TypeScript strict compilation (Exit code 0), LCI microprice timing suite (4/4 passed), ASCRG signal gating (7/7 passed, 17.44 µs latency < 100.0 µs SLA), and whipsaw eradication (7/7 passed, 1.29 µs hot path latency < 1.50 µs SLA).
 - **Status:** ✅ Completed & QA Verified
 
+- **Date:** 2026-10-24
+- **Feature/Task:** Master Risk Mitigation Plan & Phase 1 Execution (Dynamic Alpha Hurdle, Fee/Slippage Friction Gating & ~20 USDT Margin Sizing Invariant)
+- **Artifacts Created/Modified:** `sota_risk_mitigation_plan.md`, `src/strategy/engine.ts`, `src/strategy/positionLedger.ts`, `.env`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:**
+  1. **Dynamic Alpha Friction Hurdle (`computeFrictionHurdleBps`):** Implemented institutional fee hurdle aggregating round-trip fees (taker entry + maker TP = 7 bps), half-spread cost, VPIN & Garman-Klass volatility-driven adverse selection slippage, and minimum net margin target. Gated entry signals via `expectedAlphaBps >= frictionHurdleBps` in `evaluateTick()`.
+  2. **Payoff Ratio Invariant ($R:R \ge 0.85$):** Enforced `dynamicTpPercent = Math.max(dynamicSlPercent * minPayoffRatio, dynamicSlPercent * 2.50)` across entry dispatches, startup orphan position reconciliation, and all 3 slot occupation branches (`isAuthoritativeSnapshot`, accumulation, and new slot) in `HedgePositionLedger`.
+  3. **~20 USDT Margin Target Invariant:** Plumbed `TARGET_MARGIN_USDT=20.0` through `.env`, `StrategyConfig`, and `evaluateTick()` sizing logic: `marginTargetNotional = targetMargin * effectiveLev`, ensuring exact ~20 USDT margin deployment across any leverage regime (400 USDT at 20x, 100 USDT at 5x).
+  4. **Empirical Verification:** TypeScript strict build passed (`npm run build:ts` exit code 0) and full test suite passed (`npm test` exit code 0) with zero errors, zero stubs, and zero mock data.
+- **Status:** ✅ Completed & QA Verified
+

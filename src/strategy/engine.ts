@@ -57,6 +57,8 @@ export interface StrategyConfig {
   vpinThreshold: number;
   vpinBucketVolume: number;
   assetIndex?: number;
+  minPayoffRatio?: number;
+  targetMarginUsdt?: number;
 }
 
 export function getSymbolQuantityPrecision(symbol: string): { decimals: number; stepSize: number; minNotional: number } {
@@ -221,12 +223,20 @@ export class StrategyEngine {
     const defaultLeverage = !isNaN(envLeverage) ? envLeverage : 10;
 
     const envTradeSizeUsdt = process.env.TRADE_SIZE_USDT ? parseFloat(process.env.TRADE_SIZE_USDT) : NaN;
-    const defaultTradeSizeUsdt = !isNaN(envTradeSizeUsdt) ? envTradeSizeUsdt : 60.0;
+    const defaultTradeSizeUsdt = !isNaN(envTradeSizeUsdt) ? envTradeSizeUsdt : 400.0;
+
+    const envTargetMarginUsdt = process.env.TARGET_MARGIN_USDT ? parseFloat(process.env.TARGET_MARGIN_USDT) : NaN;
+    const defaultTargetMarginUsdt = !isNaN(envTargetMarginUsdt) && envTargetMarginUsdt > 0 ? envTargetMarginUsdt : 20.0;
+
+    const envMinPayoffRatio = process.env.MIN_PAYOFF_RATIO ? parseFloat(process.env.MIN_PAYOFF_RATIO) : NaN;
+    const defaultMinPayoffRatio = !isNaN(envMinPayoffRatio) && envMinPayoffRatio > 0 ? envMinPayoffRatio : 0.85;
 
     this.config = {
       symbol: targetSymbol,
       orderQuantity: config?.orderQuantity ?? defaultOrderQty,
       tradeSizeUsdt: config?.tradeSizeUsdt ?? defaultTradeSizeUsdt,
+      targetMarginUsdt: config?.targetMarginUsdt ?? defaultTargetMarginUsdt,
+      minPayoffRatio: config?.minPayoffRatio ?? defaultMinPayoffRatio,
       obiBuyThreshold: config?.obiBuyThreshold ?? defaultObiBuy,
       obiSellThreshold: config?.obiSellThreshold ?? defaultObiSell,
       cvdBuyThreshold: config?.cvdBuyThreshold ?? defaultCvdBuy,
@@ -907,7 +917,7 @@ export class StrategyEngine {
     const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
     const baseSlPercent = posSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
     const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.00, volEstimate * 3.50 * 100));
-    const dynamicTpPercent = dynamicSlPercent * 2.50;
+    const dynamicTpPercent = Math.max(dynamicSlPercent * (this.config.minPayoffRatio ?? 0.85), dynamicSlPercent * 2.50);
 
     if (posSide === "LONG") {
       this.hedgeLedger.occupyCoreLong(execQty, execPx, dynamicTpPercent, dynamicSlPercent, false);
@@ -1467,7 +1477,7 @@ export class StrategyEngine {
           const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
           const baseSlPercent = targetPosSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
           const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.00, volEstimate * 3.50 * 100));
-          const dynamicTpPercent = dynamicSlPercent * 2.50;
+          const dynamicTpPercent = Math.max(dynamicSlPercent * (this.config.minPayoffRatio ?? 0.85), dynamicSlPercent * 2.50);
 
           if (targetPosSide === "LONG") {
             this.hedgeLedger.occupyCoreLong(execQty, execPx, dynamicTpPercent, dynamicSlPercent);
@@ -2094,7 +2104,8 @@ export class StrategyEngine {
           const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
           const dynamicSlPct = Math.max(0.005, volEstimate * 2.0);
           const dynamicSlPercent = dynamicSlPct * 100;
-          const dynamicTpPercent = posSide === "LONG" ? this.config.longTakeProfitPercent : this.config.shortTakeProfitPercent;
+          const rawTpPercent = posSide === "LONG" ? this.config.longTakeProfitPercent : this.config.shortTakeProfitPercent;
+          const dynamicTpPercent = Math.max(rawTpPercent, dynamicSlPercent * (this.config.minPayoffRatio ?? 0.85));
 
           const slotId = posSide === "LONG" ? "CORE_LONG" : "SHORT_SLOT_0";
 
@@ -2223,6 +2234,35 @@ export class StrategyEngine {
     }
 
     this.syncSabPositionState(0);
+  }
+
+  /**
+   * Institutional SOTA Dynamic Friction Hurdle Calculation (BPS).
+   * Incorporates round-trip exchange fees (taker entry + maker TP, or conservative 2x taker),
+   * half-spread compensation, VPIN & Volatility-driven adverse selection slippage,
+   * and the minimum required net alpha margin.
+   */
+  public computeFrictionHurdleBps(
+    makerFeeRate: number,
+    takerFeeRate: number,
+    halfSpreadBps: number,
+    vpin: number,
+    volEstimate: number
+  ): number {
+    // Round-trip fee: taker entry + maker TP (or conservative round-trip)
+    const effectiveFeeBps = (takerFeeRate + makerFeeRate) * 10000.0;
+    const halfSpreadCostBps = halfSpreadBps * 10000.0;
+
+    // Adverse selection & execution slippage scaled by VPIN & volatility
+    const safeVpin = Number.isFinite(vpin) ? Math.max(0.0, Math.min(1.0, vpin)) : 0.50;
+    const safeVol = Number.isFinite(volEstimate) && volEstimate > 0 ? volEstimate : 0.005;
+    const slippageBps = Math.max(0.50, safeVpin * (safeVol * 10000.0) * 0.15);
+
+    // Minimum required net margin (e.g., 4 bps net profit target)
+    const minNetAlpha = this.hedgeLedger.getSizingCalculator().getMinNetAlpha();
+    const minMarginBps = (Number.isFinite(minNetAlpha) && minNetAlpha > 0 ? minNetAlpha : 0.0004) * 10000.0;
+
+    return effectiveFeeBps + halfSpreadCostBps + slippageBps + minMarginBps;
   }
 
   /**
@@ -2808,14 +2848,21 @@ export class StrategyEngine {
       const safeHawkes = Number.isFinite(hawkesIntensity) && hawkesIntensity > 0 ? hawkesIntensity : 0;
       const hawkesMultiplier = 1.0 + 0.15 * Math.log(1.0 + safeHawkes);
 
-      // SOTA Alpha-to-Friction Barrier Model (August 2026)
+      // SOTA Alpha-to-Friction Barrier Model (Phase 1 Dynamic Hurdle Gating)
       // E[alpha] = |aiDirection| * volEstimate * sqrt(horizon_s) * hawkesMultiplier
-      // Total Friction = 2 * MakerFee + HalfSpread + SlippageEst
+      // Hurdle (bps) = EffectiveFee + HalfSpread + Slippage(VPIN, Vol) + MinNetMargin
       const horizonSec = 5.0;
       const expectedAlpha = aiDirectionMag * volEstimate * Math.sqrt(horizonSec / 60.0) * hawkesMultiplier;
-      const estimatedSlippage = (spreadVelocity > 0 ? Math.min(0.0002, (spreadVelocity / 50.0) * 0.0001) : 0.0);
-      const totalFrictionBarrier = (2.0 * makerFeeRate) + halfSpreadBps + estimatedSlippage;
-      const expectedNetAlpha = expectedAlpha - totalFrictionBarrier;
+      const expectedAlphaBps = expectedAlpha * 10000.0;
+      const frictionHurdleBps = this.computeFrictionHurdleBps(
+        makerFeeRate,
+        takerFeeRate,
+        halfSpreadBps,
+        hazardMetrics.vpin,
+        volEstimate
+      );
+      const expectedNetAlpha = (expectedAlphaBps - frictionHurdleBps) / 10000.0;
+      const isAlphaFrictionPassed = expectedAlphaBps >= frictionHurdleBps;
 
       // SOTA Volatility, Toxicity & Drawdown Adjusted Dynamic Conviction Floor (theta_conf)
       // Base confidence hurdle aligned with empirical Bayesian hurdle (~0.495)
@@ -2875,7 +2922,6 @@ export class StrategyEngine {
       // Gate: IR must be positive and exceed friction-adjusted minimum
       const minIR = isDrawdown ? 0.30 : 0.15;
       const isSignalQualityValid = informationRatio >= minIR;
-      const isAlphaFrictionPassed = expectedNetAlpha >= minNetAlpha;
 
       const isConvictionValid = isAlphaFrictionPassed 
           && isSignalQualityValid
@@ -3245,7 +3291,12 @@ export class StrategyEngine {
       // SOTA August 2026 Alpha-Gated Dynamic Kelly Recovery Sizing (AG-DKRS)
       let finalQuantity = 0.001;
       if (basePrice > 0) {
-        const baseNotional = this.config.tradeSizeUsdt > 0 ? this.config.tradeSizeUsdt : 60.0;
+        const targetMargin = (this.config.targetMarginUsdt && this.config.targetMarginUsdt > 0) ? this.config.targetMarginUsdt : 20.0;
+        const effectiveLev = this.config.leverageMultiplier > 0 ? this.config.leverageMultiplier : 20.0;
+        const marginTargetNotional = targetMargin * effectiveLev;
+        const baseNotional = (this.config.targetMarginUsdt && this.config.targetMarginUsdt > 0)
+          ? marginTargetNotional
+          : (this.config.tradeSizeUsdt > 0 ? this.config.tradeSizeUsdt : 400.0);
         const maxDailyLoss = this.riskGuard.getConfig().maxDailyLossUsdt;
         const sizingRes = this.hedgeLedger.getSizingCalculator().calculateAlphaGatedRecoverySize(
           baseNotional,
@@ -3471,7 +3522,7 @@ export class StrategyEngine {
                 const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
                 const baseSlPercent = targetPosSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
                 const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.00, volEstimate * 3.50 * 100));
-                const dynamicTpPercent = dynamicSlPercent * 2.50;
+                const dynamicTpPercent = Math.max(dynamicSlPercent * (this.config.minPayoffRatio ?? 0.85), dynamicSlPercent * 2.50);
 
                 if (targetPosSide === "LONG") {
                   this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, dynamicTpPercent, dynamicSlPercent, false);
