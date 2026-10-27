@@ -146,8 +146,11 @@ class RiskGuard {
     /**
      * Continuous Closed-Loop Invariant Guard: Verifies that 100% of an aggregated active position
      * has an active exchange-native stop loss order protecting it.
+     * Phase 3 Sovereign Order State Machine:
+     * When openOrders are provided, strictly enforces that activeStopLossOrderId exists on Binance
+     * as a STOP_MARKET or STOP order with status NEW. Maker TP LIMIT orders are strictly excluded.
      */
-    auditAggregatedPositionRisk(symbol, side, aggregatedQuantity, activeStopLossOrderId) {
+    auditAggregatedPositionRisk(symbol, side, aggregatedQuantity, activeStopLossOrderId, openOrders) {
         if (aggregatedQuantity <= 0) {
             return RiskGuard.PROTECTED_RESULT;
         }
@@ -156,6 +159,36 @@ class RiskGuard {
                 isProtected: false,
                 reason: `UNPROTECTED_EXPOSURE: ${symbol} ${side} position ${aggregatedQuantity} has NO active exchange-native stop loss order!`,
             };
+        }
+        if (Array.isArray(openOrders)) {
+            const expectedExitSide = side === "LONG" ? "SELL" : "BUY";
+            const matchingOrder = openOrders.find((o) => Number(o.orderId) === activeStopLossOrderId);
+            if (!matchingOrder) {
+                return {
+                    isProtected: false,
+                    reason: `ORDER_NOT_FOUND_ON_EXCHANGE: Active Stop-Loss OrderId #${activeStopLossOrderId} does not exist in open orders on Binance for ${symbol} ${side}!`,
+                };
+            }
+            const ordType = String(matchingOrder.type).toUpperCase();
+            if (ordType !== "STOP_MARKET" && ordType !== "STOP") {
+                return {
+                    isProtected: false,
+                    reason: `INVALID_ORDER_TYPE: Order #${activeStopLossOrderId} on ${symbol} ${side} is ${ordType}, not STOP_MARKET/STOP! Maker TP LIMIT orders must strictly be excluded from satisfying SL protection!`,
+                };
+            }
+            if (matchingOrder.side !== expectedExitSide) {
+                return {
+                    isProtected: false,
+                    reason: `DIRECTION_MISMATCH: Order #${activeStopLossOrderId} side ${matchingOrder.side} does not match expected exit side ${expectedExitSide} for ${symbol} ${side}!`,
+                };
+            }
+            const status = matchingOrder.status ? String(matchingOrder.status).toUpperCase() : "NEW";
+            if (status !== "NEW" && status !== "PARTIALLY_FILLED") {
+                return {
+                    isProtected: false,
+                    reason: `ORDER_INACTIVE: Order #${activeStopLossOrderId} on ${symbol} ${side} has inactive status: ${status}!`,
+                };
+            }
         }
         return RiskGuard.PROTECTED_RESULT;
     }

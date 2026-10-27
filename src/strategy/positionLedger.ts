@@ -1279,6 +1279,21 @@ export class HedgePositionLedger {
     return slId !== undefined && slId > 0;
   }
 
+  public pruneActiveTpOrderId(orderId: number): boolean {
+    let pruned = false;
+    if (this.coreLong.activeTpOrderIds && this.coreLong.activeTpOrderIds.includes(orderId)) {
+      this.coreLong.activeTpOrderIds = this.coreLong.activeTpOrderIds.filter((id) => id !== orderId);
+      pruned = true;
+    }
+    for (const s of this.shortSlots) {
+      if (s.activeTpOrderIds && s.activeTpOrderIds.includes(orderId)) {
+        s.activeTpOrderIds = s.activeTpOrderIds.filter((id) => id !== orderId);
+        pruned = true;
+      }
+    }
+    return pruned;
+  }
+
   public updateLastSyncedSlPrice(sideOrSlotId: "LONG" | "SHORT" | string, price: number): void {
     if (sideOrSlotId === "LONG" || sideOrSlotId === "CORE_LONG") {
       this.coreLong.lastSyncedSlPrice = price;

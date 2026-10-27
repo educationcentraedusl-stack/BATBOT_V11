@@ -225,6 +225,39 @@ export class MultiAssetStrategyEngine {
         const symbolOrders = ordersBySymbol.get(symbol) || [];
         await engine.syncExchangeStateWithData(symbolPositions, symbolOrders);
 
+        // Phase 3 Sovereign Order State Machine: Continuous physical reconciliation verification
+        const longSummary = engine.getHedgeLedger().getAggregatedSideSummary("LONG");
+        if (longSummary.isOccupied && longSummary.totalQuantity > 0) {
+          const longAudit = this.riskGuard.auditAggregatedPositionRisk(
+            symbol,
+            "LONG",
+            longSummary.totalQuantity,
+            longSummary.activeStopLossOrderId,
+            symbolOrders
+          );
+          if (!longAudit.isProtected) {
+            console.error(
+              `[MultiAssetStrategyEngine][SOVEREIGN_RECONCILIATION_FAIL] [${symbol}:LONG] ${longAudit.reason}`
+            );
+          }
+        }
+
+        const shortSummary = engine.getHedgeLedger().getAggregatedSideSummary("SHORT");
+        if (shortSummary.isOccupied && shortSummary.totalQuantity > 0) {
+          const shortAudit = this.riskGuard.auditAggregatedPositionRisk(
+            symbol,
+            "SHORT",
+            shortSummary.totalQuantity,
+            shortSummary.activeStopLossOrderId,
+            symbolOrders
+          );
+          if (!shortAudit.isProtected) {
+            console.error(
+              `[MultiAssetStrategyEngine][SOVEREIGN_RECONCILIATION_FAIL] [${symbol}:SHORT] ${shortAudit.reason}`
+            );
+          }
+        }
+
         const summary = engine.getHedgeLedger().getSummary(0);
         if (summary.side !== "FLAT" && summary.grossQuantity > 0) {
           const symbolGrossNotional = summary.grossQuantity * summary.averageEntryPrice;

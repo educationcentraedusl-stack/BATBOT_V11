@@ -1282,6 +1282,16 @@ class StrategyEngine {
                             }
                         }
                     }
+                    // Phase 3 Sovereign Order State Machine: Reconcile exit fill against active Stop Loss and TP ledgers
+                    const currentLongSlId = this.hedgeLedger.getActiveStopLossOrderId("LONG");
+                    const currentShortSlId = this.hedgeLedger.getActiveStopLossOrderId("SHORT");
+                    if (currentLongSlId && currentLongSlId === orderId) {
+                        this.hedgeLedger.clearActiveStopLossOrderId("LONG");
+                    }
+                    else if (currentShortSlId && currentShortSlId === orderId) {
+                        this.hedgeLedger.clearActiveStopLossOrderId("SHORT");
+                    }
+                    this.hedgeLedger.pruneActiveTpOrderId(orderId);
                     this.onExecutionCompleted({
                         symbol: this.config.symbol,
                         assetIndex: this.assetIndex,
@@ -1306,6 +1316,34 @@ class StrategyEngine {
                     this.hedgeLedger.rollbackPendingSlot(pending.slotId, `WS_${order.orderStatus}`);
                 }
                 this.pendingEntryOrders.delete(orderId);
+            }
+            // Phase 3 Sovereign Order State Machine: Reactive WS Invalidation for Stop-Loss Orders
+            const longSlId = this.hedgeLedger.getActiveStopLossOrderId("LONG");
+            const shortSlId = this.hedgeLedger.getActiveStopLossOrderId("SHORT");
+            let affectedSlSide = null;
+            if (longSlId && longSlId === orderId) {
+                affectedSlSide = "LONG";
+            }
+            else if (shortSlId && shortSlId === orderId) {
+                affectedSlSide = "SHORT";
+            }
+            if (affectedSlSide !== null) {
+                console.warn(`[SOVEREIGN_STATE_MACHINE][WS_SL_INVALIDATED] [${this.config.symbol}:${affectedSlSide}] Active Stop-Loss OrderId #${orderId} received status ${order.orderStatus} on Binance! Immediately clearing ledger and initiating fast-path emergency replacement.`);
+                this.hedgeLedger.clearActiveStopLossOrderId(affectedSlSide);
+                const aggSummary = this.hedgeLedger.getAggregatedSideSummary(affectedSlSide);
+                if (aggSummary.isOccupied && aggSummary.totalQuantity > 1e-6) {
+                    console.warn(`[SOVEREIGN_STATE_MACHINE][EMERGENCY_SL_TRIGGER] [${this.config.symbol}:${affectedSlSide}] Position is occupied (${aggSummary.totalQuantity} @ $${aggSummary.vwapEntryPrice}). Dispatching fast-path emergency replacement SL @ $${aggSummary.stopLossPrice}...`);
+                    // Fast-path emergency replacement
+                    this.syncExchangeStopLossOrder(affectedSlSide, aggSummary.totalQuantity, aggSummary.stopLossPrice).catch((err) => {
+                        const errorMessage = err instanceof Error ? err.message : String(err);
+                        console.error(`[SOVEREIGN_STATE_MACHINE][EMERGENCY_SL_FAIL] [${this.config.symbol}:${affectedSlSide}] Fast-path emergency Stop-Loss replacement failed: ${errorMessage}`);
+                    });
+                }
+            }
+            // Phase 3 Sovereign Order State Machine: Reactive WS Invalidation for TP Limit Orders
+            const wasTpPruned = this.hedgeLedger.pruneActiveTpOrderId(orderId);
+            if (wasTpPruned) {
+                console.log(`[SOVEREIGN_STATE_MACHINE][WS_TP_PRUNED] [${this.config.symbol}] Resting TP OrderId #${orderId} received status ${order.orderStatus} and was pruned from ledger activeTpOrderIds.`);
             }
         }
     }
@@ -1737,7 +1775,7 @@ class StrategyEngine {
             this.reconcileStartupPositions(activePositions);
             // Map position metrics into SharedArrayBuffer slots
             this.syncSabPositionState(0);
-            // ORPHANED POSITION GUARD: Inject dynamic SL/TP if position lacks exchange orders
+            // ORPHANED POSITION GUARD: Sovereign Order State Machine Reconciliation
             for (const pos of activePositions) {
                 const qty = Math.abs(parseFloat(pos.positionAmt || "0"));
                 const entryPx = parseFloat(pos.entryPrice || "0");
@@ -1747,47 +1785,77 @@ class StrategyEngine {
                     ? "LONG"
                     : "SHORT";
                 const exitSide = posSide === "LONG" ? "SELL" : "BUY";
-                const hasSlTpOrder = symbolOpenOrders.some((ord) => {
+                // STRICT TYPE PARTITIONING:
+                // 1. Stop-Loss orders: STRICTLY STOP_MARKET or STOP with active status
+                const matchingSlOrders = symbolOpenOrders.filter((ord) => {
                     const isMatchSide = ord.side === exitSide;
-                    const isSlTpType = ord.type === "STOP_MARKET" ||
-                        ord.type === "TAKE_PROFIT_MARKET" ||
-                        ord.type === "LIMIT" ||
-                        ord.reduceOnly === true;
-                    return isMatchSide && isSlTpType;
+                    const isSlType = ord.type === "STOP_MARKET" || ord.type === "STOP";
+                    const isActiveStatus = !ord.status || ord.status === "NEW" || ord.status === "PARTIALLY_FILLED";
+                    const isMatchingPosSide = !ord.positionSide || ord.positionSide === posSide || ord.positionSide === "BOTH";
+                    return isMatchSide && isSlType && isActiveStatus && isMatchingPosSide;
                 });
-                if (!hasSlTpOrder) {
-                    console.warn(`[ORPHAN_GUARD] Active ${posSide} position on ${this.config.symbol} (${qty} @ $${entryPx}) is UNPROTECTED on exchange!`);
-                    // Dynamic Volatility-Based SL/TP (Phase 2 Formulas)
+                // 2. Take-Profit orders: LIMIT or TAKE_PROFIT / TAKE_PROFIT_MARKET
+                const matchingTpOrders = symbolOpenOrders.filter((ord) => {
+                    const isMatchSide = ord.side === exitSide;
+                    const isTpType = ord.type === "LIMIT" || ord.type === "TAKE_PROFIT_MARKET" || ord.type === "TAKE_PROFIT";
+                    const isActiveStatus = !ord.status || ord.status === "NEW" || ord.status === "PARTIALLY_FILLED";
+                    const isMatchingPosSide = !ord.positionSide || ord.positionSide === posSide || ord.positionSide === "BOTH";
+                    return isMatchSide && isTpType && isActiveStatus && isMatchingPosSide;
+                });
+                // CONTINUOUS RECONCILIATION: Verify physical presence of ledger Stop Loss order
+                const currentLedgerSlId = this.hedgeLedger.getActiveStopLossOrderId(posSide);
+                if (currentLedgerSlId && currentLedgerSlId > 0) {
+                    const physicalSlExists = matchingSlOrders.some((o) => o.orderId === currentLedgerSlId);
+                    if (!physicalSlExists) {
+                        console.warn(`[SOVEREIGN_STATE_MACHINE][SL_DESYNC] [${this.config.symbol}:${posSide}] Recorded SL OrderId #${currentLedgerSlId} does not exist on Binance with status NEW! Clearing ledger reference.`);
+                        this.hedgeLedger.clearActiveStopLossOrderId(posSide);
+                    }
+                }
+                // 1. RECONCILE STOP-LOSS:
+                if (matchingSlOrders.length === 0) {
+                    console.warn(`[SOVEREIGN_STATE_MACHINE][SL_MISSING] Active ${posSide} position on ${this.config.symbol} (${qty} @ $${entryPx}) has ZERO active STOP_MARKET orders on Binance (Maker TP LIMIT orders strictly excluded)! Dispatching emergency Stop-Loss order...`);
+                    // Dynamic Volatility-Based SL Calculation
                     const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
                     const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
                     const dynamicSlPct = Math.max(0.005, volEstimate * 2.0);
                     const dynamicSlPercent = dynamicSlPct * 100;
-                    const rawTpPercent = posSide === "LONG" ? this.config.longTakeProfitPercent : this.config.shortTakeProfitPercent;
-                    const dynamicTpPercent = Math.max(rawTpPercent, dynamicSlPercent * (this.config.minPayoffRatio ?? 0.85));
-                    const slotId = posSide === "LONG" ? "CORE_LONG" : "SHORT_SLOT_0";
-                    // NOTE: reconcileStartupPositions() above already reset and occupied the position slot with the exact Binance quantity.
-                    // We MUST NOT call occupyCoreLong / occupyShortSlot here because calling occupy on an already occupied slot triggers quantity accumulation (doubling the position size).
                     const slPrice = posSide === "LONG" ? entryPx * (1.0 - dynamicSlPct) : entryPx * (1.0 + dynamicSlPct);
                     const formattedSlPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.config.symbol, slPrice);
-                    // 1. Attach and dispatch protective POST_ONLY TP limit order batch to Binance
-                    await this.dispatchBatchPostOnlyTpOrders(slotId, entryPx, qty, posSide);
-                    // 2. Explicitly dispatch LIVE STOP_MARKET Stop-Loss order to Binance exchange
                     try {
                         const slOrder = await this.executionClient.placePositionStopLoss(this.config.symbol, exitSide, posSide, slPrice, undefined, undefined, qty);
                         if (slOrder && slOrder.orderId) {
                             this.hedgeLedger.registerActiveStopLossOrderId(posSide, slOrder.orderId);
                             this.hedgeLedger.updateLastSyncedSlPrice(posSide, slPrice);
-                            console.log(`[ORPHAN_GUARD][DISPATCHED] Live STOP_MARKET order #${slOrder.orderId} confirmed on Binance for ${this.config.symbol} ${posSide}: stopPrice=$${formattedSlPrice}`);
+                            console.log(`[SOVEREIGN_STATE_MACHINE][SL_DISPATCHED] Live STOP_MARKET order #${slOrder.orderId} confirmed on Binance for ${this.config.symbol} ${posSide}: stopPrice=$${formattedSlPrice} (${dynamicSlPercent.toFixed(2)}%)`);
                         }
                     }
                     catch (slErr) {
                         const errorMessage = slErr instanceof Error ? slErr.message : String(slErr);
-                        console.error(`[ORPHAN_GUARD][ERROR] Failed to dispatch live STOP_MARKET order to Binance for ${this.config.symbol} ${posSide}: ${errorMessage}`);
+                        console.error(`[SOVEREIGN_STATE_MACHINE][SL_ERROR] Failed to dispatch live STOP_MARKET order to Binance for ${this.config.symbol} ${posSide}: ${errorMessage}`);
                     }
-                    console.log(`[ORPHAN_GUARD][DISPATCHED] Dynamic Volatility SL/TP attached to ${this.config.symbol} ${posSide} position: SL=$${formattedSlPrice} (${dynamicSlPercent.toFixed(2)}%), TP=${dynamicTpPercent.toFixed(2)}%`);
                 }
                 else {
-                    console.log(`[ORPHAN_GUARD] Active ${posSide} position on ${this.config.symbol} has active exchange protective order(s).`);
+                    // Adopt physical Binance SL order ID into ledger if ledger doesn't have an active SL order
+                    const primarySl = matchingSlOrders[0];
+                    if (!this.hedgeLedger.hasActiveStopLossOrder(posSide) && primarySl) {
+                        this.hedgeLedger.registerActiveStopLossOrderId(posSide, primarySl.orderId);
+                        const parsedStopPx = parseFloat(primarySl.stopPrice || "0");
+                        if (parsedStopPx > 0) {
+                            this.hedgeLedger.updateLastSyncedSlPrice(posSide, parsedStopPx);
+                        }
+                        console.log(`[SOVEREIGN_STATE_MACHINE][SL_ADOPTED] Adopted physical Binance ${primarySl.type} order #${primarySl.orderId} (stopPx=$${primarySl.stopPrice}) into ledger for ${this.config.symbol} ${posSide}.`);
+                    }
+                }
+                // 2. RECONCILE TAKE-PROFIT:
+                const slotId = posSide === "LONG" ? "CORE_LONG" : "SHORT_SLOT_0";
+                if (matchingTpOrders.length === 0) {
+                    console.warn(`[SOVEREIGN_STATE_MACHINE][TP_MISSING] Active ${posSide} position on ${this.config.symbol} has ZERO resting TP limit orders on Binance! Dispatching protective batch POST_ONLY TP orders...`);
+                    await this.dispatchBatchPostOnlyTpOrders(slotId, entryPx, qty, posSide);
+                }
+                else {
+                    const tpOrderIds = matchingTpOrders.map((o) => o.orderId);
+                    this.hedgeLedger.registerActiveTpOrderIds(slotId, tpOrderIds);
+                    console.log(`[SOVEREIGN_STATE_MACHINE][TP_SYNCED] Synced ${tpOrderIds.length} resting TP orders (${tpOrderIds.join(",")}) for ${this.config.symbol} ${posSide}.`);
                 }
             }
             // Final synchronization of SharedArrayBuffer OMS slots
