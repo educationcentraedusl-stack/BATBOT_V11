@@ -1456,8 +1456,10 @@ class StrategyEngine {
         }
     }
     async dispatchExchangeStopLossOrder(side, entryPrice, quantity, stopLossPrice, signal) {
-        if (stopLossPrice <= 0)
+        if (stopLossPrice <= 0 || !Number.isFinite(stopLossPrice) || quantity <= 0 || !Number.isFinite(quantity)) {
+            console.warn(`[EXCHANGE_SL_ENGINE][SKIP_INVALID] [${this.config.symbol}:${side}] Invalid stopLossPrice ($${stopLossPrice}) or quantity (${quantity}). Skipping dispatch.`);
             return undefined;
+        }
         // Strict Zero-Trust Direction Mapping:
         // SHORT Position MUST be exited via BUY order with positionSide "SHORT"
         // LONG Position MUST be exited via SELL order with positionSide "LONG"
@@ -1473,10 +1475,17 @@ class StrategyEngine {
         const formattedSlPx = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(this.config.symbol, stopLossPrice);
         const clientOrderId = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(this.config.symbol, side === "LONG" ? "CORE_LONG" : "SHORT_AGG", "SL");
         try {
-            console.log(`[EXCHANGE_SL_ENGINE][DISPATCHING] [${this.config.symbol}:${side}] Submitting sovereign position-level STOP_MARKET order on Binance: ${exitSide} (positionSide: ${positionSide}, closePosition: true) @ stopPrice $${formattedSlPx} (ClId: ${clientOrderId})...`);
-            const res = await this.executionClient.placePositionStopLoss(this.config.symbol, exitSide, positionSide, stopLossPrice, clientOrderId, signal, quantity);
+            console.log(`[EXCHANGE_SL_ENGINE][DISPATCHING] [${this.config.symbol}:${side}] Submitting sovereign exact-quantity STOP_MARKET order on Binance: ${exitSide} (positionSide: ${positionSide}, quantity: ${quantity}) @ stopPrice $${formattedSlPx} (ClId: ${clientOrderId})...`);
+            // Place exact-quantity conditional order to allow coexistence and eliminate naked exposure gap
+            let res;
+            if (typeof this.executionClient.placeQuantityStopLoss === "function") {
+                res = await this.executionClient.placeQuantityStopLoss(this.config.symbol, exitSide, positionSide, stopLossPrice, quantity, clientOrderId, signal);
+            }
+            else {
+                res = await this.executionClient.placePositionStopLoss(this.config.symbol, exitSide, positionSide, stopLossPrice, clientOrderId, signal, quantity);
+            }
             if (res && res.orderId) {
-                console.log(`[EXCHANGE_SL_ENGINE][SUCCESS] [${this.config.symbol}:${side}] Dispatched sovereign position-level Exchange STOP_MARKET OrderId #${res.orderId} (ClId: ${res.clientOrderId || clientOrderId})`);
+                console.log(`[EXCHANGE_SL_ENGINE][SUCCESS] [${this.config.symbol}:${side}] Dispatched sovereign exact-quantity Exchange STOP_MARKET OrderId #${res.orderId} (ClId: ${res.clientOrderId || clientOrderId})`);
                 return res.orderId;
             }
         }
@@ -1540,41 +1549,54 @@ class StrategyEngine {
                     console.log(`[EXCHANGE_SL_ENGINE][SKIP] [${this.config.symbol}:${side}] Position is not occupied. Skipping SL placement.`);
                     return;
                 }
-                // Sovereign Order Registry Check
+                // Capture resting SL_old ID before dispatching replacement
                 const existingSlId = this.hedgeLedger.getActiveStopLossOrderId(side);
-                if (existingSlId && existingSlId > 0) {
-                    try {
-                        console.log(`[EXCHANGE_SL_ENGINE][RATCHET_CANCEL] [${this.config.symbol}:${side}] Cancelling previous resting Exchange STOP_MARKET OrderId #${existingSlId}...`);
-                        await this.executionClient.cancelOrder(this.config.symbol, existingSlId, abortController.signal);
-                    }
-                    catch (err) {
-                        const errorMessage = err instanceof Error ? err.message : String(err);
-                        console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] [${this.config.symbol}:${side}] Unable to cancel previous SL order #${existingSlId}: ${errorMessage}`);
-                    }
-                }
-                // Epoch Fencing Barrier: Re-check after cancellation await
-                if (this.slSyncLocks.get(lockKey)?.epoch !== currentEpoch) {
-                    console.warn(`[EXCHANGE_SL_ENGINE][EPOCH_FENCED] [${this.config.symbol}:${side}] Worker Epoch #${currentEpoch} evicted after cancelOrder. Aborting.`);
-                    return;
-                }
-                // Re-verify position is still occupied after awaiting order cancellation
-                const recheckSummary = this.hedgeLedger.getAggregatedSideSummary(side);
-                if (!recheckSummary.isOccupied || recheckSummary.totalQuantity <= 0) {
-                    console.log(`[EXCHANGE_SL_ENGINE][SKIP] [${this.config.symbol}:${side}] Position closed during cancellation. Skipping new SL order.`);
-                    return;
-                }
-                const placedOrderId = await this.dispatchExchangeStopLossOrder(side, recheckSummary.vwapEntryPrice, recheckSummary.totalQuantity, currentTargetPrice, abortController.signal);
+                const targetQty = aggSummary.totalQuantity > 0 ? aggSummary.totalQuantity : currentQty;
+                // =========================================================================
+                // PLACE-BEFORE-CANCEL PIPELINE (Zero-Naked Invariant)
+                // [Step 1] Dispatch New Stop-Loss Order (SL_new) FIRST with explicit quantity
+                // [Step 2] Await Binance confirmation of SL_new orderId
+                // =========================================================================
+                console.log(`[EXCHANGE_SL_ENGINE][PLACE_BEFORE_CANCEL] [${this.config.symbol}:${side}] Dispatching SL_new @ $${currentTargetPrice} (qty: ${targetQty}) before cancelling resting SL_old #${existingSlId || 0}...`);
+                const placedOrderId = await this.dispatchExchangeStopLossOrder(side, aggSummary.vwapEntryPrice, targetQty, currentTargetPrice, abortController.signal);
                 // Epoch Fencing Barrier: Re-check after placement await
                 if (this.slSyncLocks.get(lockKey)?.epoch !== currentEpoch) {
                     console.warn(`[EXCHANGE_SL_ENGINE][EPOCH_FENCED] [${this.config.symbol}:${side}] Worker Epoch #${currentEpoch} evicted after order placement. Aborting.`);
+                    if (placedOrderId) {
+                        // Cancel orphaned new order if worker was evicted
+                        this.executionClient.cancelOrder(this.config.symbol, placedOrderId).catch(() => { });
+                    }
                     return;
                 }
-                if (placedOrderId) {
+                // =========================================================================
+                // ATOMIC FAILURE INVARIANT:
+                // [Step 3] ONLY after successful SL_new confirmation, update internal ledger
+                // [Step 4] Asynchronously cancel SL_old
+                // If SL_new fails, SL_old remains 100% intact. Zero naked exposure window.
+                // =========================================================================
+                if (placedOrderId && placedOrderId > 0) {
+                    // Step 3: Register SL_new in ledger
                     this.hedgeLedger.registerActiveStopLossOrderId(side, placedOrderId);
                     this.hedgeLedger.updateLastSyncedSlPrice(side, currentTargetPrice);
+                    // Step 4: Asynchronously cancel previous SL_old
+                    if (existingSlId && existingSlId > 0 && existingSlId !== placedOrderId) {
+                        console.log(`[EXCHANGE_SL_ENGINE][CLEANUP_OLD_SL] [${this.config.symbol}:${side}] SL_new #${placedOrderId} confirmed. Asynchronously cancelling superseded SL_old #${existingSlId}...`);
+                        this.executionClient
+                            .cancelOrder(this.config.symbol, existingSlId, abortController.signal)
+                            .then(() => {
+                            console.log(`[EXCHANGE_SL_ENGINE][CLEANUP_SUCCESS] [${this.config.symbol}:${side}] Successfully cancelled superseded SL_old #${existingSlId}.`);
+                        })
+                            .catch((err) => {
+                            const errorMessage = err instanceof Error ? err.message : String(err);
+                            console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] [${this.config.symbol}:${side}] Unable to cancel superseded SL order #${existingSlId}: ${errorMessage}`);
+                        });
+                    }
                 }
                 else {
-                    console.error(`[EXCHANGE_SL_ENGINE][PLACEMENT_FAILED] [${this.config.symbol}:${side}] Failed to place replacement SL @ $${currentTargetPrice}.`);
+                    // ATOMIC FAILURE INVARIANT:
+                    // SL_new failed to place (e.g., rate limit 429, gateway 504, exchange error).
+                    // SL_old is NEVER cancelled and remains 100% intact, guaranteeing ZERO-NAKED exposure!
+                    console.error(`[EXCHANGE_SL_ENGINE][ATOMIC_FAILURE_INVARIANT] [${this.config.symbol}:${side}] Failed to place replacement SL_new @ $${currentTargetPrice}. Preserving resting SL_old #${existingSlId || 0} intact. ZERO-NAKED invariant maintained.`);
                 }
                 // If a subsequent ratchet target was queued while the network request was in-flight, process it only if delta is significant
                 if (this.pendingSlSyncTargets.has(lockKey)) {

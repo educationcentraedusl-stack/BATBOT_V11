@@ -975,6 +975,21 @@ class HedgePositionLedger {
         }
         return undefined;
     }
+    clearActiveStopLossOrderId(sideOrSlotId) {
+        if (sideOrSlotId === "LONG" || sideOrSlotId === "CORE_LONG") {
+            this.coreLong.activeStopLossOrderId = 0;
+        }
+        else if (sideOrSlotId === "SHORT" || sideOrSlotId.startsWith("SHORT_SLOT")) {
+            this.shortAggregatedStopLossOrderId = 0;
+            for (const s of this.shortSlots) {
+                s.activeStopLossOrderId = 0;
+            }
+        }
+    }
+    hasActiveStopLossOrder(sideOrSlotId) {
+        const slId = this.getActiveStopLossOrderId(sideOrSlotId);
+        return slId !== undefined && slId > 0;
+    }
     updateLastSyncedSlPrice(sideOrSlotId, price) {
         if (sideOrSlotId === "LONG" || sideOrSlotId === "CORE_LONG") {
             this.coreLong.lastSyncedSlPrice = price;

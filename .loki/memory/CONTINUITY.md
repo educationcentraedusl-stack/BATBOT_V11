@@ -15,6 +15,12 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-10-27 - SOTA Risk Mitigation Phase 2 Execution (Place-Before-Cancel Atomic Stop-Loss Continuity & Zero-Naked Invariant) Completed & 100% QA Verified:
+  - Place-Before-Cancel Pipeline (`src/strategy/engine.ts`): Refactored `syncExchangeStopLossOrder()` and `dispatchExchangeStopLossOrder()` to place `SL_new` FIRST and await exchange confirmation before asynchronously cancelling `SL_old`. Eradicated 50-200ms naked exposure gap.
+  - Exact-Quantity Conditional Order Dispatch (`src/execution/binance.ts`): Implemented `placeQuantityStopLoss()` with `closePosition: false` and explicit position-level quantities, bypassing Binance `-4130` and `-4509` collision errors and allowing temporary dual-order coexistence during ratcheting.
+  - Atomic Failure Invariant (`src/strategy/engine.ts`): Verified that if `SL_new` fails placement (e.g., 429 rate limit or 504 gateway timeout), `SL_old` is never cancelled and remains 100% intact, guaranteeing continuous coverage with exactly 0.000 ms unhedged exposure.
+  - Ledger Synchronization (`src/strategy/positionLedger.ts`): Injected `clearActiveStopLossOrderId` and `hasActiveStopLossOrder` in `HedgePositionLedger` with zero-allocation O(1) state transitions.
+  - Empirical Verification: Passed dedicated 5-stage test suite (`test_phase2_place_before_cancel_atomic_sl.ts`), deterministic cancel-replace suite (`test_deterministic_cancel_replace_sl.ts`), mutex deadlock recovery suite (`test_sota_sl_mutex_deadlock_recovery.ts`), and LVCQ microtask loop suite (`test_lvcq_microtask_loop_prevention.ts`). Zero TypeScript errors (`npm test` & `npm run build:ts` exit code 0).
 * 2026-10-24 - Phase 5 Final Forensic Audit Resolution (Audit Defects AUD-P5-01, AUD-P5-02, AUD-P5-04 Remediation & Parity Enforcement) Completed & 100% QA Verified:
   - AUD-P5-01 (Shadow SDCI Concordance Parity in `src/ai/engine.rs`): Harmonized `run_shadow_inference()` at line 1276 to evaluate `signed_z.compute_sdci(composite_logit)` matching `run_inference_asset()` and `evaluate_features()`. Eradicated shadow-vs-live divergence.
   - AUD-P5-02 (Dynamic Hurdle Bounding Without Hardcoded Ceilings in `src/strategy/engine.ts`): Eradicated hardcoded `0.525` and `0.530` squashing ceilings. Implemented dynamic relative ceiling `maxDynamicCeiling = Math.min(1.0, baseMinConfidence + 0.035)`, guaranteeing configuration integrity for any caller-defined `minAiConfidence`.

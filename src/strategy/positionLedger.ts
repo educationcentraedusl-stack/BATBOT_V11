@@ -1263,6 +1263,22 @@ export class HedgePositionLedger {
     return undefined;
   }
 
+  public clearActiveStopLossOrderId(sideOrSlotId: "LONG" | "SHORT" | string): void {
+    if (sideOrSlotId === "LONG" || sideOrSlotId === "CORE_LONG") {
+      this.coreLong.activeStopLossOrderId = 0;
+    } else if (sideOrSlotId === "SHORT" || sideOrSlotId.startsWith("SHORT_SLOT")) {
+      this.shortAggregatedStopLossOrderId = 0;
+      for (const s of this.shortSlots) {
+        s.activeStopLossOrderId = 0;
+      }
+    }
+  }
+
+  public hasActiveStopLossOrder(sideOrSlotId: "LONG" | "SHORT" | string): boolean {
+    const slId = this.getActiveStopLossOrderId(sideOrSlotId);
+    return slId !== undefined && slId > 0;
+  }
+
   public updateLastSyncedSlPrice(sideOrSlotId: "LONG" | "SHORT" | string, price: number): void {
     if (sideOrSlotId === "LONG" || sideOrSlotId === "CORE_LONG") {
       this.coreLong.lastSyncedSlPrice = price;
