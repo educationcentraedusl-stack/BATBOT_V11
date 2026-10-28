@@ -374,6 +374,14 @@ export class MarketDataClient {
     this.writeAtomicFloat64Asset(assetIdx, 102, isDrifted ? 1.0 : 0.0);
   }
 
+  public getIcSampleCount(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 155);
+  }
+
+  public setIcSampleCount(count: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 155, count);
+  }
+
   public getAIInferenceLatencyNs(assetIdx: number = 0): bigint {
     return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 103));
   }

@@ -303,6 +303,12 @@ class MarketDataClient {
     setIsModelDrifted(isDrifted, assetIdx = 0) {
         this.writeAtomicFloat64Asset(assetIdx, 102, isDrifted ? 1.0 : 0.0);
     }
+    getIcSampleCount(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 155);
+    }
+    setIcSampleCount(count, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 155, count);
+    }
     getAIInferenceLatencyNs(assetIdx = 0) {
         return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 103));
     }

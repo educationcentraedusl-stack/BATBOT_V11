@@ -66,6 +66,7 @@ export interface StrategyConfig {
   assetIndex?: number;
   minPayoffRatio?: number;
   targetMarginUsdt?: number;
+  relaxTestnetSpread?: boolean;
 }
 
 export function getSymbolQuantityPrecision(symbol: string): { decimals: number; stepSize: number; minNotional: number } {
@@ -156,6 +157,8 @@ export class StrategyEngine {
   private prevOBIVelocity: number = 0;
   private prevTickMs: number = 0;
   private isLciInitialized: boolean = false;
+  private readonly isTestnet: boolean;
+  private readonly testnetSpreadMultiplier: number;
 
   // Reusable static result object for NONE signals to achieve zero GC-heap allocation in hot path
   private staticResult: StrategySignalResult = {
@@ -179,6 +182,24 @@ export class StrategyEngine {
     this.client = client;
     this.riskGuard = riskGuard;
     this.executionClient = executionClient;
+
+    const isExplicitMainnet = process.env.USE_TESTNET === "false";
+    const hasExplicitSpreadConfig =
+      config?.maxSpreadBtc !== undefined ||
+      config?.maxSpreadEth !== undefined ||
+      config?.maxSpreadAlt !== undefined;
+    const isTestnetEnv =
+      !isExplicitMainnet &&
+      (process.env.USE_TESTNET === "true" ||
+        process.env.BINANCE_TESTNET === "true" ||
+        process.env.RELAX_TESTNET_SPREAD === "true" ||
+        process.env.ALLOW_TESTNET_WIDE_SPREADS === "true");
+    this.isTestnet =
+      config?.relaxTestnetSpread !== undefined
+        ? config.relaxTestnetSpread
+        : isTestnetEnv && !hasExplicitSpreadConfig;
+    const envSpreadMult = process.env.TESTNET_SPREAD_MULTIPLIER ? parseFloat(process.env.TESTNET_SPREAD_MULTIPLIER) : NaN;
+    this.testnetSpreadMultiplier = !isNaN(envSpreadMult) && envSpreadMult > 0 ? envSpreadMult : 10.0;
 
     const envLongTp = process.env.LONG_TAKE_PROFIT_PERCENT ? parseFloat(process.env.LONG_TAKE_PROFIT_PERCENT) : NaN;
     const envLongSl = process.env.LONG_STOP_LOSS_PERCENT ? parseFloat(process.env.LONG_STOP_LOSS_PERCENT) : NaN;
@@ -438,6 +459,11 @@ export class StrategyEngine {
             `IC: ${safeIC.toFixed(4)}, Drift: ${isDriftFlagged}`
           );
         } else if (safeIC < 0.01) {
+          const icPairs = this.client.getIcSampleCount(this.assetIndex);
+          if (icPairs < 100) {
+            this.icConditionMetSince = 0;
+            break;
+          }
           if (this.icConditionMetSince === 0) {
             this.icConditionMetSince = nowMs;
           } else if (nowMs - this.icConditionMetSince >= 30000) {
@@ -456,6 +482,14 @@ export class StrategyEngine {
       }
 
       case "DEGRADED": {
+        const icPairs = this.client.getIcSampleCount(this.assetIndex);
+        if (icPairs < 100 && !isDriftFlagged) {
+          this.icState = "ALPHA_ACTIVE";
+          this.icStateEnteredAt = nowMs;
+          this.icConditionMetSince = 0;
+          this.icEvidenceScore = 1.0;
+          break;
+        }
         if (isDriftFlagged || safeIC <= -0.02) {
           this.icState = "MODEL_BROKEN";
           this.icStateEnteredAt = nowMs;
@@ -2412,7 +2446,9 @@ export class StrategyEngine {
   ): number {
     // Round-trip fee: taker entry + maker TP (or conservative round-trip)
     const effectiveFeeBps = (takerFeeRate + makerFeeRate) * 10000.0;
-    const halfSpreadCostBps = halfSpreadBps * 10000.0;
+    // On Testnet: clamp half-spread cost so artificial testnet illiquidity does not block test execution
+    const effectiveHalfSpreadBps = this.isTestnet ? Math.min(0.00025, halfSpreadBps) : halfSpreadBps;
+    const halfSpreadCostBps = effectiveHalfSpreadBps * 10000.0;
 
     // Adverse selection & execution slippage scaled by VPIN & volatility
     const safeVpin = Number.isFinite(vpin) ? Math.max(0.0, Math.min(1.0, vpin)) : 0.50;
@@ -2493,15 +2529,25 @@ export class StrategyEngine {
       const currentMidPrice = isTickValid ? (bidPrice + askPrice) * 0.5 : 0;
 
       let maxSpreadAllowed: number;
-      if (this.config.symbol.includes("BTC")) {
-        // Strict BTC Hard Cap: Min($1.50, max(0.10, currentMidPrice * 1.5 bps))
-        maxSpreadAllowed = Math.min(this.config.maxSpreadBtc, Math.max(0.10, currentMidPrice * 0.00015));
-      } else if (this.config.symbol.includes("ETH")) {
-        // Strict ETH Hard Cap: Min($0.40, max(0.01, currentMidPrice * 2.0 bps))
-        maxSpreadAllowed = Math.min(this.config.maxSpreadEth, Math.max(0.01, currentMidPrice * 0.00020));
+      if (this.isTestnet) {
+        if (this.config.symbol.includes("BTC")) {
+          maxSpreadAllowed = Math.max(1.50, currentMidPrice * 0.0050);
+        } else if (this.config.symbol.includes("ETH")) {
+          maxSpreadAllowed = Math.max(0.40, currentMidPrice * 0.0050);
+        } else {
+          maxSpreadAllowed = Math.max(0.0001, currentMidPrice * 0.0050);
+        }
       } else {
-        // Strict Altcoins Hard Cap: Min(maxSpreadAlt, max(0.0001, currentMidPrice * 5.0 bps))
-        maxSpreadAllowed = Math.min(this.config.maxSpreadAlt, Math.max(0.0001, currentMidPrice * 0.00050));
+        if (this.config.symbol.includes("BTC")) {
+          // Strict BTC Hard Cap: Min($1.50, max(0.10, currentMidPrice * 1.5 bps))
+          maxSpreadAllowed = Math.min(this.config.maxSpreadBtc, Math.max(0.10, currentMidPrice * 0.00015));
+        } else if (this.config.symbol.includes("ETH")) {
+          // Strict ETH Hard Cap: Min($0.40, max(0.01, currentMidPrice * 2.0 bps))
+          maxSpreadAllowed = Math.min(this.config.maxSpreadEth, Math.max(0.01, currentMidPrice * 0.00020));
+        } else {
+          // Strict Altcoins Hard Cap: Min(maxSpreadAlt, max(0.0001, currentMidPrice * 5.0 bps))
+          maxSpreadAllowed = Math.min(this.config.maxSpreadAlt, Math.max(0.0001, currentMidPrice * 0.00050));
+        }
       }
 
       if (!isTickValid || isStale || currentSpread > maxSpreadAllowed) {
@@ -3082,7 +3128,9 @@ export class StrategyEngine {
 
       // Gate: IR must be positive and exceed friction-adjusted minimum
       const minIR = isDrawdown ? 0.30 : 0.15;
-      const isSignalQualityValid = informationRatio >= minIR;
+      const icPairsCount = this.client.getIcSampleCount(this.assetIndex);
+      // SOTA Cold-Start Grace Period: Bypass IR gate if IC window pairs < 100 to allow telemetry warmup
+      const isSignalQualityValid = icPairsCount < 100 ? true : (informationRatio >= minIR);
 
       const isConvictionValid = isAlphaFrictionPassed 
           && isSignalQualityValid
@@ -3216,18 +3264,29 @@ export class StrategyEngine {
       const entrySpreadBps = entryMidPrice > 0 ? (entrySpread / entryMidPrice) * 10000 : Infinity;
 
       let maxEntrySpreadAllowed: number;
-      if (this.config.symbol.includes("BTC")) {
-        // BTC Hard Ceiling: Min($1.50, 5.0 bps of mid price)
-        maxEntrySpreadAllowed = Math.min(this.config.maxSpreadBtc || 1.50, Math.max(0.10, entryMidPrice * 0.0005));
-      } else if (this.config.symbol.includes("ETH")) {
-        // ETH Hard Ceiling: Min($0.40, 5.0 bps of mid price)
-        maxEntrySpreadAllowed = Math.min(this.config.maxSpreadEth || 0.40, Math.max(0.01, entryMidPrice * 0.0005));
+      const maxAllowedBps = this.isTestnet ? 50.0 : 5.0; // 50 bps on Testnet vs 5.0 bps on Mainnet
+      if (this.isTestnet) {
+        if (this.config.symbol.includes("BTC")) {
+          maxEntrySpreadAllowed = Math.max(1.50, entryMidPrice * 0.0050);
+        } else if (this.config.symbol.includes("ETH")) {
+          maxEntrySpreadAllowed = Math.max(0.40, entryMidPrice * 0.0050);
+        } else {
+          maxEntrySpreadAllowed = Math.max(0.0001, entryMidPrice * 0.0050);
+        }
       } else {
-        // ALT Hard Ceiling: Min(config.maxSpreadAlt, 5.0 bps of mid price)
-        maxEntrySpreadAllowed = Math.min(this.config.maxSpreadAlt || 0.20, Math.max(0.0001, entryMidPrice * 0.0005));
+        if (this.config.symbol.includes("BTC")) {
+          // BTC Hard Ceiling: Min($1.50, 5.0 bps of mid price)
+          maxEntrySpreadAllowed = Math.min(this.config.maxSpreadBtc || 1.50, Math.max(0.10, entryMidPrice * 0.0005));
+        } else if (this.config.symbol.includes("ETH")) {
+          // ETH Hard Ceiling: Min($0.40, 5.0 bps of mid price)
+          maxEntrySpreadAllowed = Math.min(this.config.maxSpreadEth || 0.40, Math.max(0.01, entryMidPrice * 0.0005));
+        } else {
+          // ALT Hard Ceiling: Min(config.maxSpreadAlt, 5.0 bps of mid price)
+          maxEntrySpreadAllowed = Math.min(this.config.maxSpreadAlt || 0.20, Math.max(0.0001, entryMidPrice * 0.0005));
+        }
       }
 
-      const isSpreadBlowout = entrySpread > maxEntrySpreadAllowed || entrySpreadBps > 5.0;
+      const isSpreadBlowout = entrySpread > maxEntrySpreadAllowed || entrySpreadBps > maxAllowedBps;
 
       if (isSpreadBlowout) {
         // SOTA Tier-1 AROS-CA: Annihilate resting entry orders immediately
@@ -3237,7 +3296,7 @@ export class StrategyEngine {
           console.warn(
             `[StrategyEngine][${this.config.symbol}][REJECTED_SPREAD_BLOWOUT] Seq #${seq} | ` +
             `Spread $${entrySpread.toFixed(4)} (${entrySpreadBps.toFixed(1)} bps) > ` +
-            `Ceiling $${maxEntrySpreadAllowed.toFixed(4)} (5.0 bps limit) | Entry Signal Blocked.`
+            `Ceiling $${maxEntrySpreadAllowed.toFixed(4)} (${maxAllowedBps.toFixed(1)} bps limit) | Entry Signal Blocked.`
           );
         }
         // Zero Tolerance: Strip entry signals unconditionally (AI Confidence CANNOT override)
@@ -3650,15 +3709,26 @@ export class StrategyEngine {
           const pfSpreadBps = pfMid > 0 ? (pfSpread / pfMid) * 10000 : Infinity;
 
           let maxPfSpread: number;
-          if (this.config.symbol.includes("BTC")) {
-            maxPfSpread = Math.min(this.config.maxSpreadBtc || 1.50, Math.max(0.10, pfMid * 0.0005));
-          } else if (this.config.symbol.includes("ETH")) {
-            maxPfSpread = Math.min(this.config.maxSpreadEth || 0.40, Math.max(0.01, pfMid * 0.0005));
+          const maxPfAllowedBps = this.isTestnet ? 50.0 : 5.0;
+          if (this.isTestnet) {
+            if (this.config.symbol.includes("BTC")) {
+              maxPfSpread = Math.max(1.50, pfMid * 0.0050);
+            } else if (this.config.symbol.includes("ETH")) {
+              maxPfSpread = Math.max(0.40, pfMid * 0.0050);
+            } else {
+              maxPfSpread = Math.max(0.0001, pfMid * 0.0050);
+            }
           } else {
-            maxPfSpread = Math.min(this.config.maxSpreadAlt || 0.20, Math.max(0.0001, pfMid * 0.0005));
+            if (this.config.symbol.includes("BTC")) {
+              maxPfSpread = Math.min(this.config.maxSpreadBtc || 1.50, Math.max(0.10, pfMid * 0.0005));
+            } else if (this.config.symbol.includes("ETH")) {
+              maxPfSpread = Math.min(this.config.maxSpreadEth || 0.40, Math.max(0.01, pfMid * 0.0005));
+            } else {
+              maxPfSpread = Math.min(this.config.maxSpreadAlt || 0.20, Math.max(0.0001, pfMid * 0.0005));
+            }
           }
 
-          if (!isPfValid || pfSpread > maxPfSpread || pfSpreadBps > 5.0) {
+          if (!isPfValid || pfSpread > maxPfSpread || pfSpreadBps > maxPfAllowedBps) {
             console.warn(
               `[PREFLIGHT_SPREAD_BARRIER][BLOCKED] [${this.config.symbol}:${entrySlotId}] Pre-flight spread blowout intercepted before socket write! Spread: $${pfSpread.toFixed(4)} (${pfSpreadBps.toFixed(1)} bps) > Ceiling: $${maxPfSpread.toFixed(4)}. Aborting order dispatch.`
             );
@@ -3843,6 +3913,10 @@ export class StrategyEngine {
 
   public getConfig(): Readonly<StrategyConfig> {
     return this.config;
+  }
+
+  public getIsTestnet(): boolean {
+    return this.isTestnet;
   }
 
   public getRollingPacketAgeMs(): number {

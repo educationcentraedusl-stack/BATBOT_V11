@@ -215,6 +215,7 @@ impl ICTracker {
             if let Some(bridge) = sab {
                 bridge.store_f64_asset(asset_idx, 101, ic);
                 bridge.store_f64_asset(asset_idx, 102, 0.0);
+                bridge.store_f64_asset(asset_idx, 155, self.pairs.len() as f64);
             }
             return ic;
         }
@@ -249,10 +250,11 @@ impl ICTracker {
             self.is_drifted = false;
         }
 
-        // Broadcast to SAB slots 101 and 102 (DEF-4307: Strictly isolated per asset)
+        // Broadcast to SAB slots 101, 102, and 155 (DEF-4307: Strictly isolated per asset)
         if let Some(bridge) = sab {
             bridge.store_f64_asset(asset_idx, 101, ic);
             bridge.store_f64_asset(asset_idx, 102, if self.is_drifted { 1.0 } else { 0.0 });
+            bridge.store_f64_asset(asset_idx, 155, self.pairs.len() as f64);
         }
 
         ic

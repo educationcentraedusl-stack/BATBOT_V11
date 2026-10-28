@@ -85,9 +85,10 @@ exports.SAB_SLOTS = {
     HAWKES_ASYMMETRY: 149,
     SERVER_TIME_OFFSET_MS: 150,
     HOTSWAP_EPOCH: 151,
-    // AI Calibration Health Diagnostics (152..154) — ISOLATED from OMS
+    // AI Calibration Health Diagnostics (152..155) — ISOLATED from OMS
     AI_META_LOGIT_ABS: 152, // |meta_logit| magnitude for SSM health monitoring
     AI_CONF_VARIANCE: 153, // Rolling variance of confidence values
     AI_PLATT_HEALTH: 154, // 1.0 = healthy, 0.0 = collapsed / flatline detected
+    IC_SAMPLE_COUNT: 155, // Rolling IC observation window pairs count
 };
 exports.HOTSWAP_EPOCH = exports.SAB_SLOTS.HOTSWAP_EPOCH, exports.SURVIVAL_PROBABILITY = exports.SAB_SLOTS.SURVIVAL_PROBABILITY, exports.ROLLING_IC = exports.SAB_SLOTS.ROLLING_IC, exports.IS_MODEL_DRIFTED = exports.SAB_SLOTS.IS_MODEL_DRIFTED, exports.AI_META_LOGIT_ABS = exports.SAB_SLOTS.AI_META_LOGIT_ABS, exports.AI_CONF_VARIANCE = exports.SAB_SLOTS.AI_CONF_VARIANCE, exports.AI_PLATT_HEALTH = exports.SAB_SLOTS.AI_PLATT_HEALTH;

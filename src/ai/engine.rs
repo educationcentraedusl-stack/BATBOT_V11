@@ -1092,8 +1092,8 @@ impl AIEngine {
         tracker.last_mid_price.store(current_mid.to_bits(), Ordering::Relaxed);
         tracker.last_prediction_dir.store(direction.to_bits(), Ordering::Relaxed);
         if let Ok(mut hist) = tracker.horizon_5s.lock() {
-            if hist.is_empty() {
-                tracker.oldest_ts_5s.store(start_ns, Ordering::Relaxed);
+            if hist.is_empty() || tracker.oldest_ts_5s.load(Ordering::Relaxed) == u64::MAX {
+                tracker.oldest_ts_5s.store(hist.front().map(|x| x.0).unwrap_or(start_ns), Ordering::Relaxed);
             }
             hist.push_back((start_ns, current_mid, direction));
             if hist.len() > 3_600 {
@@ -1102,8 +1102,8 @@ impl AIEngine {
             }
         }
         if let Ok(mut hist) = tracker.horizon_60s.lock() {
-            if hist.is_empty() {
-                tracker.oldest_ts_60s.store(start_ns, Ordering::Relaxed);
+            if hist.is_empty() || tracker.oldest_ts_60s.load(Ordering::Relaxed) == u64::MAX {
+                tracker.oldest_ts_60s.store(hist.front().map(|x| x.0).unwrap_or(start_ns), Ordering::Relaxed);
             }
             hist.push_back((start_ns, current_mid, direction));
             if hist.len() > 18_000 {
@@ -1112,8 +1112,8 @@ impl AIEngine {
             }
         }
         if let Ok(mut hist) = tracker.horizon_300s.lock() {
-            if hist.is_empty() {
-                tracker.oldest_ts_300s.store(start_ns, Ordering::Relaxed);
+            if hist.is_empty() || tracker.oldest_ts_300s.load(Ordering::Relaxed) == u64::MAX {
+                tracker.oldest_ts_300s.store(hist.front().map(|x| x.0).unwrap_or(start_ns), Ordering::Relaxed);
             }
             hist.push_back((start_ns, current_mid, direction));
             if hist.len() > 36_000 {
@@ -1396,6 +1396,36 @@ impl AIEngine {
                 self_tracker.last_mid_price.store(other_tracker.last_mid_price.load(Ordering::Relaxed), Ordering::Relaxed);
                 self_tracker.last_prediction_dir.store(other_tracker.last_prediction_dir.load(Ordering::Relaxed), Ordering::Relaxed);
                 self_tracker.last_inference_ns.store(other_tracker.last_inference_ns.load(Ordering::Relaxed), Ordering::Relaxed);
+
+                let oldest_5s = other_tracker.oldest_ts_5s.load(Ordering::Relaxed);
+                let effective_5s = if oldest_5s != u64::MAX {
+                    oldest_5s
+                } else if let Ok(s5) = self_tracker.horizon_5s.lock() {
+                    s5.front().map(|x| x.0).unwrap_or(u64::MAX)
+                } else {
+                    u64::MAX
+                };
+                self_tracker.oldest_ts_5s.store(effective_5s, Ordering::Relaxed);
+
+                let oldest_60s = other_tracker.oldest_ts_60s.load(Ordering::Relaxed);
+                let effective_60s = if oldest_60s != u64::MAX {
+                    oldest_60s
+                } else if let Ok(s60) = self_tracker.horizon_60s.lock() {
+                    s60.front().map(|x| x.0).unwrap_or(u64::MAX)
+                } else {
+                    u64::MAX
+                };
+                self_tracker.oldest_ts_60s.store(effective_60s, Ordering::Relaxed);
+
+                let oldest_300s = other_tracker.oldest_ts_300s.load(Ordering::Relaxed);
+                let effective_300s = if oldest_300s != u64::MAX {
+                    oldest_300s
+                } else if let Ok(s300) = self_tracker.horizon_300s.lock() {
+                    s300.front().map(|x| x.0).unwrap_or(u64::MAX)
+                } else {
+                    u64::MAX
+                };
+                self_tracker.oldest_ts_300s.store(effective_300s, Ordering::Relaxed);
             }
         }
 
@@ -1833,6 +1863,9 @@ mod tests {
                 if let Ok(mut h5) = tracker.horizon_5s.lock() {
                     h5.push_back((1000, 50000.0, 0.5));
                 }
+                tracker.oldest_ts_5s.store(1000, Ordering::Relaxed);
+                tracker.oldest_ts_60s.store(2000, Ordering::Relaxed);
+                tracker.oldest_ts_300s.store(3000, Ordering::Relaxed);
                 tracker.last_mid_price.store(50000.0f64.to_bits(), Ordering::Relaxed);
             }
         }
@@ -1848,6 +1881,10 @@ mod tests {
                     assert_eq!(h5_new.len(), 1);
                     assert_eq!(h5_new.get(0).map(|item| item.1), Some(50000.0));
                 }
+
+                assert_eq!(tracker_new.oldest_ts_5s.load(Ordering::Relaxed), 1000);
+                assert_eq!(tracker_new.oldest_ts_60s.load(Ordering::Relaxed), 2000);
+                assert_eq!(tracker_new.oldest_ts_300s.load(Ordering::Relaxed), 3000);
 
                 assert_eq!(
                     f64::from_bits(tracker_new.last_mid_price.load(Ordering::Relaxed)),

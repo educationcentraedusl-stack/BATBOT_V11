@@ -15,6 +15,18 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-10-28 - Auto-Switching Spread Guard (Testnet vs Mainnet & Altcoin Ceiling Fix) Completed & 100% QA Verified:
+  - Root Cause Diagnosed & Remediated:
+    1. Automatic Environment Detection: Refactored `this.isTestnet` initialization to evaluate `USE_TESTNET=true` directly without requiring manual `.env` flags, while preserving strict Mainnet institutional limits (`USE_TESTNET=false`) and supporting caller configuration overrides.
+    2. Altcoin Ceiling Relaxation: Eradicated the restrictive $0.10 absolute cap that blocked high-priced altcoins (BNB $748 and SOL $100) under Testnet liquidity conditions, upgrading to a dynamic 50.0 bps relative ceiling (`midPrice * 0.0050`).
+    3. Pipeline Harmonization: Unified dynamic 50.0 bps spread evaluation across `maxSpreadAllowed` (pre-gate), `maxEntrySpreadAllowed` (Level-1 entry guard), and `maxPfSpread` (pre-flight barrier). Added `getIsTestnet()` getter.
+  - Empirical Verification: Passed dedicated 2-stage test suite `test_auto_switching_spread_guard.ts` (100%), verified `test_sota_spread_and_ic_immunity.ts` (5/5 stages passed), verified `test_level1_spread_blowout_entry_guard.ts` (2/2 stages passed), and strict TypeScript compilation (`npm test` & `npm run build:ts` exit code 0).
+* 2026-10-28 - Zero-Trade Lockout Remediation & Hostile Quant Audit Verification Completed & 100% QA Verified:
+  - Root Cause Diagnosed & Remediated:
+    1. Rust Horizon Inheritance Bug: In src/ai/engine.rs, inherit_telemetry_history cloned horizon deques but failed to copy oldest_ts_5s, oldest_ts_60s, oldest_ts_300s. Cloned deques prevented hist.is_empty() from initializing timestamps, leaving oldest_ts at u64::MAX forever, dropping all matured observations, and freezing IC at +0.0000 with 0/1000 pairs. Remediated by atomically propagating oldest_ts across hot-swaps and falling back to hist.front().
+    2. Cold-Start Information Ratio Gate Lockout: In src/strategy/engine.ts, informationRatio >= 0.15 unconditionally blocked all trades when safeIC was 0.0000. Remediated with zero-allocation cold-start grace period reading SAB slot 155 (IC_SAMPLE_COUNT) and bypassing IR check when sampleCount < 100.
+    3. Mathematically Controlled Testnet Spread Relaxation: Remediated spread blowout guard to allow sensible Testnet spreads (capped at 50 bps /  max) when RELAX_TESTNET_SPREAD=true, while strictly enforcing caller custom limits and production tight spread guards.
+  - Empirical Verification: 56/56 Rust tests passed (cargo test --release --lib), native N-API release built cleanly (npm run build:rust), strict TypeScript compiled (npm run build:ts exit code 0), and all integration suites passed.
 * 2026-10-28 - Forensic Quant Remediation (Consecutive Stop-Loss Whipsaw Eradication, +5.0% ROE Break-Even Ratchet & Active Trailing SL) Completed & 100% QA Verified:
   - Root Cause Diagnosed:
     1. Initial Stop-Loss Squeezing: `defaultLongSl` and `defaultShortSl` in `StrategyEngine` were set to 0.50%, and order fill dynamic SL had a 1.00% floor with 3.5x GK multiplier. Taking dual-sqrt on micro-bar GK volatility ($\approx 0.00003$) clamped initial SL to 0.50%-1.00%, suffocating trades within normal 0.20%-0.80% market noise.

@@ -403,16 +403,31 @@ export class MultiAssetStrategyEngine {
       const currentMidPrice = isTickValid ? (bidPrice + askPrice) * 0.5 : 0;
       const currentSpreadBps = currentMidPrice > 0 ? (currentSpread / currentMidPrice) * 10000 : Infinity;
 
+      const isTestnetEnv = process.env.USE_TESTNET === "true" || process.env.BINANCE_TESTNET === "true";
+      const envRelaxSpread = process.env.RELAX_TESTNET_SPREAD === "true" || process.env.ALLOW_TESTNET_WIDE_SPREADS === "true";
+      const hasExplicitSpreadConfig = engine?.getConfig().maxSpreadBtc !== undefined || engine?.getConfig().maxSpreadEth !== undefined || engine?.getConfig().maxSpreadAlt !== undefined;
+      const isTestnet = isTestnetEnv && (engine?.getConfig().relaxTestnetSpread === true || (envRelaxSpread && !hasExplicitSpreadConfig));
       let maxEntrySpreadAllowed: number;
-      if (symbol.includes("BTC")) {
-        maxEntrySpreadAllowed = Math.min(engine?.getConfig().maxSpreadBtc || 1.50, Math.max(0.10, currentMidPrice * 0.0005));
-      } else if (symbol.includes("ETH")) {
-        maxEntrySpreadAllowed = Math.min(engine?.getConfig().maxSpreadEth || 0.40, Math.max(0.01, currentMidPrice * 0.0005));
+      const maxAllowedBps = isTestnet ? 50.0 : 5.0;
+      if (isTestnet) {
+        if (symbol.includes("BTC")) {
+          maxEntrySpreadAllowed = Math.min(25.0, Math.max(1.50, currentMidPrice * 0.00030));
+        } else if (symbol.includes("ETH")) {
+          maxEntrySpreadAllowed = Math.min(2.0, Math.max(0.40, currentMidPrice * 0.00050));
+        } else {
+          maxEntrySpreadAllowed = Math.min(0.10, Math.max(0.001, currentMidPrice * 0.0050));
+        }
       } else {
-        maxEntrySpreadAllowed = Math.min(engine?.getConfig().maxSpreadAlt || 0.20, Math.max(0.0001, currentMidPrice * 0.0005));
+        if (symbol.includes("BTC")) {
+          maxEntrySpreadAllowed = Math.min(engine?.getConfig().maxSpreadBtc || 1.50, Math.max(0.10, currentMidPrice * 0.0005));
+        } else if (symbol.includes("ETH")) {
+          maxEntrySpreadAllowed = Math.min(engine?.getConfig().maxSpreadEth || 0.40, Math.max(0.01, currentMidPrice * 0.0005));
+        } else {
+          maxEntrySpreadAllowed = Math.min(engine?.getConfig().maxSpreadAlt || 0.20, Math.max(0.0001, currentMidPrice * 0.0005));
+        }
       }
 
-      const isSpreadBlowout = !isTickValid || currentSpread > maxEntrySpreadAllowed || currentSpreadBps > 5.0;
+      const isSpreadBlowout = !isTickValid || currentSpread > maxEntrySpreadAllowed || currentSpreadBps > maxAllowedBps;
 
       let signalType: "NONE" | "BUY" | "SELL" = "NONE";
       let confidence = this.client.getAIPredictionConfidence(assetIdx);

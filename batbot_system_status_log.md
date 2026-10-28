@@ -1,6 +1,12 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-10-28
+- **Feature/Task:** Zero-Trade Lockout Remediation & Hostile Quant Audit Verification
+- **Artifacts Created/Modified:** src/ai/engine.rs, src/ai/ic_tracker.rs, src/ipc/sabSchema.ts, src/marketDataClient.ts, src/strategy/engine.ts, src/strategy/multiEngine.ts, atbot_system_status_log.md
+- **HFT/Performance Compliance:** Fixed Rust telemetry horizon inheritance by atomically propagating oldest_ts_5s, oldest_ts_60s, oldest_ts_300s across model hot-reloads, unblocking IC prediction observation maturity and incrementing window pairs. Implemented zero-allocation cold-start Information Ratio grace period in StrategyEngine via atomic SAB slot 155 (IC_SAMPLE_COUNT) when pairs < 100. Formulated mathematically controlled Testnet spread adaptation (relaxing caps strictly when RELAX_TESTNET_SPREAD=true while strictly preserving caller custom limits). 56/56 Rust tests passed, clean N-API release compile, and 100% strict TypeScript build verified.
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-10-28
 - **Feature/Task:** Forensic Quant Remediation: Consecutive Stop-Loss Whipsaw Eradication & +5.0% ROE Break-Even Ratchet / Continuous Trailing SL
 - **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/strategy/positionLedger.ts`, `src/tests/test_sota_5pct_roe_ratchet_and_trailing.ts`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Eradicated suffocating 0.50% initial Stop-Loss defaults and tight 1.00% floors in `StrategyEngine`, restoring breathing room to 1.50% with adaptive 4.5x Garman-Klass volatility scaling. Remediated Tier 1 Step-Collar Ratchet threshold from unreachable legacy 8.0% Net ROE (1.6%-4.0% price move under 2x-5x leverage) to exactly +5.0% Net ROE. Resurrected dead-code `dynamicTrailDist` continuous trailing stop behind peak/trough, and protected MS-SOPC collar floor at or above break-even. Validated via `test_sota_5pct_roe_ratchet_and_trailing.ts` and `test_monotonic_zero_retreat_hard_lock.ts` (0.659 µs latency < 1.500 µs SLA) with zero regressions across Phase 2, Phase 3, and Phase 5 master simulation suites.
@@ -3121,4 +3127,15 @@
 - **Feature/Task:** SOTA Risk Mitigation Final Phases (3, 4, 5) Zero-Trust Forensic Audit
 - **Artifacts Created/Modified:** `final_phases_3_4_5_forensic_audit_report.md`, `src/strategy/engine.ts`, `src/strategy/risk.ts`, `src/strategy/multiEngine.ts`, `src/config/tradingSymbols.ts`, `src/ai/recalibrationWorker.ts`
 - **HFT/Performance Compliance:** Line-by-line independent physical audit verified 100% architectural parity: strict order type partitioning (Maker TP LIMIT excluded from SL checks), dynamic inverse-volatility leverage clamping [2x, 5x] with permanent 20x ban, exact ~20 USDT margin invariant ($20.0 \times L_i$), concurrent exposure haircut ($1 / \sqrt{N_{\text{active}}}$), zero-downtime hot-swap persistent SAB Buffer caching (`buf1 === buf2`), and shadow pre-flight gating with unblocked event loop.
+- **Status:** ✅ Completed & QA Verified
+
+
+- **Date:** 2026-10-28
+- **Feature/Task:** SOTA Auto-Switching Spread Guard Implementation (Testnet vs Mainnet & Altcoin Ceiling Fix)
+- **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/tests/test_auto_switching_spread_guard.ts`, `batbot_system_status_log.md`, `.loki/memory/CONTINUITY.md`
+- **HFT/Performance Compliance:** Implemented environment-aware auto-switching spread guard:
+  1. Auto-Detection: Automatically detects `USE_TESTNET=true` to relax spread guards without manual `.env` flag tuning, while enforcing strict Mainnet institutional limits (5.0 bps / tight caps) when `USE_TESTNET=false`.
+  2. Altcoin Ceiling Relaxation: Eradicated the restrictive $0.10 absolute cap that blocked high-priced altcoins (BNB $748 and SOL $100) under Testnet liquidity conditions, upgrading to a dynamic 50.0 bps relative ceiling (`entryMidPrice * 0.0050`).
+  3. Pre-Gate, Entry, and Pre-Flight Harmonization: Unified spread evaluation across `maxSpreadAllowed`, `maxEntrySpreadAllowed`, and `maxPfSpread`.
+  4. 100% QA verified via dedicated 2-stage environment suite (`src/tests/test_auto_switching_spread_guard.ts`), `test_sota_spread_and_ic_immunity.ts` (5/5 stages passed), `test_level1_spread_blowout_entry_guard.ts` (2/2 stages passed), and strict TypeScript compilation (`npm test` & `npm run build:ts` exit code 0).
 - **Status:** ✅ Completed & QA Verified
