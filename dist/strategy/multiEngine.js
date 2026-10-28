@@ -78,12 +78,28 @@ class MultiAssetStrategyEngine {
         });
         // Multiplex incoming ACCOUNT_UPDATE position and balance events by symbol
         this.centralizedUserDataStream.subscribeAccountUpdates((accUpdate) => {
-            // 1. Mutate live account balance reactively via WebSocket push (zero REST calls)
+            // 1. Propagate account balance mutations from ACCOUNT_UPDATE WebSocket push.
+            //
+            // ROOT-CAUSE FIX: The Binance ACCOUNT_UPDATE payload (payload.a.B) does NOT emit
+            // `availableBalance`. It only emits `wb` (walletBalance) and `cw` (crossWalletBalance).
+            // crossWalletBalance is the wallet balance allocated to cross-margin positions and is
+            // ALWAYS >= availableBalance because it ignores open-order margin reservations.
+            // Writing crossWalletBalance to slot 134 (AvailBal) systematically overstates the
+            // available balance by the total margin locked in pending orders.
+            //
+            // Correct behaviour:
+            //   - Update the riskGuard with walletBalance (wb) as the gross account size.
+            //   - The authoritative availableBalance is fetched asynchronously via REST
+            //     (GET /fapi/v2/balance returns `availableBalance`) and written to slot 134
+            //     by the debounced `scheduleAvailableBalanceRefetch()` called inside
+            //     BinanceUserDataStream after every ACCOUNT_UPDATE event.
             if (accUpdate.balances && accUpdate.balances.length > 0) {
                 const usdtBal = accUpdate.balances.find((b) => b.asset === "USDT");
-                if (usdtBal && Number.isFinite(usdtBal.crossWalletBalance)) {
-                    this.riskGuard.updateAccountBalance(usdtBal.crossWalletBalance);
-                    this.client.setAvailableBalance(usdtBal.crossWalletBalance);
+                if (usdtBal && Number.isFinite(usdtBal.walletBalance)) {
+                    this.riskGuard.updateAccountBalance(usdtBal.walletBalance);
+                    // NOTE: client.setAvailableBalance() is intentionally NOT called here.
+                    // The render loop in run_tui_dashboard.ts reads from binanceClient.getUsdtAvailableBalance()
+                    // which is kept authoritative by the debounced REST refetch in binance.ts.
                 }
             }
             // 2. Route position updates to matching symbol StrategyEngine

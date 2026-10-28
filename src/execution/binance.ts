@@ -453,17 +453,58 @@ export class BinanceExecutionClient {
   }
 
   /**
-   * Updates cached USDT available and wallet balances in memory via WebSocket ACCOUNT_UPDATE push.
-   * Zero REST API calls and zero rate limit consumption.
+   * @deprecated MUST NOT be called with crossWalletBalance as the first argument.
+   * The Binance ACCOUNT_UPDATE WebSocket event does NOT carry a true `availableBalance`.
+   * Call `updateWalletBalanceFromWs()` for wallet balance and `scheduleAvailableBalanceRefetch()`
+   * for the true available balance instead.
+   *
+   * Retained only to avoid breaking any external callers that may still pass walletBalance.
+   * The first argument is treated as walletBalance, not availableBalance.
    */
-  public updateBalancesFromWs(availableBalance: number, walletBalance?: number): void {
-    if (Number.isFinite(availableBalance)) {
-      this.cachedUsdtAvailableBalance = availableBalance;
-    }
-    if (walletBalance !== undefined && Number.isFinite(walletBalance)) {
+  public updateBalancesFromWs(walletBalance: number, _ignored?: number): void {
+    if (Number.isFinite(walletBalance)) {
       this.cachedReconciledWalletBalance = walletBalance;
       this.hasReconciledWalletBalance = true;
     }
+    // NOTE: cachedUsdtAvailableBalance is intentionally NOT updated here.
+    // Available balance can only be accurately sourced from GET /fapi/v2/balance (REST).
+  }
+
+  /**
+   * Updates the cached wallet balance (wb) received from an ACCOUNT_UPDATE WebSocket event.
+   * This is the total futures wallet balance and does NOT represent available margin.
+   */
+  public updateWalletBalanceFromWs(walletBalance: number): void {
+    if (Number.isFinite(walletBalance)) {
+      this.cachedReconciledWalletBalance = walletBalance;
+      this.hasReconciledWalletBalance = true;
+    }
+  }
+
+  /**
+   * Schedules a single debounced REST call to GET /fapi/v2/balance to re-hydrate
+   * `cachedUsdtAvailableBalance` with the true, authoritative availableBalance.
+   *
+   * Called immediately after every ACCOUNT_UPDATE WebSocket event (trade fills, fees,
+   * funding rate charges, deposits, withdrawals). Debounced to 200ms to coalesce
+   * back-to-back events without generating redundant REST calls.
+   *
+   * Rate-limit impact: 5 weight per call (within the 1200/min budget). Safe to call
+   * on every account mutation event.
+   */
+  private _availableBalanceRefetchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  public scheduleAvailableBalanceRefetch(): void {
+    if (this._availableBalanceRefetchTimer !== null) {
+      clearTimeout(this._availableBalanceRefetchTimer);
+    }
+    this._availableBalanceRefetchTimer = setTimeout(() => {
+      this._availableBalanceRefetchTimer = null;
+      this.fetchUsdtBalanceAsync().catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[BinanceExecutionClient] Available balance refetch after ACCOUNT_UPDATE failed: ${msg}`);
+      });
+    }, 200);
   }
 
   public async fetchUsdtBalanceAsync(): Promise<number> {

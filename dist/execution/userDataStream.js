@@ -142,11 +142,23 @@ class BinanceUserDataStream {
                             crossWalletBalance: parseFloat(b.cw || "0"),
                             balanceChange: parseFloat(b.bc || "0"),
                         }));
-                        // Immediately mutate BinanceExecutionClient cached balance via zero-weight WebSocket push
+                        // CRITICAL FIX: The Binance ACCOUNT_UPDATE WebSocket event (payload.a.B) carries ONLY
+                        // `wb` (walletBalance) and `cw` (crossWalletBalance). It does NOT emit a true
+                        // `availableBalance` field. crossWalletBalance != availableBalance — it does not
+                        // account for open-order margin reservations. Using it as available balance causes
+                        // a systematic overstatement (wallet > available whenever orders are open).
+                        //
+                        // Correct strategy:
+                        //   1. Update the cached walletBalance from `wb` for bookkeeping.
+                        //   2. Schedule a single debounced REST call to GET /fapi/v2/balance which is the
+                        //      authoritative source of `availableBalance` — updated by Binance after each
+                        //      account state mutation (trade fill, fee deduction, margin change).
                         const usdtItem = balances.find((b) => b.asset === "USDT");
-                        if (usdtItem && Number.isFinite(usdtItem.crossWalletBalance)) {
-                            this.client.updateBalancesFromWs(usdtItem.crossWalletBalance, usdtItem.walletBalance);
+                        if (usdtItem && Number.isFinite(usdtItem.walletBalance)) {
+                            this.client.updateWalletBalanceFromWs(usdtItem.walletBalance);
                         }
+                        // Trigger an async REST fetch for the authoritative availableBalance.
+                        this.client.scheduleAvailableBalanceRefetch();
                         const accountUpdate = {
                             eventType: payload.e,
                             eventTime: payload.E,
