@@ -204,9 +204,9 @@ export class StrategyEngine {
     const envVpinBucketVolume = process.env.VPIN_BUCKET_VOLUME ? parseFloat(process.env.VPIN_BUCKET_VOLUME) : NaN;
 
     const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 1.0;
-    const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 0.50;
+    const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 1.50;
     const defaultShortTp = !isNaN(envShortTp) ? envShortTp : 1.0;
-    const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 0.50;
+    const defaultShortSl = !isNaN(envShortSl) ? envShortSl : 1.50;
     const defaultProfitLock = !isNaN(envProfitLock) ? envProfitLock : 10.0;
     const defaultMaxShortSlots = !isNaN(envMaxShortSlots) ? envMaxShortSlots : 3;
     const defaultMinAiConfidence = !isNaN(envMinAiConfidence) ? envMinAiConfidence : 0.495;
@@ -951,7 +951,7 @@ export class StrategyEngine {
     const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
     const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
     const baseSlPercent = posSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
-    const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.00, volEstimate * 3.50 * 100));
+    const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.50, volEstimate * 4.50 * 100));
     const dynamicTpPercent = Math.max(dynamicSlPercent * (this.config.minPayoffRatio ?? 0.85), dynamicSlPercent * 2.50);
 
     if (posSide === "LONG") {
@@ -1511,7 +1511,7 @@ export class StrategyEngine {
           const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
           const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
           const baseSlPercent = targetPosSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
-          const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.00, volEstimate * 3.50 * 100));
+          const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.50, volEstimate * 4.50 * 100));
           const dynamicTpPercent = Math.max(dynamicSlPercent * (this.config.minPayoffRatio ?? 0.85), dynamicSlPercent * 2.50);
 
           if (targetPosSide === "LONG") {
@@ -2253,7 +2253,7 @@ export class StrategyEngine {
           // Dynamic Volatility-Based SL Calculation
           const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
           const volEstimate = garmanKlassRV > 0.000001 ? Math.sqrt(garmanKlassRV) : 0.005;
-          const dynamicSlPct = Math.max(0.005, volEstimate * 2.0);
+          const dynamicSlPct = Math.max(0.015, volEstimate * 3.5);
           const dynamicSlPercent = dynamicSlPct * 100;
           const slPrice = posSide === "LONG" ? entryPx * (1.0 - dynamicSlPct) : entryPx * (1.0 + dynamicSlPct);
           const formattedSlPrice = SymbolPrecisionRegistry.formatPrice(this.config.symbol, slPrice);
@@ -3697,7 +3697,7 @@ export class StrategyEngine {
                 const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
                 const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
                 const baseSlPercent = targetPosSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
-                const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.00, volEstimate * 3.50 * 100));
+                const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.50, volEstimate * 4.50 * 100));
                 const dynamicTpPercent = Math.max(dynamicSlPercent * (this.config.minPayoffRatio ?? 0.85), dynamicSlPercent * 2.50);
 
                 if (targetPosSide === "LONG") {

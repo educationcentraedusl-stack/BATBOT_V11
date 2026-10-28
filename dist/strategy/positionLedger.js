@@ -1800,11 +1800,11 @@ class HedgePositionLedger {
             slot.breakEvenPrice = Math.round(beRaw * this.invPriceTickSize) / this.invPriceTickSize;
         }
         // =========================================================================
-        // LAYER 1: STANDARD STEP-COLLAR RATCHETS (MANDATORY >= +8.0% NET ROE GATE)
+        // LAYER 1: STANDARD STEP-COLLAR RATCHETS (MANDATORY >= +5.0% NET ROE GATE)
         // =========================================================================
         const currentPeakRoe = slot.peakRoe ?? rawRoePct;
-        // Tier 1: +8.0% Net ROE -> Lock Entry + Round-Trip Fees
-        if (rawRoePct >= 8.0 || currentPeakRoe >= 8.0) {
+        // Tier 1: +5.0% Net ROE -> Lock Entry + Round-Trip Fees (Break-Even Ratchet) & Dynamic Trail
+        if (rawRoePct >= 5.0 || currentPeakRoe >= 5.0) {
             const maxLongSl = Math.round((markPrice - this.priceTickSize * 2) * this.invPriceTickSize) / this.invPriceTickSize;
             const minShortSl = Math.round((markPrice + this.priceTickSize * 2) * this.invPriceTickSize) / this.invPriceTickSize;
             const beOffset = feeBuffer + 0.0002;
@@ -1817,6 +1817,23 @@ class HedgePositionLedger {
                 slot.breakEvenPrice = targetTier1Sl;
             }
             this.applyMonotonicStopLoss(slot, targetTier1Sl);
+            // Active Dynamic Continuous Trailing SL behind Peak/Trough once Break-Even is Secured (>= +5.0% ROE)
+            const minVol = (garmanKlass > 0.000001) ? Math.sqrt(garmanKlass) : 0.0020;
+            const dynamicTrailDist = Math.max(this.priceTickSize * 3, slot.entryPrice * Math.max(0.0010, minVol * 1.0));
+            if (isLong) {
+                const dynamicTrailSl = Math.round(((slot.peakPrice ?? markPrice) - dynamicTrailDist) * this.invPriceTickSize) / this.invPriceTickSize;
+                if (dynamicTrailSl >= targetTier1Sl) {
+                    const safeTrailSl = Math.min(maxLongSl, dynamicTrailSl);
+                    this.applyMonotonicStopLoss(slot, safeTrailSl);
+                }
+            }
+            else {
+                const dynamicTrailSl = Math.round(((slot.troughPrice ?? markPrice) + dynamicTrailDist) * this.invPriceTickSize) / this.invPriceTickSize;
+                if (dynamicTrailSl <= targetTier1Sl) {
+                    const safeTrailSl = Math.max(minShortSl, dynamicTrailSl);
+                    this.applyMonotonicStopLoss(slot, safeTrailSl);
+                }
+            }
             // Tier 2: +15.0% Net ROE -> Lock +10.0% ROE
             if (rawRoePct >= 15.0 || currentPeakRoe >= 15.0) {
                 const lockOffset = 0.10 / effectiveLev;
@@ -2197,8 +2214,8 @@ class HedgePositionLedger {
         }
         const maxLongSl = this.formatPriceFast(markPrice - this.priceTickSize * 2);
         const minShortSl = this.formatPriceFast(markPrice + this.priceTickSize * 2);
-        // Tier 1: +8.0% Net ROE -> Lock Entry + Round-Trip Fees
-        if (rawRoePct >= 8.0) {
+        // Tier 1: +5.0% Net ROE -> Lock Entry + Round-Trip Fees (Break-Even Ratchet) & Dynamic Trail
+        if (rawRoePct >= 5.0 || (slot.peakRoe && slot.peakRoe >= 5.0)) {
             const beOffset = roundTripFeeBuffer + 0.0002;
             const rawTier1 = isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset);
             const targetTier1Sl = isLong ? Math.min(maxLongSl, this.formatPriceFast(rawTier1)) : Math.max(minShortSl, this.formatPriceFast(rawTier1));
@@ -2208,6 +2225,21 @@ class HedgePositionLedger {
                 slot.breakEvenPrice = targetTier1Sl;
             }
             this.applyMonotonicStopLoss(slot, targetTier1Sl);
+            // Active Dynamic Continuous Trailing SL behind Peak/Trough once Break-Even is Secured (>= +5.0% ROE)
+            if (isLong) {
+                const dynamicTrailSl = this.formatPriceFast((slot.peakPrice ?? markPrice) - dynamicTrailDist);
+                if (dynamicTrailSl >= targetTier1Sl) {
+                    const safeTrailSl = Math.min(maxLongSl, dynamicTrailSl);
+                    this.applyMonotonicStopLoss(slot, safeTrailSl);
+                }
+            }
+            else {
+                const dynamicTrailSl = this.formatPriceFast((slot.troughPrice ?? markPrice) + dynamicTrailDist);
+                if (dynamicTrailSl <= targetTier1Sl) {
+                    const safeTrailSl = Math.max(minShortSl, dynamicTrailSl);
+                    this.applyMonotonicStopLoss(slot, safeTrailSl);
+                }
+            }
         }
         // Tier 2: +15.0% Net ROE -> Lock +10.0% ROE
         if (rawRoePct >= 15.0) {
@@ -2274,7 +2306,10 @@ class HedgePositionLedger {
                 slot.peakPrice = stoikovMicroPrice;
                 if (slot.peakPrice >= minProfitFloorLong) {
                     const collarOffsetUsdt = slot.peakPrice * collarDistancePct;
-                    const msSopcStopPrice = this.formatPriceFast(slot.peakPrice - collarOffsetUsdt);
+                    const rawMsSopc = this.formatPriceFast(slot.peakPrice - collarOffsetUsdt);
+                    const msSopcStopPrice = (slot.breakEvenPrice && slot.breakEvenPrice > 0)
+                        ? Math.max(slot.breakEvenPrice, rawMsSopc)
+                        : rawMsSopc;
                     this.applyMonotonicStopLoss(slot, msSopcStopPrice);
                 }
             }
@@ -2290,7 +2325,10 @@ class HedgePositionLedger {
                 slot.troughPrice = stoikovMicroPrice;
                 if (slot.troughPrice <= minProfitFloorShort) {
                     const collarOffsetUsdt = slot.troughPrice * collarDistancePct;
-                    const msSopcStopPrice = this.formatPriceFast(slot.troughPrice + collarOffsetUsdt);
+                    const rawMsSopc = this.formatPriceFast(slot.troughPrice + collarOffsetUsdt);
+                    const msSopcStopPrice = (slot.breakEvenPrice && slot.breakEvenPrice > 0)
+                        ? Math.min(slot.breakEvenPrice, rawMsSopc)
+                        : rawMsSopc;
                     this.applyMonotonicStopLoss(slot, msSopcStopPrice);
                 }
             }

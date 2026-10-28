@@ -1,6 +1,12 @@
 # BATBOT_V11 System Status Log
 
 - **Date:** 2026-10-28
+- **Feature/Task:** Forensic Quant Remediation: Consecutive Stop-Loss Whipsaw Eradication & +5.0% ROE Break-Even Ratchet / Continuous Trailing SL
+- **Artifacts Created/Modified:** `src/strategy/engine.ts`, `src/strategy/positionLedger.ts`, `src/tests/test_sota_5pct_roe_ratchet_and_trailing.ts`, `batbot_system_status_log.md`
+- **HFT/Performance Compliance:** Eradicated suffocating 0.50% initial Stop-Loss defaults and tight 1.00% floors in `StrategyEngine`, restoring breathing room to 1.50% with adaptive 4.5x Garman-Klass volatility scaling. Remediated Tier 1 Step-Collar Ratchet threshold from unreachable legacy 8.0% Net ROE (1.6%-4.0% price move under 2x-5x leverage) to exactly +5.0% Net ROE. Resurrected dead-code `dynamicTrailDist` continuous trailing stop behind peak/trough, and protected MS-SOPC collar floor at or above break-even. Validated via `test_sota_5pct_roe_ratchet_and_trailing.ts` and `test_monotonic_zero_retreat_hard_lock.ts` (0.659 µs latency < 1.500 µs SLA) with zero regressions across Phase 2, Phase 3, and Phase 5 master simulation suites.
+- **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-10-28
 - **Feature/Task:** DevOps & Build Pipeline Fix: Eradicate 'cargo not recognized' regression caused by Windows cmd.exe PATH quotation corruption
 - **Artifacts Created/Modified:** `package.json`, `scripts/build_rust.js`, `batbot_system_status_log.md`
 - **HFT/Performance Compliance:** Eradicated Windows cmd.exe PATH delimiter corruption caused by a stray dangling quotation mark in System PATH (`C:\Program Files\WSL"`). Implemented zero-overhead deterministic build runner `scripts/build_rust.js` sanitizing PATH and enforcing explicit Cargo bin resolution (`~/.cargo/bin`) prior to N-API release compilation. Rebuild confirmed in 0.96s with exit code 0.

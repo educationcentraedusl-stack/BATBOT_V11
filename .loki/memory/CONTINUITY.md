@@ -15,6 +15,18 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-10-28 - Forensic Quant Remediation (Consecutive Stop-Loss Whipsaw Eradication, +5.0% ROE Break-Even Ratchet & Active Trailing SL) Completed & 100% QA Verified:
+  - Root Cause Diagnosed:
+    1. Initial Stop-Loss Squeezing: `defaultLongSl` and `defaultShortSl` in `StrategyEngine` were set to 0.50%, and order fill dynamic SL had a 1.00% floor with 3.5x GK multiplier. Taking dual-sqrt on micro-bar GK volatility ($\approx 0.00003$) clamped initial SL to 0.50%-1.00%, suffocating trades within normal 0.20%-0.80% market noise.
+    2. Missing +5.0% ROE Ratchet: In `positionLedger.ts`, Tier 1 Step-Collar Ratchet was hardcoded to `rawRoePct >= 8.0`. Designed under legacy 20x leverage (where 8% ROE was 0.40% price move), it was never adjusted when Phase 4 permanently banned 20x leverage. Under 2x-5x leverage, 8% ROE required an unreachable 1.60%-4.00% price move. Positions entering +5.0% ROE never ratcheted to break-even.
+    3. Dead-Code Continuous Trailing SL: `dynamicTrailDist` was calculated in `positionLedger.ts:2886` but never assigned to update `slot.stopLossPrice`.
+    4. MS-SOPC Collar Floor: The collar formula sat below entry price during moderate profits, failing to establish break-even protection.
+  - Remediation:
+    - Updated initial SL default to 1.50% and dynamic SL floor to `Math.max(1.50, volEstimate * 4.50 * 100)`. Aligned `syncExchangeStateWithData` to `Math.max(0.015, volEstimate * 3.5)`.
+    - Updated Tier 1 in both `evalHedgeSlot` and `evalSingleSlotSota` to trigger at `rawRoePct >= 5.0 || currentPeakRoe >= 5.0`, locking Break-Even + Round-Trip Fees (`slot.breakEvenPrice`).
+    - Resurrected active continuous trailing SL via `dynamicTrailDist` following `peakPrice` / `troughPrice` monotonically once Break-Even is secured.
+    - Clamped in-profit MS-SOPC collar stops to never drop below break-even for LONG or above break-even for SHORT.
+  - Empirical Verification: Passed dedicated suite `test_sota_5pct_roe_ratchet_and_trailing.ts` (100%), passed `test_monotonic_zero_retreat_hard_lock.ts` (0.659 µs latency), passed `test_phase2_place_before_cancel_atomic_sl.ts`, passed `test_phase3_sovereign_order_state_machine.ts`, and passed 6-stage master simulation suite `test_phase5_master_simulation_and_hotreload.ts` (Exit Code 0). Strict TypeScript compiled (`npm run build:ts` exit code 0).
 * 2026-10-28 - DevOps & Build Pipeline Fix (Eradicated 'cargo not recognized' regression caused by Windows cmd.exe PATH quotation corruption):
   - Root Cause Diagnosed: System Environment PATH (`HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment\Path`) contained a rogue trailing quotation mark (`C:\Program Files\WSL"`). When Windows concatenated System PATH with User PATH, `cmd.exe` (invoked by Node.js `child_process.execSync` inside `@napi-rs/cli`) entered an invalid quote state, corrupting `;` delimiter parsing and blinding `cmd.exe` to `C:\Users\SMART PLUS\.cargo\bin` located in User PATH.
   - Remediation: Created deterministic build runner `scripts/build_rust.js` that sanitizes `process.env.PATH` (stripping rogue quotation marks) and guarantees `~/.cargo/bin` presence before calling `napi build --platform --release`. Updated `package.json` `build:rust` script to `node scripts/build_rust.js`. Rebuild verified clean in 0.96s with exit code 0.
