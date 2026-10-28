@@ -3,7 +3,7 @@ import { MultiAssetRiskGuard } from "./risk";
 import { BinanceExecutionClient, BinancePositionRisk, BinanceOrderResponse } from "../execution/binance";
 import { MultiAssetPositionLedger } from "./positionLedger";
 import { StrategyEngine, StrategySignalResult, EngineState } from "./engine";
-import { getTradingSymbols } from "../config/tradingSymbols";
+import { getTradingSymbols, getBaselineLeverageForSymbol } from "../config/tradingSymbols";
 import {
   BinanceUserDataStream,
   OrderTradeUpdatePayload,
@@ -48,11 +48,12 @@ export class MultiAssetStrategyEngine {
       const symbol = this.activeSymbols[i];
       if (!symbol) continue;
       const hedgeLedger = this.positionLedger.getOrCreateLedger(symbol);
+      const baselineLev = getBaselineLeverageForSymbol(symbol);
       const engine = new StrategyEngine(
         this.client,
         this.riskGuard,
         this.executionClient,
-        { symbol, assetIndex: i },
+        { symbol, assetIndex: i, leverageMultiplier: baselineLev },
         hedgeLedger.getLegacyLedger(),
         hedgeLedger
       );
@@ -172,24 +173,33 @@ export class MultiAssetStrategyEngine {
   }
 
   public async syncLeverageWithExchange(targetLeverage?: number): Promise<void> {
-    const envLeverage = parseInt(process.env.LEVERAGE || "10", 10);
-    const leverageToSet = targetLeverage && targetLeverage > 0 ? targetLeverage : envLeverage;
-
     if (!this.executionClient.isConfigured()) return;
 
     for (const symbol of this.activeSymbols) {
       if (!symbol) continue;
       try {
+        const engine = this.engines.get(symbol);
+        // Phase 4 Dynamic Leverage Scaling:
+        // Calculate dynamic inverse-volatility leverage targeting constant portfolio volatility budget.
+        // Clamp strictly between 2x (Min) and 5x (Max). 20x is permanently banned!
+        let leverageToSet: number;
+        if (targetLeverage && targetLeverage > 0) {
+          leverageToSet = Math.max(2, Math.min(5, Math.round(targetLeverage)));
+        } else if (engine) {
+          leverageToSet = engine.getDynamicLeverage();
+        } else {
+          leverageToSet = getBaselineLeverageForSymbol(symbol);
+        }
+
         const res = await this.executionClient.setLeverage(symbol, leverageToSet);
         if (res) {
-          const engine = this.engines.get(symbol);
           if (engine) {
             engine.setLeverageMultiplier(res.leverage);
           }
         }
       } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : String(err);
-        console.warn(`[MultiAssetStrategyEngine] Notice setting leverage for ${symbol}: ${errorMessage}`);
+        console.warn(`[MultiAssetStrategyEngine] Notice setting dynamic leverage for ${symbol}: ${errorMessage}`);
       }
     }
   }

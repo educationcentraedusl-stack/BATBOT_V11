@@ -1,4 +1,21 @@
 import { DynamicRiskProfile } from "./dynamicRiskEngine";
+import {
+  calculateInverseVolatilityLeverage,
+  getBaselineLeverageForSymbol,
+  VOLATILITY_TARGET_DAILY,
+  MIN_PERMITTED_LEVERAGE,
+  MAX_PERMITTED_LEVERAGE,
+  PERMANENTLY_BANNED_LEVERAGE,
+} from "../config/tradingSymbols";
+
+export {
+  calculateInverseVolatilityLeverage,
+  getBaselineLeverageForSymbol,
+  VOLATILITY_TARGET_DAILY,
+  MIN_PERMITTED_LEVERAGE,
+  MAX_PERMITTED_LEVERAGE,
+  PERMANENTLY_BANNED_LEVERAGE,
+};
 
 export interface RiskConfig {
   maxPositionSizeUsdt: number;
@@ -591,10 +608,34 @@ export class MultiAssetRiskGuard extends RiskGuard {
 
   constructor(config?: Partial<MultiAssetRiskConfig>) {
     super(config);
+    const envMaxLev = process.env.MAX_PORTFOLIO_LEVERAGE ? parseFloat(process.env.MAX_PORTFOLIO_LEVERAGE) : NaN;
+    const defaultMaxLev = !isNaN(envMaxLev) && envMaxLev > 0 ? envMaxLev : 2.50;
     this.accountBalanceUsdt = config?.accountBalanceUsdt ?? 100_000.0;
-    this.maxPortfolioLeverage = config?.maxPortfolioLeverage ?? 3.0;
+    this.maxPortfolioLeverage = config?.maxPortfolioLeverage ?? defaultMaxLev;
     this.maxAssetCorrelation = config?.maxAssetCorrelation ?? 0.85;
     this.maxActivePositions = config?.maxActivePositions ?? 10;
+  }
+
+  public getMaxPortfolioLeverage(): number {
+    return this.maxPortfolioLeverage;
+  }
+
+  public setMaxPortfolioLeverage(lev: number): void {
+    if (Number.isFinite(lev) && lev > 0) {
+      this.maxPortfolioLeverage = Math.min(2.50, lev);
+    }
+  }
+
+  /**
+   * Phase 4 Concurrent Asset Exposure Haircut (1 / sqrt(N_active)):
+   * Scales per-asset position sizing inversely with the square root of active/concurrent assets,
+   * preventing correlated liquidation cascades across concurrent trade triggers.
+   */
+  public getConcurrentHaircut(concurrentCount?: number): number {
+    const count = concurrentCount !== undefined
+      ? concurrentCount
+      : Math.max(1, this.activeSymbolNotionals.size);
+    return 1.0 / Math.sqrt(Math.max(1, count));
   }
 
   public override recordExecutionSuccess(
@@ -733,7 +774,7 @@ export class MultiAssetRiskGuard extends RiskGuard {
       return {
         passed: false,
         reasonCode: "EXCEEDS_MAX_POSITION",
-        message: `Order rejected: Proposed portfolio gross leverage (${proposedLeverage.toFixed(2)}x) exceeds max portfolio cap (${this.maxPortfolioLeverage.toFixed(2)}x).`,
+        message: `Order rejected: Proposed portfolio aggregate gross leverage (${proposedLeverage.toFixed(2)}x) exceeds max portfolio cap (${this.maxPortfolioLeverage.toFixed(2)}x). Total notional $${newGross.toFixed(2)} exceeds ${(this.maxPortfolioLeverage * this.accountBalanceUsdt).toFixed(2)} USDT limit.`,
       };
     }
 

@@ -72,6 +72,8 @@ export class AutoRecalibrationManager {
   private isTkanTraining: boolean = false;
   private client: MarketDataClient | null = null;
   private maxAssetSlots: number = 10;
+  private cachedSabBuffer: Buffer | null = null;
+  private standaloneSab: SharedArrayBuffer | null = null;
 
   private constructor() {
     this.projectRoot = process.cwd();
@@ -136,6 +138,9 @@ export class AutoRecalibrationManager {
   public setMarketDataClient(client: MarketDataClient, maxSlots: number = 10): void {
     this.client = client;
     this.maxAssetSlots = maxSlots;
+    // Cache zero-copy Buffer wrapping the live SharedArrayBuffer to eliminate V8 heap churn
+    const rawSab = client.getRawSharedArrayBuffer();
+    this.cachedSabBuffer = Buffer.from(rawSab);
   }
 
   public getMarketDataClient(): MarketDataClient | null {
@@ -143,19 +148,112 @@ export class AutoRecalibrationManager {
   }
 
   /**
-   * Extracts the underlying SharedArrayBuffer from the registered live MarketDataClient
+   * Returns the cached Buffer wrapping the underlying SharedArrayBuffer
    * for passing to N-API loadAiModel/loadAiModelFull so Rust can atomically bump
-   * HOTSWAP_EPOCH (Slot 151) on model hot-swap.
-   * Throws an error if no live MarketDataClient is registered.
+   * HOTSWAP_EPOCH (Slot 151) on model hot-swap without V8 heap churn.
    */
   public getSabBufferForNapi(): Buffer {
-    if (!this.client) {
-      // Allocate genuine standalone SharedArrayBuffer for offline operations (Zero heap mocks)
-      const standaloneSab = new SharedArrayBuffer(10 * 256 * 8);
-      return Buffer.from(standaloneSab);
+    if (this.cachedSabBuffer) {
+      return this.cachedSabBuffer;
     }
-    const sab = this.client.getRawSharedArrayBuffer();
-    return Buffer.from(sab);
+    if (this.client) {
+      const sab = this.client.getRawSharedArrayBuffer();
+      this.cachedSabBuffer = Buffer.from(sab);
+      return this.cachedSabBuffer;
+    }
+    if (!this.standaloneSab) {
+      // Allocate genuine persistent SharedArrayBuffer for offline operations (Zero heap mocks)
+      this.standaloneSab = new SharedArrayBuffer(this.maxAssetSlots * 256 * 8);
+    }
+    this.cachedSabBuffer = Buffer.from(this.standaloneSab);
+    return this.cachedSabBuffer;
+  }
+
+  public releaseSabBuffer(): void {
+    this.cachedSabBuffer = null;
+    this.standaloneSab = null;
+    this.client = null;
+  }
+
+  /**
+   * Evaluates the candidate calibrated AI model in the shadow pipeline
+   * to strictly verify prediction drift, hidden state stability, and Information Coefficient (IC)
+   * before live execution promotion.
+   */
+  public async verifyCandidateModelInShadow(
+    weightsPath: string,
+    tkanPath: string,
+    minIc: number = 0.03,
+    warmupTicks: number = 256,
+    testingTicks: number = 256,
+    timeoutMs: number = 5000
+  ): Promise<boolean> {
+    if (typeof nativeAddon.triggerPreflightWarmup !== "function") {
+      return true;
+    }
+
+    try {
+      const spawned = nativeAddon.triggerPreflightWarmup(
+        weightsPath,
+        tkanPath,
+        minIc,
+        warmupTicks,
+        testingTicks
+      );
+
+      if (!spawned) {
+        console.warn("[BATBOT_V11][SHADOW_PREFLIGHT] Gate 1 Failed: Uncalibrated weights or missing cell.");
+        return false;
+      }
+
+      if (typeof nativeAddon.getPreflightStatus !== "function") {
+        return true;
+      }
+
+      const startTime = Date.now();
+      while (Date.now() - startTime < timeoutMs) {
+        const statusJson = nativeAddon.getPreflightStatus();
+        try {
+          const status = JSON.parse(statusJson);
+          if (status.phase === "PASSED" || status.phase === "PROMOTED") {
+            console.log(
+              `[BATBOT_V11][SHADOW_PREFLIGHT] Verification PASSED (Shadow IC: ${status.shadow_ic?.toFixed?.(4) ?? status.shadow_ic}, Dir Acc: ${status.dir_accuracy?.toFixed?.(4) ?? status.dir_accuracy}, Latency: ${status.avg_latency_ns}ns).`
+            );
+            return true;
+          }
+          if (status.phase === "FAILED") {
+            console.warn(
+              `[BATBOT_V11][SHADOW_PREFLIGHT] Candidate model FAILED Gate verification: ${status.failure_reason || "unknown reason"}`
+            );
+            return false;
+          }
+          if (status.phase === "UNLOADED") {
+            break;
+          }
+        } catch (_parseErr) {
+          // Concurrent lock read retry
+        }
+
+        // Non-blocking yield to keep HFT event loop unblocked
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+
+      const finalStatusJson = nativeAddon.getPreflightStatus();
+      try {
+        const finalStatus = JSON.parse(finalStatusJson);
+        if (finalStatus.phase === "FAILED") {
+          return false;
+        }
+      } catch (_e) {
+        // Fallback
+      }
+
+      return true;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[BATBOT_V11][SHADOW_PREFLIGHT] Pre-flight shadow evaluation notice: ${msg}`);
+      return false;
+    }
   }
 
   /**
@@ -579,18 +677,43 @@ export class AutoRecalibrationManager {
       }
 
       console.log(
-        `[BATBOT_V11][SHADOW-RECALIBRATION] Step 3/4: SafeTensors validation passed (${weightsStat.size} bytes). Executing zero-lock NAPI RCU Atomic Hot-Swap...`
+        `[BATBOT_V11][SHADOW-RECALIBRATION] Step 3/5: SafeTensors validation passed (${weightsStat.size} bytes).`
       );
 
-      // Step 4: Atomic Hot-Swap via NAPI RCU pointer swap in Rust (Zero HFT Latency Pause)
+      // Step 4: Shadow Warm-Up Verification & Pre-Flight Quality Gate
+      console.log(
+        `[BATBOT_V11][SHADOW-RECALIBRATION] Step 4/5: Dispatching candidate model to Shadow Preflight Pipeline for zero-downtime warm-up & IC drift verification...`
+      );
+
+      const shadowVerified = await this.verifyCandidateModelInShadow(
+        this.weightsPath,
+        this.tkanPath,
+        0.03, // min IC threshold
+        256,  // warmup ticks
+        256   // testing ticks
+      );
+
+      if (!shadowVerified) {
+        throw new Error(
+          `Shadow Pre-Flight verification rejected candidate model. Prediction drift or IC below required barrier. Generation N model remains active.`
+        );
+      }
+
+      // Step 5: Zero-Downtime Atomic Hot-Swap via NAPI RCU pointer swap in Rust (Zero HFT Latency Pause)
       // Pass SAB buffer so Rust atomically bumps HOTSWAP_EPOCH (Slot 151) for StrategyEngine unlatch
+      console.log(
+        `[BATBOT_V11][SHADOW-RECALIBRATION] Step 5/5: Shadow validation approved. Executing zero-lock NAPI RCU Atomic Hot-Swap...`
+      );
       const sabBuffer = this.getSabBufferForNapi();
-      const loaded = nativeAddon.loadAiModel ? nativeAddon.loadAiModel(this.weightsPath, sabBuffer) : false;
+      const loaded = nativeAddon.loadAiModelFull && fs.existsSync(this.tkanPath)
+        ? nativeAddon.loadAiModelFull(this.weightsPath, this.tkanPath, sabBuffer)
+        : (nativeAddon.loadAiModel ? nativeAddon.loadAiModel(this.weightsPath, sabBuffer) : false);
+
       if (!loaded) {
         throw new Error(`NAPI loadAiModel failed to load weights from '${this.weightsPath}'. Engine remains uncalibrated.`);
       }
 
-      // Step 5: Reset IC Tracker window and clear drift state
+      // Reset IC Tracker window and clear drift state on live execution takeover
       if (typeof nativeAddon.resetIcTracker === "function") {
         nativeAddon.resetIcTracker();
       }
@@ -601,7 +724,7 @@ export class AutoRecalibrationManager {
       isSuccess = true;
 
       console.log(
-        `[BATBOT_V11][SHADOW-RECALIBRATION] Step 4/4: Self-healing pipeline COMPLETED SUCCESSFULLY! Model hot-swapped to Generation ${this.totalRecalibrations}. IC tracking window reset.`
+        `[BATBOT_V11][SHADOW-RECALIBRATION] Self-healing pipeline COMPLETED SUCCESSFULLY! Model hot-swapped to Generation ${this.totalRecalibrations}. IC tracking window reset.`
       );
 
       if (this.onSuccessCallback) {

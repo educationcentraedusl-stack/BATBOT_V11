@@ -138,7 +138,10 @@ class StrategyEngine {
         const defaultOrderQty = !isNaN(envOrderQty)
             ? envOrderQty
             : (targetSymbol.includes("ETH") ? 0.05 : 0.001);
-        const defaultLeverage = !isNaN(envLeverage) ? envLeverage : 10;
+        const symbolBaseline = (0, tradingSymbols_1.getBaselineLeverageForSymbol)(targetSymbol);
+        const envLevRaw = !isNaN(envLeverage) ? envLeverage : symbolBaseline;
+        // Banned 20x leverage enforcement: clamp strictly between 2x and 5x
+        const defaultLeverage = Math.max(tradingSymbols_1.MIN_PERMITTED_LEVERAGE, Math.min(tradingSymbols_1.MAX_PERMITTED_LEVERAGE, envLevRaw >= tradingSymbols_1.PERMANENTLY_BANNED_LEVERAGE ? symbolBaseline : envLevRaw));
         const envTradeSizeUsdt = process.env.TRADE_SIZE_USDT ? parseFloat(process.env.TRADE_SIZE_USDT) : NaN;
         const defaultTradeSizeUsdt = !isNaN(envTradeSizeUsdt) ? envTradeSizeUsdt : 400.0;
         const envTargetMarginUsdt = process.env.TARGET_MARGIN_USDT ? parseFloat(process.env.TARGET_MARGIN_USDT) : NaN;
@@ -404,11 +407,30 @@ class StrategyEngine {
     }
     setLeverageMultiplier(leverage) {
         if (Number.isFinite(leverage) && leverage > 0) {
-            this.config.leverageMultiplier = leverage;
-            this.positionLedger.setLeverage(leverage);
-            this.hedgeLedger.setLeverage(leverage);
-            this.client.setOmsLeverage(leverage, this.assetIndex);
+            // Phase 4 Invariant: 20x leverage is permanently banned. Strict clamp [2, 5].
+            let safeLev = Math.max(tradingSymbols_1.MIN_PERMITTED_LEVERAGE, Math.min(tradingSymbols_1.MAX_PERMITTED_LEVERAGE, Math.round(leverage)));
+            if (leverage >= tradingSymbols_1.PERMANENTLY_BANNED_LEVERAGE) {
+                safeLev = Math.min(tradingSymbols_1.MAX_PERMITTED_LEVERAGE, (0, tradingSymbols_1.getBaselineLeverageForSymbol)(this.config.symbol));
+                console.warn(`[StrategyEngine][LEVERAGE_BANNED] 20x leverage is permanently banned! Clamping requested leverage (${leverage}x) to ${safeLev}x for ${this.config.symbol}.`);
+            }
+            this.config.leverageMultiplier = safeLev;
+            this.positionLedger.setLeverage(safeLev);
+            this.hedgeLedger.setLeverage(safeLev);
+            this.client.setOmsLeverage(safeLev, this.assetIndex);
         }
+    }
+    /**
+     * Continuous inverse-volatility leverage calculator targeting a constant portfolio volatility budget.
+     * Target portfolio daily volatility budget: sigma_target = 0.0125 (1.25% daily / ~20% annualized).
+     * Formula: L_i = clamp(round(sigma_target / max(sigma_realized, 0.0025)), 2, 5)
+     * 20x leverage is permanently banned.
+     */
+    getDynamicLeverage() {
+        const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
+        const safeVol = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001)
+            ? Math.sqrt(garmanKlassRV)
+            : 0.0025;
+        return (0, tradingSymbols_1.calculateInverseVolatilityLeverage)(safeVol);
     }
     getLeverageMultiplier() {
         return this.config.leverageMultiplier;
@@ -2778,15 +2800,18 @@ class StrategyEngine {
                     targetPrice = askPrice + this.config.tickSize;
                 }
             }
-            // SOTA August 2026 Alpha-Gated Dynamic Kelly Recovery Sizing (AG-DKRS)
+            // SOTA August 2026 Alpha-Gated Dynamic Kelly Recovery Sizing (AG-DKRS) & Phase 4 Volatility-Targeted Risk Parity
             let finalQuantity = 0.001;
             if (basePrice > 0) {
                 const targetMargin = (this.config.targetMarginUsdt && this.config.targetMarginUsdt > 0) ? this.config.targetMarginUsdt : 20.0;
-                const effectiveLev = this.config.leverageMultiplier > 0 ? this.config.leverageMultiplier : 20.0;
+                // Phase 4 Dynamic Inverse-Volatility Leverage: strictly 2x - 5x. 20x is permanently banned.
+                const dynamicLev = this.getDynamicLeverage();
+                const effectiveLev = Math.max(tradingSymbols_1.MIN_PERMITTED_LEVERAGE, Math.min(tradingSymbols_1.MAX_PERMITTED_LEVERAGE, dynamicLev));
+                this.config.leverageMultiplier = effectiveLev;
+                this.hedgeLedger.setLeverage(effectiveLev);
+                // TargetNotional = 20.0 * L_i (Strict ~20 USDT margin allocation invariant)
                 const marginTargetNotional = targetMargin * effectiveLev;
-                const baseNotional = (this.config.targetMarginUsdt && this.config.targetMarginUsdt > 0)
-                    ? marginTargetNotional
-                    : (this.config.tradeSizeUsdt > 0 ? this.config.tradeSizeUsdt : 400.0);
+                const baseNotional = marginTargetNotional;
                 const maxDailyLoss = this.riskGuard.getConfig().maxDailyLossUsdt;
                 const sizingRes = this.hedgeLedger.getSizingCalculator().calculateAlphaGatedRecoverySize(baseNotional, sessionPnl, maxDailyLoss, aiConfidence, zScore, hurstExponent);
                 let targetNotionalUsdt = sizingRes.targetNotionalUsdt;
@@ -2795,6 +2820,13 @@ class StrategyEngine {
                 if (maxPosSizeUsdt > 0 && targetNotionalUsdt > maxPosSizeUsdt) {
                     targetNotionalUsdt = maxPosSizeUsdt;
                 }
+                // Phase 4 Concurrent Asset Exposure Haircut (1 / sqrt(N_active)):
+                // Position sizing per asset scales by 1 / sqrt(N_active) to prevent correlated liquidation cascades.
+                const activeSymbolCount = Math.max(1, this.riskGuard instanceof risk_1.MultiAssetRiskGuard
+                    ? this.riskGuard.getActiveSymbolCount()
+                    : this.getGlobalActivePositionCount());
+                const concurrentHaircut = 1.0 / Math.sqrt(activeSymbolCount);
+                targetNotionalUsdt *= concurrentHaircut;
                 const icSizeModifier = this.icState === "DEGRADED" ? 0.50 : 1.0;
                 const rawQty = (targetNotionalUsdt / basePrice) * penaltyCoeff * targetSizeDecayCoeff * icSizeModifier;
                 finalQuantity = formatQuantityForSymbol(this.config.symbol, rawQty, false);

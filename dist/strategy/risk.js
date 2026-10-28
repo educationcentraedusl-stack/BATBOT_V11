@@ -1,6 +1,13 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MultiAssetRiskGuard = exports.RiskGuard = exports.RISK_REJECTED_PROFIT_LOCKED = exports.RISK_REJECTED_DAILY_LOSS = exports.RISK_REJECTED_COOLDOWN = exports.RISK_REJECTED_UNCONFIGURED = exports.RISK_PASSED = void 0;
+exports.MultiAssetRiskGuard = exports.RiskGuard = exports.RISK_REJECTED_PROFIT_LOCKED = exports.RISK_REJECTED_DAILY_LOSS = exports.RISK_REJECTED_COOLDOWN = exports.RISK_REJECTED_UNCONFIGURED = exports.RISK_PASSED = exports.PERMANENTLY_BANNED_LEVERAGE = exports.MAX_PERMITTED_LEVERAGE = exports.MIN_PERMITTED_LEVERAGE = exports.VOLATILITY_TARGET_DAILY = exports.getBaselineLeverageForSymbol = exports.calculateInverseVolatilityLeverage = void 0;
+const tradingSymbols_1 = require("../config/tradingSymbols");
+Object.defineProperty(exports, "calculateInverseVolatilityLeverage", { enumerable: true, get: function () { return tradingSymbols_1.calculateInverseVolatilityLeverage; } });
+Object.defineProperty(exports, "getBaselineLeverageForSymbol", { enumerable: true, get: function () { return tradingSymbols_1.getBaselineLeverageForSymbol; } });
+Object.defineProperty(exports, "VOLATILITY_TARGET_DAILY", { enumerable: true, get: function () { return tradingSymbols_1.VOLATILITY_TARGET_DAILY; } });
+Object.defineProperty(exports, "MIN_PERMITTED_LEVERAGE", { enumerable: true, get: function () { return tradingSymbols_1.MIN_PERMITTED_LEVERAGE; } });
+Object.defineProperty(exports, "MAX_PERMITTED_LEVERAGE", { enumerable: true, get: function () { return tradingSymbols_1.MAX_PERMITTED_LEVERAGE; } });
+Object.defineProperty(exports, "PERMANENTLY_BANNED_LEVERAGE", { enumerable: true, get: function () { return tradingSymbols_1.PERMANENTLY_BANNED_LEVERAGE; } });
 exports.RISK_PASSED = Object.freeze({
     passed: true,
     reasonCode: "APPROVED",
@@ -445,10 +452,31 @@ class MultiAssetRiskGuard extends RiskGuard {
     maxActivePositions;
     constructor(config) {
         super(config);
+        const envMaxLev = process.env.MAX_PORTFOLIO_LEVERAGE ? parseFloat(process.env.MAX_PORTFOLIO_LEVERAGE) : NaN;
+        const defaultMaxLev = !isNaN(envMaxLev) && envMaxLev > 0 ? envMaxLev : 2.50;
         this.accountBalanceUsdt = config?.accountBalanceUsdt ?? 100_000.0;
-        this.maxPortfolioLeverage = config?.maxPortfolioLeverage ?? 3.0;
+        this.maxPortfolioLeverage = config?.maxPortfolioLeverage ?? defaultMaxLev;
         this.maxAssetCorrelation = config?.maxAssetCorrelation ?? 0.85;
         this.maxActivePositions = config?.maxActivePositions ?? 10;
+    }
+    getMaxPortfolioLeverage() {
+        return this.maxPortfolioLeverage;
+    }
+    setMaxPortfolioLeverage(lev) {
+        if (Number.isFinite(lev) && lev > 0) {
+            this.maxPortfolioLeverage = Math.min(2.50, lev);
+        }
+    }
+    /**
+     * Phase 4 Concurrent Asset Exposure Haircut (1 / sqrt(N_active)):
+     * Scales per-asset position sizing inversely with the square root of active/concurrent assets,
+     * preventing correlated liquidation cascades across concurrent trade triggers.
+     */
+    getConcurrentHaircut(concurrentCount) {
+        const count = concurrentCount !== undefined
+            ? concurrentCount
+            : Math.max(1, this.activeSymbolNotionals.size);
+        return 1.0 / Math.sqrt(Math.max(1, count));
     }
     recordExecutionSuccess(notionalUsdt, side = "BUY", symbol, isCloseOrder = false, remainingGrossNotional) {
         super.recordExecutionSuccess(notionalUsdt, side, symbol, isCloseOrder, remainingGrossNotional);
@@ -559,7 +587,7 @@ class MultiAssetRiskGuard extends RiskGuard {
             return {
                 passed: false,
                 reasonCode: "EXCEEDS_MAX_POSITION",
-                message: `Order rejected: Proposed portfolio gross leverage (${proposedLeverage.toFixed(2)}x) exceeds max portfolio cap (${this.maxPortfolioLeverage.toFixed(2)}x).`,
+                message: `Order rejected: Proposed portfolio aggregate gross leverage (${proposedLeverage.toFixed(2)}x) exceeds max portfolio cap (${this.maxPortfolioLeverage.toFixed(2)}x). Total notional $${newGross.toFixed(2)} exceeds ${(this.maxPortfolioLeverage * this.accountBalanceUsdt).toFixed(2)} USDT limit.`,
             };
         }
         return exports.RISK_PASSED;
