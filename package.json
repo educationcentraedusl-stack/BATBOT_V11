@@ -6,7 +6,7 @@
   "types": "dist/index.d.ts",
   "private": true,
   "scripts": {
-    "build:rust": "napi build --platform --release",
+    "build:rust": "node scripts/build_rust.js",
     "build:ts": "tsc",
     "build:dashboard": "vite build",
     "build": "npm run build:rust && npm run build:ts && npm run build:dashboard",
