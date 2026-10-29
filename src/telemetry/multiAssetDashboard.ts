@@ -72,6 +72,8 @@ export class MultiAssetCLIDashboard {
   private confHistoryIdxs: number[];
   private confHistoryCounts: number[];
   private isConfFlatlined: boolean[];
+  /** Unix-ms timestamp at which each asset first entered the CONF_FLATLINE state. 0 = not flatlined. */
+  private flatlineOnsetTs: number[];
 
   // Static pre-rendered Mini-Bar lookup table (0 to 10 filled blocks) to avoid .repeat() heap allocations on hot-path
   private static readonly MINI_BAR_CACHE: string[] = Array.from({ length: 11 }, (_, filled) => {
@@ -100,6 +102,7 @@ export class MultiAssetCLIDashboard {
     this.confHistoryIdxs = new Array(maxAssets).fill(0);
     this.confHistoryCounts = new Array(maxAssets).fill(0);
     this.isConfFlatlined = new Array(maxAssets).fill(false);
+    this.flatlineOnsetTs = new Array(maxAssets).fill(0);
 
     this.originalConsoleLog = console.log.bind(console);
     this.originalConsoleWarn = console.warn.bind(console);
@@ -115,6 +118,44 @@ export class MultiAssetCLIDashboard {
         this.clear();
       });
     }
+  }
+
+  /**
+   * Watchdog API: Returns true if ANY asset slot is currently in a CONF_FLATLINE state.
+   * Called by the external Watchdog timer in run_tui_dashboard.ts to detect deadlocks.
+   */
+  public isAnyAssetFlatlined(): boolean {
+    for (let i = 0; i < this.isConfFlatlined.length; i++) {
+      if (this.isConfFlatlined[i]) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Watchdog API: Returns the Unix-ms timestamp at which the EARLIEST active flatline began.
+   * Returns 0 if no asset is currently flatlined.
+   */
+  public getEarliestFlatlineOnsetMs(): number {
+    let earliest = 0;
+    for (let i = 0; i < this.isConfFlatlined.length; i++) {
+      if (this.isConfFlatlined[i] && this.flatlineOnsetTs[i] > 0) {
+        if (earliest === 0 || this.flatlineOnsetTs[i] < earliest) {
+          earliest = this.flatlineOnsetTs[i];
+        }
+      }
+    }
+    return earliest;
+  }
+
+  /**
+   * Watchdog API: Returns list of asset indices currently in CONF_FLATLINE state.
+   */
+  public getFlatlinedAssetIndices(): number[] {
+    const result: number[] = [];
+    for (let i = 0; i < this.isConfFlatlined.length; i++) {
+      if (this.isConfFlatlined[i]) result.push(i);
+    }
+    return result;
   }
 
   /**
@@ -630,9 +671,11 @@ export class MultiAssetCLIDashboard {
     const isFlatline = count >= 20 && confStdDev < 0.0002;
     if (isFlatline && !this.isConfFlatlined[assetIdx]) {
       this.isConfFlatlined[assetIdx] = true;
-      this.pushNotification(`\x1b[31m[CONF_FLATLINE_DETECTED] Asset #${assetIdx} (${this.assetSymbols[assetIdx] || "ASSET"}) Platt Calibration Flatline: StdDev=${(confStdDev * 100).toFixed(4)}% < 0.02%\x1b[0m`);
+      this.flatlineOnsetTs[assetIdx] = Date.now();
+      this.pushNotification(`\x1b[31m[CONF_FLATLINE_DETECTED] Asset #${assetIdx} (${this.assetSymbols[assetIdx] || "ASSET"}) Platt Calibration Flatline: StdDev=${(confStdDev * 100).toFixed(4)}% < 0.02%. WATCHDOG ARMED (5min auto-restart).\x1b[0m`);
     } else if (!isFlatline && this.isConfFlatlined[assetIdx] && confStdDev >= 0.0002) {
       this.isConfFlatlined[assetIdx] = false;
+      this.flatlineOnsetTs[assetIdx] = 0;
     }
 
     const plattA = this.client.getAiPlattScale(assetIdx);
@@ -647,9 +690,27 @@ export class MultiAssetCLIDashboard {
     // AI Calibration Health Monitor (TUI Section)
     out += MultiAssetCLIDashboard.SUB_DIVIDER;
     out += `${bold}--- AI CALIBRATION HEALTH MONITOR (PLATT SCALE & CONF DIVERSITY) ---${reset}${clearLine}\n`;
-    const calibHealthStr = (isFlatline || plattA < 0.5)
-      ? `${red}${bold}[COLLAPSED ⚠️ - CONF_FLATLINE_DETECTED]${reset}`
-      : `${green}${bold}[HEALTHY ✅ - OPTIMAL DISPERSION]${reset}`;
+
+    const recalStatusForHealth = AutoRecalibrationManager.getInstance().getStatus();
+    let calibHealthStr: string;
+    if (isFlatline || plattA < 0.5) {
+      const elapsedFlatlineSec = this.flatlineOnsetTs[assetIdx] > 0
+        ? Math.floor((Date.now() - this.flatlineOnsetTs[assetIdx]) / 1000)
+        : 0;
+      const watchdogRemainSec = Math.max(0, 300 - elapsedFlatlineSec);
+      const failReason = recalStatusForHealth.lastFailureReason;
+      const reasonStr = failReason
+        ? `LAST_FAILURE=${failReason}`
+        : (plattA < 0.5 ? "PLATT_SCALE_COLLAPSED" : "CONF_DIVERSITY_DEAD");
+      const watchdogStr = recalStatusForHealth.isRecalibrating
+        ? `${yellow}[RECALIBRATING...]${reset}`
+        : watchdogRemainSec > 0
+        ? `${yellow}[WATCHDOG: AUTO-RESTART IN ${watchdogRemainSec}s]${reset}`
+        : `${red}${bold}[WATCHDOG: TRIGGERING NOW]${reset}`;
+      calibHealthStr = `${red}${bold}[COLLAPSED ⚠️ - ${reasonStr}]${reset} ${watchdogStr}`;
+    } else {
+      calibHealthStr = `${green}${bold}[HEALTHY ✅ - OPTIMAL DISPERSION]${reset}`;
+    }
     out += ` Platt Scale (A): ${plattA >= 0.8 ? green + bold : plattA >= 0.5 ? yellow : red + bold}${plattA.toFixed(4)}${reset} | Platt Offset (B): ${plattB.toFixed(4)} | Temperature (T): ${plattT.toFixed(4)}${clearLine}\n`;
     out += ` Meta-Logit |μ|: ${metaLogitAbs.toFixed(4)} | Conf% StdDev: ${(confStdDev * 100).toFixed(3)}% (N=${count}) | Health: ${calibHealthStr}${clearLine}\n`;
 

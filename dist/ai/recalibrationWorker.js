@@ -48,6 +48,7 @@ class AutoRecalibrationManager {
     isRecalibrating = false;
     isPromptActive = false;
     recalibrationFailed = false;
+    lastFailureReason = null;
     isShadowMode = false;
     shadowTickCounter = 0;
     driftTickCounter = 0;
@@ -386,6 +387,7 @@ class AutoRecalibrationManager {
             totalRecalibrations: this.totalRecalibrations,
             lastError: this.lastError,
             isShadowMode: this.isShadowMode,
+            lastFailureReason: this.lastFailureReason,
         };
     }
     evaluateShadowTick(seq, ic) {
@@ -513,6 +515,7 @@ class AutoRecalibrationManager {
         // Set attempt timestamp IMMEDIATELY at entry to enforce cooldown on all execution paths
         this.lastAttemptTimestamp = Date.now();
         this.recalibrationFailed = false;
+        this.lastFailureReason = null;
         // Single-Flight Atomic Mutex Acquisition & SAB Drift Assertion
         this.isRecalibrating = true;
         this.broadcastDriftState(true);
@@ -619,6 +622,23 @@ class AutoRecalibrationManager {
             }
             this.lastError = errorMsg;
             this.recalibrationFailed = true;
+            // Classify failure into a structured reason code for UI diagnostics
+            const lowerMsg = errorMsg.toLowerCase();
+            if (lowerMsg.includes("insufficient data") || lowerMsg.includes("signals") || lowerMsg.includes("below 100")) {
+                this.lastFailureReason = "INSUFFICIENT_DATA";
+            }
+            else if (childErr.killed || lowerMsg.includes("timed out") || lowerMsg.includes("timeout")) {
+                this.lastFailureReason = "TIMED_OUT";
+            }
+            else if (lowerMsg.includes("shadow") || lowerMsg.includes("shadow pre-flight") || lowerMsg.includes("gate")) {
+                this.lastFailureReason = "SHADOW_GATE_REJECTED";
+            }
+            else if (lowerMsg.includes("napi") || lowerMsg.includes("loadaimodel") || lowerMsg.includes("hot-swap")) {
+                this.lastFailureReason = "NAPI_HOTSWAP_FAILED";
+            }
+            else {
+                this.lastFailureReason = "TRAINING_FAILED";
+            }
             const logPayload = `[${new Date().toISOString()}] [RECALIBRATION_FAILURE] ${errorMsg}\n`;
             try {
                 fs.appendFileSync(this.errorLogPath, logPayload, { encoding: "utf-8" });

@@ -3139,3 +3139,14 @@
   3. Pre-Gate, Entry, and Pre-Flight Harmonization: Unified spread evaluation across `maxSpreadAllowed`, `maxEntrySpreadAllowed`, and `maxPfSpread`.
   4. 100% QA verified via dedicated 2-stage environment suite (`src/tests/test_auto_switching_spread_guard.ts`), `test_sota_spread_and_ic_immunity.ts` (5/5 stages passed), `test_level1_spread_blowout_entry_guard.ts` (2/2 stages passed), and strict TypeScript compilation (`npm test` & `npm run build:ts` exit code 0).
 - **Status:** âœ… Completed & QA Verified
+
+---
+
+- **Date:** 2026-10-29
+- **Feature/Task:** CONF_FLATLINE Deadlock Diagnosis & Watchdog Auto-Restart Implementation
+- **Artifacts Created/Modified:**
+  - src/ai/recalibrationWorker.ts — Added RecalibrationFailureReason union type, lastFailureReason private field, structured error classifier in catch block, lastFailureReason surfaced in getStatus().
+  - src/telemetry/multiAssetDashboard.ts — Added latlineOnsetTs[] per-asset timestamp array, three public Watchdog API methods (isAnyAssetFlatlined, getEarliestFlatlineOnsetMs, getFlatlinedAssetIndices), onset timestamp recording on flatline state transition, enhanced TUI diagnostic string with reason code and watchdog countdown.
+  - src/scripts/run_tui_dashboard.ts — Added WATCHDOG_AUTO_RESTART setInterval (15s cadence, 5-min threshold, force-bypass recalibration trigger), clearInterval(watchdogInterval) in handleShutdown.
+- **HFT/Performance Compliance:** Zero-allocation watchdog (scalar comparisons only, no heap allocations in hot path). Watchdog fires on 15s interval (not on 10ms strategy tick). orce=true recalibration bypass uses existing single-flight mutex guard — no double-entry possible.
+- **Status:** ? Completed & QA Verified (npm run build:ts exit code 0, zero TypeScript errors)

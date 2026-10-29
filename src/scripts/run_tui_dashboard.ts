@@ -190,6 +190,80 @@ export async function runProductionTuiLauncher(): Promise<void> {
   // Active High-Frequency 10ms Vectorized Multi-Asset Strategy Engine Tick Loop
   let tickCounter = 0;
   let lastIcErrorLoggedTs = 0;
+
+  // ============================================================
+  // WATCHDOG AUTO-RESTART (CONF_FLATLINE DEADLOCK BREAKER)
+  // Fires every 15 seconds. If a CONF_FLATLINE has persisted for
+  // >= 5 minutes AND the recalibration manager is not already
+  // running, force-bypass all guards and restart the pipeline.
+  // ============================================================
+  const WATCHDOG_THRESHOLD_MS = 300_000; // 5 minutes
+  let lastWatchdogTriggerTs = 0;
+
+  const watchdogInterval = setInterval(() => {
+    try {
+      if (!dashboard.isAnyAssetFlatlined()) return;
+
+      const onsetMs = dashboard.getEarliestFlatlineOnsetMs();
+      if (onsetMs === 0) return;
+
+      const elapsedMs = Date.now() - onsetMs;
+      if (elapsedMs < WATCHDOG_THRESHOLD_MS) return;
+
+      const recalStatus = recalibrationManager.getStatus();
+      if (recalStatus.isRecalibrating) return;
+
+      // Enforce per-trigger cooldown: do not spam the force-restart
+      if (Date.now() - lastWatchdogTriggerTs < WATCHDOG_THRESHOLD_MS) return;
+
+      lastWatchdogTriggerTs = Date.now();
+
+      const flatlinedAssets = dashboard.getFlatlinedAssetIndices();
+      const elapsedMin = (elapsedMs / 60000).toFixed(1);
+
+      dashboard.pushNotification(
+        `\x1b[31m\x1b[1m[WATCHDOG_AUTO_RESTART] CONF_FLATLINE DEADLOCK DETECTED (Assets: ${flatlinedAssets.join(",")}, Elapsed: ${elapsedMin}m >= 5.0m). Forcing recalibration pipeline bypass...\x1b[0m`
+      );
+
+      let currentIc = client.getRollingIC();
+      if (nativeModule && typeof nativeModule.getIcStatus === "function") {
+        try {
+          const rawJson = nativeModule.getIcStatus();
+          const parsed = JSON.parse(rawJson) as Record<string, unknown>;
+          if (typeof parsed.ic === "number" && Number.isFinite(parsed.ic)) {
+            currentIc = parsed.ic;
+          }
+        } catch (_e) {
+          // Non-blocking fallback to SAB IC
+        }
+      }
+
+      // force=true bypasses IC immunity, warmup gate, and cooldown floor
+      recalibrationManager
+        .runRecalibrationPipeline(currentIc, true)
+        .then((success) => {
+          if (success) {
+            dashboard.pushNotification(
+              "\x1b[32m[WATCHDOG_AUTO_RESTART] Forced recalibration SUCCEEDED. Platt calibration hot-swapped. System self-healed.\x1b[0m"
+            );
+          } else {
+            const failStatus = recalibrationManager.getStatus();
+            const reasonStr = failStatus.lastFailureReason ?? "UNKNOWN";
+            dashboard.pushNotification(
+              `\x1b[33m[WATCHDOG_AUTO_RESTART] Forced recalibration FAILED: ${reasonStr}. Will retry in 5 minutes.\x1b[0m`
+            );
+          }
+        })
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          dashboard.pushNotification(`\x1b[31m[WATCHDOG_AUTO_RESTART] Pipeline exception: ${msg}\x1b[0m`);
+        });
+    } catch (watchdogErr: unknown) {
+      const msg = watchdogErr instanceof Error ? watchdogErr.message : String(watchdogErr);
+      dashboard.pushNotification(`\x1b[33m[WATCHDOG_ERROR] ${msg}\x1b[0m`);
+    }
+  }, 15000);
+
   const strategyInterval = setInterval(() => {
     try {
       tickCounter++;
@@ -345,6 +419,7 @@ export async function runProductionTuiLauncher(): Promise<void> {
     binanceClient.stopBalancePolling();
     clearInterval(strategyInterval);
     clearInterval(renderInterval);
+    clearInterval(watchdogInterval);
     keyEngine.stop();
     dashboard.clear();
 

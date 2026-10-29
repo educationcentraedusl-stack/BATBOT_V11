@@ -13,6 +13,14 @@ const execFileAsync = promisify(execFile);
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const nativeAddon = require("../../index.js");
 
+export type RecalibrationFailureReason =
+  | "INSUFFICIENT_DATA"
+  | "TRAINING_FAILED"
+  | "SHADOW_GATE_REJECTED"
+  | "NAPI_HOTSWAP_FAILED"
+  | "TIMED_OUT"
+  | "UNKNOWN";
+
 export interface RecalibrationStatus {
   isRecalibrating: boolean;
   driftTickCounter: number;
@@ -21,6 +29,8 @@ export interface RecalibrationStatus {
   totalRecalibrations: number;
   lastError: string | null;
   isShadowMode: boolean;
+  /** Structured failure reason code for UI diagnostics. Null when healthy or no attempt made. */
+  lastFailureReason: RecalibrationFailureReason | null;
 }
 
 export type RecalibrationSuccessCallback = () => void;
@@ -46,6 +56,7 @@ export class AutoRecalibrationManager {
   private isRecalibrating = false;
   private isPromptActive = false;
   private recalibrationFailed = false;
+  private lastFailureReason: RecalibrationFailureReason | null = null;
   private isShadowMode = false;
   private shadowTickCounter = 0;
   private driftTickCounter = 0;
@@ -449,6 +460,7 @@ export class AutoRecalibrationManager {
       totalRecalibrations: this.totalRecalibrations,
       lastError: this.lastError,
       isShadowMode: this.isShadowMode,
+      lastFailureReason: this.lastFailureReason,
     };
   }
 
@@ -597,6 +609,7 @@ export class AutoRecalibrationManager {
     // Set attempt timestamp IMMEDIATELY at entry to enforce cooldown on all execution paths
     this.lastAttemptTimestamp = Date.now();
     this.recalibrationFailed = false;
+    this.lastFailureReason = null;
 
     // Single-Flight Atomic Mutex Acquisition & SAB Drift Assertion
     this.isRecalibrating = true;
@@ -749,6 +762,20 @@ export class AutoRecalibrationManager {
 
       this.lastError = errorMsg;
       this.recalibrationFailed = true;
+
+      // Classify failure into a structured reason code for UI diagnostics
+      const lowerMsg = errorMsg.toLowerCase();
+      if (lowerMsg.includes("insufficient data") || lowerMsg.includes("signals") || lowerMsg.includes("below 100")) {
+        this.lastFailureReason = "INSUFFICIENT_DATA";
+      } else if (childErr.killed || lowerMsg.includes("timed out") || lowerMsg.includes("timeout")) {
+        this.lastFailureReason = "TIMED_OUT";
+      } else if (lowerMsg.includes("shadow") || lowerMsg.includes("shadow pre-flight") || lowerMsg.includes("gate")) {
+        this.lastFailureReason = "SHADOW_GATE_REJECTED";
+      } else if (lowerMsg.includes("napi") || lowerMsg.includes("loadaimodel") || lowerMsg.includes("hot-swap")) {
+        this.lastFailureReason = "NAPI_HOTSWAP_FAILED";
+      } else {
+        this.lastFailureReason = "TRAINING_FAILED";
+      }
 
       const logPayload = `[${new Date().toISOString()}] [RECALIBRATION_FAILURE] ${errorMsg}\n`;
       try {
