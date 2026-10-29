@@ -486,7 +486,7 @@ export class VegamTpLadderEngine {
     }
 
     // 5b. Layer 1: TP2 Hit Evaluation (Primary Momentum Capture)
-    const tp2Price = slot.tpStagePrices?.[1] ?? slot.tpPrices?.[1] ?? (slot.tpStageReached === 1 && slot.takeProfitPrice > 0 ? slot.takeProfitPrice : 0);
+    const tp2Price = slot.tpStagePrices?.[1] ?? slot.tpPrices?.[1] ?? 0;
     if (tp2Price > 0) {
       const isTp2Reached = isLong ? markPrice >= tp2Price : markPrice <= tp2Price;
       if (isTp2Reached) {

@@ -197,6 +197,31 @@ const slotStoikovTest = {
 // markPrice is 100.5, but stoikovMicroPrice is leading at 100.8
 engine.tick(slotStoikovTest, 100.5, 100.8, 0.30, 0.10, 1.0, 0.01, 2.0);
 assert(slotStoikovTest.peakPrice === 100.8, `Stoikov microprice leading high updates peakPrice: expected 100.8, got ${slotStoikovTest.peakPrice}`);
+// Test 2B-4: TP2 Fallback Remediation & Same-Tick SL Whipsaw Immunity
+// Asserts that a standard PositionSlot without tpStagePrices/tpPrices hitting TP1 ONLY triggers TP1_RATCHET,
+// advances tpStageReached = 1, and does NOT falsely trigger TP2 or an immediate stop-loss exit.
+const slotStandardTp1 = {
+    slotId: "STD_TP1_TEST",
+    isOccupied: true,
+    side: "LONG",
+    quantity: 10.0,
+    entryPrice: 100.0,
+    openTime: Date.now(),
+    takeProfitPrice: 101.0,
+    stopLossPrice: 99.0,
+    takeProfitPercent: 1.0,
+    stopLossPercent: 1.0,
+    peakPrice: 100.0,
+    peakRoe: 0.0,
+    breakEvenPrice: 100.10, // Round-trip fee buffer
+};
+const resStdTp1 = engine.tick(slotStandardTp1, 101.0, 101.0, 0.0, 0.0, 1.0, 0.01, 2.0);
+assert(resStdTp1.tp1Hit === true, "Standard slot hitting TP1 triggers tp1Hit = true");
+assert(resStdTp1.tp2Hit === false, "Standard slot without tpStagePrices does NOT falsely trigger TP2 (tp2Hit = false)");
+assert(resStdTp1.slHit === false, "Standard slot hitting TP1 does NOT trigger stop loss (slHit = false)");
+assert(resStdTp1.action === "TP1_RATCHET", `Standard slot hitting TP1 emits exact TP1_RATCHET action (got ${resStdTp1.action})`);
+assert(slotStandardTp1.tpStageReached === 1, `Slot state advances strictly to tpStageReached = 1 (got ${slotStandardTp1.tpStageReached})`);
+assert(slotStandardTp1.stopLossPrice === 100.10, `Stop Loss ratchets strictly to break-even price ($100.10): got $${slotStandardTp1.stopLossPrice}`);
 // =========================================================================================
 // STAGE 3: Dynamic OBI Book Pressure & Trail Tightening
 // =========================================================================================
