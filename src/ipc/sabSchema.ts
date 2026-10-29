@@ -97,6 +97,14 @@ export const SAB_SLOTS = {
   AI_CONF_VARIANCE: 153,   // Rolling variance of confidence values
   AI_PLATT_HEALTH: 154,    // 1.0 = healthy, 0.0 = collapsed / flatline detected
   IC_SAMPLE_COUNT: 155,    // Rolling IC observation window pairs count
+
+  // VEGAM Dynamic Profit Maximization Slots (156..158)
+  // Volatility-Engineered & AI-Governed Adaptive Management framework.
+  // All slots are per-asset (assetIdx × slotsPerAsset + slotId).
+  // Zero-initialized automatically by SharedArrayBuffer ECMAScript spec guarantee on construction.
+  VEGAM_GK_ATR_COMPOSITE: 156, // GK_ATR_composite = sqrt(0.30×GK_1s + 0.70×GK_60s) — primary vol governor
+  VEGAM_TRAIL_K_REGIME: 157,   // k_regime OBI-weighted trail multiplier [0.5 .. 2.0] — real-time trail distance scaler
+  VEGAM_CADME_STATE: 158,      // CADME alpha-decay state: 0=INACTIVE, 1=MONITORING, 2=EXIT_TRIGGERED
 } as const;
 
 export const {
@@ -107,4 +115,7 @@ export const {
   AI_META_LOGIT_ABS,
   AI_CONF_VARIANCE,
   AI_PLATT_HEALTH,
+  VEGAM_GK_ATR_COMPOSITE,
+  VEGAM_TRAIL_K_REGIME,
+  VEGAM_CADME_STATE,
 } = SAB_SLOTS;

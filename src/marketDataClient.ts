@@ -819,6 +819,51 @@ export class MarketDataClient {
     this.writeAtomicFloat64Asset(assetIdx, 149, val);
   }
 
+  // --- VEGAM Dynamic Profit Maximization Slots (156..158) ---
+  // Volatility-Engineered & AI-Governed Adaptive Management.
+  // Zero-initialized by SharedArrayBuffer construction — no explicit init required.
+  // All getters/setters follow the established per-asset atomics pattern.
+
+  /**
+   * Slot 156: GK_ATR_composite = sqrt(0.30 * GK_1s + 0.70 * GK_60s).
+   * Primary volatility governor for all VEGAM TP ladder and trail distance computations.
+   * Written by the Rust inference pipeline on every tick via atomic SAB bridge.
+   */
+  public getVegamGkAtrComposite(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 156);
+  }
+
+  public setVegamGkAtrComposite(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 156, val);
+  }
+
+  /**
+   * Slot 157: k_regime OBI-weighted trail multiplier [0.5 .. 2.0].
+   * Real-time trail distance scaler — product of OBI, VPIN, and Hawkes intensity regime classification.
+   * Written by VegamTpLadderEngine on every tick evaluation. Read by dashboard for telemetry only.
+   */
+  public getVegamTrailKRegime(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 157);
+  }
+
+  public setVegamTrailKRegime(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 157, val);
+  }
+
+  /**
+   * Slot 158: CADME alpha-decay state machine value.
+   * 0.0 = INACTIVE (position within alpha half-life), 1.0 = MONITORING (decay threshold approaching),
+   * 2.0 = EXIT_TRIGGERED (dual-confirmation: modeled decay AND live IC degradation confirmed).
+   * Written by evalSingleSlotSota() CADME gate. Read by dashboard for telemetry display.
+   */
+  public getVegamCadmeState(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 158);
+  }
+
+  public setVegamCadmeState(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 158, val);
+  }
+
 
   /**
    * Broadcasts atomic Kill-Switch activation across all asset slots simultaneously.

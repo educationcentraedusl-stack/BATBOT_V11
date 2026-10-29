@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AI_PLATT_HEALTH = exports.AI_CONF_VARIANCE = exports.AI_META_LOGIT_ABS = exports.IS_MODEL_DRIFTED = exports.ROLLING_IC = exports.SURVIVAL_PROBABILITY = exports.HOTSWAP_EPOCH = exports.SAB_SLOTS = void 0;
+exports.VEGAM_CADME_STATE = exports.VEGAM_TRAIL_K_REGIME = exports.VEGAM_GK_ATR_COMPOSITE = exports.AI_PLATT_HEALTH = exports.AI_CONF_VARIANCE = exports.AI_META_LOGIT_ABS = exports.IS_MODEL_DRIFTED = exports.ROLLING_IC = exports.SURVIVAL_PROBABILITY = exports.HOTSWAP_EPOCH = exports.SAB_SLOTS = void 0;
 exports.SAB_SLOTS = {
     TIMESTAMP_NS: 0,
     OBI: 1,
@@ -90,5 +90,12 @@ exports.SAB_SLOTS = {
     AI_CONF_VARIANCE: 153, // Rolling variance of confidence values
     AI_PLATT_HEALTH: 154, // 1.0 = healthy, 0.0 = collapsed / flatline detected
     IC_SAMPLE_COUNT: 155, // Rolling IC observation window pairs count
+    // VEGAM Dynamic Profit Maximization Slots (156..158)
+    // Volatility-Engineered & AI-Governed Adaptive Management framework.
+    // All slots are per-asset (assetIdx × slotsPerAsset + slotId).
+    // Zero-initialized automatically by SharedArrayBuffer ECMAScript spec guarantee on construction.
+    VEGAM_GK_ATR_COMPOSITE: 156, // GK_ATR_composite = sqrt(0.30×GK_1s + 0.70×GK_60s) — primary vol governor
+    VEGAM_TRAIL_K_REGIME: 157, // k_regime OBI-weighted trail multiplier [0.5 .. 2.0] — real-time trail distance scaler
+    VEGAM_CADME_STATE: 158, // CADME alpha-decay state: 0=INACTIVE, 1=MONITORING, 2=EXIT_TRIGGERED
 };
-exports.HOTSWAP_EPOCH = exports.SAB_SLOTS.HOTSWAP_EPOCH, exports.SURVIVAL_PROBABILITY = exports.SAB_SLOTS.SURVIVAL_PROBABILITY, exports.ROLLING_IC = exports.SAB_SLOTS.ROLLING_IC, exports.IS_MODEL_DRIFTED = exports.SAB_SLOTS.IS_MODEL_DRIFTED, exports.AI_META_LOGIT_ABS = exports.SAB_SLOTS.AI_META_LOGIT_ABS, exports.AI_CONF_VARIANCE = exports.SAB_SLOTS.AI_CONF_VARIANCE, exports.AI_PLATT_HEALTH = exports.SAB_SLOTS.AI_PLATT_HEALTH;
+exports.HOTSWAP_EPOCH = exports.SAB_SLOTS.HOTSWAP_EPOCH, exports.SURVIVAL_PROBABILITY = exports.SAB_SLOTS.SURVIVAL_PROBABILITY, exports.ROLLING_IC = exports.SAB_SLOTS.ROLLING_IC, exports.IS_MODEL_DRIFTED = exports.SAB_SLOTS.IS_MODEL_DRIFTED, exports.AI_META_LOGIT_ABS = exports.SAB_SLOTS.AI_META_LOGIT_ABS, exports.AI_CONF_VARIANCE = exports.SAB_SLOTS.AI_CONF_VARIANCE, exports.AI_PLATT_HEALTH = exports.SAB_SLOTS.AI_PLATT_HEALTH, exports.VEGAM_GK_ATR_COMPOSITE = exports.SAB_SLOTS.VEGAM_GK_ATR_COMPOSITE, exports.VEGAM_TRAIL_K_REGIME = exports.SAB_SLOTS.VEGAM_TRAIL_K_REGIME, exports.VEGAM_CADME_STATE = exports.SAB_SLOTS.VEGAM_CADME_STATE;
