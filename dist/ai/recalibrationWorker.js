@@ -49,6 +49,10 @@ class AutoRecalibrationManager {
     isPromptActive = false;
     recalibrationFailed = false;
     lastFailureReason = null;
+    /** Counts consecutive forced-watchdog recalibration failures. Resets to 0 on any success. */
+    consecutiveFailures = 0;
+    /** Hard ceiling: if this many watchdog-forced attempts fail back-to-back, trip the circuit breaker. */
+    CIRCUIT_BREAKER_THRESHOLD = 3;
     isShadowMode = false;
     shadowTickCounter = 0;
     driftTickCounter = 0;
@@ -118,6 +122,14 @@ class AutoRecalibrationManager {
     }
     getCooldownMs() {
         return this.cooldownMs;
+    }
+    /** Returns the number of back-to-back watchdog-forced recalibration failures since last success. */
+    getConsecutiveFailureCount() {
+        return this.consecutiveFailures;
+    }
+    /** Circuit-breaker limit before a hard process.exit(1) is ordered by the watchdog. */
+    getCircuitBreakerThreshold() {
+        return this.CIRCUIT_BREAKER_THRESHOLD;
     }
     getCooldownMinutes() {
         return this.cooldownMs / 60000;
@@ -601,6 +613,8 @@ class AutoRecalibrationManager {
             this.lastSuccessTimestamp = Date.now();
             this.totalRecalibrations++;
             isSuccess = true;
+            // CIRCUIT BREAKER RESET: successful recalibration clears the consecutive failure count.
+            this.consecutiveFailures = 0;
             console.log(`[BATBOT_V11][SHADOW-RECALIBRATION] Self-healing pipeline COMPLETED SUCCESSFULLY! Model hot-swapped to Generation ${this.totalRecalibrations}. IC tracking window reset.`);
             if (this.onSuccessCallback) {
                 this.onSuccessCallback();
@@ -622,6 +636,8 @@ class AutoRecalibrationManager {
             }
             this.lastError = errorMsg;
             this.recalibrationFailed = true;
+            // CIRCUIT BREAKER INCREMENT: track consecutive back-to-back failures for watchdog hard-kill logic.
+            this.consecutiveFailures++;
             // Classify failure into a structured reason code for UI diagnostics
             const lowerMsg = errorMsg.toLowerCase();
             if (lowerMsg.includes("insufficient data") || lowerMsg.includes("signals") || lowerMsg.includes("below 100")) {

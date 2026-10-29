@@ -12,6 +12,13 @@ import { syncStateOnStartup } from "../index";
 import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
 import { AutoRecalibrationManager } from "../ai/recalibrationWorker";
 import { timeSynchronizer } from "../utils/timeSynchronizer";
+import { ProcessGuardian } from "../supervisor/guardian";
+import {
+  HandshakeInitPayload,
+  HeartbeatPingPayload,
+  IntentionalResurrectPayload,
+  UserShutdownPayload
+} from "../supervisor/types";
 
 export interface NativeIngestionModule {
   startIngestion?: (sabBuffer: Buffer, symbols?: string[]) => boolean;
@@ -191,13 +198,44 @@ export async function runProductionTuiLauncher(): Promise<void> {
   let tickCounter = 0;
   let lastIcErrorLoggedTs = 0;
 
+  // ── SOTA 2026 IPC HEARTBEAT & HANDSHAKE CLIENT ───────────────────────────
+  let heartbeatSeq = 0;
+  if (process.send) {
+    const handshakePayload: HandshakeInitPayload = {
+      type: "HANDSHAKE_INIT",
+      workerPid: process.pid,
+      version: "11.0.0",
+      heartbeatIntervalMs: 2500,
+      timestamp: Date.now()
+    };
+    process.send(handshakePayload);
+  }
+
+  const heartbeatInterval = setInterval(() => {
+    if (process.send) {
+      const pingPayload: HeartbeatPingPayload = {
+        type: "HEARTBEAT_PING",
+        seq: ++heartbeatSeq,
+        timestamp: Date.now()
+      };
+      process.send(pingPayload);
+    }
+  }, 2500);
+
   // ============================================================
   // WATCHDOG AUTO-RESTART (CONF_FLATLINE DEADLOCK BREAKER)
   // Fires every 15 seconds. If a CONF_FLATLINE has persisted for
   // >= 5 minutes AND the recalibration manager is not already
   // running, force-bypass all guards and restart the pipeline.
+  //
+  // CIRCUIT BREAKER: If the forced recalibration fails
+  // WATCHDOG_CIRCUIT_BREAKER_MAX times consecutively, the watchdog
+  // stops retrying and executes process.exit(1) — a true hard kill
+  // so the external process manager (PM2/Nodemon/Docker) can perform
+  // a completely fresh, clean reboot of the entire system.
   // ============================================================
   const WATCHDOG_THRESHOLD_MS = 300_000; // 5 minutes
+  const WATCHDOG_CIRCUIT_BREAKER_MAX = 3; // Hard-kill after 3 consecutive soft failures
   let lastWatchdogTriggerTs = 0;
 
   const watchdogInterval = setInterval(() => {
@@ -213,6 +251,50 @@ export async function runProductionTuiLauncher(): Promise<void> {
       const recalStatus = recalibrationManager.getStatus();
       if (recalStatus.isRecalibrating) return;
 
+      // ── CIRCUIT BREAKER CHECK ──────────────────────────────────────────
+      // If the soft recalibration pipeline has already failed
+      // WATCHDOG_CIRCUIT_BREAKER_MAX times consecutively, do NOT retry.
+      // Execute a true hard process.exit(1) so PM2/Nodemon/Guardian performs a
+      // fully clean reboot — this is the only way to escape Testnet data
+      // starvation or persistent Python crashes without human intervention.
+      const consecutiveFailures = recalibrationManager.getConsecutiveFailureCount();
+      if (consecutiveFailures >= WATCHDOG_CIRCUIT_BREAKER_MAX) {
+        const lastReason = recalStatus.lastFailureReason ?? "UNKNOWN";
+        const msg =
+          `[WATCHDOG_HARD_RESTART] CIRCUIT BREAKER TRIPPED: ` +
+          `${consecutiveFailures}/${WATCHDOG_CIRCUIT_BREAKER_MAX} consecutive recalibration failures ` +
+          `(Last reason: ${lastReason}). Soft pipeline is unrecoverable. ` +
+          `Executing process.exit(1) for clean PM2/Nodemon/Guardian reboot...`;
+
+        // Notify Guardian Kernel of intentional resurrection request via IPC
+        if (process.send) {
+          const resurrectPayload: IntentionalResurrectPayload = {
+            type: "INTENTIONAL_RESURRECT",
+            reason: "RECALIBRATION_CIRCUIT_BREAKER",
+            consecutiveFailures,
+            lastReason,
+            cooldownMs: 1500,
+            timestamp: Date.now()
+          };
+          process.send(resurrectPayload);
+        }
+
+        // Stop all active intervals before exit so no dangling callbacks fire.
+        clearInterval(watchdogInterval);
+        clearInterval(strategyInterval);
+        clearInterval(renderInterval);
+        clearInterval(heartbeatInterval);
+        keyEngine.stop();
+        multiEngine.stopContinuousReconciliation();
+        binanceClient.stopBalancePolling();
+        dashboard.clear();
+
+        process.stderr.write(`\n\x1b[31m\x1b[1m${msg}\x1b[0m\n`);
+        process.exit(1);
+        return; // Unreachable — satisfies TS control-flow analysis
+      }
+      // ── END CIRCUIT BREAKER ───────────────────────────────────────────
+
       // Enforce per-trigger cooldown: do not spam the force-restart
       if (Date.now() - lastWatchdogTriggerTs < WATCHDOG_THRESHOLD_MS) return;
 
@@ -220,9 +302,11 @@ export async function runProductionTuiLauncher(): Promise<void> {
 
       const flatlinedAssets = dashboard.getFlatlinedAssetIndices();
       const elapsedMin = (elapsedMs / 60000).toFixed(1);
+      const attemptNum = consecutiveFailures + 1;
 
       dashboard.pushNotification(
-        `\x1b[31m\x1b[1m[WATCHDOG_AUTO_RESTART] CONF_FLATLINE DEADLOCK DETECTED (Assets: ${flatlinedAssets.join(",")}, Elapsed: ${elapsedMin}m >= 5.0m). Forcing recalibration pipeline bypass...\x1b[0m`
+        `\x1b[31m\x1b[1m[WATCHDOG_AUTO_RESTART] CONF_FLATLINE DEADLOCK DETECTED (Assets: ${flatlinedAssets.join(",")}, Elapsed: ${elapsedMin}m >= 5.0m). ` +
+        `Forcing recalibration pipeline bypass (Attempt ${attemptNum}/${WATCHDOG_CIRCUIT_BREAKER_MAX} — circuit breaker trips on ${WATCHDOG_CIRCUIT_BREAKER_MAX} failures)...\x1b[0m`
       );
 
       let currentIc = client.getRollingIC();
@@ -249,9 +333,20 @@ export async function runProductionTuiLauncher(): Promise<void> {
           } else {
             const failStatus = recalibrationManager.getStatus();
             const reasonStr = failStatus.lastFailureReason ?? "UNKNOWN";
-            dashboard.pushNotification(
-              `\x1b[33m[WATCHDOG_AUTO_RESTART] Forced recalibration FAILED: ${reasonStr}. Will retry in 5 minutes.\x1b[0m`
-            );
+            const newFailCount = recalibrationManager.getConsecutiveFailureCount();
+            const remaining = WATCHDOG_CIRCUIT_BREAKER_MAX - newFailCount;
+            if (remaining > 0) {
+              dashboard.pushNotification(
+                `\x1b[33m[WATCHDOG_AUTO_RESTART] Forced recalibration FAILED: ${reasonStr}. ` +
+                `Failures: ${newFailCount}/${WATCHDOG_CIRCUIT_BREAKER_MAX}. ` +
+                `${remaining} attempt(s) remaining before HARD RESTART (process.exit(1)).\x1b[0m`
+              );
+            } else {
+              dashboard.pushNotification(
+                `\x1b[31m\x1b[1m[WATCHDOG_AUTO_RESTART] Circuit breaker limit reached (${newFailCount}/${WATCHDOG_CIRCUIT_BREAKER_MAX}). ` +
+                `HARD RESTART will fire on next watchdog tick.\x1b[0m`
+              );
+            }
           }
         })
         .catch((err: unknown) => {
@@ -415,11 +510,26 @@ export async function runProductionTuiLauncher(): Promise<void> {
     if (isShuttingDown) return;
     isShuttingDown = true;
 
+    if (process.send) {
+      const shutdownPayload: UserShutdownPayload = {
+        type: "USER_SHUTDOWN",
+        exitCode: 0,
+        reason: signal,
+        timestamp: Date.now()
+      };
+      try {
+        process.send(shutdownPayload);
+      } catch {
+        // Ignore
+      }
+    }
+
     multiEngine.stopContinuousReconciliation();
     binanceClient.stopBalancePolling();
     clearInterval(strategyInterval);
     clearInterval(renderInterval);
     clearInterval(watchdogInterval);
+    clearInterval(heartbeatInterval);
     keyEngine.stop();
     dashboard.clear();
 
@@ -436,9 +546,19 @@ export async function runProductionTuiLauncher(): Promise<void> {
 }
 
 if (require.main === module) {
-  runProductionTuiLauncher().catch((err: unknown) => {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    console.error(`❌ Critical error launching BATBOT_V11 TUI Command Center: ${errorMsg}`);
-    process.exit(1);
-  });
+  if (process.env.BATBOT_SUPERVISED !== "1") {
+    // Transparent Self-Supervision Guard:
+    // If invoked directly via node or external runner, auto-bootstrap Guardian
+    // guaranteeing 100% autonomous auto-resurrection immunity across all entrypoints.
+    const guardian = new ProcessGuardian({
+      workerScriptPath: __filename
+    });
+    guardian.start();
+  } else {
+    runProductionTuiLauncher().catch((err: unknown) => {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error(`❌ Critical error launching BATBOT_V11 TUI Command Center: ${errorMsg}`);
+      process.exit(1);
+    });
+  }
 }

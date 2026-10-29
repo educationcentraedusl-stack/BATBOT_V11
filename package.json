@@ -13,8 +13,8 @@
     "check": "cargo check",
     "test": "tsc --noEmit",
     "start": "npm run start:live",
-    "start:live": "npm run build:rust && npm run build:ts && node dist/scripts/run_tui_dashboard.js",
-    "bot:run": "npm run build:rust && npm run build:ts && node dist/scripts/run_tui_dashboard.js",
+    "start:live": "npm run build:rust && npm run build:ts && node dist/supervisor/guardian.js",
+    "bot:run": "npm run build:rust && npm run build:ts && node dist/supervisor/guardian.js",
     "dev": "vite",
     "trainmodels": "npm run build:ts && node dist/scripts/manual_train.js"
   },
