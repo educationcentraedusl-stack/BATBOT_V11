@@ -102,6 +102,9 @@ const slotLong = {
     stopLossPercent: 1.20,
     peakPrice: linkEntry,
     peakRoe: 0.0,
+    tpStagePrices: [linkLevels.tp1Price, linkLevels.tp2Price],
+    tpStageQuantities: [linkLevels.tp1Qty, linkLevels.tp2Qty],
+    breakEvenPrice: 11.605, // $11.59 * (1 + 0.0013 fee buffer)
 };
 // Tick 1: Minimal price move ($11.60 -> ROE = +0.17% < trailActivationRoePct 0.50%)
 const tick1Res = engine.tick(slotLong, 11.60, 11.60, 0.10, 0.20, 1.0, linkAtr, linkLev);
@@ -115,10 +118,85 @@ assert(slotLong.stopLossPrice > 11.45, `Dynamic trail activates at ROE >= 0.50%:
 // Tick 3: 1-ATR move hits TP1 ($11.70 >= $11.695)
 const tick3Res = engine.tick(slotLong, 11.70, 11.70, 0.10, 0.20, 1.0, linkAtr, linkLev);
 assert(tick3Res.tp1Hit, "1-ATR move ($11.70 >= $11.695) successfully triggers TP1");
-assert(tick3Res.action === "TP1_RATCHET" || tick3Res.action === "TRAIL_UPDATED", "Engine emits valid TP1 / ratchet action");
+assert(tick3Res.action === "TP1_RATCHET", "Engine emits exact TP1_RATCHET action");
 assert(slotLong.tpStageReached === 1, "Slot state advances to tpStageReached = 1");
 assert(slotLong.breakEvenLocked === true, "breakEvenLocked is set to true");
-assert(slotLong.stopLossPrice >= slotLong.entryPrice, `Stop Loss ratcheted to entry price (or better): SL=$${slotLong.stopLossPrice.toFixed(4)} >= Entry=$${slotLong.entryPrice} (100% Risk-Free secured)`);
+assert(slotLong.stopLossPrice >= slotLong.breakEvenPrice, `Stop Loss ratcheted to Break-Even price: SL=$${slotLong.stopLossPrice.toFixed(4)} >= BE=$${slotLong.breakEvenPrice} (Round-Trip Fees covered)`);
+// Tick 4: 2.5-ATR move hits TP2 ($11.86 >= $11.8527)
+const tick4Res = engine.tick(slotLong, 11.86, 11.86, 0.10, 0.20, 1.0, linkAtr, linkLev);
+assert(tick4Res.tp2Hit, "2.5-ATR move ($11.86 >= TP2) successfully triggers TP2");
+assert(tick4Res.action === "TP2_REACHED", "Engine emits exact TP2_REACHED action");
+assert(slotLong.tpStageReached === 2, "Slot state advances to tpStageReached = 2");
+assert(slotLong.stopLossPrice >= linkLevels.tp1Price, `Stop Loss trailed to at least TP1 ($${linkLevels.tp1Price.toFixed(4)}) upon TP2 hit: got $${slotLong.stopLossPrice.toFixed(4)}`);
+// Tick 5: Price plunges to $11.50, triggering the ratcheted Stop Loss
+const tick5Res = engine.tick(slotLong, 11.50, 11.50, -0.30, 0.70, 1.0, linkAtr, linkLev);
+assert(tick5Res.slHit, "Price plunge ($11.50 <= SL) successfully triggers stop loss");
+assert(tick5Res.action === "SL_TRIGGERED", "Engine emits exact SL_TRIGGERED action");
+// =========================================================================================
+// STAGE 2B: Forensic Edge Cases & Remediation Invariants
+// =========================================================================================
+console.log("\n--- STAGE 2B: Forensic Edge Cases & Remediation Invariants ---");
+// Test 2B-1: Leverage Clamping (20x Ban & Safe Default)
+const slotLevTest = {
+    slotId: "LEV_TEST",
+    isOccupied: true,
+    side: "LONG",
+    quantity: 10.0,
+    entryPrice: 100.0,
+    openTime: Date.now(),
+    takeProfitPrice: 102.0,
+    stopLossPrice: 98.0,
+    takeProfitPercent: 2.0,
+    stopLossPercent: 2.0,
+    peakPrice: 100.0,
+    peakRoe: 0.0,
+};
+// Passing banned 20x leverage must clamp to MAX_PERMITTED_LEVERAGE (5.0)
+const res20x = engine.tick(slotLevTest, 101.0, 101.0, 0.0, 0.0, 1.0, 0.01, 20.0);
+assert(Math.abs(res20x.rawRoePct - 5.0) < 1e-9, `Banned 20x leverage is hard-clamped to 5.0: ROE is +5.0% (got ${res20x.rawRoePct}%)`);
+// Omitting leverage (undefined) must default to 2.0 (baseline)
+const resDefLev = engine.tick(slotLevTest, 101.0, 101.0, 0.0, 0.0, 1.0, 0.01, undefined);
+assert(Math.abs(resDefLev.rawRoePct - 2.0) < 1e-9, `Omitted leverage defaults safely to 2.0: ROE is +2.0% (got ${resDefLev.rawRoePct}%)`);
+// Passing leverage below 2.0 (e.g. 1.0) clamps to MIN_PERMITTED_LEVERAGE (2.0)
+const resLowLev = engine.tick(slotLevTest, 101.0, 101.0, 0.0, 0.0, 1.0, 0.01, 1.0);
+assert(Math.abs(resLowLev.rawRoePct - 2.0) < 1e-9, `Sub-2.0 leverage is clamped to 2.0: ROE is +2.0% (got ${resLowLev.rawRoePct}%)`);
+// Test 2B-2: Peak ROE Falsy Corruption Protection
+const slotRoeTest = {
+    slotId: "ROE_TEST",
+    isOccupied: true,
+    side: "LONG",
+    quantity: 10.0,
+    entryPrice: 100.0,
+    openTime: Date.now(),
+    takeProfitPrice: 102.0,
+    stopLossPrice: 98.0,
+    takeProfitPercent: 2.0,
+    stopLossPercent: 2.0,
+    peakPrice: 100.0,
+    peakRoe: 0.0, // Initialized to 0.0
+};
+// Tick moves adversely to $99.50 (-0.5% price move -> -1.0% ROE at 2x)
+const resNegRoe = engine.tick(slotRoeTest, 99.50, 99.50, 0.0, 0.0, 1.0, 0.01, 2.0);
+assert(slotRoeTest.peakRoe === 0.0, `Negative ROE tick does not corrupt peakRoe (remains 0.0): got ${slotRoeTest.peakRoe}`);
+assert(resNegRoe.peakRoe === 0.0, `Result peakRoe accurately reflects 0.0 baseline: got ${resNegRoe.peakRoe}`);
+// Test 2B-3: Stoikov MicroPrice Leading Peak/Trough Tracking
+const slotStoikovTest = {
+    slotId: "STOIKOV_TEST",
+    isOccupied: true,
+    side: "LONG",
+    quantity: 10.0,
+    entryPrice: 100.0,
+    openTime: Date.now(),
+    takeProfitPrice: 102.0,
+    stopLossPrice: 98.0,
+    takeProfitPercent: 2.0,
+    stopLossPercent: 2.0,
+    peakPrice: 100.0,
+    peakRoe: 0.0,
+};
+// markPrice is 100.5, but stoikovMicroPrice is leading at 100.8
+engine.tick(slotStoikovTest, 100.5, 100.8, 0.30, 0.10, 1.0, 0.01, 2.0);
+assert(slotStoikovTest.peakPrice === 100.8, `Stoikov microprice leading high updates peakPrice: expected 100.8, got ${slotStoikovTest.peakPrice}`);
 // =========================================================================================
 // STAGE 3: Dynamic OBI Book Pressure & Trail Tightening
 // =========================================================================================

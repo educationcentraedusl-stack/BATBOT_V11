@@ -418,16 +418,27 @@ export class VegamTpLadderEngine {
     }
 
     const isLong = slot.side === "LONG";
-    const effLev = typeof leverage === "number" && leverage > 0 ? leverage : 20.0;
+    // Strict constitutional leverage enforcement: clamp strictly between 2.0x and 5.0x (default 2.0x)
+    const effLev = typeof leverage === "number" && Number.isFinite(leverage) && leverage > 0
+      ? Math.min(5.0, Math.max(2.0, leverage))
+      : 2.0;
 
-    // 1. Monotonic Peak/Trough Tracking
+    // 1. Monotonic Peak/Trough Tracking (Orderflow-Aware via Stoikov MicroPrice)
+    // Stoikov microprice accounts for short-term book imbalance skew; ingest as leading price metric
+    const effectiveHighPrice = Number.isFinite(stoikovMicroPrice) && stoikovMicroPrice > markPrice
+      ? stoikovMicroPrice
+      : markPrice;
+    const effectiveLowPrice = Number.isFinite(stoikovMicroPrice) && stoikovMicroPrice > 0 && stoikovMicroPrice < markPrice
+      ? stoikovMicroPrice
+      : markPrice;
+
     if (isLong) {
-      if (!slot.peakPrice || markPrice > slot.peakPrice) {
-        slot.peakPrice = markPrice;
+      if (slot.peakPrice === undefined || slot.peakPrice <= 0 || effectiveHighPrice > slot.peakPrice) {
+        slot.peakPrice = effectiveHighPrice;
       }
     } else {
-      if (!slot.troughPrice || slot.troughPrice <= 0 || markPrice < slot.troughPrice) {
-        slot.troughPrice = markPrice;
+      if (slot.troughPrice === undefined || slot.troughPrice <= 0 || effectiveLowPrice < slot.troughPrice) {
+        slot.troughPrice = effectiveLowPrice;
       }
     }
 
@@ -436,7 +447,7 @@ export class VegamTpLadderEngine {
     const rawRoePct = (priceDiff / slot.entryPrice) * effLev * 100.0;
     out.rawRoePct = rawRoePct;
 
-    if (!slot.peakRoe || rawRoePct > slot.peakRoe) {
+    if (slot.peakRoe === undefined || rawRoePct > slot.peakRoe) {
       slot.peakRoe = rawRoePct;
     }
     out.peakRoe = slot.peakRoe;
@@ -458,14 +469,15 @@ export class VegamTpLadderEngine {
         if (!slot.tpStageReached || slot.tpStageReached < 1) {
           slot.tpStageReached = 1;
           slot.breakEvenLocked = true;
-          // Ratchet SL to entry price to secure 100% risk-free trade on remainder
+          // Ratchet SL to Break-Even Price (covering entry + round-trip fees) to secure 100% risk-free trade on remainder
+          const bePrice = (slot.breakEvenPrice && slot.breakEvenPrice > 0) ? slot.breakEvenPrice : slot.entryPrice;
           if (isLong) {
-            if (slot.stopLossPrice < slot.entryPrice) {
-              slot.stopLossPrice = slot.entryPrice;
+            if (slot.stopLossPrice < bePrice) {
+              slot.stopLossPrice = bePrice;
             }
           } else {
-            if (slot.stopLossPrice <= 0 || slot.stopLossPrice > slot.entryPrice) {
-              slot.stopLossPrice = slot.entryPrice;
+            if (slot.stopLossPrice <= 0 || slot.stopLossPrice > bePrice) {
+              slot.stopLossPrice = bePrice;
             }
           }
           out.action = "TP1_RATCHET";
@@ -473,9 +485,34 @@ export class VegamTpLadderEngine {
       }
     }
 
+    // 5b. Layer 1: TP2 Hit Evaluation (Primary Momentum Capture)
+    const tp2Price = slot.tpStagePrices?.[1] ?? slot.tpPrices?.[1] ?? (slot.tpStageReached === 1 && slot.takeProfitPrice > 0 ? slot.takeProfitPrice : 0);
+    if (tp2Price > 0) {
+      const isTp2Reached = isLong ? markPrice >= tp2Price : markPrice <= tp2Price;
+      if (isTp2Reached) {
+        out.tp2Hit = true;
+        if (!slot.tpStageReached || slot.tpStageReached < 2) {
+          slot.tpStageReached = 2;
+          // Trail SL to TP1 level upon hitting TP2 to lock primary profits
+          const tp1Price = (slot.tpStagePrices?.[0] ?? slot.tpPrices?.[0]) || (slot.takeProfitPrice > 0 ? slot.takeProfitPrice : slot.entryPrice);
+          if (isLong) {
+            if (slot.stopLossPrice < tp1Price) {
+              slot.stopLossPrice = tp1Price;
+            }
+          } else {
+            if (slot.stopLossPrice <= 0 || slot.stopLossPrice > tp1Price) {
+              slot.stopLossPrice = tp1Price;
+            }
+          }
+          out.action = "TP2_REACHED";
+        }
+      }
+    }
+
     // 6. Layer 2: OBI-Weighted Dynamic Trailing SL
     // Activates once rawRoePct >= trailActivationRoePct (0.50%) or peakRoe >= trailActivationRoePct
-    const isTrailActive = rawRoePct >= cfg.trailActivationRoePct || (slot.peakRoe ?? 0) >= cfg.trailActivationRoePct;
+    const currentPeakRoe = slot.peakRoe ?? 0.0;
+    const isTrailActive = rawRoePct >= cfg.trailActivationRoePct || currentPeakRoe >= cfg.trailActivationRoePct;
     if (isTrailActive) {
       if (isLong) {
         const proposedSl = (slot.peakPrice ?? markPrice) - trailDist;

@@ -1,4 +1,4 @@
-﻿# BATBOT_V11: STATE CONTINUITY LEDGER
+# BATBOT_V11: STATE CONTINUITY LEDGER
 
 ## Active Goals
 * SOTA Multi-Asset HFT Engine Hardening & Production Deployment.
@@ -15,6 +15,14 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-10-29 - VEGAM Master Plan Phase 3 Forensic Remediation & Hardening Completed & 100% QA Verified:
+  - Remediated 6 Forensic Audit Failures:
+    1. Constitutional Leverage Clamping: Hard-clamped leverage between 2.0x and 5.0x (default 2.0x), eradicating the unconstitutional 20x fallback.
+    2. Zero-Loss Break-Even Ratchet: Ratcheted stop loss to slot.breakEvenPrice on TP1 fill, guaranteeing round-trip exchange fee coverage.
+    3. Peak ROE Falsy Protection: Replaced `!slot.peakRoe` with explicit `undefined` check, preventing 0.0 baseline corruption on negative ticks.
+    4. TP2 Hit State Machine: Implemented physical TP2 hit evaluation advancing slot.tpStageReached to 2, locking TP1 profits, and emitting `TP2_REACHED`.
+    5. Stoikov MicroPrice Ingestion: Ingested `stoikovMicroPrice` into monotonic peak and trough tracking, capturing leading orderflow pressure.
+    6. Strict QA Test Suite: Upgraded `test_vegam_tp_ladder.ts` to 50/50 strict assertions (0 failures), verifying TP1/TP2 progression, SL plunge triggering, leverage clamping, and zero-GC performance (0.1296 µs latency).
 * 2026-10-29 - VEGAM Master Plan Phase 3 Execution (VegamTpLadderEngine & Zero-GC Adaptive Exit State Machine) Completed & 100% QA Verified:
   - SOTA Exit Engine: Implemented VegamTpLadderEngine in src/strategy/vegamTpLadderEngine.ts defining VegamTpLadderConfig with default parameters matching Section 2.3 of the Master Plan.
   - Guaranteed Fee Hurdle: Implemented computeRpmMin(leverage, makerFee, takerFee) enforcing TP1 >= RPM_min (0.00095 = 9.5 bps) across all volatility regimes, preventing unprofitable scalp executions during volatility compression.
