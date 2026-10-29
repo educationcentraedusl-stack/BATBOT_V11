@@ -205,7 +205,10 @@ class StrategyEngine {
             const symIdx = activeSymbols.indexOf(this.config.symbol);
             this.assetIndex = symIdx >= 0 ? symIdx : 0;
         }
-        this.hedgeLedger = hedgeLedger ?? new positionLedger_1.HedgePositionLedger(this.config.symbol, this.config.maxShortSlots);
+        this.hedgeLedger = hedgeLedger ?? new positionLedger_1.HedgePositionLedger(this.config.symbol, this.config.maxShortSlots, this.client, this.assetIndex);
+        if (!this.hedgeLedger.getMarketDataClient() && this.client) {
+            this.hedgeLedger.setMarketDataClient(this.client, this.assetIndex);
+        }
         this.positionLedger = positionLedger ?? this.hedgeLedger.getLegacyLedger();
         this.hazardEngine = new microstructureHazardEngine_1.MicrostructureHazardEngine(this.config.symbol);
         this.hjbEngine = new hjbReservationEngine_1.HJBReservationEngine(this.config.symbol);

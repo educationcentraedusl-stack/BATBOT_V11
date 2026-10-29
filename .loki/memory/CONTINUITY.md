@@ -15,6 +15,14 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-10-29 - VEGAM Master Plan Phase 4 Execution (CADME AI Alpha Decay Managed Exit Integration) Completed & 100% QA Verified:
+  - Layer 3 CADME Engine: Integrated AI alpha decay exit model into `HedgePositionLedger` and `StrategyEngine`.
+  - PositionSlot Tracking: Added `icAtEntry: number` and `cadmeState: 0 | 1 | 2` fields to `PositionSlot`.
+  - Atomic IC Capture: In `occupyCoreLong()` and `occupyShortSlot()`, captured live EWMA IC from SAB Slot 101 (`client.getRollingIC(assetIndex)`) at position fill.
+  - Ornstein-Uhlenbeck Decay: Evaluated `alphaDecay = slot.icAtEntry * Math.exp(-Math.LN2 * durationSec / safeHalfLife)` on every tick in `evalSingleSlotSota()`.
+  - Dual-Confirmation Gate: Set `slot.cadmeState = 2` and pushed `CADME_ALPHA_DECAY_EXIT_{side}` trigger (with `executionStyle = "PASSIVE_MAKER"` and `executionType = "PASSIVE_MAKER"`) IF AND ONLY IF `alphaDecay < slot.icAtEntry * 0.60` AND `liveIc < slot.icAtEntry * 0.75`.
+  - Telemetry Synchronization: Automatically synchronized SAB Slot 158 (`VEGAM_CADME_STATE`) with real-time slot state changes (0=INACTIVE, 1=MONITORING, 2=EXIT_TRIGGERED).
+  - 100% Empirical QA Gating: Created `src/tests/test_cadme_alpha_decay_exit.ts` passing all 6 stages (28/28 assertions passed, exit code 0). Verified strict TypeScript compilation (`npm run build:ts`, exit code 0), and all 6 stages of Phase 5 Master Simulation Suite.
 * 2026-10-29 - VEGAM Master Plan Phase 3 Third Round Zero-Trust Forensic Audit & Regression Eradication Completed & 100% QA Verified:
   - Third-Round Hostile Code Audit Passed (100% Flawless):
     1. Eradicated TP2 Fallback Shadow: Purged `takeProfitPrice` fallback in `vegamTpLadderEngine.ts`, strictly enforcing `tp2Price = slot.tpStagePrices?.[1] ?? slot.tpPrices?.[1] ?? 0;`.

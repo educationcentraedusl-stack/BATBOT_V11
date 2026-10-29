@@ -477,9 +477,20 @@ class HedgePositionLedger {
     };
     shortAggregatedStopLossOrderId = 0;
     shortAggregatedLastSyncedSlPrice = 0;
-    constructor(symbol = "BTCUSDT", maxShortSlots = 3) {
+    marketDataClient;
+    assetIndex = 0;
+    constructor(symbol = "BTCUSDT", maxShortSlots = 3, marketDataClient, assetIndex) {
         this.symbol = symbol;
         this.maxShortSlots = maxShortSlots;
+        this.marketDataClient = marketDataClient;
+        if (typeof assetIndex === "number" && assetIndex >= 0) {
+            this.assetIndex = assetIndex;
+        }
+        else {
+            const syms = (0, tradingSymbols_1.getTradingSymbols)();
+            const idx = syms.indexOf(symbol);
+            this.assetIndex = idx >= 0 ? idx : 0;
+        }
         this.legacyLedger = new PositionLedger(symbol);
         this.sizingCalc = new dynamicSizing_1.DynamicSizingCalculator();
         const rule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(symbol);
@@ -526,6 +537,8 @@ class HedgePositionLedger {
             activeTpOrderIds: [],
             tpStagePrices: [],
             tpStageQuantities: [],
+            icAtEntry: 0,
+            cadmeState: 0,
         };
         this.shortSlots = new Array(maxShortSlots);
         for (let i = 0; i < maxShortSlots; i++) {
@@ -543,8 +556,19 @@ class HedgePositionLedger {
                 activeTpOrderIds: [],
                 tpStagePrices: [],
                 tpStageQuantities: [],
+                icAtEntry: 0,
+                cadmeState: 0,
             };
         }
+    }
+    setMarketDataClient(client, assetIndex) {
+        this.marketDataClient = client;
+        if (typeof assetIndex === "number" && assetIndex >= 0) {
+            this.assetIndex = assetIndex;
+        }
+    }
+    getMarketDataClient() {
+        return this.marketDataClient;
     }
     reset() {
         this.releaseCoreLong();
@@ -1268,7 +1292,7 @@ class HedgePositionLedger {
         }
         return count;
     }
-    occupyCoreLong(quantity, entryPrice, tpPercent, slPercent, isAuthoritativeSnapshot = false) {
+    occupyCoreLong(quantity, entryPrice, tpPercent, slPercent, isAuthoritativeSnapshot = false, entryIc) {
         if (quantity <= 0 || entryPrice <= 0)
             return;
         // SOTA UNIDIRECTIONAL ASSET MUTEX: Block occupying CORE_LONG if ANY short slot is active/pending
@@ -1283,6 +1307,9 @@ class HedgePositionLedger {
         // Enforce SOTA Payoff Ratio Barrier: R:R >= 0.85
         const minPayoffRatio = 0.85;
         const effectiveTpPercent = Math.max(tpPercent, slPercent * minPayoffRatio);
+        const liveIc = typeof entryIc === "number" && Number.isFinite(entryIc)
+            ? entryIc
+            : (this.marketDataClient ? this.marketDataClient.getRollingIC(this.assetIndex) : 0);
         if (isAuthoritativeSnapshot) {
             this.coreLong.isOccupied = true;
             this.coreLong.lifecycleState = "OCCUPIED";
@@ -1291,6 +1318,8 @@ class HedgePositionLedger {
             this.coreLong.entryPrice = entryPrice;
             this.coreLong.takeProfitPercent = effectiveTpPercent;
             this.coreLong.stopLossPercent = slPercent;
+            this.coreLong.icAtEntry = liveIc;
+            this.coreLong.cadmeState = 0;
             if (!this.coreLong.openTime || this.coreLong.openTime === 0) {
                 this.coreLong.openTime = Date.now();
             }
@@ -1329,6 +1358,10 @@ class HedgePositionLedger {
             this.coreLong.lifecycleState = "OCCUPIED";
             this.coreLong.pendingClientOrderId = undefined;
             this.coreLong.pendingOrderTimestamp = undefined;
+            if (!this.coreLong.icAtEntry || this.coreLong.icAtEntry <= 0) {
+                this.coreLong.icAtEntry = liveIc;
+            }
+            this.coreLong.cadmeState = 0;
             const makerFee = this.sizingCalc.getMakerFeeRate();
             const takerFee = this.sizingCalc.getTakerFeeRate();
             const feeMultiplier = (makerFee + takerFee) * 2.5;
@@ -1369,6 +1402,8 @@ class HedgePositionLedger {
         this.coreLong.peakPrice = entryPrice;
         this.coreLong.reversalTickCounter = 0;
         this.coreLong.reversalStartTs = 0;
+        this.coreLong.icAtEntry = liveIc;
+        this.coreLong.cadmeState = 0;
         const makerFee = this.sizingCalc.getMakerFeeRate();
         const takerFee = this.sizingCalc.getTakerFeeRate();
         const feeMultiplier = (makerFee + takerFee) * 2.5; // Fee-adjusted zero-loss buffer loaded from .env
@@ -1536,8 +1571,13 @@ class HedgePositionLedger {
         this.coreLong.reversalTickCounter = 0;
         this.coreLong.reversalStartTs = 0;
         this.coreLong.tpPrices = [];
+        this.coreLong.icAtEntry = 0;
+        this.coreLong.cadmeState = 0;
+        if (this.marketDataClient) {
+            this.marketDataClient.setVegamCadmeState(0, this.assetIndex);
+        }
     }
-    occupyShortSlot(slotIndex, quantity, entryPrice, tpPercent, slPercent, isAuthoritativeSnapshot = false) {
+    occupyShortSlot(slotIndex, quantity, entryPrice, tpPercent, slPercent, isAuthoritativeSnapshot = false, entryIc) {
         if (slotIndex < 0 || slotIndex >= this.maxShortSlots || quantity <= 0 || entryPrice <= 0)
             return false;
         // SOTA UNIDIRECTIONAL ASSET MUTEX: Block occupying SHORT slot if CORE_LONG is active/pending
@@ -1551,6 +1591,9 @@ class HedgePositionLedger {
         // Enforce SOTA Payoff Ratio Barrier: R:R >= 0.85
         const minPayoffRatio = 0.85;
         const effectiveTpPercent = Math.max(tpPercent, slPercent * minPayoffRatio);
+        const liveIc = typeof entryIc === "number" && Number.isFinite(entryIc)
+            ? entryIc
+            : (this.marketDataClient ? this.marketDataClient.getRollingIC(this.assetIndex) : 0);
         if (isAuthoritativeSnapshot) {
             slot.isOccupied = true;
             slot.lifecycleState = "OCCUPIED";
@@ -1559,6 +1602,8 @@ class HedgePositionLedger {
             slot.entryPrice = entryPrice;
             slot.takeProfitPercent = effectiveTpPercent;
             slot.stopLossPercent = slPercent;
+            slot.icAtEntry = liveIc;
+            slot.cadmeState = 0;
             if (!slot.openTime || slot.openTime === 0) {
                 slot.openTime = Date.now();
             }
@@ -1601,6 +1646,10 @@ class HedgePositionLedger {
             slot.pendingOrderTimestamp = undefined;
             slot.reversalTickCounter = 0;
             slot.reversalStartTs = 0;
+            if (!slot.icAtEntry || slot.icAtEntry <= 0) {
+                slot.icAtEntry = liveIc;
+            }
+            slot.cadmeState = 0;
             const makerFee = this.sizingCalc.getMakerFeeRate();
             const takerFee = this.sizingCalc.getTakerFeeRate();
             const feeMultiplier = (makerFee + takerFee) * 2.5;
@@ -1641,6 +1690,8 @@ class HedgePositionLedger {
         slot.troughPrice = entryPrice;
         slot.reversalTickCounter = 0;
         slot.reversalStartTs = 0;
+        slot.icAtEntry = liveIc;
+        slot.cadmeState = 0;
         const makerFee = this.sizingCalc.getMakerFeeRate();
         const takerFee = this.sizingCalc.getTakerFeeRate();
         const feeMultiplier = (makerFee + takerFee) * 2.5; // Fee-adjusted zero-loss buffer loaded from .env
@@ -1698,6 +1749,11 @@ class HedgePositionLedger {
         slot.reversalTickCounter = 0;
         slot.reversalStartTs = 0;
         slot.tpPrices = [];
+        slot.icAtEntry = 0;
+        slot.cadmeState = 0;
+        if (this.marketDataClient) {
+            this.marketDataClient.setVegamCadmeState(0, this.assetIndex);
+        }
         let hasRemainingOccupied = false;
         for (let i = 0; i < this.maxShortSlots; i++) {
             if (this.shortSlots[i].isOccupied && this.shortSlots[i].quantity > 0) {
@@ -2082,7 +2138,7 @@ class HedgePositionLedger {
      *      * Phase 3: Passive Maker Unwind (2*t_half <= tau < 4*t_half) -> Tier 2 Lock
      *      * Phase 4: Terminal Horizon Hard Kill (tau >= T_max) -> Force Liquidation
      */
-    evaluateSotaDynamicExits(bestBidOrMark, bestAskOrHazard, hazardOrHjb, hjbOrVol, volMetricsOrNowMs, nowMs = Date.now(), hurstExponent = 0.50) {
+    evaluateSotaDynamicExits(bestBidOrMark, bestAskOrHazard, hazardOrHjb, hjbOrVol, volMetricsOrNowMs, nowMs = Date.now(), hurstExponent = 0.50, liveIcOverride) {
         this.sotaTriggers.length = 0;
         let bestBid = 0;
         let bestAsk = 0;
@@ -2170,13 +2226,13 @@ class HedgePositionLedger {
         const rawCollarDistancePct = safeGkVol * vpinPenalty * hurstMultiplier * volMultiplier;
         // When !isVolReady: rawCollarDistancePct = 0 → collarDistancePct = 0.0015 (floor, no-op collar)
         const collarDistancePct = Math.max(0.0015, Math.min(0.05, rawCollarDistancePct));
-        this.evalSingleSlotSota(this.coreLong, midPrice, stoikovMicroPrice, hazardMetrics, hjbEngine, volSurfMetrics, effectiveNowMs, halfLifeSec, roundTripFeeBuffer, minNetAlpha, collarDistancePct);
+        this.evalSingleSlotSota(this.coreLong, midPrice, stoikovMicroPrice, hazardMetrics, hjbEngine, volSurfMetrics, effectiveNowMs, halfLifeSec, roundTripFeeBuffer, minNetAlpha, collarDistancePct, liveIcOverride);
         for (let i = 0; i < this.maxShortSlots; i++) {
-            this.evalSingleSlotSota(this.shortSlots[i], midPrice, stoikovMicroPrice, hazardMetrics, hjbEngine, volSurfMetrics, effectiveNowMs, halfLifeSec, roundTripFeeBuffer, minNetAlpha, collarDistancePct);
+            this.evalSingleSlotSota(this.shortSlots[i], midPrice, stoikovMicroPrice, hazardMetrics, hjbEngine, volSurfMetrics, effectiveNowMs, halfLifeSec, roundTripFeeBuffer, minNetAlpha, collarDistancePct, liveIcOverride);
         }
         return this.sotaTriggers;
     }
-    evalSingleSlotSota(slot, markPrice, stoikovMicroPrice, hazardMetrics, hjbEngine, volMetrics, nowMs, halfLifeSec, roundTripFeeBuffer, minNetAlpha, collarDistancePct) {
+    evalSingleSlotSota(slot, markPrice, stoikovMicroPrice, hazardMetrics, hjbEngine, volMetrics, nowMs, halfLifeSec, roundTripFeeBuffer, minNetAlpha, collarDistancePct, liveIcOverride) {
         if (!slot.isOccupied || slot.quantity <= 0 || slot.entryPrice <= 0)
             return;
         const isLong = slot.side === "LONG";
@@ -2333,6 +2389,44 @@ class HedgePositionLedger {
                 }
             }
         }
+        // -------------------------------------------------------------------------
+        // 5. CADME (AI Alpha Decay Managed Exit) - Layer 3
+        // Ornstein-Uhlenbeck Decay: alpha(tau) = IC_entry * exp(-ln2 * durationSec / halfLifeSec)
+        // Dual Confirmation Trigger Gate:
+        // 1. Modeled Decay: alphaDecay < IC_entry * 0.60
+        // 2. Live Market Confirmation: liveIc < IC_entry * 0.75
+        // -------------------------------------------------------------------------
+        if (slot.icAtEntry && slot.icAtEntry > 0) {
+            const safeHalfLife = typeof halfLifeSec === "number" && halfLifeSec > 0 ? halfLifeSec : 90.0;
+            const alphaDecay = slot.icAtEntry * Math.exp(-Math.LN2 * durationSec / safeHalfLife);
+            const liveIc = typeof liveIcOverride === "number" && Number.isFinite(liveIcOverride)
+                ? liveIcOverride
+                : (this.marketDataClient ? this.marketDataClient.getRollingIC(this.assetIndex) : 0);
+            if (alphaDecay < slot.icAtEntry * 0.60) {
+                if (liveIc < slot.icAtEntry * 0.75) {
+                    if (slot.cadmeState !== 2) {
+                        slot.cadmeState = 2;
+                        if (this.marketDataClient) {
+                            this.marketDataClient.setVegamCadmeState(2, this.assetIndex);
+                        }
+                        this.pushSotaTrigger(slot.slotId, slot.side, `CADME_ALPHA_DECAY_EXIT_${slot.side}`, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "PASSIVE_MAKER");
+                    }
+                    return;
+                }
+                else {
+                    slot.cadmeState = 1;
+                    if (this.marketDataClient) {
+                        this.marketDataClient.setVegamCadmeState(1, this.assetIndex);
+                    }
+                }
+            }
+            else {
+                slot.cadmeState = 0;
+                if (this.marketDataClient) {
+                    this.marketDataClient.setVegamCadmeState(0, this.assetIndex);
+                }
+            }
+        }
         // Check Trigger
         const isStopTriggered = isLong
             ? markPrice <= slot.stopLossPrice
@@ -2363,6 +2457,7 @@ class HedgePositionLedger {
             trg.isPartialClose = isPartialClose;
             trg.tpStage = undefined;
             trg.executionStyle = executionStyle;
+            trg.executionType = executionStyle;
             trg.targetPrice = targetPrice;
             trg.cancelOrderIds = cancelIds;
             this.sotaTriggers.push(trg);

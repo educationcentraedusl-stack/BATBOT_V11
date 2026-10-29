@@ -308,7 +308,10 @@ export class StrategyEngine {
       this.assetIndex = symIdx >= 0 ? symIdx : 0;
     }
 
-    this.hedgeLedger = hedgeLedger ?? new HedgePositionLedger(this.config.symbol, this.config.maxShortSlots);
+    this.hedgeLedger = hedgeLedger ?? new HedgePositionLedger(this.config.symbol, this.config.maxShortSlots, this.client, this.assetIndex);
+    if (!this.hedgeLedger.getMarketDataClient() && this.client) {
+      this.hedgeLedger.setMarketDataClient(this.client, this.assetIndex);
+    }
     this.positionLedger = positionLedger ?? this.hedgeLedger.getLegacyLedger();
     this.hazardEngine = new MicrostructureHazardEngine(this.config.symbol);
     this.hjbEngine = new HJBReservationEngine(this.config.symbol);
