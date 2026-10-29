@@ -8,7 +8,7 @@ pub mod preflight;
 pub mod weights;
 
 pub use cfc::CfCCell;
-pub use engine::AIEngine;
+pub use engine::{compute_gk_atr_composite, AIEngine};
 pub use ic_tracker::{CusumDriftDetector, ICTracker};
 pub use kan::{BSplineLUT, TKANLayer};
 pub use latency::{spawn_latency_monitor, LatencyMonitor};

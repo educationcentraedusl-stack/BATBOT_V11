@@ -19,6 +19,11 @@ pub const ROLLING_IC_SLOT: usize = 101;
 /// Must match `SAB_SLOTS.IS_MODEL_DRIFTED` in `src/ipc/sabSchema.ts` (= 102).
 pub const IS_MODEL_DRIFTED_SLOT: usize = 102;
 
+/// Canonical SAB slot index for VEGAM_GK_ATR_COMPOSITE.
+/// Must match `SAB_SLOTS.VEGAM_GK_ATR_COMPOSITE` in `src/ipc/sabSchema.ts` (= 156).
+/// Multi-timeframe Garman-Klass Composite ATR acting as primary volatility governor.
+pub const VEGAM_GK_ATR_COMPOSITE_SLOT: usize = 156;
+
 const HAWKES_BUF_CAP: usize = 64;
 
 #[derive(Clone)]
@@ -278,6 +283,16 @@ impl AtomicSharedMemoryBridge {
     #[inline]
     pub fn load_f64(&self, slot: usize) -> f64 {
         self.load_f64_asset(0, slot)
+    }
+
+    #[inline]
+    pub fn store_vegam_gk_atr_composite(&self, asset_idx: usize, val: f64) {
+        self.store_f64_asset(asset_idx, VEGAM_GK_ATR_COMPOSITE_SLOT, val);
+    }
+
+    #[inline]
+    pub fn load_vegam_gk_atr_composite(&self, asset_idx: usize) -> f64 {
+        self.load_f64_asset(asset_idx, VEGAM_GK_ATR_COMPOSITE_SLOT)
     }
 
     #[allow(clippy::too_many_arguments)]

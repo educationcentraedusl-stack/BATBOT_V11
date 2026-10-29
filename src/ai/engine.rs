@@ -9,7 +9,7 @@ use crate::ai::ic_tracker::ICTracker;
 use crate::ai::kan::TKANLayer;
 use crate::ai::mamba::Mamba2Cell;
 use crate::ai::weights::{AiEngine, AiEngineStatus};
-use crate::ipc::shared_memory::AtomicSharedMemoryBridge;
+use crate::ipc::shared_memory::{AtomicSharedMemoryBridge, VEGAM_GK_ATR_COMPOSITE_SLOT};
 
 #[allow(dead_code)]
 #[inline(always)]
@@ -594,6 +594,7 @@ pub struct AssetTelemetryTracker {
     pub oldest_ts_5s: AtomicU64,
     pub oldest_ts_60s: AtomicU64,
     pub oldest_ts_300s: AtomicU64,
+    pub gk_60s_ema: AtomicU64,                          // VEGAM Phase 2: Rolling 60s Garman-Klass EMA variance
     pub horizon_5s: Mutex<VecDeque<(u64, f64, f64)>>,   // (timestamp_ns, mid_price, prediction) - 5s Micro-Scalp
     pub horizon_60s: Mutex<VecDeque<(u64, f64, f64)>>,  // (timestamp_ns, mid_price, prediction) - 60s Tactical Alpha
     pub horizon_300s: Mutex<VecDeque<(u64, f64, f64)>>, // (timestamp_ns, mid_price, prediction) - 300s Macro-Regime
@@ -608,6 +609,7 @@ impl AssetTelemetryTracker {
             oldest_ts_5s: AtomicU64::new(u64::MAX),
             oldest_ts_60s: AtomicU64::new(u64::MAX),
             oldest_ts_300s: AtomicU64::new(u64::MAX),
+            gk_60s_ema: AtomicU64::new(0.0f64.to_bits()),
             horizon_5s: Mutex::new(VecDeque::with_capacity(3_600)),
             horizon_60s: Mutex::new(VecDeque::with_capacity(18_000)),
             horizon_300s: Mutex::new(VecDeque::with_capacity(36_000)),
@@ -1133,6 +1135,30 @@ impl AIEngine {
         sab.store_u64_asset(asset_idx, 103, latency_ns);
         sab.store_u64_asset(asset_idx, 104, seq);
 
+        // VEGAM Phase 2: Compute multi-timeframe Garman-Klass Composite ATR and write directly to Slot 156
+        let raw_gk_1s = sab.load_f64_asset(asset_idx, 121);
+        let gk_1s = if raw_gk_1s > 0.0 { raw_gk_1s } else { gk_vol };
+
+        let prev_gk_60s_bits = tracker.gk_60s_ema.load(Ordering::Relaxed);
+        let prev_gk_60s = f64::from_bits(prev_gk_60s_bits);
+        let gk_60s = if prev_gk_60s <= 0.0 {
+            tracker.gk_60s_ema.store(gk_1s.to_bits(), Ordering::Relaxed);
+            gk_1s
+        } else {
+            let dt_sec = if start_ns > 0 && _prev_ns > 0 && start_ns > _prev_ns {
+                ((start_ns - _prev_ns) as f64 / 1_000_000_000.0).clamp(0.001, 5.0)
+            } else {
+                0.010
+            };
+            let decay = (-dt_sec / 60.0).exp();
+            let updated_gk_60s = prev_gk_60s * decay + gk_1s * (1.0 - decay);
+            tracker.gk_60s_ema.store(updated_gk_60s.to_bits(), Ordering::Relaxed);
+            updated_gk_60s
+        };
+
+        let gk_atr_composite = compute_gk_atr_composite(gk_1s, gk_60s, 0.30);
+        sab.store_f64_asset(asset_idx, VEGAM_GK_ATR_COMPOSITE_SLOT, gk_atr_composite);
+
         Ok(())
     }
 
@@ -1396,6 +1422,7 @@ impl AIEngine {
                 self_tracker.last_mid_price.store(other_tracker.last_mid_price.load(Ordering::Relaxed), Ordering::Relaxed);
                 self_tracker.last_prediction_dir.store(other_tracker.last_prediction_dir.load(Ordering::Relaxed), Ordering::Relaxed);
                 self_tracker.last_inference_ns.store(other_tracker.last_inference_ns.load(Ordering::Relaxed), Ordering::Relaxed);
+                self_tracker.gk_60s_ema.store(other_tracker.gk_60s_ema.load(Ordering::Relaxed), Ordering::Relaxed);
 
                 let oldest_5s = other_tracker.oldest_ts_5s.load(Ordering::Relaxed);
                 let effective_5s = if oldest_5s != u64::MAX {
@@ -1493,6 +1520,29 @@ pub fn compute_platt_confidence(
     let calibrated_logit = ((s * meta_logit + platt_offset) / t).clamp(-60.0, 60.0);
     let sig = 1.0 / (1.0 + (-calibrated_logit).exp());
     sig.clamp(1e-7, 1.0 - 1e-7)
+}
+
+/// Computes the Volatility-Engineered Garman-Klass Composite ATR (VEGAM GK_ATR_composite).
+///
+/// Formula: sqrt(alpha * gk_1s + (1.0 - alpha) * gk_60s)
+/// where alpha defaults to 0.30 if <= 0.0, >= 1.0, or non-finite.
+///
+/// HFT Hot-Path Invariant: Performs zero heap allocations and executes with sub-microsecond latency (< 0.5 µs).
+#[inline(always)]
+pub fn compute_gk_atr_composite(gk_1s: f64, gk_60s: f64, alpha: f64) -> f64 {
+    let effective_alpha = if alpha > 0.0 && alpha < 1.0 && alpha.is_finite() {
+        alpha
+    } else {
+        0.30
+    };
+    let safe_gk_1s = if gk_1s.is_finite() && gk_1s > 0.0 { gk_1s } else { 0.0 };
+    let safe_gk_60s = if gk_60s.is_finite() && gk_60s > 0.0 { gk_60s } else { 0.0 };
+    let composite_variance = effective_alpha * safe_gk_1s + (1.0 - effective_alpha) * safe_gk_60s;
+    if composite_variance > 0.0 {
+        composite_variance.sqrt()
+    } else {
+        0.0
+    }
 }
 
 impl Default for AIEngine {
@@ -1666,6 +1716,8 @@ mod tests {
         let bull_conf = bridge.load_f64(94);
         assert!(bull_dir.is_finite(), "bull_dir must be finite");
         assert!(bull_conf.is_finite() && bull_conf >= 0.0 && bull_conf <= 1.0, "bull_conf must be in [0, 1]");
+        let vegam_atr = bridge.load_f64(156);
+        assert!(vegam_atr > 0.0 && vegam_atr.is_finite(), "VEGAM_GK_ATR_COMPOSITE must be positive and finite");
 
         // Feed 160 bearish ticks (falling price down to 48000, low OBI, crashing CVD)
         for tick in 0..160 {
@@ -2008,5 +2060,87 @@ mod tests {
         let conf_cold = compute_platt_confidence(1.0, 1.0, 0.0, 0.5);
         let conf_warm = compute_platt_confidence(1.0, 1.0, 0.0, 2.0);
         assert!(conf_cold > conf_warm, "Lower temperature must sharpen positive confidence: {} > {}", conf_cold, conf_warm);
+    }
+
+    #[test]
+    fn test_gk_atr_composite_correctness() {
+        // 1. Exact mathematical test from VEGAM Master Plan (Section 2.4 Proof 1)
+        // GK_1s = 0.00004, GK_60s = 0.00010, alpha = 0.30
+        // Variance = 0.30 * 0.00004 + 0.70 * 0.00010 = 0.000012 + 0.000070 = 0.000082
+        // sqrt(0.000082) = 0.009055385138137417
+        let gk_1s = 0.00004;
+        let gk_60s = 0.00010;
+        let alpha = 0.30;
+        let expected = (0.30 * 0.00004 + 0.70 * 0.00010f64).sqrt();
+        let actual = compute_gk_atr_composite(gk_1s, gk_60s, alpha);
+        assert!(
+            (actual - expected).abs() < 1e-12,
+            "Composite ATR math mismatch: expected {}, got {}",
+            expected,
+            actual
+        );
+        assert!(
+            (actual - 0.009055385138137417).abs() < 1e-12,
+            "Expected exactly 0.009055385138137417, got {}",
+            actual
+        );
+
+        // 2. Default alpha fallback when alpha <= 0.0, >= 1.0, or non-finite
+        let defaulted = compute_gk_atr_composite(gk_1s, gk_60s, 0.0);
+        assert!((defaulted - expected).abs() < 1e-12, "Should default to alpha=0.30 when alpha is 0.0");
+        let defaulted_neg = compute_gk_atr_composite(gk_1s, gk_60s, -0.5);
+        assert!((defaulted_neg - expected).abs() < 1e-12, "Should default to alpha=0.30 when alpha is negative");
+        let defaulted_over = compute_gk_atr_composite(gk_1s, gk_60s, 1.5);
+        assert!((defaulted_over - expected).abs() < 1e-12, "Should default to alpha=0.30 when alpha >= 1.0");
+        let defaulted_nan = compute_gk_atr_composite(gk_1s, gk_60s, f64::NAN);
+        assert!((defaulted_nan - expected).abs() < 1e-12, "Should default to alpha=0.30 when alpha is NaN");
+
+        // 3. Custom alpha weights: equal weighting alpha = 0.50
+        let gk_1s_custom = 0.04;
+        let gk_60s_custom = 0.16;
+        let custom_expected = (0.50 * 0.04 + 0.50 * 0.16f64).sqrt(); // sqrt(0.10) = 0.31622776601683794
+        let custom_actual = compute_gk_atr_composite(gk_1s_custom, gk_60s_custom, 0.50);
+        assert!((custom_actual - custom_expected).abs() < 1e-12);
+
+        // 4. Edge cases: zero inputs, negative inputs, non-finite inputs
+        assert_eq!(compute_gk_atr_composite(0.0, 0.0, 0.30), 0.0);
+        assert_eq!(compute_gk_atr_composite(-0.001, -0.002, 0.30), 0.0);
+        assert_eq!(compute_gk_atr_composite(f64::NAN, 0.00010, 0.30), (0.70 * 0.00010f64).sqrt());
+        assert_eq!(compute_gk_atr_composite(0.00004, f64::INFINITY, 0.30), (0.30 * 0.00004f64).sqrt());
+
+        // 5. Atomic Shared Memory Bridge integration verification (Slot 156)
+        let mut buffer = vec![0u8; 2048];
+        match AtomicSharedMemoryBridge::new(buffer.as_mut_ptr(), buffer.len()) {
+            Ok(bridge) => {
+                bridge.store_vegam_gk_atr_composite(0, actual);
+                let read_back = bridge.load_vegam_gk_atr_composite(0);
+                assert!(
+                    (read_back - actual).abs() < 1e-12,
+                    "Atomic bridge round-trip mismatch: expected {}, got {}",
+                    actual,
+                    read_back
+                );
+                assert_eq!(bridge.load_f64_asset(0, 156), actual);
+            }
+            Err(e) => {
+                assert!(false, "Failed to create test bridge: {}", e);
+            }
+        }
+
+        // 6. Sub-microsecond latency verification (< 0.5 µs SLA)
+        let iterations = 10_000;
+        let start = std::time::Instant::now();
+        let mut sink = 0.0;
+        for i in 0..iterations {
+            sink += compute_gk_atr_composite(0.00004 + (i as f64) * 1e-8, 0.00010, 0.30);
+        }
+        let elapsed = start.elapsed();
+        let latency_per_call_us = elapsed.as_micros() as f64 / (iterations as f64);
+        assert!(sink > 0.0);
+        assert!(
+            latency_per_call_us < 0.50,
+            "Latency SLA violation: compute_gk_atr_composite took {:.4} µs (must be < 0.5 µs)",
+            latency_per_call_us
+        );
     }
 }
