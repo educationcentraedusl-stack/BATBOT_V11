@@ -64,12 +64,12 @@ assert(coreLong.cadmeState === 0, `Initial cadmeState is 0 (INACTIVE): got ${cor
 console.log("\n--- STAGE 2: Prime Alpha Trade Immunity (tau = 0.5 * halfLifeSec) ---");
 // Fixed Hurst = 0.50 -> Trending baseline halfLifeSec = 90.0s
 const halfLifeSec = 90.0;
-const earlyDurationSec = halfLifeSec * 0.5; // 45.0s
+const earlyDurationSec = halfLifeSec * 0.20; // 18.0s -> alphaDecay = 0.050 * 2^-0.2 = 0.0435 > 0.75 * 0.050 (0.0375)
 const earlyTime = coreLong.openTime + earlyDurationSec * 1000;
 // Tick at mid-price $60,000 (neutral market price)
 const earlyTriggers = ledger.evaluateSotaDynamicExits(entryPrice, entryPrice, undefined, undefined, undefined, earlyTime, 0.50);
 const earlyCadmeTriggers = earlyTriggers.filter((t) => t.reason.startsWith("CADME_ALPHA_DECAY_EXIT"));
-assert(earlyCadmeTriggers.length === 0, `Prime alpha immunity verified: No CADME exit at tau = 0.5*t_half (triggers = ${earlyCadmeTriggers.length})`);
+assert(earlyCadmeTriggers.length === 0, `Prime alpha immunity verified: No CADME exit at tau = 0.20*t_half (triggers = ${earlyCadmeTriggers.length})`);
 assert(coreLong.cadmeState === 0, `cadmeState remains 0 during prime alpha regime (got ${coreLong.cadmeState})`);
 // =========================================================================================
 // STAGE 3: Dual-Confirmation Rejection Matrix
@@ -151,6 +151,56 @@ assert(shortSlot.icAtEntry === 0, `Short slot icAtEntry reset to 0: got ${shortS
 assert(shortSlot.cadmeState === 0, `Short slot cadmeState reset to 0: got ${shortSlot.cadmeState}`);
 const sabResetState = mdClient.getVegamCadmeState(assetIndex);
 assert(sabResetState === 0.0, `SAB Slot 158 atomically reset to 0.0 on slot release: got ${sabResetState}`);
+// =========================================================================================
+// STAGE 7: CADME State Latching, Stop-Loss Continuity & Multi-Slot SAB 158 Aggregation
+// =========================================================================================
+console.log("\n--- STAGE 7: CADME State Latching, Stop-Loss Continuity & Multi-Slot SAB 158 Aggregation ---");
+// Test 7A: State Latching under oscillating live IC
+mdClient.setRollingIC(0.050, assetIndex);
+ledger.occupyCoreLong(0.10, 60000.0, 1.0, 1.0);
+const testLongSlot = ledger.getCoreLong();
+// Force CADME trigger: duration = 180s, live IC = 0.010 (< 0.050 * 0.75)
+mdClient.setRollingIC(0.010, assetIndex);
+const trig1 = ledger.evaluateSotaDynamicExits(60000.0, 60000.0, undefined, undefined, undefined, testLongSlot.openTime + 180000, 0.50);
+assert(testLongSlot.cadmeState === 2, "Slot successfully entered cadmeState = 2 (EXIT_TRIGGERED)");
+assert(trig1.some((t) => t.reason.startsWith("CADME_ALPHA_DECAY_EXIT")), "First tick emits CADME exit trigger");
+// Now oscillate live IC back to high (0.050)
+mdClient.setRollingIC(0.050, assetIndex);
+const trig2 = ledger.evaluateSotaDynamicExits(60000.0, 60000.0, undefined, undefined, undefined, testLongSlot.openTime + 185000, 0.50);
+assert(testLongSlot.cadmeState === 2, `CADME state strictly latched at 2 despite live IC rebound (got ${testLongSlot.cadmeState})`);
+assert(!trig2.some((t) => t.reason.startsWith("CADME_ALPHA_DECAY_EXIT")), "Latched state does not re-emit duplicate CADME exit triggers on subsequent ticks");
+// Test 7B: Stop-Loss Continuity while passive maker exit rests on book
+// Price crashes to $59,000 (below stop loss at $59,400)
+const slTriggers = ledger.evaluateSotaDynamicExits(59000.0, 59000.0, undefined, undefined, undefined, testLongSlot.openTime + 186000, 0.50);
+assert(slTriggers.some((t) => t.reason.includes("STOP_LOSS") || t.reason.includes("TRAILING_STOP")), "Hard stop-loss protection remains 100% active while CADME maker exit rests on book");
+// Test 7C: Multi-Slot SAB 158 Aggregation (No Clobbering by Secondary Inactive Slots)
+// Occupy Short Slot 0 while Core Long is in cadmeState = 2
+ledger.occupyShortSlot(0, 0.05, 60000.0, 1.0, 1.0);
+const testShortSlot0 = ledger.getShortSlots()[0];
+assert(testShortSlot0.cadmeState === 0, "Newly occupied Short Slot 0 starts in cadmeState = 0");
+// Evaluate dynamic exits: Short Slot 0 is healthy (state 0), Core Long is latched (state 2)
+ledger.evaluateSotaDynamicExits(60000.0, 60000.0, undefined, undefined, undefined, testLongSlot.openTime + 187000, 0.50);
+assert(mdClient.getVegamCadmeState(assetIndex) === 2.0, `SAB Slot 158 preserves maximum active state (2.0) across all occupied slots (got ${mdClient.getVegamCadmeState(assetIndex)})`);
+// Release Short Slot 0: Core Long is still in state 2, so SAB Slot 158 must remain 2.0
+ledger.releaseShortSlot(0, 60000.0, 0.0002, "TEST_CLOSE");
+assert(mdClient.getVegamCadmeState(assetIndex) === 2.0, `Releasing secondary slot does NOT clobber active urgent alert in SAB Slot 158 (got ${mdClient.getVegamCadmeState(assetIndex)})`);
+// Clean release Core Long
+ledger.releaseCoreLong(60000.0, 0.0002, "TEST_CLOSE");
+assert(mdClient.getVegamCadmeState(assetIndex) === 0.0, `Releasing final slot clears SAB Slot 158 to 0.0 (got ${mdClient.getVegamCadmeState(assetIndex)})`);
+// Test 7D: CADME Pre-Warning Tier (cadmeState = 1)
+// Duration: 0.60 * icAtEntry <= alphaDecay < 0.75 * icAtEntry
+// halfLife = 90s, tau = 45s -> alphaDecay = 0.050 * exp(-LN2 * 0.5) = 0.03536 (70.7% of icAtEntry)
+mdClient.setRollingIC(0.050, assetIndex);
+ledger.occupyCoreLong(0.10, 60000.0, 1.0, 1.0);
+const preWarnLong = ledger.getCoreLong();
+ledger.evaluateSotaDynamicExits(60000.0, 60000.0, undefined, undefined, undefined, preWarnLong.openTime + 45000, 0.50);
+assert(preWarnLong.cadmeState === 1, `cadmeState advances to 1 (MONITORING) in pre-warning decay zone (0.60 <= alpha/ic < 0.75): got ${preWarnLong.cadmeState}`);
+assert(mdClient.getVegamCadmeState(assetIndex) === 1.0, `SAB Slot 158 reflects MONITORING state (1.0): got ${mdClient.getVegamCadmeState(assetIndex)}`);
+// Test 7E: Complete Slot Cleanup via clearSlots()
+ledger.clearSlots();
+assert(preWarnLong.icAtEntry === 0, `clearSlots resets coreLong icAtEntry to 0: got ${preWarnLong.icAtEntry}`);
+assert(preWarnLong.cadmeState === 0, `clearSlots resets coreLong cadmeState to 0: got ${preWarnLong.cadmeState}`);
+assert(mdClient.getVegamCadmeState(assetIndex) === 0.0, `clearSlots synchronizes SAB Slot 158 to 0.0: got ${mdClient.getVegamCadmeState(assetIndex)}`);
 // =========================================================================================
 // SUMMARY
 // =========================================================================================

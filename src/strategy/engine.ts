@@ -3,7 +3,7 @@ import { RiskGuard, MultiAssetRiskGuard, OrderIntent, RiskCheckResult } from "./
 import { BinanceExecutionClient, BinanceOrderResponse, BinanceOrderParams, BinancePositionRisk, BinanceUserTrade } from "../execution/binance";
 import { ClientOrderIdGenerator } from "../execution/clientOrderIdGenerator";
 import { PositionLedger, HedgePositionLedger, MultiAssetPositionLedger, PositionSlot, SlotExitTrigger, ActiveTradeSlot } from "./positionLedger";
-import { computeVegamTpLevels, DEFAULT_VEGAM_CONFIG } from "./vegamTpLadderEngine";
+import { computeVegamTpLevels, DEFAULT_VEGAM_CONFIG, VegamTpLevels } from "./vegamTpLadderEngine";
 import { DynamicRiskEngine, DynamicMicrostructureMetrics, DynamicRiskProfile } from "./dynamicRiskEngine";
 import { MicrostructureHazardEngine } from "./microstructureHazardEngine";
 import { VolatilitySurfaceEngine } from "./volatilitySurfaceEngine";
@@ -1368,8 +1368,24 @@ export class StrategyEngine {
                         (targetSide === "SHORT" && Math.abs(summary.shortQuantity - absQty) < 1e-5);
       if (!isTracked) {
         console.warn(`[BinanceExecution][WS_ACCOUNT_UPDATE_DESYNC] Reconciling active ${targetSide} position for ${this.config.symbol}: ${absQty} @ $${entryPx}`);
+        const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
+        const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
+        const gkAtrComposite = this.client.getVegamGkAtrComposite(this.assetIndex) || volEstimate;
+        const effectiveLev = this.config.leverageMultiplier ?? 2.0;
+        const vegamLevels = computeVegamTpLevels(
+          entryPx,
+          gkAtrComposite,
+          effectiveLev,
+          targetSide,
+          DEFAULT_VEGAM_CONFIG,
+          absQty
+        );
+        const dynamicTpPercent = vegamLevels.tp2Offset * 100;
+        const baseSlPercent = targetSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
+        const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.50, volEstimate * 4.50 * 100));
+
         if (targetSide === "LONG") {
-          this.hedgeLedger.occupyCoreLong(absQty, entryPx, this.config.longTakeProfitPercent, this.config.longStopLossPercent, true);
+          this.hedgeLedger.occupyCoreLong(absQty, entryPx, dynamicTpPercent, dynamicSlPercent, true, undefined, vegamLevels);
           if (posUpdate.positionSide === "BOTH") {
             this.reconcileFlatPositionWithUserTrades("SHORT", 0);
           }
@@ -1380,7 +1396,7 @@ export class StrategyEngine {
         } else {
           const availIdx = this.hedgeLedger.getAvailableShortSlotIndex();
           const slotIdx = availIdx >= 0 ? availIdx : 0;
-          this.hedgeLedger.occupyShortSlot(slotIdx, absQty, entryPx, this.config.shortTakeProfitPercent, this.config.shortStopLossPercent, true);
+          this.hedgeLedger.occupyShortSlot(slotIdx, absQty, entryPx, dynamicTpPercent, dynamicSlPercent, true, undefined, vegamLevels);
           if (posUpdate.positionSide === "BOTH") {
             this.reconcileFlatPositionWithUserTrades("LONG", 0);
           }
@@ -1728,7 +1744,9 @@ export class StrategyEngine {
   ): Promise<void> {
     let intents: BinanceOrderParams[] = [];
     try {
-      const gkAtr = this.client.getVegamGkAtrComposite(this.assetIndex) || 0.00906;
+      const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
+      const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
+      const gkAtr = this.client.getVegamGkAtrComposite(this.assetIndex) || volEstimate;
       intents = this.hedgeLedger.generateAggregatedBatchTpIntents(side, aggregatedQty, vwapEntryPrice, slotId, gkAtr);
       if (intents.length === 0) return;
 
@@ -1789,7 +1807,9 @@ export class StrategyEngine {
   ): Promise<void> {
     let intents: BinanceOrderParams[] = [];
     try {
-      const gkAtr = this.client.getVegamGkAtrComposite(this.assetIndex) || 0.00906;
+      const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
+      const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
+      const gkAtr = this.client.getVegamGkAtrComposite(this.assetIndex) || volEstimate;
       intents = this.hedgeLedger.generateBatchTpOrderIntents(slotId, entryPrice, quantity, side, gkAtr);
       if (intents.length === 0) return;
 
@@ -2419,7 +2439,13 @@ export class StrategyEngine {
       this.setLeverageMultiplier(liveLev);
     }
 
-    const recovered: { side: "LONG" | "SHORT"; quantity: number; entryPrice: number; originalOpenTime?: number }[] = [];
+    const recovered: {
+      side: "LONG" | "SHORT";
+      quantity: number;
+      entryPrice: number;
+      originalOpenTime?: number;
+      vegamLevels?: VegamTpLevels;
+    }[] = [];
 
     for (const pos of rawPositions) {
       if (pos.symbol !== this.config.symbol) continue;
@@ -2434,12 +2460,28 @@ export class StrategyEngine {
       // Binance REST /fapi/v2/positionRisk returns `updateTime` (Unix ms) — the last time this position
       // was opened or modified. Used to restore CAD-DTLM position age across restarts.
       const originalOpenTime = pos.updateTime && pos.updateTime > 0 ? pos.updateTime : 0;
+      const absQty = Math.abs(amt);
+
+      const garmanKlassRV = this.client.getGarmanKlassRV(this.assetIndex);
+      const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
+      const gkAtrComposite = this.client.getVegamGkAtrComposite(this.assetIndex) || volEstimate;
+      const effectiveLev = this.config.leverageMultiplier ?? 2.0;
+
+      const vegamLevels = computeVegamTpLevels(
+        entryPx,
+        gkAtrComposite,
+        effectiveLev,
+        side,
+        DEFAULT_VEGAM_CONFIG,
+        absQty
+      );
 
       recovered.push({
         side,
-        quantity: Math.abs(amt),
+        quantity: absQty,
         entryPrice: entryPx,
         originalOpenTime,
+        vegamLevels,
       });
     }
 

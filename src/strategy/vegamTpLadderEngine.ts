@@ -25,6 +25,10 @@ export interface VegamTpLadderConfig {
   tp2AtrMultiplier: number;
   /** ATR multiple for TP3 trailing distance (default: 0.80) */
   tp3TrailAtrMultiplier: number;
+  /** ATR multiple for TP3 limit ceiling (default: 4.00) */
+  tp3AtrMultiplier: number;
+  /** RPM multiple for TP3 limit ceiling (default: 3.00) */
+  tp3RpmMultiplier: number;
   /** Fraction to close at TP1 (default: 0.35) */
   tp1SizeRatio: number;
   /** Fraction to close at TP2 (default: 0.40) */
@@ -63,6 +67,8 @@ export const DEFAULT_VEGAM_CONFIG: Readonly<VegamTpLadderConfig> = Object.freeze
   tp1AtrMultiplier: 1.00,
   tp2AtrMultiplier: 2.50,
   tp3TrailAtrMultiplier: 0.80,
+  tp3AtrMultiplier: 4.00,
+  tp3RpmMultiplier: 3.00,
   tp1SizeRatio: 0.35,
   tp2SizeRatio: 0.40,
   tp3SizeRatio: 0.25,
@@ -233,7 +239,7 @@ export function computeVegamTpLevels(
   // Assert TP1 offset is always >= RPM_min to guarantee round-trip fee coverage
   const tp1Offset = Math.max(cfg.tp1AtrMultiplier * safeAtr, rpmMin);
   const tp2Offset = Math.max(cfg.tp2AtrMultiplier * safeAtr, 2.0 * rpmMin);
-  const tp3Offset = Math.max(4.0 * safeAtr, 3.0 * rpmMin);
+  const tp3Offset = Math.max(cfg.tp3AtrMultiplier * safeAtr, cfg.tp3RpmMultiplier * rpmMin);
 
   const isLong = side === "LONG";
   const tp1Price = isLong ? safePrice * (1.0 + tp1Offset) : safePrice * (1.0 - tp1Offset);

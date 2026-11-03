@@ -1041,7 +1041,7 @@ export class HedgePositionLedger {
     entryPrice: number,
     quantity: number,
     side: "LONG" | "SHORT",
-    gkAtrComposite: number = 0.00906
+    gkAtrComposite?: number
   ): BinanceOrderParams[] {
     const slot = slotId === "CORE_LONG" ? this.coreLong : this.shortSlots.find((s) => s.slotId === slotId);
     if (!slot || entryPrice <= 0 || quantity <= 0) return [];
@@ -1050,7 +1050,7 @@ export class HedgePositionLedger {
     const effectiveDecimals = Math.max(rule.qtyDecimals, (String(quantity).split(".")[1] || "").length);
 
     // Dynamic VEGAM TP Levels: Anchored to GK_ATR_composite with guaranteed fee hurdle
-    const safeGkAtr = Number.isFinite(gkAtrComposite) && gkAtrComposite > 0
+    const safeGkAtr = (typeof gkAtrComposite === "number" && Number.isFinite(gkAtrComposite) && gkAtrComposite > 0)
       ? gkAtrComposite
       : (this.marketDataClient?.getVegamGkAtrComposite(this.assetIndex) || 0.00906);
 
@@ -1125,7 +1125,7 @@ export class HedgePositionLedger {
     aggregatedQty: number,
     vwapEntryPrice: number,
     targetSlotId?: string,
-    gkAtrComposite: number = 0.00906
+    gkAtrComposite?: number
   ): BinanceOrderParams[] {
     if (vwapEntryPrice <= 0 || aggregatedQty <= 0) return [];
     const primarySlotId = targetSlotId || (side === "LONG" ? "CORE_LONG" : "SHORT_SLOT_0");
@@ -1133,7 +1133,7 @@ export class HedgePositionLedger {
     const effectiveDecimals = Math.max(rule.qtyDecimals, (String(aggregatedQty).split(".")[1] || "").length);
 
     // Dynamic VEGAM TP Levels: Anchored to GK_ATR_composite with guaranteed fee hurdle
-    const safeGkAtr = Number.isFinite(gkAtrComposite) && gkAtrComposite > 0
+    const safeGkAtr = (typeof gkAtrComposite === "number" && Number.isFinite(gkAtrComposite) && gkAtrComposite > 0)
       ? gkAtrComposite
       : (this.marketDataClient?.getVegamGkAtrComposite(this.assetIndex) || 0.00906);
 
@@ -1731,27 +1731,25 @@ export class HedgePositionLedger {
       this.coreLong.lastSyncedSlPrice = this.coreLong.stopLossPrice;
 
       if (resolvedVegamLevels) {
-        this.coreLong.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price);
-        this.coreLong.tpStagePrices = [
-          SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price),
-          SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp2Price),
-        ];
-        this.coreLong.tpStageQuantities = [
-          resolvedVegamLevels.tp1Qty,
-          resolvedVegamLevels.tp2Qty,
-          resolvedVegamLevels.tp3Qty,
-        ];
+        const tp1Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price);
+        const tp2Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp2Price);
+        const tp3Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp3Price ?? resolvedVegamLevels.tp2Price);
+        this.coreLong.takeProfitPrice = tp1Price;
+        this.coreLong.tpStagePrices = [tp1Price, tp2Price, tp3Price];
+        const q1 = Number(resolvedVegamLevels.tp1Qty.toFixed(rule.qtyDecimals));
+        const q2 = Number(resolvedVegamLevels.tp2Qty.toFixed(rule.qtyDecimals));
+        const q3 = Number(Math.max(0, quantity - q1 - q2).toFixed(rule.qtyDecimals));
+        this.coreLong.tpStageQuantities = [q1, q2, q3];
       } else {
-        this.coreLong.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + effectiveTpPercent / 100));
-        this.coreLong.tpStagePrices = [
-          this.coreLong.takeProfitPrice,
-          SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + (effectiveTpPercent * 2.0) / 100)),
-        ];
-        this.coreLong.tpStageQuantities = [
-          Number((quantity * 0.35).toFixed(rule.qtyDecimals)),
-          Number((quantity * 0.40).toFixed(rule.qtyDecimals)),
-          Number((quantity * 0.25).toFixed(rule.qtyDecimals)),
-        ];
+        const tp1Price = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + effectiveTpPercent / 100));
+        const tp2Price = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + (effectiveTpPercent * 2.0) / 100));
+        const tp3Price = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + (effectiveTpPercent * 3.0) / 100));
+        this.coreLong.takeProfitPrice = tp1Price;
+        this.coreLong.tpStagePrices = [tp1Price, tp2Price, tp3Price];
+        const q1 = Number((quantity * 0.35).toFixed(rule.qtyDecimals));
+        const q2 = Number((quantity * 0.40).toFixed(rule.qtyDecimals));
+        const q3 = Number(Math.max(0, quantity - q1 - q2).toFixed(rule.qtyDecimals));
+        this.coreLong.tpStageQuantities = [q1, q2, q3];
       }
 
       const tp1Pct = Math.min(2.0, effectiveTpPercent * 1.0);
@@ -1797,27 +1795,25 @@ export class HedgePositionLedger {
       this.coreLong.lastSyncedSlPrice = this.coreLong.stopLossPrice;
 
       if (resolvedVegamLevels) {
-        this.coreLong.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price);
-        this.coreLong.tpStagePrices = [
-          SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price),
-          SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp2Price),
-        ];
-        this.coreLong.tpStageQuantities = [
-          resolvedVegamLevels.tp1Qty,
-          resolvedVegamLevels.tp2Qty,
-          resolvedVegamLevels.tp3Qty,
-        ];
+        const tp1Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price);
+        const tp2Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp2Price);
+        const tp3Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp3Price ?? resolvedVegamLevels.tp2Price);
+        this.coreLong.takeProfitPrice = tp1Price;
+        this.coreLong.tpStagePrices = [tp1Price, tp2Price, tp3Price];
+        const q1 = Number(resolvedVegamLevels.tp1Qty.toFixed(rule.qtyDecimals));
+        const q2 = Number(resolvedVegamLevels.tp2Qty.toFixed(rule.qtyDecimals));
+        const q3 = Number(Math.max(0, newQty - q1 - q2).toFixed(rule.qtyDecimals));
+        this.coreLong.tpStageQuantities = [q1, q2, q3];
       } else {
-        this.coreLong.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + effectiveTpPercent / 100));
-        this.coreLong.tpStagePrices = [
-          this.coreLong.takeProfitPrice,
-          SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + (effectiveTpPercent * 2.0) / 100)),
-        ];
-        this.coreLong.tpStageQuantities = [
-          Number((newQty * 0.35).toFixed(rule.qtyDecimals)),
-          Number((newQty * 0.40).toFixed(rule.qtyDecimals)),
-          Number((newQty * 0.25).toFixed(rule.qtyDecimals)),
-        ];
+        const tp1Price = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + effectiveTpPercent / 100));
+        const tp2Price = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + (effectiveTpPercent * 2.0) / 100));
+        const tp3Price = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 + (effectiveTpPercent * 3.0) / 100));
+        this.coreLong.takeProfitPrice = tp1Price;
+        this.coreLong.tpStagePrices = [tp1Price, tp2Price, tp3Price];
+        const q1 = Number((newQty * 0.35).toFixed(rule.qtyDecimals));
+        const q2 = Number((newQty * 0.40).toFixed(rule.qtyDecimals));
+        const q3 = Number(Math.max(0, newQty - q1 - q2).toFixed(rule.qtyDecimals));
+        this.coreLong.tpStageQuantities = [q1, q2, q3];
       }
 
       const tp1Pct = Math.min(2.0, effectiveTpPercent * 1.0);
@@ -1867,27 +1863,25 @@ export class HedgePositionLedger {
     this.coreLong.lastSyncedSlPrice = this.coreLong.stopLossPrice;
 
     if (resolvedVegamLevels) {
-      this.coreLong.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price);
-      this.coreLong.tpStagePrices = [
-        SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price),
-        SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp2Price),
-      ];
-      this.coreLong.tpStageQuantities = [
-        resolvedVegamLevels.tp1Qty,
-        resolvedVegamLevels.tp2Qty,
-        resolvedVegamLevels.tp3Qty,
-      ];
+      const tp1Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price);
+      const tp2Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp2Price);
+      const tp3Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp3Price ?? resolvedVegamLevels.tp2Price);
+      this.coreLong.takeProfitPrice = tp1Price;
+      this.coreLong.tpStagePrices = [tp1Price, tp2Price, tp3Price];
+      const q1 = Number(resolvedVegamLevels.tp1Qty.toFixed(rule.qtyDecimals));
+      const q2 = Number(resolvedVegamLevels.tp2Qty.toFixed(rule.qtyDecimals));
+      const q3 = Number(Math.max(0, quantity - q1 - q2).toFixed(rule.qtyDecimals));
+      this.coreLong.tpStageQuantities = [q1, q2, q3];
     } else {
-      this.coreLong.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + effectiveTpPercent / 100));
-      this.coreLong.tpStagePrices = [
-        this.coreLong.takeProfitPrice,
-        SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + (effectiveTpPercent * 2.0) / 100)),
-      ];
-      this.coreLong.tpStageQuantities = [
-        Number((quantity * 0.35).toFixed(rule.qtyDecimals)),
-        Number((quantity * 0.40).toFixed(rule.qtyDecimals)),
-        Number((quantity * 0.25).toFixed(rule.qtyDecimals)),
-      ];
+      const tp1Price = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + effectiveTpPercent / 100));
+      const tp2Price = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + (effectiveTpPercent * 2.0) / 100));
+      const tp3Price = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 + (effectiveTpPercent * 3.0) / 100));
+      this.coreLong.takeProfitPrice = tp1Price;
+      this.coreLong.tpStagePrices = [tp1Price, tp2Price, tp3Price];
+      const q1 = Number((quantity * 0.35).toFixed(rule.qtyDecimals));
+      const q2 = Number((quantity * 0.40).toFixed(rule.qtyDecimals));
+      const q3 = Number(Math.max(0, quantity - q1 - q2).toFixed(rule.qtyDecimals));
+      this.coreLong.tpStageQuantities = [q1, q2, q3];
     }
 
     // 5-Stage TP Micro-Ladder Targets: 0.25%, 0.50%, 1.00%, 1.50%, 2.50% price moves (tpPercent * 1.0, 2.0, 4.0, 6.0, 10.0)
@@ -1930,6 +1924,8 @@ export class HedgePositionLedger {
     this.coreLong.reversalTickCounter = 0;
     this.coreLong.reversalStartTs = 0;
     this.coreLong.tpPrices = [];
+    this.coreLong.icAtEntry = 0;
+    this.coreLong.cadmeState = 0;
 
     for (let i = 0; i < this.maxShortSlots; i++) {
       const slot = this.shortSlots[i];
@@ -1951,14 +1947,43 @@ export class HedgePositionLedger {
       slot.reversalTickCounter = 0;
       slot.reversalStartTs = 0;
       slot.tpPrices = [];
+      slot.icAtEntry = 0;
+      slot.cadmeState = 0;
     }
     this.shortAggregatedStopLossOrderId = 0;
     this.shortAggregatedLastSyncedSlPrice = 0;
     this.legacyLedger.reset();
+    this.syncVegamCadmeState();
+  }
+
+  /**
+   * Synchronizes SAB Slot 158 (VEGAM_CADME_STATE) with the maximum CADME state
+   * across all actively occupied position slots for this asset.
+   * Prevents secondary or inactive slots from clobbering active alert states.
+   */
+  public syncVegamCadmeState(): void {
+    if (!this.marketDataClient || typeof this.assetIndex !== "number") return;
+    let maxState: 0 | 1 | 2 = 0;
+    if (this.coreLong.isOccupied && this.coreLong.quantity > 0) {
+      maxState = Math.max(maxState, this.coreLong.cadmeState ?? 0) as 0 | 1 | 2;
+    }
+    for (let i = 0; i < this.maxShortSlots; i++) {
+      const slot = this.shortSlots[i];
+      if (slot && slot.isOccupied && slot.quantity > 0) {
+        maxState = Math.max(maxState, slot.cadmeState ?? 0) as 0 | 1 | 2;
+      }
+    }
+    this.marketDataClient.setVegamCadmeState(maxState, this.assetIndex);
   }
 
   public syncStartupPositions(
-    recoveredPositions: { side: "LONG" | "SHORT"; quantity: number; entryPrice: number; originalOpenTime?: number }[],
+    recoveredPositions: {
+      side: "LONG" | "SHORT";
+      quantity: number;
+      entryPrice: number;
+      originalOpenTime?: number;
+      vegamLevels?: VegamTpLevels;
+    }[],
     longTpPct: number,
     longSlPct: number,
     shortTpPct: number,
@@ -1981,7 +2006,7 @@ export class HedgePositionLedger {
       if (pos.quantity <= 0 || pos.entryPrice <= 0) continue;
 
       if (pos.side === "LONG") {
-        this.occupyCoreLong(pos.quantity, pos.entryPrice, longTpPct, longSlPct, true);
+        this.occupyCoreLong(pos.quantity, pos.entryPrice, pos.vegamLevels ?? longTpPct, longSlPct, true, undefined, pos.vegamLevels);
         // Restore original open timestamp for CAD-DTLM clock continuity across restarts
         if (pos.originalOpenTime && pos.originalOpenTime > 0) {
           this.coreLong.originalOpenTime = pos.originalOpenTime;
@@ -1998,7 +2023,7 @@ export class HedgePositionLedger {
       } else if (pos.side === "SHORT") {
         const slotIdx = this.getAvailableShortSlotIndex();
         if (slotIdx >= 0) {
-          this.occupyShortSlot(slotIdx, pos.quantity, pos.entryPrice, shortTpPct, shortSlPct, true);
+          this.occupyShortSlot(slotIdx, pos.quantity, pos.entryPrice, pos.vegamLevels ?? shortTpPct, shortSlPct, true, undefined, pos.vegamLevels);
           // Restore original open timestamp for CAD-DTLM clock continuity across restarts
           if (pos.originalOpenTime && pos.originalOpenTime > 0) {
             this.shortSlots[slotIdx].originalOpenTime = pos.originalOpenTime;
@@ -2076,9 +2101,7 @@ export class HedgePositionLedger {
     this.coreLong.tpPrices = [];
     this.coreLong.icAtEntry = 0;
     this.coreLong.cadmeState = 0;
-    if (this.marketDataClient) {
-      this.marketDataClient.setVegamCadmeState(0, this.assetIndex);
-    }
+    this.syncVegamCadmeState();
   }
 
   public occupyShortSlot(
@@ -2144,27 +2167,25 @@ export class HedgePositionLedger {
       slot.reversalStartTs = 0;
 
       if (resolvedVegamLevels) {
-        slot.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price);
-        slot.tpStagePrices = [
-          SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price),
-          SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp2Price),
-        ];
-        slot.tpStageQuantities = [
-          resolvedVegamLevels.tp1Qty,
-          resolvedVegamLevels.tp2Qty,
-          resolvedVegamLevels.tp3Qty,
-        ];
+        const tp1Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price);
+        const tp2Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp2Price);
+        const tp3Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp3Price ?? resolvedVegamLevels.tp2Price);
+        slot.takeProfitPrice = tp1Price;
+        slot.tpStagePrices = [tp1Price, tp2Price, tp3Price];
+        const q1 = Number(resolvedVegamLevels.tp1Qty.toFixed(rule.qtyDecimals));
+        const q2 = Number(resolvedVegamLevels.tp2Qty.toFixed(rule.qtyDecimals));
+        const q3 = Number(Math.max(0, quantity - q1 - q2).toFixed(rule.qtyDecimals));
+        slot.tpStageQuantities = [q1, q2, q3];
       } else {
-        slot.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - effectiveTpPercent / 100));
-        slot.tpStagePrices = [
-          slot.takeProfitPrice,
-          SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - (effectiveTpPercent * 2.0) / 100)),
-        ];
-        slot.tpStageQuantities = [
-          Number((quantity * 0.35).toFixed(rule.qtyDecimals)),
-          Number((quantity * 0.40).toFixed(rule.qtyDecimals)),
-          Number((quantity * 0.25).toFixed(rule.qtyDecimals)),
-        ];
+        const tp1Price = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - effectiveTpPercent / 100));
+        const tp2Price = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - (effectiveTpPercent * 2.0) / 100));
+        const tp3Price = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - (effectiveTpPercent * 3.0) / 100));
+        slot.takeProfitPrice = tp1Price;
+        slot.tpStagePrices = [tp1Price, tp2Price, tp3Price];
+        const q1 = Number((quantity * 0.35).toFixed(rule.qtyDecimals));
+        const q2 = Number((quantity * 0.40).toFixed(rule.qtyDecimals));
+        const q3 = Number(Math.max(0, quantity - q1 - q2).toFixed(rule.qtyDecimals));
+        slot.tpStageQuantities = [q1, q2, q3];
       }
 
       const tp1Pct = Math.min(2.0, effectiveTpPercent * 1.0);
@@ -2212,27 +2233,25 @@ export class HedgePositionLedger {
       slot.lastSyncedSlPrice = slot.stopLossPrice;
 
       if (resolvedVegamLevels) {
-        slot.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price);
-        slot.tpStagePrices = [
-          SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price),
-          SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp2Price),
-        ];
-        slot.tpStageQuantities = [
-          resolvedVegamLevels.tp1Qty,
-          resolvedVegamLevels.tp2Qty,
-          resolvedVegamLevels.tp3Qty,
-        ];
+        const tp1Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price);
+        const tp2Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp2Price);
+        const tp3Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp3Price ?? resolvedVegamLevels.tp2Price);
+        slot.takeProfitPrice = tp1Price;
+        slot.tpStagePrices = [tp1Price, tp2Price, tp3Price];
+        const q1 = Number(resolvedVegamLevels.tp1Qty.toFixed(rule.qtyDecimals));
+        const q2 = Number(resolvedVegamLevels.tp2Qty.toFixed(rule.qtyDecimals));
+        const q3 = Number(Math.max(0, newQty - q1 - q2).toFixed(rule.qtyDecimals));
+        slot.tpStageQuantities = [q1, q2, q3];
       } else {
-        slot.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - effectiveTpPercent / 100));
-        slot.tpStagePrices = [
-          slot.takeProfitPrice,
-          SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - (effectiveTpPercent * 2.0) / 100)),
-        ];
-        slot.tpStageQuantities = [
-          Number((newQty * 0.35).toFixed(rule.qtyDecimals)),
-          Number((newQty * 0.40).toFixed(rule.qtyDecimals)),
-          Number((newQty * 0.25).toFixed(rule.qtyDecimals)),
-        ];
+        const tp1Price = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - effectiveTpPercent / 100));
+        const tp2Price = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - (effectiveTpPercent * 2.0) / 100));
+        const tp3Price = SymbolPrecisionRegistry.formatPrice(this.symbol, newAvgEntry * (1 - (effectiveTpPercent * 3.0) / 100));
+        slot.takeProfitPrice = tp1Price;
+        slot.tpStagePrices = [tp1Price, tp2Price, tp3Price];
+        const q1 = Number((newQty * 0.35).toFixed(rule.qtyDecimals));
+        const q2 = Number((newQty * 0.40).toFixed(rule.qtyDecimals));
+        const q3 = Number(Math.max(0, newQty - q1 - q2).toFixed(rule.qtyDecimals));
+        slot.tpStageQuantities = [q1, q2, q3];
       }
 
       const tp1Pct = Math.min(2.0, effectiveTpPercent * 1.0);
@@ -2282,27 +2301,25 @@ export class HedgePositionLedger {
     slot.lastSyncedSlPrice = slot.stopLossPrice;
 
     if (resolvedVegamLevels) {
-      slot.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price);
-      slot.tpStagePrices = [
-        SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price),
-        SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp2Price),
-      ];
-      slot.tpStageQuantities = [
-        resolvedVegamLevels.tp1Qty,
-        resolvedVegamLevels.tp2Qty,
-        resolvedVegamLevels.tp3Qty,
-      ];
+      const tp1Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp1Price);
+      const tp2Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp2Price);
+      const tp3Price = SymbolPrecisionRegistry.formatPrice(this.symbol, resolvedVegamLevels.tp3Price ?? resolvedVegamLevels.tp2Price);
+      slot.takeProfitPrice = tp1Price;
+      slot.tpStagePrices = [tp1Price, tp2Price, tp3Price];
+      const q1 = Number(resolvedVegamLevels.tp1Qty.toFixed(rule.qtyDecimals));
+      const q2 = Number(resolvedVegamLevels.tp2Qty.toFixed(rule.qtyDecimals));
+      const q3 = Number(Math.max(0, quantity - q1 - q2).toFixed(rule.qtyDecimals));
+      slot.tpStageQuantities = [q1, q2, q3];
     } else {
-      slot.takeProfitPrice = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - effectiveTpPercent / 100));
-      slot.tpStagePrices = [
-        slot.takeProfitPrice,
-        SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - (effectiveTpPercent * 2.0) / 100)),
-      ];
-      slot.tpStageQuantities = [
-        Number((quantity * 0.35).toFixed(rule.qtyDecimals)),
-        Number((quantity * 0.40).toFixed(rule.qtyDecimals)),
-        Number((quantity * 0.25).toFixed(rule.qtyDecimals)),
-      ];
+      const tp1Price = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - effectiveTpPercent / 100));
+      const tp2Price = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - (effectiveTpPercent * 2.0) / 100));
+      const tp3Price = SymbolPrecisionRegistry.formatPrice(this.symbol, entryPrice * (1 - (effectiveTpPercent * 3.0) / 100));
+      slot.takeProfitPrice = tp1Price;
+      slot.tpStagePrices = [tp1Price, tp2Price, tp3Price];
+      const q1 = Number((quantity * 0.35).toFixed(rule.qtyDecimals));
+      const q2 = Number((quantity * 0.40).toFixed(rule.qtyDecimals));
+      const q3 = Number(Math.max(0, quantity - q1 - q2).toFixed(rule.qtyDecimals));
+      slot.tpStageQuantities = [q1, q2, q3];
     }
 
     const tp1Pct = Math.min(2.0, effectiveTpPercent * 1.0);
@@ -2365,9 +2382,7 @@ export class HedgePositionLedger {
     slot.tpPrices = [];
     slot.icAtEntry = 0;
     slot.cadmeState = 0;
-    if (this.marketDataClient) {
-      this.marketDataClient.setVegamCadmeState(0, this.assetIndex);
-    }
+    this.syncVegamCadmeState();
 
     let hasRemainingOccupied = false;
     for (let i = 0; i < this.maxShortSlots; i++) {
@@ -3116,6 +3131,7 @@ export class HedgePositionLedger {
       );
     }
 
+    this.syncVegamCadmeState();
     return this.sotaTriggers;
   }
 
@@ -3350,21 +3366,22 @@ export class HedgePositionLedger {
     // Dual Confirmation Trigger Gate:
     // 1. Modeled Decay: alphaDecay < IC_entry * 0.60
     // 2. Live Market Confirmation: liveIc < IC_entry * 0.75
+    // State Latching: once cadmeState === 2, it NEVER demotes back to 1 or 0 while occupied.
     // -------------------------------------------------------------------------
     if (slot.icAtEntry && slot.icAtEntry > 0) {
-      const safeHalfLife = typeof halfLifeSec === "number" && halfLifeSec > 0 ? halfLifeSec : 90.0;
-      const alphaDecay = slot.icAtEntry * Math.exp(-Math.LN2 * durationSec / safeHalfLife);
-      const liveIc = typeof liveIcOverride === "number" && Number.isFinite(liveIcOverride)
-        ? liveIcOverride
-        : (this.marketDataClient ? this.marketDataClient.getRollingIC(this.assetIndex) : 0);
+      if (slot.cadmeState === 2) {
+        // Latched: state remains 2 until position is closed/released.
+        // Do not re-trigger CADME exit, and do NOT return early so stop-loss protection remains active.
+      } else {
+        const safeHalfLife = typeof halfLifeSec === "number" && halfLifeSec > 0 ? halfLifeSec : 90.0;
+        const alphaDecay = slot.icAtEntry * Math.exp(-Math.LN2 * durationSec / safeHalfLife);
+        const liveIc = typeof liveIcOverride === "number" && Number.isFinite(liveIcOverride)
+          ? liveIcOverride
+          : (this.marketDataClient ? this.marketDataClient.getRollingIC(this.assetIndex) : 0);
 
-      if (alphaDecay < slot.icAtEntry * 0.60) {
-        if (liveIc < slot.icAtEntry * 0.75) {
-          if (slot.cadmeState !== 2) {
+        if (alphaDecay < slot.icAtEntry * 0.60) {
+          if (liveIc < slot.icAtEntry * 0.75) {
             slot.cadmeState = 2;
-            if (this.marketDataClient) {
-              this.marketDataClient.setVegamCadmeState(2, this.assetIndex);
-            }
             this.pushSotaTrigger(
               slot.slotId,
               slot.side,
@@ -3377,18 +3394,15 @@ export class HedgePositionLedger {
               slot.activeStopLossOrderId,
               "PASSIVE_MAKER"
             );
+          } else {
+            // Modeled decay breached 0.60, but live market confirmation has not confirmed yet -> MONITORING
+            slot.cadmeState = 1;
           }
-          return;
-        } else {
+        } else if (alphaDecay < slot.icAtEntry * 0.75) {
+          // Pre-warning tier: 0.60 * icAtEntry <= alphaDecay < 0.75 * icAtEntry -> MONITORING
           slot.cadmeState = 1;
-          if (this.marketDataClient) {
-            this.marketDataClient.setVegamCadmeState(1, this.assetIndex);
-          }
-        }
-      } else {
-        slot.cadmeState = 0;
-        if (this.marketDataClient) {
-          this.marketDataClient.setVegamCadmeState(0, this.assetIndex);
+        } else {
+          slot.cadmeState = 0;
         }
       }
     }

@@ -18,7 +18,8 @@ import {
   computeObiWeightedTrailDistance,
   computeVegamTpLevels,
 } from "../strategy/vegamTpLadderEngine";
-import { PositionSlot } from "../strategy/positionLedger";
+import { HedgePositionLedger, PositionSlot } from "../strategy/positionLedger";
+import { MarketDataClient } from "../marketDataClient";
 
 console.log("================================================================================");
 console.log("   BATBOT_V11 SOTA QA TEST SUITE: VEGAM TP LADDER ENGINE (PHASE 3)");
@@ -427,9 +428,88 @@ assert(
 );
 
 // =========================================================================================
-// STAGE 6: Zero Heap Allocation Invariant & Sub-Microsecond Hot-Path Benchmark
+// STAGE 6: Phase 4 & 5 Forensic Audit Remediation & Parity Checks
 // =========================================================================================
-console.log("\n--- STAGE 6: Zero-GC State Machine & Latency Benchmark ---");
+console.log("\n--- STAGE 6: Phase 4 & 5 Forensic Audit Remediation & Parity Checks ---");
+
+// Test 6A: Configurable TP3 Multipliers (Defect 9)
+const customConfig = {
+  ...DEFAULT_VEGAM_CONFIG,
+  tp3AtrMultiplier: 5.50,
+  tp3RpmMultiplier: 4.50,
+};
+const customLevels = computeVegamTpLevels(100.0, 0.010, 2.0, "LONG", customConfig);
+assert(
+  Math.abs((customLevels.tp3Offset ?? 0) - 0.055) < 1e-6,
+  `Custom tp3AtrMultiplier (5.50) scales TP3 offset to 0.055: got ${customLevels.tp3Offset}`
+);
+const defaultLevels = computeVegamTpLevels(100.0, 0.010, 2.0, "LONG");
+assert(
+  Math.abs((defaultLevels.tp3Offset ?? 0) - 0.040) < 1e-6,
+  `Default tp3AtrMultiplier (4.00) scales TP3 offset to 0.040: got ${defaultLevels.tp3Offset}`
+);
+
+// Test 6B: Live SAB Slot 156 fallback when gkAtrComposite is omitted (Defect 5)
+const testSab = new SharedArrayBuffer(10 * 256 * 8);
+const testMdClient = new MarketDataClient(testSab, 10, 256);
+testMdClient.setVegamGkAtrComposite(0.0250, 0); // Set distinctive 2.50% ATR in Slot 156
+const auditLedger = new HedgePositionLedger("BTCUSDT", 3, testMdClient, 0);
+
+// Occupy slot first so generateBatchTpOrderIntents finds it
+auditLedger.occupyCoreLong(0.10, 50000.0, 1.0, 1.0);
+const batchIntents = auditLedger.generateBatchTpOrderIntents("CORE_LONG", 50000.0, 0.10, "LONG"); // omitted gkAtrComposite!
+assert(batchIntents.length > 0, "generateBatchTpOrderIntents generated intents with omitted gkAtrComposite");
+const tp1IntentPrice = Number(batchIntents[0].price);
+assert(
+  Math.abs(tp1IntentPrice - 50000.0 * (1 + 0.0250)) < 1e-2,
+  `Omitting gkAtrComposite correctly falls through to reading live SAB Slot 156 (0.0250): expected $51250, got $${tp1IntentPrice}`
+);
+
+const aggIntents = auditLedger.generateAggregatedBatchTpIntents("LONG", 0.10, 50000.0); // omitted gkAtrComposite!
+assert(aggIntents.length > 0, "generateAggregatedBatchTpIntents generated intents with omitted gkAtrComposite");
+const aggTp1Price = Number(aggIntents[0].price);
+assert(
+  Math.abs(aggTp1Price - 50000.0 * (1 + 0.0250)) < 1e-2,
+  `Omitting gkAtrComposite in aggregated intents reads live SAB Slot 156 (0.0250): expected $51250, got $${aggTp1Price}`
+);
+
+// Test 6C: 3-Element tpStagePrices Array Parity (Defect 6)
+const coreLongSlot = auditLedger.getCoreLong();
+assert(
+  coreLongSlot.tpStagePrices?.length === 3,
+  `Core Long slot.tpStagePrices has exact 3-element parity: got length ${coreLongSlot.tpStagePrices?.length}`
+);
+
+// Clear slots to satisfy unidirectional mutex before occupying short slot
+auditLedger.clearSlots();
+auditLedger.occupyShortSlot(0, 0.05, 50000.0, 1.0, 1.0);
+const shortSlot0 = auditLedger.getShortSlots()[0];
+assert(
+  shortSlot0.tpStagePrices?.length === 3,
+  `Short slot.tpStagePrices has exact 3-element parity: got length ${shortSlot0.tpStagePrices?.length}`
+);
+
+// Test 6D: Strict Lot Step Precision Quantization & Remainder Reconciliation (Defect 7)
+auditLedger.clearSlots();
+auditLedger.occupyCoreLong(0.123, 50000.0, 1.0, 1.0);
+const quantizedQuantities = auditLedger.getCoreLong().tpStageQuantities;
+assert(
+  quantizedQuantities !== undefined && quantizedQuantities.length === 3,
+  "tpStageQuantities populated with 3 quantized elements"
+);
+if (quantizedQuantities) {
+  const [q1, q2, q3] = quantizedQuantities;
+  const sumQty = Number((q1 + q2 + q3).toFixed(6));
+  assert(
+    Math.abs(sumQty - 0.123) < 1e-9,
+    `Quantized TP stage quantities reconcile exactly to total position size (0.123): got [${q1}, ${q2}, ${q3}] sum=${sumQty}`
+  );
+}
+
+// =========================================================================================
+// STAGE 7: Zero Heap Allocation Invariant & Sub-Microsecond Hot-Path Benchmark
+// =========================================================================================
+console.log("\n--- STAGE 7: Zero-GC State Machine & Latency Benchmark ---");
 
 const testSlot: PositionSlot = {
   slotId: "BENCH_SLOT",
