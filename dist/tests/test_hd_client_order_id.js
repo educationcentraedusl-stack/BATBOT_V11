@@ -107,7 +107,7 @@ assert(collisions === 0, `Zero collisions detected across 4,096 rapid sequential
 // -----------------------------------------------------------------------------------------
 console.log("\n[TEST 4] Testing HedgePositionLedger.generateBatchTpOrderIntents() ClientOrderId injection...");
 const ledger = new positionLedger_1.HedgePositionLedger("XRPUSDT");
-const tpIntents = ledger.generateBatchTpOrderIntents("CORE_LONG", 2.50, 1000, "LONG");
+const tpIntents = ledger.generateBatchTpOrderIntents("CORE_LONG", 2.50, 1000, "LONG", 0.00906);
 assert(tpIntents.length > 0, `Generated ${tpIntents.length} TP order intents`);
 let allTpCidsValid = true;
 for (let i = 0; i < tpIntents.length; i++) {

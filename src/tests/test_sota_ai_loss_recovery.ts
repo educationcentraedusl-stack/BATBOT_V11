@@ -210,7 +210,7 @@ const hedgeLedger = new HedgePositionLedger("BTCUSDT", 3);
 runTest("Stage 1 TP dynamically clears round-trip fees + MIN_NET_ALPHA", () => {
   const entryPrice = 60000.0;
   const quantity = 0.005;
-  const tpOrders = hedgeLedger.generateBatchTpOrderIntents("CORE_LONG", entryPrice, quantity, "LONG");
+  const tpOrders = hedgeLedger.generateBatchTpOrderIntents("CORE_LONG", entryPrice, quantity, "LONG", 0.00906);
 
   if (tpOrders.length < 2) {
     throw new Error(`Expected at least 2 TP stage orders! Got ${tpOrders.length}`);

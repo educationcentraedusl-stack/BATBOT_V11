@@ -3,6 +3,7 @@ import { RiskGuard, MultiAssetRiskGuard, OrderIntent, RiskCheckResult } from "./
 import { BinanceExecutionClient, BinanceOrderResponse, BinanceOrderParams, BinancePositionRisk, BinanceUserTrade } from "../execution/binance";
 import { ClientOrderIdGenerator } from "../execution/clientOrderIdGenerator";
 import { PositionLedger, HedgePositionLedger, MultiAssetPositionLedger, PositionSlot, SlotExitTrigger, ActiveTradeSlot } from "./positionLedger";
+import { computeVegamTpLevels, DEFAULT_VEGAM_CONFIG } from "./vegamTpLadderEngine";
 import { DynamicRiskEngine, DynamicMicrostructureMetrics, DynamicRiskProfile } from "./dynamicRiskEngine";
 import { MicrostructureHazardEngine } from "./microstructureHazardEngine";
 import { VolatilitySurfaceEngine } from "./volatilitySurfaceEngine";
@@ -989,10 +990,23 @@ export class StrategyEngine {
     const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
     const baseSlPercent = posSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
     const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.50, volEstimate * 4.50 * 100));
-    const dynamicTpPercent = Math.max(dynamicSlPercent * (this.config.minPayoffRatio ?? 0.85), dynamicSlPercent * 2.50);
+
+    // VEGAM Phase 5: Root Fix for DEFECT-PM-01 (Eradicate SL * 2.50 unreachable TP)
+    // Anchor TP ladder to GK_ATR_composite surface read from SAB Slot 156
+    const gkAtrComposite = this.client.getVegamGkAtrComposite(this.assetIndex) || volEstimate;
+    const effectiveLev = this.config.leverageMultiplier ?? 2.0;
+    const vegamLevels = computeVegamTpLevels(
+      execPx,
+      gkAtrComposite,
+      effectiveLev,
+      posSide,
+      DEFAULT_VEGAM_CONFIG,
+      execQty
+    );
+    const dynamicTpPercent = vegamLevels.tp2Offset * 100;
 
     if (posSide === "LONG") {
-      this.hedgeLedger.occupyCoreLong(execQty, execPx, dynamicTpPercent, dynamicSlPercent, false);
+      this.hedgeLedger.occupyCoreLong(execQty, execPx, dynamicTpPercent, dynamicSlPercent, false, undefined, vegamLevels);
       const aggLong = this.hedgeLedger.getAggregatedSideSummary("LONG");
 
       // Atomic TP Replacement: Cancel previous resting TP limit orders to prevent stale sub-lots
@@ -1009,7 +1023,7 @@ export class StrategyEngine {
     } else if (posSide === "SHORT") {
       const targetIdx = slotIndex !== undefined ? slotIndex : (this.hedgeLedger.getAvailableShortSlotIndex() >= 0 ? this.hedgeLedger.getAvailableShortSlotIndex() : 0);
       const targetSlotId = `SHORT_SLOT_${targetIdx}`;
-      this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, dynamicTpPercent, dynamicSlPercent, false);
+      this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, dynamicTpPercent, dynamicSlPercent, false, undefined, vegamLevels);
       const aggShort = this.hedgeLedger.getAggregatedSideSummary("SHORT");
 
       // Atomic TP Replacement: Cancel all existing resting TP limit orders across short slots
@@ -1549,10 +1563,22 @@ export class StrategyEngine {
           const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
           const baseSlPercent = targetPosSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
           const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.50, volEstimate * 4.50 * 100));
-          const dynamicTpPercent = Math.max(dynamicSlPercent * (this.config.minPayoffRatio ?? 0.85), dynamicSlPercent * 2.50);
+
+          // VEGAM Phase 5: Root Fix for DEFECT-PM-01 (Eradicate SL * 2.50 unreachable TP)
+          const gkAtrComposite = this.client.getVegamGkAtrComposite(this.assetIndex) || volEstimate;
+          const effectiveLev = this.config.leverageMultiplier ?? 2.0;
+          const vegamLevels = computeVegamTpLevels(
+            execPx,
+            gkAtrComposite,
+            effectiveLev,
+            targetPosSide,
+            DEFAULT_VEGAM_CONFIG,
+            execQty
+          );
+          const dynamicTpPercent = vegamLevels.tp2Offset * 100;
 
           if (targetPosSide === "LONG") {
-            this.hedgeLedger.occupyCoreLong(execQty, execPx, dynamicTpPercent, dynamicSlPercent);
+            this.hedgeLedger.occupyCoreLong(execQty, execPx, dynamicTpPercent, dynamicSlPercent, false, undefined, vegamLevels);
             const aggLong = this.hedgeLedger.getAggregatedSideSummary("LONG");
             this.dispatchBatchPostOnlyTpOrders("CORE_LONG", execPx, execQty, "LONG").catch((err) => {
               console.error(`[BinanceExecution][UNTRACKED_TP_DISPATCH_ERROR] [${this.config.symbol}:CORE_LONG] ${err?.message || String(err)}`);
@@ -1564,7 +1590,7 @@ export class StrategyEngine {
             const slotIdx = this.hedgeLedger.getAvailableShortSlotIndex();
             const targetIdx = slotIdx >= 0 ? slotIdx : 0;
             const slotId = `SHORT_SLOT_${targetIdx}`;
-            this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, dynamicTpPercent, dynamicSlPercent);
+            this.hedgeLedger.occupyShortSlot(targetIdx, execQty, execPx, dynamicTpPercent, dynamicSlPercent, false, undefined, vegamLevels);
             const aggShort = this.hedgeLedger.getAggregatedSideSummary("SHORT");
             this.dispatchBatchPostOnlyTpOrders(slotId, execPx, execQty, "SHORT").catch((err) => {
               console.error(`[BinanceExecution][UNTRACKED_TP_DISPATCH_ERROR] [${this.config.symbol}:${slotId}] ${err?.message || String(err)}`);
@@ -1702,7 +1728,8 @@ export class StrategyEngine {
   ): Promise<void> {
     let intents: BinanceOrderParams[] = [];
     try {
-      intents = this.hedgeLedger.generateAggregatedBatchTpIntents(side, aggregatedQty, vwapEntryPrice, slotId);
+      const gkAtr = this.client.getVegamGkAtrComposite(this.assetIndex) || 0.00906;
+      intents = this.hedgeLedger.generateAggregatedBatchTpIntents(side, aggregatedQty, vwapEntryPrice, slotId, gkAtr);
       if (intents.length === 0) return;
 
       console.log(`[MAKER_TP_ENGINE][DISPATCHING_AGGREGATED] [${this.config.symbol}:${slotId}] Submitting ${intents.length} POST_ONLY limit TP orders for aggregated size ${aggregatedQty} @ VWAP $${vwapEntryPrice}...`);
@@ -1762,7 +1789,8 @@ export class StrategyEngine {
   ): Promise<void> {
     let intents: BinanceOrderParams[] = [];
     try {
-      intents = this.hedgeLedger.generateBatchTpOrderIntents(slotId, entryPrice, quantity, side);
+      const gkAtr = this.client.getVegamGkAtrComposite(this.assetIndex) || 0.00906;
+      intents = this.hedgeLedger.generateBatchTpOrderIntents(slotId, entryPrice, quantity, side, gkAtr);
       if (intents.length === 0) return;
 
       console.log(`[MAKER_TP_ENGINE][DISPATCHING] [${this.config.symbol}:${slotId}] Submitting ${intents.length} POST_ONLY limit TP orders via batchOrders...`);
@@ -3771,10 +3799,23 @@ export class StrategyEngine {
                 const volEstimate = (Number.isFinite(garmanKlassRV) && garmanKlassRV > 0.000001) ? Math.sqrt(garmanKlassRV) : 0.005;
                 const baseSlPercent = targetPosSide === "LONG" ? this.config.longStopLossPercent : this.config.shortStopLossPercent;
                 const dynamicSlPercent = Math.max(baseSlPercent, Math.max(1.50, volEstimate * 4.50 * 100));
-                const dynamicTpPercent = Math.max(dynamicSlPercent * (this.config.minPayoffRatio ?? 0.85), dynamicSlPercent * 2.50);
+
+                // VEGAM Phase 5: Root Fix for DEFECT-PM-01 (Eradicate SL * 2.50 unreachable TP)
+                const gkAtrComposite = this.client.getVegamGkAtrComposite(this.assetIndex) || volEstimate;
+                const effectiveLev = this.config.leverageMultiplier ?? 2.0;
+                const safeSide: "LONG" | "SHORT" = targetPosSide === "SHORT" ? "SHORT" : "LONG";
+                const vegamLevels = computeVegamTpLevels(
+                  execPx,
+                  gkAtrComposite,
+                  effectiveLev,
+                  safeSide,
+                  DEFAULT_VEGAM_CONFIG,
+                  finalQuantity
+                );
+                const dynamicTpPercent = vegamLevels.tp2Offset * 100;
 
                 if (targetPosSide === "LONG") {
-                  this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, dynamicTpPercent, dynamicSlPercent, false);
+                  this.hedgeLedger.occupyCoreLong(finalQuantity, execPx, dynamicTpPercent, dynamicSlPercent, false, undefined, vegamLevels);
                   const aggLong = this.hedgeLedger.getAggregatedSideSummary("LONG");
 
                   // Atomic TP Replacement: Cancel previous resting TP limit orders to prevent stale sub-lots
@@ -3790,7 +3831,7 @@ export class StrategyEngine {
                   });
                 } else if (targetPosSide === "SHORT" && targetSlotIndex !== undefined) {
                   const slotId = `SHORT_SLOT_${targetSlotIndex}`;
-                  this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, dynamicTpPercent, dynamicSlPercent, false);
+                  this.hedgeLedger.occupyShortSlot(targetSlotIndex, finalQuantity, execPx, dynamicTpPercent, dynamicSlPercent, false, undefined, vegamLevels);
                   const aggShort = this.hedgeLedger.getAggregatedSideSummary("SHORT");
 
                   // Atomic TP Replacement: Cancel all existing resting TP limit orders across short slots

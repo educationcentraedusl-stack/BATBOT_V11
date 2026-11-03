@@ -121,7 +121,7 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
   console.log("\n[STAGE 2] Testing Pyramiding Fill (0.0008 -> 0.0016) & Atomic TP Cancel-Replace...");
   
   // Dispatch initial TP ladder for 0.0008
-  const initialTpIntents = ledger.generateAggregatedBatchTpIntents("SHORT", agg1.totalQuantity, agg1.vwapEntryPrice, "SHORT_SLOT_0");
+  const initialTpIntents = ledger.generateAggregatedBatchTpIntents("SHORT", agg1.totalQuantity, agg1.vwapEntryPrice, "SHORT_SLOT_0", 0.00906);
   const initialTpResponses = await mockExecutionClient.placeBatchOrders(initialTpIntents);
   const initialTpOrderIds = initialTpResponses.map((r) => r.orderId);
   ledger.registerActiveTpOrderIds("SHORT_SLOT_0", initialTpOrderIds);
@@ -145,7 +145,7 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
   console.log("  ✓ Old resting TP orders successfully cancelled");
 
   // Atomic TP Replace: Dispatch new TP ladder sized to 100% of aggregated 0.0016
-  const newTpIntents = ledger.generateAggregatedBatchTpIntents("SHORT", agg2.totalQuantity, agg2.vwapEntryPrice, "SHORT_SLOT_0");
+  const newTpIntents = ledger.generateAggregatedBatchTpIntents("SHORT", agg2.totalQuantity, agg2.vwapEntryPrice, "SHORT_SLOT_0", 0.00906);
   const newTpResponses = await mockExecutionClient.placeBatchOrders(newTpIntents);
   const newTpOrderIds = newTpResponses.map((r) => r.orderId);
   ledger.registerActiveTpOrderIds("SHORT_SLOT_0", newTpOrderIds);
@@ -177,7 +177,7 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
   assert(Math.abs(agg3.vwapEntryPrice - expectedVwap3) < 1e-2, `VWAP must be exactly ${expectedVwap3}, got ${agg3.vwapEntryPrice}`);
 
   // Generate and verify TP intents for full 0.0032
-  const tpIntents3 = ledger.generateAggregatedBatchTpIntents("SHORT", agg3.totalQuantity, agg3.vwapEntryPrice, "SHORT_SLOT_0");
+  const tpIntents3 = ledger.generateAggregatedBatchTpIntents("SHORT", agg3.totalQuantity, agg3.vwapEntryPrice, "SHORT_SLOT_0", 0.00906);
   const sumTp3Qty = tpIntents3.reduce((acc, c) => acc + (c.quantity || 0), 0);
   assert(Math.abs(sumTp3Qty - 0.0032) < 1e-6, `Aggregated TP ladder quantity must equal 0.0032, got ${sumTp3Qty}`);
   console.log(`  ✓ Stage 3 Passed: 0.0032 BTC fully aggregated across short slots with exact VWAP $${agg3.vwapEntryPrice.toFixed(2)}`);

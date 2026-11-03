@@ -13,7 +13,7 @@ async function runPhase3Phase4IntegrationTest() {
     ledger.occupyCoreLong(0.005, 60000, 2.5, 1.2);
     const coreLongSlot = ledger.getCoreLong();
     console.log(`- Core Long Occupied: Qty = ${coreLongSlot.quantity}, Entry = $${coreLongSlot.entryPrice}`);
-    const tpIntents = ledger.generateBatchTpOrderIntents("CORE_LONG", 60000, 0.005, "LONG");
+    const tpIntents = ledger.generateBatchTpOrderIntents("CORE_LONG", 60000, 0.005, "LONG", 0.00906);
     console.log(`- Generated ${tpIntents.length} POST_ONLY TP limit order intents:`);
     tpIntents.forEach((intent, idx) => {
         console.log(`  Stage ${idx + 1}: ${intent.side} ${intent.quantity} ${intent.symbol} @ $${intent.price} [${intent.timeInForce}]`);

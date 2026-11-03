@@ -15,6 +15,13 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-11-03 - VEGAM Master Plan Phase 5 Execution (Replace Static TP Offsets & Wire GK_ATR_COMPOSITE) Completed & 100% QA Verified:
+  - Root Fix for DEFECT-PM-01 & DEFECT-PM-02: Eradicated unreachable `SL * 2.50` dynamic TP calculation (which created 7.10% TP targets under normal volatility) and static maker offsets (0.35% / 0.65% / 1.20%).
+  - Dynamic TP Level Sizing: Updated `VegamTpLadderEngine.computeVegamTpLevels()` to include `tp3Price` and `tp3Offset` (0.8x ATR trailing / 4.0x ATR limit ceiling). Enforced 35% / 40% / 25% size partitioning anchored directly to ATR-based price targets.
+  - SAB Slot 156 GK_ATR_COMPOSITE Wiring: Added `gkAtrComposite: number` parameter to `generateBatchTpOrderIntents()` and `generateAggregatedBatchTpIntents()`. Connected live telemetry from `this.client.getVegamGkAtrComposite(this.assetIndex)` across `StrategyEngine` (with safe fallback to Garman-Klass volatility if cold).
+  - Slot Occupation Ingestion: Updated `occupyCoreLong()` and `occupyShortSlot()` in `positionLedger.ts` to accept `vegamTpLevels: VegamTpLevels`, cleanly populating `slot.takeProfitPrice` (TP1), `slot.tpStagePrices = [tp1Price, tp2Price]`, and `slot.tpStageQuantities = [tp1Qty, tp2Qty, tp3Qty]` across snapshot restoration, position accumulation, and fresh occupation branches. Preserved backward compatibility for scalar callers.
+  - Fill Handler Alignment: Updated all 3 fill dispatch paths in `engine.ts` (`onRestExecutionFill`, `onUserDataStreamOrderTradeUpdate`, `executeMarketOrderSync`) to evaluate dynamic TP percentage directly from `vegamLevels.tp2Offset * 100` and pass levels into the ledger.
+  - 100% Empirical QA Gating: Passed strict TypeScript compilation (`npm run build:ts`, exit code 0), `test_vegam_tp_ladder.ts` (56/56 assertions), `test_cadme_alpha_decay_exit.ts` (28/28 assertions), `test_phase5_master_simulation_and_hotreload.ts` (all 6 stages), `test_phase3_phase4_integration.ts`, `test_aggregated_risk_and_sl_tp_sync.ts` (all 6 stages), `test_sota_ai_loss_recovery.ts` (all 5 phases), `test_hd_client_order_id.ts`, and `test_phase1_3stage_tp_proof.ts`.
 * 2026-10-29 - VEGAM Master Plan Phase 4 Execution (CADME AI Alpha Decay Managed Exit Integration) Completed & 100% QA Verified:
   - Layer 3 CADME Engine: Integrated AI alpha decay exit model into `HedgePositionLedger` and `StrategyEngine`.
   - PositionSlot Tracking: Added `icAtEntry: number` and `cadmeState: 0 | 1 | 2` fields to `PositionSlot`.

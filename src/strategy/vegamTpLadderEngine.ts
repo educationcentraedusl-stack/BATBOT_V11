@@ -85,11 +85,13 @@ export const DEFAULT_VEGAM_CONFIG: Readonly<VegamTpLadderConfig> = Object.freeze
 export interface VegamTpLevels {
   tp1Price: number;
   tp2Price: number;
+  tp3Price?: number;
   tp1Qty: number;
   tp2Qty: number;
   tp3Qty: number;
   tp1Offset: number;
   tp2Offset: number;
+  tp3Offset?: number;
   tp3TrailingDist: number;
   rpmMin: number;
 }
@@ -231,10 +233,12 @@ export function computeVegamTpLevels(
   // Assert TP1 offset is always >= RPM_min to guarantee round-trip fee coverage
   const tp1Offset = Math.max(cfg.tp1AtrMultiplier * safeAtr, rpmMin);
   const tp2Offset = Math.max(cfg.tp2AtrMultiplier * safeAtr, 2.0 * rpmMin);
+  const tp3Offset = Math.max(4.0 * safeAtr, 3.0 * rpmMin);
 
   const isLong = side === "LONG";
   const tp1Price = isLong ? safePrice * (1.0 + tp1Offset) : safePrice * (1.0 - tp1Offset);
   const tp2Price = isLong ? safePrice * (1.0 + tp2Offset) : safePrice * (1.0 - tp2Offset);
+  const tp3Price = isLong ? safePrice * (1.0 + tp3Offset) : safePrice * (1.0 - tp3Offset);
 
   const tp3TrailingDist = cfg.tp3TrailAtrMultiplier * safeAtr * safePrice;
 
@@ -255,11 +259,13 @@ export function computeVegamTpLevels(
   return {
     tp1Price,
     tp2Price,
+    tp3Price,
     tp1Qty,
     tp2Qty,
     tp3Qty,
     tp1Offset,
     tp2Offset,
+    tp3Offset,
     tp3TrailingDist,
     rpmMin,
   };

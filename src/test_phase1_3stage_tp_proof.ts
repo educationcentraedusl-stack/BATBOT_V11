@@ -24,7 +24,7 @@ async function runPhase1Proof() {
     const ledger = new HedgePositionLedger(asset.symbol);
     ledger.occupyCoreLong(asset.qty, asset.entryPrice, 0.40, 0.20);
 
-    const intents = ledger.generateBatchTpOrderIntents("CORE_LONG", asset.entryPrice, asset.qty, "LONG");
+    const intents = ledger.generateBatchTpOrderIntents("CORE_LONG", asset.entryPrice, asset.qty, "LONG", 0.00906);
 
     console.log(`[Execution Engine Output] Generated ${intents.length} POST_ONLY limit TP order intents:`);
 
