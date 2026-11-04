@@ -2178,7 +2178,11 @@ class StrategyEngine {
             const hazardMetrics = this.hazardEngine.getHazardMetrics(activePosSide, aiConfidence, holdingDurationMs);
             const volMetrics = this.volEngine.getVolatilitySurfaceMetrics();
             const signedInventory = summary.netQuantity;
-            const hjbResPrice = this.hjbEngine.calculateReservationPrice(markPrice, signedInventory, holdingDurationMs, volMetrics.garmanKlass1s);
+            const liveGkAtr = this.client.getVegamGkAtrComposite(this.assetIndex);
+            const safeGkVol = (volMetrics && Number.isFinite(volMetrics.garmanKlass1s) && volMetrics.garmanKlass1s > 0)
+                ? volMetrics.garmanKlass1s
+                : (liveGkAtr > 0 ? liveGkAtr : 0.00906);
+            const hjbResPrice = this.hjbEngine.calculateReservationPrice(markPrice, signedInventory, holdingDurationMs, safeGkVol, 200.0);
             // Atomically sync SAB Telemetry Slots 138-141 for Live TUI Monitor & OMS
             this.client.setOFI(hazardMetrics.ofi, this.assetIndex);
             this.client.setHJBReservationPrice(hjbResPrice, this.assetIndex);

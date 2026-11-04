@@ -2593,7 +2593,10 @@ class HedgePositionLedger {
             const safeGkVol = (volMetrics && Number.isFinite(volMetrics.garmanKlass1s) && volMetrics.garmanKlass1s > 0)
                 ? volMetrics.garmanKlass1s
                 : liveGkAtr;
-            const hjbEval = effHjb.getOptimalExitBoundary(slot.side, slot.entryPrice, stoikovMicroPrice, slot.quantity, durationMs, safeGkVol);
+            const targetHorizonSec = (typeof halfLifeSec === "number" && halfLifeSec > 0)
+                ? halfLifeSec * 2.0
+                : effHjb.getTargetHorizonSeconds();
+            const hjbEval = effHjb.getOptimalExitBoundary(slot.side, slot.entryPrice, stoikovMicroPrice, slot.quantity, durationMs, safeGkVol, 200.0, targetHorizonSec);
             if (hjbEval.isLiquidationTriggered) {
                 this.pushSotaTrigger(slot.slotId, slot.side, hjbEval.exitReason, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "PASSIVE_MAKER");
                 return;

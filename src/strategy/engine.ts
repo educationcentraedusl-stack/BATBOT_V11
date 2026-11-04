@@ -2704,11 +2704,16 @@ export class StrategyEngine {
       const volMetrics = this.volEngine.getVolatilitySurfaceMetrics();
 
       const signedInventory = summary.netQuantity;
+      const liveGkAtr = this.client.getVegamGkAtrComposite(this.assetIndex);
+      const safeGkVol = (volMetrics && Number.isFinite(volMetrics.garmanKlass1s) && volMetrics.garmanKlass1s > 0)
+        ? volMetrics.garmanKlass1s
+        : (liveGkAtr > 0 ? liveGkAtr : 0.00906);
       const hjbResPrice = this.hjbEngine.calculateReservationPrice(
         markPrice,
         signedInventory,
         holdingDurationMs,
-        volMetrics.garmanKlass1s
+        safeGkVol,
+        200.0
       );
 
       // Atomically sync SAB Telemetry Slots 138-141 for Live TUI Monitor & OMS

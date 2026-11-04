@@ -109,7 +109,7 @@ export class HJBReservationEngine {
 
   /**
    * Calculates Avellaneda-Stoikov Reservation Price R(s, q, t) = s - q * gamma * sigma^2 * (T - t)
-   * Inventory q is notional-normalized against standard slot trade size ($60.0 USDT) to maintain
+   * Inventory q is notional-normalized against standard slot trade size ($200.0 USDT) to maintain
    * price-scale invariance across all cryptocurrency assets (BTC to DOGE).
    */
   public calculateReservationPrice(
@@ -117,22 +117,26 @@ export class HJBReservationEngine {
     inventory: number,
     durationMs: number,
     garmanKlassVol: number,
-    referenceNotionalUsdt: number = 60.0
+    referenceNotionalUsdt: number = 200.0,
+    targetHorizonSec?: number
   ): number {
     if (basePrice <= 0) return 0;
 
-    const remainingHorizon = Math.max(0.001, this.targetHorizonSeconds - durationMs * 0.001);
+    const effHorizon = typeof targetHorizonSec === "number" && Number.isFinite(targetHorizonSec) && targetHorizonSec > 0
+      ? targetHorizonSec
+      : this.targetHorizonSeconds;
+    const remainingHorizon = Math.max(0.001, effHorizon - durationMs * 0.001);
     const variance = garmanKlassVol * garmanKlassVol;
 
     // Notional-normalized inventory across all cryptocurrency assets (0.001 BTC to 1000 DOGE):
-    // Maps raw token quantity against standard slot size (refNotional, default $60 USDT).
-    const refNotional = referenceNotionalUsdt > 0 ? referenceNotionalUsdt : 60.0;
+    // Maps raw token quantity against standard slot size (refNotional, default $200 USDT).
+    const refNotional = referenceNotionalUsdt > 0 ? referenceNotionalUsdt : 200.0;
     const absQty = Math.abs(inventory);
     const notional = absQty * basePrice;
     const slotUnits = notional > 0 ? notional / refNotional : 1.0;
     const qNorm = Math.sign(inventory) * Math.max(0.1, Math.min(5.0, slotUnits));
 
-    // Inventory Penalty Delta = q_norm * gamma * sigma^2 * (T - t) * S0
+    // Inventory Penalty Delta = q_norm * gamma * variance * (T - t) * S0
     const inventoryPenalty = qNorm * this.riskAversionGamma * variance * remainingHorizon * basePrice;
 
     return basePrice - inventoryPenalty;
@@ -148,7 +152,8 @@ export class HJBReservationEngine {
     inventory: number,
     durationMs: number,
     garmanKlassVol: number,
-    referenceNotionalUsdt: number = 60.0
+    referenceNotionalUsdt: number = 200.0,
+    targetHorizonSec?: number
   ): HJBExitEvaluation {
     const res = this.cachedExitEvalRing[this.evalRingIdx];
     this.evalRingIdx = (this.evalRingIdx + 1) & 7;
@@ -163,41 +168,47 @@ export class HJBReservationEngine {
     }
 
     const safeVol = Math.max(0.001, garmanKlassVol);
-    const refNotional = referenceNotionalUsdt > 0 ? referenceNotionalUsdt : 60.0;
+    const refNotional = referenceNotionalUsdt > 0 ? referenceNotionalUsdt : 200.0;
     const absQty = Math.abs(inventory);
     const notional = absQty * entryPrice;
     const slotUnits = notional > 0 ? notional / refNotional : 1.0;
     const normalizedQty = Math.max(0.1, Math.min(5.0, slotUnits));
     const isLong = side === "LONG";
 
-    const remainingHorizon = Math.max(0.001, this.targetHorizonSeconds - durationMs * 0.001);
+    const effHorizon = typeof targetHorizonSec === "number" && Number.isFinite(targetHorizonSec) && targetHorizonSec > 0
+      ? targetHorizonSec
+      : this.targetHorizonSeconds;
+    const remainingHorizon = Math.max(0.001, effHorizon - durationMs * 0.001);
     const variance = safeVol * safeVol;
     const qNorm = isLong ? normalizedQty : -normalizedQty;
     const inventoryPenalty = qNorm * this.riskAversionGamma * variance * remainingHorizon * entryPrice;
     const reservationPrice = entryPrice - inventoryPenalty;
     const penaltyAbs = Math.abs(inventoryPenalty);
 
-    // SOTA Stoikov-Lehalle Multi-Scale Breathing Boundary (August 2026):
-    // Brownian motion noise protection: Delta_breathing = max(0.0050, k_vol * sigma_GK * sqrt((t + t0) / T), term1 + term2)
-    // Guarantees at least 50 bps breathing room so sub-second micro-ticks cannot panic liquidations.
+    // SOTA Noise Floor & Actionable Institutional Boundary:
+    // Anchored directly to reservation price R(s, q, t) = S0 - inventoryPenalty
+    // with a minimum noise floor max(0.0050, term1) to prevent sub-second noise panic,
+    // and strictly clamped to sit within [0.5x, 3.0x] GK_ATR of entry.
     const term1 = safeVol * this.precalcLogTerm;
-    const term2 = (normalizedQty + 0.5) * safeVol * this.precalcSqrtCoeff;
-    const durationSec = Math.max(0, durationMs * 0.001);
-    const timeScaleFactor = Math.sqrt((durationSec + 10.0) / Math.max(10.0, this.targetHorizonSeconds));
-    const dynamicVolBreathingPct = safeVol * 2.5 * timeScaleFactor;
-
-    // Minimum 50 bps (0.0050) breathing floor prevents noise scratches
-    const halfSpreadOffsetPct = Math.max(0.0050, Math.max(term1 + term2, dynamicVolBreathingPct));
-    const offsetUsdt = entryPrice * halfSpreadOffsetPct;
+    const noiseFloorPct = Math.max(0.0050, term1);
+    const noiseFloorUsdt = entryPrice * noiseFloorPct;
+    const gkAtr = entryPrice * safeVol;
+    const maxBoundDistUsdt = 3.0 * gkAtr;
 
     let liquidationBoundary = 0;
     let isLiquidationTriggered = false;
 
     if (isLong) {
-      liquidationBoundary = reservationPrice - offsetUsdt;
+      const minBound = entryPrice - noiseFloorUsdt;
+      const maxBound = entryPrice - maxBoundDistUsdt;
+      const rawBoundary = Math.min(minBound, reservationPrice);
+      liquidationBoundary = Math.max(maxBound, rawBoundary);
       isLiquidationTriggered = currentPrice <= liquidationBoundary;
     } else {
-      liquidationBoundary = reservationPrice + offsetUsdt;
+      const minBound = entryPrice + noiseFloorUsdt;
+      const maxBound = entryPrice + maxBoundDistUsdt;
+      const rawBoundary = Math.max(minBound, reservationPrice);
+      liquidationBoundary = Math.min(maxBound, rawBoundary);
       isLiquidationTriggered = currentPrice >= liquidationBoundary;
     }
 

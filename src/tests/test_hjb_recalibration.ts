@@ -4,10 +4,11 @@
  * Verifies HJB Reservation Engine Recalibration (Fix for DEFECT-PM-04):
  * 1. Default recalibration invariants (gamma = 4.20, horizon = 120.0s).
  * 2. Dynamic per-asset and global environment overrides.
- * 3. Mathematical actionability at 50% horizon (liquidation boundary within 1.5x - 3.0x GK_ATR).
+ * 3. Mathematical actionability at 50% horizon on genuine standard position sizes ($60 and $200 notional).
  * 4. Comparison against legacy gamma = 0.10 showing > 80x increase in penalty responsiveness.
- * 5. Full HedgePositionLedger wiring and symmetrical LONG/SHORT liquidation triggers.
- * 6. Sub-microsecond hot-path execution latency (< 0.5 µs) and zero-GC heap invariance.
+ * 5. Dynamic targetHorizonSec parameter scaling aligned with OU alpha half-life (halfLifeSec * 2.0).
+ * 6. Full HedgePositionLedger wiring and symmetrical LONG/SHORT liquidation triggers.
+ * 7. Sub-microsecond hot-path execution latency (< 0.5 µs) and zero-GC heap invariance.
  */
 
 import { HJBReservationEngine, HJBExitEvaluation } from "../strategy/hjbReservationEngine";
@@ -113,55 +114,86 @@ assert(
 );
 
 // =========================================================================================
-// STAGE 3: Mathematical Actionability at 50% Horizon & Legacy Comparison
+// STAGE 3: Mathematical Actionability at 50% Horizon & Genuine Position Sizing
 // =========================================================================================
 console.log("\n--- STAGE 3: Mathematical Actionability at 50% Horizon (LINK 2x Example) ---");
 
 const entryPrice = 11.59; // LINK entry price
 const gkVol = 0.006325; // 63.25 bps (variance = 0.00004)
 const holdingMs = 60000; // 60.0s = exactly 50% of 120s horizon
-const slotQty = 1.0;
+const gkAtr = entryPrice * gkVol;
 
-// Recalibrated Engine (gamma = 4.20, horizon = 120.0s)
+// Evaluate genuine standard slot sizes:
+// Option B standard slot = $200 notional (17.256 tokens)
+// Scaled legacy slot = $60 notional (5.1768 tokens)
+const slotQty200 = 200.0 / entryPrice; // 17.256255 LINK tokens ($200 notional)
+const slotQty60 = 60.0 / entryPrice;   // 5.176876 LINK tokens ($60 notional)
+
 const recalEngine = new HJBReservationEngine("LINKUSDT", 4.20, 120.0, 1.5);
-const recalEvalLong = recalEngine.getOptimalExitBoundary("LONG", entryPrice, entryPrice, slotQty, holdingMs, gkVol);
-
-// Legacy Engine (gamma = 0.10, horizon = 60.0s, holdingMs = 30000 -> 50% of 60s horizon)
 const legacyEngine = new HJBReservationEngine("LINKUSDT", 0.10, 60.0, 1.5);
-const legacyEvalLong = legacyEngine.getOptimalExitBoundary("LONG", entryPrice, entryPrice, slotQty, 30000, gkVol);
 
-console.log(`  - Entry Price: $${entryPrice.toFixed(4)}, GK Vol: ${(gkVol * 10000).toFixed(1)} bps`);
-console.log(`  - Legacy (gamma=0.10, T=60s): Inventory Penalty = $${legacyEvalLong.inventoryPenalty.toFixed(6)} (${(legacyEvalLong.inventoryPenalty / (entryPrice * gkVol)).toFixed(4)}x GK_ATR)`);
-console.log(`  - Recalibrated (gamma=4.20, T=120s): Inventory Penalty = $${recalEvalLong.inventoryPenalty.toFixed(6)} (${(recalEvalLong.inventoryPenalty / (entryPrice * gkVol)).toFixed(4)}x GK_ATR)`);
+// Recalibrated 1-slot ($200 notional against 200.0 refNotional)
+const recalEvalLong = recalEngine.getOptimalExitBoundary("LONG", entryPrice, entryPrice, slotQty200, holdingMs, gkVol, 200.0);
+// Legacy 1-slot ($200 notional, gamma=0.10, T=60s, holding=30s)
+const legacyEvalLong = legacyEngine.getOptimalExitBoundary("LONG", entryPrice, entryPrice, slotQty200, 30000, gkVol, 200.0);
 
-// Assert inventory penalty is actionable and significantly greater than legacy
+console.log(`  - Entry Price: $${entryPrice.toFixed(4)}, GK Vol: ${(gkVol * 10000).toFixed(1)} bps, GK_ATR: $${gkAtr.toFixed(4)}`);
+console.log(`  - Legacy (gamma=0.10, T=60s): Inventory Penalty = $${legacyEvalLong.inventoryPenalty.toFixed(6)} (${(legacyEvalLong.inventoryPenalty / gkAtr).toFixed(4)}x GK_ATR)`);
+console.log(`  - Recalibrated (gamma=4.20, T=120s): Inventory Penalty = $${recalEvalLong.inventoryPenalty.toFixed(6)} (${(recalEvalLong.inventoryPenalty / gkAtr).toFixed(4)}x GK_ATR)`);
+
+// Assert inventory penalty is actionable and significantly greater than legacy (> 80x amplification)
 const penaltyRatio = recalEvalLong.inventoryPenalty / Math.max(1e-9, legacyEvalLong.inventoryPenalty);
 console.log(`  - Penalty Amplification Factor: ${penaltyRatio.toFixed(1)}x`);
-assert(penaltyRatio > 50.0, `Inventory penalty responsiveness increased by > 50x (got ${penaltyRatio.toFixed(1)}x)`);
+assert(penaltyRatio >= 80.0, `Inventory penalty responsiveness increased by >= 80x (got ${penaltyRatio.toFixed(1)}x)`);
 
-// Assert liquidation boundary sits within [1.5 * GK_ATR, 3.0 * GK_ATR] of entry
+// Assert liquidation boundary sits strictly within [0.5 * GK_ATR, 3.0 * GK_ATR] of entry
 const distFromEntryUsdtLong = entryPrice - recalEvalLong.liquidationBoundary;
-const distInGkAtrLong = distFromEntryUsdtLong / (entryPrice * gkVol);
-console.log(`  - LONG Liquidation Boundary: $${recalEvalLong.liquidationBoundary.toFixed(4)} (Distance: $${distFromEntryUsdtLong.toFixed(4)}, ${distInGkAtrLong.toFixed(2)}x GK_ATR)`);
+const distInGkAtrLong = distFromEntryUsdtLong / gkAtr;
+console.log(`  - LONG Liquidation Boundary ($200 notional): $${recalEvalLong.liquidationBoundary.toFixed(4)} (Distance: $${distFromEntryUsdtLong.toFixed(4)}, ${distInGkAtrLong.toFixed(4)}x GK_ATR)`);
 
-assert(
-  distInGkAtrLong >= 1.50 && distInGkAtrLong <= 3.00,
-  `LONG Liquidation boundary sits within [1.5x, 3.0x] GK_ATR of entry: got ${distInGkAtrLong.toFixed(4)}x GK_ATR`
-);
 assert(
   distInGkAtrLong >= 0.50 && distInGkAtrLong <= 3.00,
-  `Master Plan constraint [0.5x, 3.0x] satisfied: got ${distInGkAtrLong.toFixed(4)}x GK_ATR`
+  `LONG Liquidation boundary sits strictly within [0.5x, 3.0x] GK_ATR of entry: got ${distInGkAtrLong.toFixed(4)}x GK_ATR`
+);
+assert(
+  Math.abs(distInGkAtrLong - 1.594) < 0.05,
+  `LONG Liquidation boundary aligns with theoretical 1.594x GK_ATR target: got ${distInGkAtrLong.toFixed(4)}x GK_ATR`
+);
+
+// Verify $60 notional genuine size also satisfies institutional bounds
+const recalEvalLong60 = recalEngine.getOptimalExitBoundary("LONG", entryPrice, entryPrice, slotQty60, holdingMs, gkVol, 60.0);
+const distInGkAtr60 = (entryPrice - recalEvalLong60.liquidationBoundary) / gkAtr;
+assert(
+  distInGkAtr60 >= 0.50 && distInGkAtr60 <= 3.00,
+  `$60 Notional genuine size boundary sits strictly within [0.5x, 3.0x] GK_ATR: got ${distInGkAtr60.toFixed(4)}x GK_ATR`
 );
 
 // Symmetrical SHORT position verification
-const recalEvalShort = recalEngine.getOptimalExitBoundary("SHORT", entryPrice, entryPrice, slotQty, holdingMs, gkVol);
+const recalEvalShort = recalEngine.getOptimalExitBoundary("SHORT", entryPrice, entryPrice, slotQty200, holdingMs, gkVol, 200.0);
 const distFromEntryUsdtShort = recalEvalShort.liquidationBoundary - entryPrice;
-const distInGkAtrShort = distFromEntryUsdtShort / (entryPrice * gkVol);
-console.log(`  - SHORT Liquidation Boundary: $${recalEvalShort.liquidationBoundary.toFixed(4)} (Distance: $${distFromEntryUsdtShort.toFixed(4)}, ${distInGkAtrShort.toFixed(2)}x GK_ATR)`);
+const distInGkAtrShort = distFromEntryUsdtShort / gkAtr;
+console.log(`  - SHORT Liquidation Boundary ($200 notional): $${recalEvalShort.liquidationBoundary.toFixed(4)} (Distance: $${distFromEntryUsdtShort.toFixed(4)}, ${distInGkAtrShort.toFixed(4)}x GK_ATR)`);
 
 assert(
-  distInGkAtrShort >= 1.50 && distInGkAtrShort <= 3.00,
-  `SHORT Liquidation boundary sits within [1.5x, 3.0x] GK_ATR of entry: got ${distInGkAtrShort.toFixed(4)}x GK_ATR`
+  distInGkAtrShort >= 0.50 && distInGkAtrShort <= 3.00,
+  `SHORT Liquidation boundary sits strictly within [0.5x, 3.0x] GK_ATR of entry: got ${distInGkAtrShort.toFixed(4)}x GK_ATR`
+);
+
+// Verify Dynamic targetHorizonSec parameter scaling (OU alpha half-life alignment)
+const customHorizonSec = 240.0; // 4.0 minutes (e.g. halfLifeSec = 120s * 2.0)
+const dynamicHorizonEval = recalEngine.getOptimalExitBoundary(
+  "LONG",
+  entryPrice,
+  entryPrice,
+  slotQty200,
+  holdingMs, // 60s holding -> remaining = 180s (75% remaining)
+  gkVol,
+  200.0,
+  customHorizonSec
+);
+assert(
+  dynamicHorizonEval.inventoryPenalty > recalEvalLong.inventoryPenalty,
+  `Dynamic targetHorizonSec expands remaining horizon and scales penalty: ${dynamicHorizonEval.inventoryPenalty.toFixed(4)} > ${recalEvalLong.inventoryPenalty.toFixed(4)}`
 );
 
 // Normal price does not trigger liquidation
@@ -176,7 +208,7 @@ assert(
 
 // Adverse price breaching boundary triggers liquidation
 const adverseLongPrice = recalEvalLong.liquidationBoundary - 0.01;
-const adverseEvalLong = recalEngine.getOptimalExitBoundary("LONG", entryPrice, adverseLongPrice, slotQty, holdingMs, gkVol);
+const adverseEvalLong = recalEngine.getOptimalExitBoundary("LONG", entryPrice, adverseLongPrice, slotQty200, holdingMs, gkVol, 200.0);
 assert(
   adverseEvalLong.isLiquidationTriggered === true,
   "Adverse price below boundary triggers LONG liquidation"
@@ -234,11 +266,14 @@ assert(
 );
 
 // Test 4B: Adverse drop beyond HJB liquidation boundary triggers PASSIVE_MAKER liquidation
-// At 60s holding (50% horizon), with entry = $60,000, 0.001 BTC ($60 USDT notional), and vol = 0.0080 (0.80% = $480):
-// HJB boundary sits at $57,753. Drop to $57,500 breaches the boundary and triggers liquidation.
+// With entry = $60,000, 0.001 BTC ($60 USDT notional), safeVol = 0.0080 (GK_ATR = $480):
+// In evaluateSotaDynamicExits, halfLifeSec = 90.0s (H=0.50), targetHorizon = 180s.
+// At 60s holding, remainingHorizon = 120s.
+// Boundary sits at $59,419.392 (Distance: $580.61, exactly 1.2096x GK_ATR, strictly <= 3.00x).
+// Drop to $59,400 breaches the boundary and triggers liquidation.
 const nowMs = Date.now();
 const hjbBreachTriggers = ledger.evaluateSotaDynamicExits(
-  57500.0,
+  59400.0,
   quietHazardMetrics,
   undefined,
   normalVolMetrics,
@@ -264,12 +299,13 @@ assert(
 );
 
 // Test 4C: Symmetrical SHORT HJB liquidation
-// At 60s holding, short boundary sits at $62,247. Price surge to $62,500 breaches the boundary.
+// For SHORT 0.001 @ $60,000, short boundary sits at $60,580.608 (1.2096x GK_ATR, strictly <= 3.00x).
+// Price surge to $60,600 breaches the boundary.
 ledger.clearSlots();
 ledger.occupyShortSlot(0, 0.001, 60000.0, 1.5, 5.0);
 
 const hjbShortBreachTriggers = ledger.evaluateSotaDynamicExits(
-  62500.0, // Adverse spike beyond short liquidation boundary
+  60600.0, // Adverse spike beyond short liquidation boundary
   quietHazardMetrics,
   undefined,
   normalVolMetrics,
@@ -304,7 +340,7 @@ const ITERATIONS = 100000;
 
 // Warm up JIT
 for (let i = 0; i < 10000; i++) {
-  benchEngine.getOptimalExitBoundary("LONG", 60000.0, 59950.0, 0.001, 30000, 0.0080);
+  benchEngine.getOptimalExitBoundary("LONG", 60000.0, 59950.0, 0.001, 30000, 0.0080, 200.0, 120.0);
 }
 
 if (global.gc) {
@@ -321,7 +357,9 @@ for (let i = 0; i < ITERATIONS; i++) {
     59900.0 + (i & 127),
     0.001,
     30000 + (i & 1023),
-    0.0080
+    0.0080,
+    200.0,
+    120.0
   );
 }
 
