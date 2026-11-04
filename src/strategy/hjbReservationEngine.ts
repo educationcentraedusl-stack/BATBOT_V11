@@ -7,6 +7,8 @@
  * High-performance zero-GC precalculated math for sub-microsecond HFT execution.
  */
 
+import { DEFAULT_VEGAM_CONFIG } from "./vegamTpLadderEngine";
+
 export interface HJBExitEvaluation {
   reservationPrice: number;
   liquidationBoundary: number;
@@ -37,18 +39,72 @@ export class HJBReservationEngine {
 
   constructor(
     symbol: string,
-    riskAversionGamma: number = 0.10,
-    targetHorizonSeconds: number = 60.0,
+    riskAversionGamma?: number,
+    targetHorizonSeconds?: number,
     liquidityKappa: number = 1.5
   ) {
     this.symbol = symbol;
-    this.riskAversionGamma = riskAversionGamma;
-    this.targetHorizonSeconds = targetHorizonSeconds;
+
+    const cleanSym = symbol ? symbol.toUpperCase().replace(/[^A-Z0-9]/g, "") : "";
+
+    // Multi-tier Risk Aversion Gamma resolution:
+    // 1. Explicit caller argument (if finite and > 0)
+    // 2. Per-asset environment variable (e.g. HJB_GAMMA_BTCUSDT)
+    // 3. Global environment variable (HJB_RISK_AVERSION_GAMMA or HJB_GAMMA)
+    // 4. SOTA calibrated default from DEFAULT_VEGAM_CONFIG (4.20)
+    let resolvedGamma = DEFAULT_VEGAM_CONFIG.hjbRiskAversionGamma;
+    if (typeof riskAversionGamma === "number" && Number.isFinite(riskAversionGamma) && riskAversionGamma > 0) {
+      resolvedGamma = riskAversionGamma;
+    } else {
+      const envPerAsset = cleanSym ? process.env[`HJB_GAMMA_${cleanSym}`] : undefined;
+      const envGlobal = process.env.HJB_RISK_AVERSION_GAMMA || process.env.HJB_GAMMA;
+      const rawEnv = envPerAsset || envGlobal;
+      if (rawEnv) {
+        const parsed = parseFloat(rawEnv);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          resolvedGamma = parsed;
+        }
+      }
+    }
+    this.riskAversionGamma = resolvedGamma;
+
+    // Multi-tier Target Horizon Seconds resolution:
+    // 1. Explicit caller argument (if finite and > 0)
+    // 2. Per-asset environment variable (e.g. HJB_HORIZON_BTCUSDT)
+    // 3. Global environment variable (HJB_TARGET_HORIZON_SECONDS or HJB_HORIZON)
+    // 4. SOTA calibrated default from DEFAULT_VEGAM_CONFIG (120.0s)
+    let resolvedHorizon = DEFAULT_VEGAM_CONFIG.hjbTargetHorizonSeconds;
+    if (typeof targetHorizonSeconds === "number" && Number.isFinite(targetHorizonSeconds) && targetHorizonSeconds > 0) {
+      resolvedHorizon = targetHorizonSeconds;
+    } else {
+      const envPerAsset = cleanSym ? process.env[`HJB_HORIZON_${cleanSym}`] : undefined;
+      const envGlobal = process.env.HJB_TARGET_HORIZON_SECONDS || process.env.HJB_HORIZON;
+      const rawEnv = envPerAsset || envGlobal;
+      if (rawEnv) {
+        const parsed = parseFloat(rawEnv);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          resolvedHorizon = parsed;
+        }
+      }
+    }
+    this.targetHorizonSeconds = resolvedHorizon;
     this.liquidityKappa = liquidityKappa;
 
-    // Precalculate static mathematical terms
-    this.precalcLogTerm = (1.0 / liquidityKappa) * Math.log(1.0 + (riskAversionGamma / liquidityKappa));
-    this.precalcSqrtCoeff = Math.sqrt(riskAversionGamma / (2.0 * liquidityKappa));
+    // Precalculate static mathematical terms with resolved gamma
+    this.precalcLogTerm = (1.0 / this.liquidityKappa) * Math.log(1.0 + (this.riskAversionGamma / this.liquidityKappa));
+    this.precalcSqrtCoeff = Math.sqrt(this.riskAversionGamma / (2.0 * this.liquidityKappa));
+  }
+
+  public getRiskAversionGamma(): number {
+    return this.riskAversionGamma;
+  }
+
+  public getTargetHorizonSeconds(): number {
+    return this.targetHorizonSeconds;
+  }
+
+  public getLiquidityKappa(): number {
+    return this.liquidityKappa;
   }
 
   /**
@@ -95,7 +151,7 @@ export class HJBReservationEngine {
     referenceNotionalUsdt: number = 60.0
   ): HJBExitEvaluation {
     const res = this.cachedExitEvalRing[this.evalRingIdx];
-    this.evalRingIdx = (this.evalRingIdx + 1) % 8;
+    this.evalRingIdx = (this.evalRingIdx + 1) & 7;
 
     if (currentPrice <= 0 || entryPrice <= 0) {
       res.reservationPrice = currentPrice;
@@ -112,15 +168,14 @@ export class HJBReservationEngine {
     const notional = absQty * entryPrice;
     const slotUnits = notional > 0 ? notional / refNotional : 1.0;
     const normalizedQty = Math.max(0.1, Math.min(5.0, slotUnits));
-    const signedInventory = side === "LONG" ? absQty : -absQty;
+    const isLong = side === "LONG";
 
-    const reservationPrice = this.calculateReservationPrice(
-      entryPrice,
-      signedInventory,
-      durationMs,
-      safeVol,
-      refNotional
-    );
+    const remainingHorizon = Math.max(0.001, this.targetHorizonSeconds - durationMs * 0.001);
+    const variance = safeVol * safeVol;
+    const qNorm = isLong ? normalizedQty : -normalizedQty;
+    const inventoryPenalty = qNorm * this.riskAversionGamma * variance * remainingHorizon * entryPrice;
+    const reservationPrice = entryPrice - inventoryPenalty;
+    const penaltyAbs = Math.abs(inventoryPenalty);
 
     // SOTA Stoikov-Lehalle Multi-Scale Breathing Boundary (August 2026):
     // Brownian motion noise protection: Delta_breathing = max(0.0050, k_vol * sigma_GK * sqrt((t + t0) / T), term1 + term2)
@@ -138,7 +193,7 @@ export class HJBReservationEngine {
     let liquidationBoundary = 0;
     let isLiquidationTriggered = false;
 
-    if (side === "LONG") {
+    if (isLong) {
       liquidationBoundary = reservationPrice - offsetUsdt;
       isLiquidationTriggered = currentPrice <= liquidationBoundary;
     } else {
@@ -146,12 +201,10 @@ export class HJBReservationEngine {
       isLiquidationTriggered = currentPrice >= liquidationBoundary;
     }
 
-    const inventoryPenalty = Math.abs(entryPrice - reservationPrice);
-
     res.reservationPrice = reservationPrice;
     res.liquidationBoundary = liquidationBoundary;
     res.isLiquidationTriggered = isLiquidationTriggered;
-    res.inventoryPenalty = inventoryPenalty;
+    res.inventoryPenalty = penaltyAbs;
     res.exitReason = isLiquidationTriggered ? `HJB_RESERVATION_LIQUIDATE_${side}` : "NONE";
 
     return res;

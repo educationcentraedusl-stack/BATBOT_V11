@@ -213,6 +213,7 @@ class StrategyEngine {
         this.positionLedger = positionLedger ?? this.hedgeLedger.getLegacyLedger();
         this.hazardEngine = new microstructureHazardEngine_1.MicrostructureHazardEngine(this.config.symbol);
         this.hjbEngine = new hjbReservationEngine_1.HJBReservationEngine(this.config.symbol);
+        this.hedgeLedger.setHjbReservationEngine(this.hjbEngine);
         this.volEngine = new volatilitySurfaceEngine_1.VolatilitySurfaceEngine(this.config.symbol);
         this.reusableOrderIntent = {
             symbol: this.config.symbol,

@@ -8,6 +8,7 @@ import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
 import { getTradingSymbols } from "../config/tradingSymbols";
 import { MarketDataClient } from "../marketDataClient";
 import { computeVegamTpLevels, VegamTpLevels } from "./vegamTpLadderEngine";
+import { AdversarialExitGate, AdversarialExitConfig, DEFAULT_ADVERSARIAL_CONFIG, AdversarialExitResult } from "./adversarialExitGate";
 
 interface NativeTradingAddon {
   recordTradeIc?: (dir: number, realizedReturn: number, assetIndex: number) => void;
@@ -524,6 +525,10 @@ export interface PositionSlot {
   // Phase 4 CADME AI Alpha Decay tracking fields
   icAtEntry?: number;
   cadmeState?: 0 | 1 | 2;
+  // Phase 6 Adversarial Exit Gate tracking fields
+  entryObi?: number;
+  entryVpin?: number;
+  entryCvdDelta?: number;
 }
 
 export interface SlotExitTrigger {
@@ -701,6 +706,8 @@ export class HedgePositionLedger {
   private shortAggregatedLastSyncedSlPrice: number = 0;
   private marketDataClient?: MarketDataClient;
   private assetIndex: number = 0;
+  private adversarialGate: AdversarialExitGate = new AdversarialExitGate();
+  private hjbEngine: HJBReservationEngine;
 
   constructor(
     symbol: string = "BTCUSDT",
@@ -711,6 +718,7 @@ export class HedgePositionLedger {
     this.symbol = symbol;
     this.maxShortSlots = maxShortSlots;
     this.marketDataClient = marketDataClient;
+    this.hjbEngine = new HJBReservationEngine(this.symbol);
     if (typeof assetIndex === "number" && assetIndex >= 0) {
       this.assetIndex = assetIndex;
     } else {
@@ -802,6 +810,22 @@ export class HedgePositionLedger {
 
   public getMarketDataClient(): MarketDataClient | undefined {
     return this.marketDataClient;
+  }
+
+  public getAdversarialExitGate(): AdversarialExitGate {
+    return this.adversarialGate;
+  }
+
+  public setAdversarialExitGate(gate: AdversarialExitGate): void {
+    this.adversarialGate = gate;
+  }
+
+  public getHjbReservationEngine(): HJBReservationEngine {
+    return this.hjbEngine;
+  }
+
+  public setHjbReservationEngine(engine: HJBReservationEngine): void {
+    this.hjbEngine = engine;
   }
 
   public reset(): void {
@@ -1708,6 +1732,9 @@ export class HedgePositionLedger {
     const liveIc = typeof entryIc === "number" && Number.isFinite(entryIc)
       ? entryIc
       : (this.marketDataClient ? this.marketDataClient.getRollingIC(this.assetIndex) : 0);
+    const liveEntryObi = this.marketDataClient ? this.marketDataClient.getOBI(this.assetIndex) : 0;
+    const liveEntryVpin = this.marketDataClient ? this.marketDataClient.getVPIN(this.assetIndex) : 0.5;
+    const liveEntryCvd = this.marketDataClient ? this.marketDataClient.getCVD(this.assetIndex) : 0;
 
     if (isAuthoritativeSnapshot) {
       this.coreLong.isOccupied = true;
@@ -1719,6 +1746,9 @@ export class HedgePositionLedger {
       this.coreLong.stopLossPercent = slPercent;
       this.coreLong.icAtEntry = liveIc;
       this.coreLong.cadmeState = 0;
+      this.coreLong.entryObi = liveEntryObi;
+      this.coreLong.entryVpin = liveEntryVpin;
+      this.coreLong.entryCvdDelta = liveEntryCvd;
       if (!this.coreLong.openTime || this.coreLong.openTime === 0) {
         this.coreLong.openTime = Date.now();
       }
@@ -1785,6 +1815,11 @@ export class HedgePositionLedger {
         this.coreLong.icAtEntry = liveIc;
       }
       this.coreLong.cadmeState = 0;
+      if (this.coreLong.entryObi === undefined) {
+        this.coreLong.entryObi = liveEntryObi;
+        this.coreLong.entryVpin = liveEntryVpin;
+        this.coreLong.entryCvdDelta = liveEntryCvd;
+      }
 
       const makerFee = this.sizingCalc.getMakerFeeRate();
       const takerFee = this.sizingCalc.getTakerFeeRate();
@@ -1853,6 +1888,9 @@ export class HedgePositionLedger {
     this.coreLong.reversalStartTs = 0;
     this.coreLong.icAtEntry = liveIc;
     this.coreLong.cadmeState = 0;
+    this.coreLong.entryObi = liveEntryObi;
+    this.coreLong.entryVpin = liveEntryVpin;
+    this.coreLong.entryCvdDelta = liveEntryCvd;
 
     const makerFee = this.sizingCalc.getMakerFeeRate();
     const takerFee = this.sizingCalc.getTakerFeeRate();
@@ -1926,6 +1964,9 @@ export class HedgePositionLedger {
     this.coreLong.tpPrices = [];
     this.coreLong.icAtEntry = 0;
     this.coreLong.cadmeState = 0;
+    this.coreLong.entryObi = 0;
+    this.coreLong.entryVpin = 0;
+    this.coreLong.entryCvdDelta = 0;
 
     for (let i = 0; i < this.maxShortSlots; i++) {
       const slot = this.shortSlots[i];
@@ -2101,6 +2142,9 @@ export class HedgePositionLedger {
     this.coreLong.tpPrices = [];
     this.coreLong.icAtEntry = 0;
     this.coreLong.cadmeState = 0;
+    this.coreLong.entryObi = 0;
+    this.coreLong.entryVpin = 0;
+    this.coreLong.entryCvdDelta = 0;
     this.syncVegamCadmeState();
   }
 
@@ -2142,6 +2186,9 @@ export class HedgePositionLedger {
     const liveIc = typeof entryIc === "number" && Number.isFinite(entryIc)
       ? entryIc
       : (this.marketDataClient ? this.marketDataClient.getRollingIC(this.assetIndex) : 0);
+    const liveEntryObi = this.marketDataClient ? this.marketDataClient.getOBI(this.assetIndex) : 0;
+    const liveEntryVpin = this.marketDataClient ? this.marketDataClient.getVPIN(this.assetIndex) : 0.5;
+    const liveEntryCvd = this.marketDataClient ? this.marketDataClient.getCVD(this.assetIndex) : 0;
 
     if (isAuthoritativeSnapshot) {
       slot.isOccupied = true;
@@ -2153,6 +2200,9 @@ export class HedgePositionLedger {
       slot.stopLossPercent = slPercent;
       slot.icAtEntry = liveIc;
       slot.cadmeState = 0;
+      slot.entryObi = liveEntryObi;
+      slot.entryVpin = liveEntryVpin;
+      slot.entryCvdDelta = liveEntryCvd;
       if (!slot.openTime || slot.openTime === 0) {
         slot.openTime = Date.now();
       }
@@ -2223,6 +2273,11 @@ export class HedgePositionLedger {
         slot.icAtEntry = liveIc;
       }
       slot.cadmeState = 0;
+      if (slot.entryObi === undefined) {
+        slot.entryObi = liveEntryObi;
+        slot.entryVpin = liveEntryVpin;
+        slot.entryCvdDelta = liveEntryCvd;
+      }
 
       const makerFee = this.sizingCalc.getMakerFeeRate();
       const takerFee = this.sizingCalc.getTakerFeeRate();
@@ -2291,6 +2346,9 @@ export class HedgePositionLedger {
     slot.reversalStartTs = 0;
     slot.icAtEntry = liveIc;
     slot.cadmeState = 0;
+    slot.entryObi = liveEntryObi;
+    slot.entryVpin = liveEntryVpin;
+    slot.entryCvdDelta = liveEntryCvd;
 
     const makerFee = this.sizingCalc.getMakerFeeRate();
     const takerFee = this.sizingCalc.getTakerFeeRate();
@@ -2382,6 +2440,9 @@ export class HedgePositionLedger {
     slot.tpPrices = [];
     slot.icAtEntry = 0;
     slot.cadmeState = 0;
+    slot.entryObi = 0;
+    slot.entryVpin = 0;
+    slot.entryCvdDelta = 0;
     this.syncVegamCadmeState();
 
     let hasRemainingOccupied = false;
@@ -3017,7 +3078,7 @@ export class HedgePositionLedger {
       bestBid = bestBidOrMark;
       bestAsk = bestAskOrHazard;
       hazardMetrics = hazardOrHjb as MicrostructureMetrics;
-      hjbEngine = hjbOrVol as HJBReservationEngine;
+      hjbEngine = (hjbOrVol as HJBReservationEngine) || this.hjbEngine;
       volSurfMetrics = volMetricsOrNowMs as VolatilitySurfaceMetrics;
     } else {
       // Single-price overload: evaluateSotaDynamicExits(markPx, hazardMetrics, hjbEngine, volMetrics, nowMs)
@@ -3031,7 +3092,7 @@ export class HedgePositionLedger {
       bestBid = mark;  // spread = 0 → OBI term = 0 → micro-price = mid (correct neutral Stoikov)
       bestAsk = mark;
       hazardMetrics = bestAskOrHazard as MicrostructureMetrics;
-      hjbEngine = hazardOrHjb as HJBReservationEngine;
+      hjbEngine = (hazardOrHjb as HJBReservationEngine) || this.hjbEngine;
       volSurfMetrics = hjbOrVol as VolatilitySurfaceMetrics;
       if (typeof volMetricsOrNowMs === "number") {
         effectiveNowMs = volMetricsOrNowMs;
@@ -3270,7 +3331,44 @@ export class HedgePositionLedger {
     }
 
     // -------------------------------------------------------------------------
-    // 2. Cox Proportional Hazard Rate Survival Exit
+    // 2. Layer 4: Adversarial Exit Gate (Ultra-Low-Latency Defensive Shield)
+    // Multi-signal consensus (>= 2 signals) + adverse price velocity shock
+    // -------------------------------------------------------------------------
+    const liveHawkes = this.marketDataClient ? this.marketDataClient.getHawkesIntensity(this.assetIndex) : 1.0;
+    const liveSweep = this.marketDataClient ? this.marketDataClient.getIsSweepDetected(this.assetIndex) : false;
+    const liveEntropy = this.marketDataClient ? this.marketDataClient.getLOBEntropy(this.assetIndex) : 1.0;
+    const liveGkAtr = (this.marketDataClient?.getVegamGkAtrComposite(this.assetIndex))
+      || (volMetrics?.garmanKlass1s ? Math.sqrt(volMetrics.garmanKlass1s) : 0.00906);
+
+    const advResult = this.adversarialGate.evaluate(
+      slot,
+      markPrice,
+      hazardMetrics,
+      liveGkAtr,
+      liveHawkes,
+      liveSweep,
+      liveEntropy,
+      nowMs
+    );
+
+    if (advResult.isBreached) {
+      this.pushSotaTrigger(
+        slot.slotId,
+        slot.side,
+        advResult.reason,
+        slot.quantity,
+        slot.entryPrice,
+        markPrice,
+        false,
+        slot.activeTpOrderIds,
+        slot.activeStopLossOrderId,
+        "AGGRESSIVE_MARKET"
+      );
+      return;
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. Cox Proportional Hazard Rate Survival Exit
     // -------------------------------------------------------------------------
     if (hazardMetrics && hazardMetrics.isHazardExitTriggered) {
       this.pushSotaTrigger(
@@ -3292,14 +3390,18 @@ export class HedgePositionLedger {
     // 3. Avellaneda-Stoikov HJB Optimal Stopping Liquidation Boundary
     // SOTA Tier-1: Passive Maker Unwind / Scratch Order at Best Mid
     // -------------------------------------------------------------------------
-    if (hjbEngine && volMetrics) {
-      const hjbEval = hjbEngine.getOptimalExitBoundary(
+    const effHjb = hjbEngine || this.hjbEngine;
+    if (effHjb && (volMetrics || liveGkAtr > 0)) {
+      const safeGkVol = (volMetrics && Number.isFinite(volMetrics.garmanKlass1s) && volMetrics.garmanKlass1s > 0)
+        ? volMetrics.garmanKlass1s
+        : liveGkAtr;
+      const hjbEval = effHjb.getOptimalExitBoundary(
         slot.side,
         slot.entryPrice,
         stoikovMicroPrice,
         slot.quantity,
         durationMs,
-        volMetrics.garmanKlass1s
+        safeGkVol
       );
 
       if (hjbEval.isLiquidationTriggered) {
