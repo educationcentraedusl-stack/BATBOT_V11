@@ -1877,6 +1877,7 @@ export class HedgePositionLedger {
     this.coreLong.initialQuantity = quantity;
     this.coreLong.entryPrice = entryPrice;
     this.coreLong.openTime = Date.now();
+    this.coreLong.originalOpenTime = this.coreLong.openTime;
     this.coreLong.takeProfitPercent = effectiveTpPercent;
     this.coreLong.stopLossPercent = slPercent;
     this.coreLong.tpStageReached = 0;
@@ -1952,6 +1953,7 @@ export class HedgePositionLedger {
     this.coreLong.initialQuantity = 0;
     this.coreLong.entryPrice = 0;
     this.coreLong.openTime = 0;
+    this.coreLong.originalOpenTime = undefined;
     this.coreLong.takeProfitPrice = 0;
     this.coreLong.stopLossPrice = 0;
     this.coreLong.tpStageReached = 0;
@@ -1978,6 +1980,7 @@ export class HedgePositionLedger {
       slot.initialQuantity = 0;
       slot.entryPrice = 0;
       slot.openTime = 0;
+      slot.originalOpenTime = undefined;
       slot.takeProfitPrice = 0;
       slot.stopLossPrice = 0;
       slot.tpStageReached = 0;
@@ -2129,6 +2132,7 @@ export class HedgePositionLedger {
     this.coreLong.initialQuantity = 0;
     this.coreLong.entryPrice = 0;
     this.coreLong.openTime = 0;
+    this.coreLong.originalOpenTime = undefined;
     this.coreLong.takeProfitPrice = 0;
     this.coreLong.stopLossPrice = 0;
     this.coreLong.tpStageReached = 0;
@@ -2335,6 +2339,7 @@ export class HedgePositionLedger {
     slot.initialQuantity = quantity;
     slot.entryPrice = entryPrice;
     slot.openTime = Date.now();
+    slot.originalOpenTime = slot.openTime;
     slot.takeProfitPercent = effectiveTpPercent;
     slot.stopLossPercent = slPercent;
     slot.tpStageReached = 0;
@@ -2427,6 +2432,7 @@ export class HedgePositionLedger {
     slot.initialQuantity = 0;
     slot.entryPrice = 0;
     slot.openTime = 0;
+    slot.originalOpenTime = undefined;
     slot.takeProfitPrice = 0;
     slot.stopLossPrice = 0;
     slot.tpStageReached = 0;
@@ -3073,6 +3079,7 @@ export class HedgePositionLedger {
     let hjbEngine: HJBReservationEngine;
     let volSurfMetrics: VolatilitySurfaceMetrics;
     let effectiveNowMs = nowMs;
+    let effectiveHurst = hurstExponent;
 
     if (typeof bestAskOrHazard === "number") {
       bestBid = bestBidOrMark;
@@ -3081,7 +3088,7 @@ export class HedgePositionLedger {
       hjbEngine = (hjbOrVol as HJBReservationEngine) || this.hjbEngine;
       volSurfMetrics = volMetricsOrNowMs as VolatilitySurfaceMetrics;
     } else {
-      // Single-price overload: evaluateSotaDynamicExits(markPx, hazardMetrics, hjbEngine, volMetrics, nowMs)
+      // Single-price overload: evaluateSotaDynamicExits(markPx, hazardMetrics, hjbEngine, volMetrics, nowMs, hurst)
       // Degenerate Stoikov case: spread = 0, OBI term = 0, stoikovMicroPrice = midPrice exactly.
       // This is mathematically correct and avoids synthetic spread injection.
       const mark = bestBidOrMark;
@@ -3096,6 +3103,9 @@ export class HedgePositionLedger {
       volSurfMetrics = hjbOrVol as VolatilitySurfaceMetrics;
       if (typeof volMetricsOrNowMs === "number") {
         effectiveNowMs = volMetricsOrNowMs;
+        if (typeof nowMs === "number" && nowMs <= 1.0 && nowMs >= 0.0) {
+          effectiveHurst = nowMs;
+        }
       }
     }
 
@@ -3119,8 +3129,8 @@ export class HedgePositionLedger {
     const minNetAlpha = this.sizingCalc.getMinNetAlpha();
     const roundTripFeeBuffer = (makerFee + takerFee) * 2.5;
 
-    const safeHurst = (typeof hurstExponent === "number" && Number.isFinite(hurstExponent) && hurstExponent > 0)
-      ? Math.max(0.05, Math.min(0.95, hurstExponent))
+    const safeHurst = (typeof effectiveHurst === "number" && Number.isFinite(effectiveHurst) && effectiveHurst > 0)
+      ? Math.max(0.05, Math.min(0.95, effectiveHurst))
       : 0.50;
 
     // Ornstein-Uhlenbeck half-life calibration (August 2026 SOTA):
