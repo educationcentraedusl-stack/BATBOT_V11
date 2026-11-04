@@ -98,7 +98,10 @@ class HJBReservationEngine {
             ? targetHorizonSec
             : this.targetHorizonSeconds;
         const remainingHorizon = Math.max(0.001, effHorizon - durationMs * 0.001);
-        const variance = garmanKlassVol * garmanKlassVol;
+        const safeVol = (garmanKlassVol > 0 && Number.isFinite(garmanKlassVol))
+            ? garmanKlassVol
+            : 0.00906;
+        const variance = safeVol * safeVol;
         // Notional-normalized inventory across all cryptocurrency assets (0.001 BTC to 1000 DOGE):
         // Maps raw token quantity against standard slot size (refNotional, default $200 USDT).
         const refNotional = referenceNotionalUsdt > 0 ? referenceNotionalUsdt : 200.0;
@@ -124,7 +127,9 @@ class HJBReservationEngine {
             res.exitReason = "NONE";
             return res;
         }
-        const safeVol = Math.max(0.001, garmanKlassVol);
+        const safeVol = (garmanKlassVol > 0 && Number.isFinite(garmanKlassVol))
+            ? garmanKlassVol
+            : 0.00906;
         const refNotional = referenceNotionalUsdt > 0 ? referenceNotionalUsdt : 200.0;
         const absQty = Math.abs(inventory);
         const notional = absQty * entryPrice;
@@ -149,18 +154,19 @@ class HJBReservationEngine {
         const noiseFloorUsdt = entryPrice * noiseFloorPct;
         const gkAtr = entryPrice * safeVol;
         const maxBoundDistUsdt = 3.0 * gkAtr;
+        const maxDist = Math.max(maxBoundDistUsdt, noiseFloorUsdt);
         let liquidationBoundary = 0;
         let isLiquidationTriggered = false;
         if (isLong) {
             const minBound = entryPrice - noiseFloorUsdt;
-            const maxBound = entryPrice - maxBoundDistUsdt;
+            const maxBound = entryPrice - maxDist;
             const rawBoundary = Math.min(minBound, reservationPrice);
             liquidationBoundary = Math.max(maxBound, rawBoundary);
             isLiquidationTriggered = currentPrice <= liquidationBoundary;
         }
         else {
             const minBound = entryPrice + noiseFloorUsdt;
-            const maxBound = entryPrice + maxBoundDistUsdt;
+            const maxBound = entryPrice + maxDist;
             const rawBoundary = Math.max(minBound, reservationPrice);
             liquidationBoundary = Math.min(maxBound, rawBoundary);
             isLiquidationTriggered = currentPrice >= liquidationBoundary;

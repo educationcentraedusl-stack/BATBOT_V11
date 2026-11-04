@@ -707,6 +707,13 @@
   - Defect 4 (Dynamic AI Confidence & Signal Threshold Bindings): Replaced hardcoded `0.65` in `src/strategy/risk.ts` and `0.75` in `src/strategy/multiEngine.ts` with dynamic `.env` configurations (`minAiConfidence`, `obiBuyThreshold`, `obiSellThreshold`).
   - 100% verified via `npm run build:ts` (0 errors), `cargo test --lib` (39/39 passed), `test_hjb_reservation.js` (5/5 passed, 0.299 µs latency), `test_sota_dynamic_exit_integration.js` (5/5 passed, 0.329 µs latency), `test_sota_ai_loss_recovery.js` (5/5 passed), `test_double_entry_oms_pnl.js` (19/19 passed), `test_long_hold_profit_guarantee.js` (5/5 passed), `test_hd_client_order_id.js` (5/5 passed), and `test_hedge_mode_split.js` (6/6 passed).
 
+* 2026-11-04 - VEGAM Phase 7 Remediation of 4 Critical Re-Audit Failures Completed & QA Verified:
+  - Failure 1: Moved hard Stop-Loss check in src/strategy/positionLedger.ts to evaluate BEFORE HJB optimal stopping, preventing passive maker exits from shadowing aggressive market stop-outs.
+  - Failure 2: In src/strategy/engine.ts, synchronized calculateReservationPrice with dynamic OU alpha half-life (targetHorizonSec = halfLifeSec * 2.0), maintaining lockstep with HedgePositionLedger and atomic SAB Slot 139.
+  - Failure 3: In src/strategy/hjbReservationEngine.ts, guarded against compressed volatility noise floor inversion using Math.max(maxBoundDistUsdt, noiseFloorUsdt).
+  - Failure 4: In src/strategy/hjbReservationEngine.ts, sanitized safeVol against NaN, non-finite, and non-positive numbers with 0.00906 fallback.
+  - 100% verified via npm run build:ts (0 errors), test_cadme_alpha_decay_exit.ts (42/42 passed), test_hjb_recalibration.ts (34/34 passed), test_adversarial_exit_gate.ts (37/37 passed), test_sota_hjb_breathing_and_exit_tiers.ts (passed 100%), and test_phase5_master_simulation_and_hotreload.ts (6/6 stages passed).
+
 ## Next Actions
 1. System is 100% audited, repaired, compiled, and verified for production live markets.
 2. Launch and monitor live multi-asset TUI command center (`npm start` or `npm run start:live`).

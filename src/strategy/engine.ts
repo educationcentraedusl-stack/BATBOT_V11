@@ -2708,12 +2708,28 @@ export class StrategyEngine {
       const safeGkVol = (volMetrics && Number.isFinite(volMetrics.garmanKlass1s) && volMetrics.garmanKlass1s > 0)
         ? volMetrics.garmanKlass1s
         : (liveGkAtr > 0 ? liveGkAtr : 0.00906);
+
+      // SOTA OU Alpha Half-Life Dynamic Horizon Synchronization (matching HedgePositionLedger)
+      const liveHurst = this.client.getHurstExponent(this.assetIndex);
+      const safeHurst = Number.isFinite(liveHurst) && liveHurst > 0 ? liveHurst : 0.50;
+      let halfLifeSec: number;
+      if (safeHurst < 0.5) {
+        const hurstShifted = safeHurst + 0.5;
+        const lnHurstSafe = Math.max(Math.abs(Math.log(hurstShifted)), 0.001);
+        const ouHalfLifeRaw = (0.1 * Math.LN2) / (2.0 * lnHurstSafe);
+        halfLifeSec = Math.max(60.0, Math.min(600.0, ouHalfLifeRaw));
+      } else {
+        halfLifeSec = Math.max(90.0, Math.min(900.0, 90.0 + (safeHurst - 0.5) * 1620.0));
+      }
+      const targetHorizonSec = halfLifeSec * 2.0;
+
       const hjbResPrice = this.hjbEngine.calculateReservationPrice(
         markPrice,
         signedInventory,
         holdingDurationMs,
         safeGkVol,
-        200.0
+        200.0,
+        targetHorizonSec
       );
 
       // Atomically sync SAB Telemetry Slots 138-141 for Live TUI Monitor & OMS
@@ -2746,7 +2762,6 @@ export class StrategyEngine {
       }
 
       if (markPrice > 0) {
-        const hurstExponent = this.client.getHurstExponent(this.assetIndex);
         // Priority 1: Evaluate SOTA Dynamic Exits (MS-SOPC, CAD-DTLM, Cox Hazard Survival Flush, HJB Liquidation Boundary)
         const sotaTriggers = hasActivePos
           ? this.hedgeLedger.evaluateSotaDynamicExits(
@@ -2756,7 +2771,7 @@ export class StrategyEngine {
               this.hjbEngine,
               volMetrics,
               nowMs,
-              hurstExponent
+              liveHurst
             )
           : [];
 

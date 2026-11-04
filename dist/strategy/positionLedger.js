@@ -2585,7 +2585,20 @@ class HedgePositionLedger {
             return;
         }
         // -------------------------------------------------------------------------
-        // 3. Avellaneda-Stoikov HJB Optimal Stopping Liquidation Boundary
+        // 4. Stop-Loss / Hard Break-Even Trailing SL Exit (SUPREME OVER PASSIVE EXITS)
+        // -------------------------------------------------------------------------
+        const isStopTriggered = isLong
+            ? markPrice <= slot.stopLossPrice
+            : markPrice >= slot.stopLossPrice;
+        if (isStopTriggered) {
+            const exitReason = slot.timeDecayTier && slot.timeDecayTier >= 1
+                ? "BREAK_EVEN_STOP_LOSS"
+                : `MVA_TRAILING_STOP_${slot.side}`;
+            this.pushSotaTrigger(slot.slotId, slot.side, exitReason, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "AGGRESSIVE_MARKET");
+            return;
+        }
+        // -------------------------------------------------------------------------
+        // 5. Avellaneda-Stoikov HJB Optimal Stopping Liquidation Boundary
         // SOTA Tier-1: Passive Maker Unwind / Scratch Order at Best Mid
         // -------------------------------------------------------------------------
         const effHjb = hjbEngine || this.hjbEngine;
@@ -2680,16 +2693,6 @@ class HedgePositionLedger {
                     slot.cadmeState = 0;
                 }
             }
-        }
-        // Check Trigger
-        const isStopTriggered = isLong
-            ? markPrice <= slot.stopLossPrice
-            : markPrice >= slot.stopLossPrice;
-        if (isStopTriggered) {
-            const exitReason = slot.timeDecayTier && slot.timeDecayTier >= 1
-                ? "BREAK_EVEN_STOP_LOSS"
-                : `MVA_TRAILING_STOP_${slot.side}`;
-            this.pushSotaTrigger(slot.slotId, slot.side, exitReason, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "AGGRESSIVE_MARKET");
         }
     }
     formatPriceFast(rawPrice) {
