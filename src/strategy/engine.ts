@@ -2689,13 +2689,21 @@ export class StrategyEngine {
       const activePosSide: "LONG" | "SHORT" = summary.side === "SHORT" ? "SHORT" : "LONG";
       let holdingDurationMs = 0;
       const coreLong = this.hedgeLedger.getCoreLong();
-      const coreLongDuration = coreLong.isOccupied && coreLong.openTime > 0 ? Math.max(0, nowMs - coreLong.openTime) : 0;
+      const coreLongOpenTime = (coreLong.originalOpenTime && coreLong.originalOpenTime > 0)
+        ? coreLong.originalOpenTime
+        : coreLong.openTime;
+      const coreLongDuration = coreLong.isOccupied && coreLongOpenTime > 0 ? Math.max(0, nowMs - coreLongOpenTime) : 0;
       let shortDuration = 0;
       const shortSlots = this.hedgeLedger.getShortSlots();
       for (const slot of shortSlots) {
-        if (slot.isOccupied && slot.openTime > 0) {
-          const dur = Math.max(0, nowMs - slot.openTime);
-          if (dur > shortDuration) shortDuration = dur;
+        if (slot.isOccupied) {
+          const slotOpenTime = (slot.originalOpenTime && slot.originalOpenTime > 0)
+            ? slot.originalOpenTime
+            : slot.openTime;
+          if (slotOpenTime > 0) {
+            const dur = Math.max(0, nowMs - slotOpenTime);
+            if (dur > shortDuration) shortDuration = dur;
+          }
         }
       }
       holdingDurationMs = Math.max(coreLongDuration, shortDuration);
@@ -2711,7 +2719,9 @@ export class StrategyEngine {
 
       // SOTA OU Alpha Half-Life Dynamic Horizon Synchronization (matching HedgePositionLedger)
       const liveHurst = this.client.getHurstExponent(this.assetIndex);
-      const safeHurst = Number.isFinite(liveHurst) && liveHurst > 0 ? liveHurst : 0.50;
+      const safeHurst = (typeof liveHurst === "number" && Number.isFinite(liveHurst) && liveHurst > 0)
+        ? Math.max(0.05, Math.min(0.95, liveHurst))
+        : 0.50;
       let halfLifeSec: number;
       if (safeHurst < 0.5) {
         const hurstShifted = safeHurst + 0.5;
@@ -2771,7 +2781,7 @@ export class StrategyEngine {
               this.hjbEngine,
               volMetrics,
               nowMs,
-              liveHurst
+              safeHurst
             )
           : [];
 

@@ -3119,7 +3119,9 @@ export class HedgePositionLedger {
     const minNetAlpha = this.sizingCalc.getMinNetAlpha();
     const roundTripFeeBuffer = (makerFee + takerFee) * 2.5;
 
-    const safeHurst = Math.max(0.05, Math.min(0.95, hurstExponent));
+    const safeHurst = (typeof hurstExponent === "number" && Number.isFinite(hurstExponent) && hurstExponent > 0)
+      ? Math.max(0.05, Math.min(0.95, hurstExponent))
+      : 0.50;
 
     // Ornstein-Uhlenbeck half-life calibration (August 2026 SOTA):
     // t_half = -Δt × ln(2) / (2 × ln(H + 0.5)), Δt = 0.1s (100ms tick)

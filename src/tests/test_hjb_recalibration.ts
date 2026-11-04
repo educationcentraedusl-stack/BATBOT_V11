@@ -330,6 +330,84 @@ assert(
   `Short exit quantity equals full slot quantity: got ${hjbShortTrigger?.quantity}`
 );
 
+// Test 4D: Hard Stop-Loss Preemption over HJB Liquidation Boundary
+// With entry = $60,000 and slPercent = 5.0%, stopLossPrice sits at $57,000 (LONG) and $63,000 (SHORT).
+// Price drop to $56,500 breaches BOTH Stop-Loss ($57,000) and HJB boundary ($59,419.39).
+// Stop-Loss MUST unconditionally preempt HJB optimal stopping and emit AGGRESSIVE_MARKET.
+ledger.clearSlots();
+ledger.occupyCoreLong(0.001, 60000.0, 1.5, 5.0);
+
+const slPreemptTriggers = ledger.evaluateSotaDynamicExits(
+  56500.0, // Plunge breaching Stop-Loss ($57,000) and HJB boundary ($59,419.39)
+  quietHazardMetrics,
+  undefined,
+  normalVolMetrics,
+  nowMs + 60000
+);
+
+const slTrigger = slPreemptTriggers.find((t) => t.reason.startsWith("MVA_TRAILING_STOP") || t.reason === "BREAK_EVEN_STOP_LOSS");
+const hjbPreemptedTrigger = slPreemptTriggers.find((t) => t.reason.startsWith("HJB_RESERVATION_LIQUIDATE"));
+
+assert(
+  slTrigger !== undefined,
+  "Hard Stop-Loss evaluates and triggers when markPrice <= stopLossPrice"
+);
+assert(
+  slTrigger?.executionStyle === "AGGRESSIVE_MARKET",
+  `Stop-Loss emits AGGRESSIVE_MARKET: got ${slTrigger?.executionStyle}`
+);
+assert(
+  hjbPreemptedTrigger === undefined,
+  "HJB PASSIVE_MAKER liquidation is strictly suppressed/preempted by Hard Stop-Loss"
+);
+
+// Test 4E: Volatility NaN, 0, and Negative Poisoning Protection
+const nanVolRes = defaultHjb.calculateReservationPrice(60000.0, 0.001, 30000, NaN, 200.0, 120.0);
+const zeroVolRes = defaultHjb.calculateReservationPrice(60000.0, 0.001, 30000, 0, 200.0, 120.0);
+const negVolRes = defaultHjb.calculateReservationPrice(60000.0, 0.001, 30000, -0.05, 200.0, 120.0);
+const nanBoundEval = defaultHjb.getOptimalExitBoundary("LONG", 60000.0, 59900.0, 0.001, 30000, NaN, 200.0, 120.0);
+
+assert(
+  Number.isFinite(nanVolRes) && nanVolRes > 0,
+  `calculateReservationPrice safe against NaN volatility: got ${nanVolRes}`
+);
+assert(
+  Number.isFinite(zeroVolRes) && zeroVolRes > 0,
+  `calculateReservationPrice safe against 0 volatility: got ${zeroVolRes}`
+);
+assert(
+  Number.isFinite(negVolRes) && negVolRes > 0,
+  `calculateReservationPrice safe against negative volatility: got ${negVolRes}`
+);
+assert(
+  Number.isFinite(nanBoundEval.liquidationBoundary) && nanBoundEval.liquidationBoundary > 0,
+  `getOptimalExitBoundary safe against NaN volatility: got ${nanBoundEval.liquidationBoundary}`
+);
+
+// Test 4F: Compressed Volatility Noise Floor Non-Inversion
+// Under highly compressed volatility (e.g. gkVol = 0.0005 = 5 bps),
+// maxBoundDistUsdt (3.0 * ATR = 15 bps) < noiseFloorUsdt (50 bps).
+// maxDist clamps to max(maxBoundDistUsdt, noiseFloorUsdt) = noiseFloorUsdt.
+const compressedVolEvalLong = defaultHjb.getOptimalExitBoundary("LONG", 60000.0, 59900.0, 0.001, 30000, 0.0005, 200.0, 120.0);
+const compressedVolEvalShort = defaultHjb.getOptimalExitBoundary("SHORT", 60000.0, 60100.0, 0.001, 30000, 0.0005, 200.0, 120.0);
+
+assert(
+  compressedVolEvalLong.liquidationBoundary <= 60000.0,
+  `LONG compressed boundary ($${compressedVolEvalLong.liquidationBoundary.toFixed(2)}) is below entry ($60,000)`
+);
+assert(
+  compressedVolEvalShort.liquidationBoundary >= 60000.0,
+  `SHORT compressed boundary ($${compressedVolEvalShort.liquidationBoundary.toFixed(2)}) is above entry ($60,000)`
+);
+assert(
+  Math.abs(compressedVolEvalLong.liquidationBoundary - 59700.0) < 1.0,
+  `LONG compressed boundary clamps to exact 50 bps noise floor ($59,700): got $${compressedVolEvalLong.liquidationBoundary.toFixed(2)}`
+);
+assert(
+  Math.abs(compressedVolEvalShort.liquidationBoundary - 60300.0) < 1.0,
+  `SHORT compressed boundary clamps to exact 50 bps noise floor ($60,300): got $${compressedVolEvalShort.liquidationBoundary.toFixed(2)}`
+);
+
 // =========================================================================================
 // STAGE 5: Sub-Microsecond Execution Latency & Zero-GC Benchmark
 // =========================================================================================
