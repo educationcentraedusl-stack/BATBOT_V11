@@ -20,6 +20,8 @@ import {
 } from "../strategy/vegamTpLadderEngine";
 import { HedgePositionLedger, PositionSlot } from "../strategy/positionLedger";
 import { MarketDataClient } from "../marketDataClient";
+import { MicrostructureMetrics } from "../strategy/microstructureHazardEngine";
+import { VolatilitySurfaceMetrics } from "../strategy/volatilitySurfaceEngine";
 
 console.log("================================================================================");
 console.log("   BATBOT_V11 SOTA QA TEST SUITE: VEGAM TP LADDER ENGINE (PHASE 3)");
@@ -561,6 +563,118 @@ assert(
 assert(
   bytesPerCall < 50.0,
   `Zero-GC hot-path verified: ${bytesPerCall.toFixed(2)} bytes/call (< 50 bytes V8 runtime noise threshold)`
+);
+
+// =========================================================================================
+// STAGE 8: Phase 8 Dynamic Trail Activation & OBI Tightening in HedgePositionLedger
+// =========================================================================================
+console.log("\n--- STAGE 8: Phase 8 Dynamic Trail Activation & OBI Tightening (HedgePositionLedger) ---");
+
+// Test 8A: Trail does NOT activate below 0.50% ROE (+0.167% ROE on BTC 2x)
+const phase8Sab = new SharedArrayBuffer(10 * 256 * 8);
+const phase8MdClient = new MarketDataClient(phase8Sab, 10, 256);
+phase8MdClient.setVegamGkAtrComposite(0.00906, 0); // 90.6 bps GK ATR
+const phase8Ledger = new HedgePositionLedger("BTCUSDT", 3, phase8MdClient, 0);
+phase8Ledger.setLeverage(2.0); // 2x leverage
+
+// Occupy CORE_LONG @ $60,000, initial SL = 1.50% ($59,100)
+phase8Ledger.occupyCoreLong(0.10, 60000.0, 3.0, 1.5);
+let p8CoreLong = phase8Ledger.getCoreLong();
+assert(p8CoreLong.stopLossPrice === 59100.0, `Initial Core Long SL set to $59,100: got $${p8CoreLong.stopLossPrice}`);
+
+const quietVolMetrics: VolatilitySurfaceMetrics = {
+  garmanKlass1s: 0.00906 * 0.00906,
+  garmanKlass10s: 0.00906 * 0.00906,
+  garmanKlass60s: 0.00906 * 0.00906,
+  parkinson60s: 0.00906 * 0.00906,
+  volatilityMultiplier: 1.0,
+};
+
+// Price move to $60,050 (+0.083% price move @ 2x = +0.167% ROE < 0.50% activation gate)
+const subActivationHazard: MicrostructureMetrics = {
+  ofi: 0.0,
+  obi: 0.0,
+  tfi: 0.0,
+  vpin: 0.30,
+  hazardScore: 0.10,
+  coxHazardRate: 0.05,
+  survivalProbability: 0.95,
+  isHazardExitTriggered: false,
+};
+phase8Ledger.evaluateSotaDynamicExits(60050.0, subActivationHazard, undefined, quietVolMetrics, Date.now());
+p8CoreLong = phase8Ledger.getCoreLong();
+assert(
+  p8CoreLong.stopLossPrice === 59100.0,
+  `Dynamic trail does NOT activate below 0.50% ROE: SL remains $59,100 (got $${p8CoreLong.stopLossPrice})`
+);
+
+// Test 8B: Dynamic trail activates at ROE >= 0.50% (+0.333% move @ 2x = +0.667% ROE @ $60,200)
+// Trail dist with neutral OBI (0.0): trailDist = 60000 * 0.00906 * 1.0 = $543.60
+// Proposed SL = 60200 - 543.60 = $59,656.40
+phase8Ledger.evaluateSotaDynamicExits(60200.0, subActivationHazard, undefined, quietVolMetrics, Date.now());
+p8CoreLong = phase8Ledger.getCoreLong();
+assert(
+  p8CoreLong.stopLossPrice > 59100.0,
+  `Dynamic trail activates at >= 0.50% ROE: SL ratcheted from $59,100 to $${p8CoreLong.stopLossPrice}`
+);
+assert(
+  Math.abs(p8CoreLong.stopLossPrice - 59656.4) < 1.0,
+  `Neutral OBI trailing stop matches exact formula (peak - 1.0*ATR): expected $59656.4, got $${p8CoreLong.stopLossPrice}`
+);
+assert(
+  p8CoreLong.stepCollarTier === undefined || p8CoreLong.stepCollarTier === 0,
+  `Tier 1 Break-Even ratchet remains inactive below 5.0% ROE (stepCollarTier: ${p8CoreLong.stepCollarTier ?? 0})`
+);
+
+// Test 8C: Trail distance dynamically tightens when OBI < -0.20 (Adverse Book Pressure)
+// With OBI = -0.35, k_regime contracts to 0.80 -> trailDist = 60000 * 0.00906 * 0.8 = $434.88
+// Proposed SL = 60200 - 434.88 = $59,765.12 (> $59,656.40)
+const adverseObiHazard: MicrostructureMetrics = {
+  ...subActivationHazard,
+  obi: -0.35, // OBI < -0.20 adverse pressure
+};
+phase8Ledger.evaluateSotaDynamicExits(60200.0, adverseObiHazard, undefined, quietVolMetrics, Date.now());
+p8CoreLong = phase8Ledger.getCoreLong();
+assert(
+  p8CoreLong.stopLossPrice > 59656.4,
+  `Adverse OBI (-0.35 < -0.20) tightens trail distance: SL raised to $${p8CoreLong.stopLossPrice}`
+);
+assert(
+  Math.abs(p8CoreLong.stopLossPrice - 59765.12) < 1.0,
+  `Tightened trailing stop matches exact 0.80x k_regime formula: expected $59765.12, got $${p8CoreLong.stopLossPrice}`
+);
+
+// Test 8D: Symmetrical SHORT position trail activation and OBI tightening
+phase8Ledger.clearSlots();
+phase8Ledger.occupyShortSlot(0, 0.10, 60000.0, 3.0, 1.5);
+let p8ShortSlot = phase8Ledger.getShortSlots()[0];
+assert(p8ShortSlot.stopLossPrice === 60900.0, `Initial Short SL set to $60,900: got $${p8ShortSlot.stopLossPrice}`);
+
+// Short price drop to $59,800 (+0.667% ROE >= 0.50%) with adverse OBI (+0.35 against short < -0.20 directional)
+// directional OBI = -0.35 -> k_regime = 0.80 -> trailDist = $434.88
+// Proposed Short SL = 59800 + 434.88 = $60,234.88 (< $60,900)
+const shortAdverseHazard: MicrostructureMetrics = {
+  ...subActivationHazard,
+  obi: 0.35, // Positive raw OBI is adverse for SHORT position
+};
+phase8Ledger.evaluateSotaDynamicExits(59800.0, shortAdverseHazard, undefined, quietVolMetrics, Date.now());
+p8ShortSlot = phase8Ledger.getShortSlots()[0];
+assert(
+  p8ShortSlot.stopLossPrice < 60900.0,
+  `Short dynamic trail activates at >= 0.50% ROE: SL tightened to $${p8ShortSlot.stopLossPrice}`
+);
+assert(
+  Math.abs(p8ShortSlot.stopLossPrice - 60234.88) < 1.0,
+  `Short tightened trailing stop matches exact 0.80x k_regime formula: expected $60234.88, got $${p8ShortSlot.stopLossPrice}`
+);
+
+// Test 8E: Monotonic Zero-Retreat Invariant on Pullback
+// Price bounces to $59,900 -> SL must NOT retreat back up
+phase8Ledger.evaluateSotaDynamicExits(59900.0, shortAdverseHazard, undefined, quietVolMetrics, Date.now());
+p8ShortSlot = phase8Ledger.getShortSlots()[0];
+assert(
+  Math.abs(p8ShortSlot.stopLossPrice - 60234.88) < 1.0,
+  `Monotonic zero-retreat invariant: Short SL remains locked at $${p8ShortSlot.stopLossPrice} on pullback`
 );
 
 // =========================================================================================

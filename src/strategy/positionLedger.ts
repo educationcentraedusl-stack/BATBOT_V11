@@ -7,7 +7,12 @@ import { HJBReservationEngine, HJBExitEvaluation } from "./hjbReservationEngine"
 import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
 import { getTradingSymbols } from "../config/tradingSymbols";
 import { MarketDataClient } from "../marketDataClient";
-import { computeVegamTpLevels, VegamTpLevels } from "./vegamTpLadderEngine";
+import {
+  computeVegamTpLevels,
+  computeObiWeightedTrailDistance,
+  DEFAULT_VEGAM_CONFIG,
+  VegamTpLevels,
+} from "./vegamTpLadderEngine";
 import { AdversarialExitGate, AdversarialExitConfig, DEFAULT_ADVERSARIAL_CONFIG, AdversarialExitResult } from "./adversarialExitGate";
 
 interface NativeTradingAddon {
@@ -3245,7 +3250,7 @@ export class HedgePositionLedger {
       slot.troughPrice = Math.min(slot.troughPrice && slot.troughPrice > 0 ? slot.troughPrice : slot.entryPrice, markPrice);
     }
 
-    const effectiveLev = this.leverage > 0 ? this.leverage : 20.0;
+    const effectiveLev = this.leverage > 0 ? Math.min(5.0, Math.max(2.0, this.leverage)) : 2.0;
     const rawRoePct = isLong
       ? ((markPrice - slot.entryPrice) / slot.entryPrice) * effectiveLev * 100.0
       : ((slot.entryPrice - markPrice) / slot.entryPrice) * effectiveLev * 100.0;
@@ -3254,9 +3259,26 @@ export class HedgePositionLedger {
       slot.peakRoe = rawRoePct;
     }
 
-    // Dynamic Continuous Tick-by-Tick Trailing SL (Locks past Entry Price as soon as in profit)
-    const minVol = (volMetrics && volMetrics.garmanKlass1s > 0.000001) ? Math.sqrt(volMetrics.garmanKlass1s) : 0.0020;
-    const dynamicTrailDist = Math.max(this.priceTickSize * 3, slot.entryPrice * Math.max(0.0010, minVol * 1.0));
+    // Telemetry and Microstructure Ingestion for Layer 2 & Layer 4
+    const liveHawkes = this.marketDataClient ? this.marketDataClient.getHawkesIntensity(this.assetIndex) : 1.0;
+    const liveSweep = this.marketDataClient ? this.marketDataClient.getIsSweepDetected(this.assetIndex) : false;
+    const liveEntropy = this.marketDataClient ? this.marketDataClient.getLOBEntropy(this.assetIndex) : 1.0;
+    const liveGkAtr = (this.marketDataClient?.getVegamGkAtrComposite(this.assetIndex))
+      || (volMetrics?.garmanKlass1s ? Math.sqrt(volMetrics.garmanKlass1s) : 0.00906);
+    const obiVal = (hazardMetrics && Number.isFinite(hazardMetrics.obi)) ? hazardMetrics.obi : 0.0;
+    const vpinVal = (hazardMetrics && Number.isFinite(hazardMetrics.vpin)) ? hazardMetrics.vpin : 0.50;
+
+    // Layer 2: OBI-Weighted Dynamic Trailing Distance (P8-T3: DEFECT-PM-03 Remediation)
+    const rawDynamicTrailDist = computeObiWeightedTrailDistance(
+      liveGkAtr,
+      obiVal,
+      vpinVal,
+      liveHawkes,
+      DEFAULT_VEGAM_CONFIG,
+      slot.entryPrice,
+      slot.side
+    );
+    const dynamicTrailDist = Math.max(this.priceTickSize * 3, rawDynamicTrailDist);
 
     if (!slot.breakEvenPrice || slot.breakEvenPrice <= 0) {
       slot.breakEvenPrice = this.formatPriceFast(
@@ -3267,8 +3289,24 @@ export class HedgePositionLedger {
     const maxLongSl = this.formatPriceFast(markPrice - this.priceTickSize * 2);
     const minShortSl = this.formatPriceFast(markPrice + this.priceTickSize * 2);
 
-    // Tier 1: +5.0% Net ROE -> Lock Entry + Round-Trip Fees (Break-Even Ratchet) & Dynamic Trail
-    if (rawRoePct >= 5.0 || (slot.peakRoe && slot.peakRoe >= 5.0)) {
+    // Layer 2: Dynamic Trailing SL Activation (P8-T1 & P8-T2: Reduced Threshold to >= 0.50% ROE)
+    // Operates as an independent additive layer alongside the Tier 1 Break-Even Ratchet
+    const currentPeakRoe = slot.peakRoe ?? rawRoePct;
+    const isTrailActive = rawRoePct >= DEFAULT_VEGAM_CONFIG.trailActivationRoePct || currentPeakRoe >= DEFAULT_VEGAM_CONFIG.trailActivationRoePct;
+    if (isTrailActive) {
+      if (isLong) {
+        const dynamicTrailSl = this.formatPriceFast((slot.peakPrice ?? markPrice) - dynamicTrailDist);
+        const safeTrailSl = Math.min(maxLongSl, dynamicTrailSl);
+        this.applyMonotonicStopLoss(slot, safeTrailSl);
+      } else {
+        const dynamicTrailSl = this.formatPriceFast((slot.troughPrice ?? markPrice) + dynamicTrailDist);
+        const safeTrailSl = Math.max(minShortSl, dynamicTrailSl);
+        this.applyMonotonicStopLoss(slot, safeTrailSl);
+      }
+    }
+
+    // Tier 1: +5.0% Net ROE -> Lock Entry + Round-Trip Fees (Break-Even Ratchet)
+    if (rawRoePct >= 5.0 || currentPeakRoe >= 5.0) {
       const beOffset = roundTripFeeBuffer + 0.0002;
       const rawTier1 = isLong ? slot.entryPrice * (1.0 + beOffset) : slot.entryPrice * (1.0 - beOffset);
       const targetTier1Sl = isLong ? Math.min(maxLongSl, this.formatPriceFast(rawTier1)) : Math.max(minShortSl, this.formatPriceFast(rawTier1));
@@ -3278,25 +3316,10 @@ export class HedgePositionLedger {
         slot.breakEvenPrice = targetTier1Sl;
       }
       this.applyMonotonicStopLoss(slot, targetTier1Sl);
-
-      // Active Dynamic Continuous Trailing SL behind Peak/Trough once Break-Even is Secured (>= +5.0% ROE)
-      if (isLong) {
-        const dynamicTrailSl = this.formatPriceFast((slot.peakPrice ?? markPrice) - dynamicTrailDist);
-        if (dynamicTrailSl >= targetTier1Sl) {
-          const safeTrailSl = Math.min(maxLongSl, dynamicTrailSl);
-          this.applyMonotonicStopLoss(slot, safeTrailSl);
-        }
-      } else {
-        const dynamicTrailSl = this.formatPriceFast((slot.troughPrice ?? markPrice) + dynamicTrailDist);
-        if (dynamicTrailSl <= targetTier1Sl) {
-          const safeTrailSl = Math.max(minShortSl, dynamicTrailSl);
-          this.applyMonotonicStopLoss(slot, safeTrailSl);
-        }
-      }
     }
 
     // Tier 2: +15.0% Net ROE -> Lock +10.0% ROE
-    if (rawRoePct >= 15.0) {
+    if (rawRoePct >= 15.0 || currentPeakRoe >= 15.0) {
       const lockOffset = (10.0 / 100.0) / effectiveLev;
       const rawTier2 = isLong ? slot.entryPrice * (1.0 + lockOffset) : slot.entryPrice * (1.0 - lockOffset);
       const targetTier2Sl = isLong ? Math.min(maxLongSl, this.formatPriceFast(rawTier2)) : Math.max(minShortSl, this.formatPriceFast(rawTier2));
@@ -3308,8 +3331,7 @@ export class HedgePositionLedger {
     }
 
     // Tier 3: >= +25.0% Net ROE -> Aggressive 70% Trailing Profit Collar
-    if (rawRoePct >= 25.0 || (slot.peakRoe && slot.peakRoe >= 25.0)) {
-      const currentPeakRoe = slot.peakRoe ?? rawRoePct;
+    if (rawRoePct >= 25.0 || currentPeakRoe >= 25.0) {
       const trailRoe = currentPeakRoe * 0.70;
       const trailOffset = (trailRoe / 100.0) / effectiveLev;
       const rawTier3 = isLong ? slot.entryPrice * (1.0 + trailOffset) : slot.entryPrice * (1.0 - trailOffset);
@@ -3346,12 +3368,6 @@ export class HedgePositionLedger {
     // 2. Layer 4: Adversarial Exit Gate (Ultra-Low-Latency Defensive Shield)
     // Multi-signal consensus (>= 2 signals) + adverse price velocity shock
     // -------------------------------------------------------------------------
-    const liveHawkes = this.marketDataClient ? this.marketDataClient.getHawkesIntensity(this.assetIndex) : 1.0;
-    const liveSweep = this.marketDataClient ? this.marketDataClient.getIsSweepDetected(this.assetIndex) : false;
-    const liveEntropy = this.marketDataClient ? this.marketDataClient.getLOBEntropy(this.assetIndex) : 1.0;
-    const liveGkAtr = (this.marketDataClient?.getVegamGkAtrComposite(this.assetIndex))
-      || (volMetrics?.garmanKlass1s ? Math.sqrt(volMetrics.garmanKlass1s) : 0.00906);
-
     const advResult = this.adversarialGate.evaluate(
       slot,
       markPrice,
