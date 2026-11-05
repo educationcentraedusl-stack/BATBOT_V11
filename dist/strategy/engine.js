@@ -316,6 +316,19 @@ class StrategyEngine {
      */
     updateICKillSwitchState(ewmaIC, isDriftFlagged, nowMs) {
         const safeIC = Number.isFinite(ewmaIC) ? ewmaIC : 0.0;
+        // Strict Invariant: If SAB Slot 102 reads 1.0 (Drifted), strictly latch to MODEL_BROKEN immediately
+        if (isDriftFlagged) {
+            if (this.icState !== "MODEL_BROKEN") {
+                this.icState = "MODEL_BROKEN";
+                this.icStateEnteredAt = nowMs;
+                this.icConditionMetSince = 0;
+                this.icEvidenceScore = 0.0;
+                console.warn(`[StrategyEngine][${this.config.symbol}][IC_KILL_SWITCH] Transition: -> MODEL_BROKEN | ` +
+                    `SAB Slot 102 Drift Flag Active (isDriftFlagged=true, IC: ${safeIC.toFixed(4)}). Strict latch enforced.`);
+            }
+            this.icConditionMetSince = 0;
+            return;
+        }
         // 1. SOTA Fast-Path SPRT Unlatch: High-conviction alpha (IC >= 0.10) with no structural drift immediately unlatches from DEGRADED only.
         // STRICTLY FORBIDDEN when MODEL_BROKEN (must strictly serve 120s quarantine).
         if (this.icState === "DEGRADED" && safeIC >= 0.10 && !isDriftFlagged) {
@@ -363,14 +376,7 @@ class StrategyEngine {
                 break;
             }
             case "DEGRADED": {
-                const icPairs = this.client.getIcSampleCount(this.assetIndex);
-                if (icPairs < 100 && !isDriftFlagged) {
-                    this.icState = "ALPHA_ACTIVE";
-                    this.icStateEnteredAt = nowMs;
-                    this.icConditionMetSince = 0;
-                    this.icEvidenceScore = 1.0;
-                    break;
-                }
+                // Cold-Start auto-unlatch loophole permanently eradicated: DEGRADED state cannot auto-unlatch based on low sample count.
                 if (isDriftFlagged || safeIC <= -0.02) {
                     this.icState = "MODEL_BROKEN";
                     this.icStateEnteredAt = nowMs;

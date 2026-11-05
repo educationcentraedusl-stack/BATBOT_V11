@@ -639,13 +639,16 @@ class HedgePositionLedger {
         }
         try {
             if (nativeAddon && typeof nativeAddon.recordTradeIc === "function") {
-                const realizedReturn = slotSide === "LONG"
-                    ? (exitPrice - entryPrice) / entryPrice
-                    : (entryPrice - exitPrice) / entryPrice;
+                // SOTA Ground-Truth IC Alignment: Spearman IC correlates prediction direction
+                // strictly with the UNDERLYING MARKET PRICE RETURN, independent of position side.
+                // For both LONG and SHORT, market return is strictly (exitPrice - entryPrice) / entryPrice.
+                const marketReturn = entryPrice > 0 ? (exitPrice - entryPrice) / entryPrice : 0.0;
                 const dir = slotSide === "LONG" ? 1.0 : -1.0;
                 const syms = (0, tradingSymbols_1.getTradingSymbols)();
                 const assetIdx = Math.max(0, syms.indexOf(this.symbol));
-                nativeAddon.recordTradeIc(dir, realizedReturn, assetIdx);
+                const rawSab = this.marketDataClient?.getRawSharedArrayBuffer();
+                const sabBuffer = rawSab ? Buffer.from(rawSab) : undefined;
+                nativeAddon.recordTradeIc(dir, marketReturn, assetIdx, sabBuffer);
             }
         }
         catch (err) {

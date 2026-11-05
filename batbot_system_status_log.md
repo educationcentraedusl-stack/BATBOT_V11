@@ -3279,3 +3279,16 @@ pm run build:ts exit 0), and all regression test suites.
 - **Artifacts Created/Modified:** src/strategy/engine.ts, src/strategy/positionLedger.ts, src/strategy/vegamTpLadderEngine.ts, src/strategy/hjbReservationEngine.ts, src/strategy/adversarialExitGate.ts, src/strategy/microstructureHazardEngine.ts, src/strategy/volatilitySurfaceEngine.ts, src/tests/test_phase9_master_validation.ts
 - **HFT/Performance Compliance:** Hostile line-by-line physical inspection across entire VEGAM stack. Zero GC heap allocations in hot paths (0.00 to 13.26 bytes/call vs < 50 bytes V8 noise threshold), sub-microsecond execution latency (0.1702 to 1.9025 µs vs < 3.0 µs SLA), 100% test pass rate across 57/57 Rust core tests and all TypeScript suites (77/77 TP ladder, 45/45 HJB, 37/37 Adversarial, 42/42 CADME, 53/53 Phase 9 Master Validation), zero fake/mock data, and clean strict TypeScript compilation (npm test & npm run build:ts exit 0).
 - **Status:** ✅ Completed & QA Verified
+
+- **Date:** 2026-11-05
+- **Feature/Task:** Remediation Step 1 - Trade IC Sign Inversion and N-API SAB Disconnect Fix
+- **Artifacts Created/Modified:** src/strategy/positionLedger.ts, src/lib.rs
+- **HFT/Performance Compliance:** Remediated critical prediction inversion and telemetry disconnect. Fixed Trade IC calculation in HedgePositionLedger to use underlying market return ((exitPrice - entryPrice) / entryPrice) aligned with model prediction direction (+1.0 for Long, -1.0 for Short), eliminating sign inversion on Short trades. Updated record_trade_ic N-API binding in lib.rs to accept and cache active SharedArrayBuffer via zero-copy AtomicSharedMemoryBridge (GLOBAL_SAB_BRIDGE), enabling immediate lock-free synchronization of SAB Slots 101, 102, and 155 upon trade closure. Zero heap allocations in hot path, strict TypeScript build pass, zero-copy SAB pointer semantics maintained.
+- **Status:** ✅ Completed & QA Verified
+
+
+- **Date:** 2026-11-05
+- **Feature/Task:** Remediation Step 2 - Kill Switch Bypass & Global Portfolio Breaker Fix
+- **Artifacts Created/Modified:** src/scripts/run_tui_dashboard.ts, src/strategy/engine.ts, src/strategy/risk.ts, src/tests/test_step2_remediation_verification.ts
+- **HFT/Performance Compliance:** Remediated critical kill switch bypass vulnerabilities and portfolio risk exposure: (1) Eradicated cross-asset drift erasure loops in run_tui_dashboard.ts, reading true drift state directly from SAB Slot 102 independently across all 10 assets; (2) Eradicated cold-start auto-unlatch loophole in engine.ts and enforced strict immediate latching to MODEL_BROKEN whenever SAB Slot 102 indicates drift (1.0), triggering [IC_KILL_SWITCH_BLOCKED] entry short-circuiting; (3) Implemented portfolio-wide consecutive loss circuit breaker in risk.ts (globalConsecutiveLosses >= 5) with 15-minute strict timeout and manual reset capability, while preserving emergency hard-stop close order bypass. Verified zero-allocation hot paths, clean TypeScript compilation (npm test), and 100% pass rate in comprehensive multi-asset verification suite.
+- **Status:** ✅ Completed & QA Verified

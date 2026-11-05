@@ -36,6 +36,7 @@ async function runICKillSwitchHysteresisTestSuite() {
     const bigIntView = new BigInt64Array(sab);
     let nowMs = timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs();
     Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
+    client.setIcSampleCount(1000, 0);
     let simulatedNowMs = 1_000_000.0;
     // --------------------------------------------------------------------------
     // STAGE 1: Initial State Invariant (ALPHA_ACTIVE)

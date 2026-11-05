@@ -288,3 +288,45 @@ IndexError: index 1 is out of bounds for dimension 1 with size 1
 [BATBOT Epoch 06/10] Loss: 0.638704 | Focal: 0.000000 | Grad Norm: 1.3824 | Best Val IC: +0.1100
 [BATBOT Epoch 07/10] Loss: 0.638201 | Focal: 0.000000 | Grad Norm: 1.3160 | Best Val IC: +0.1100
 [BATBOT Epoch 08/10] Loss: 0.644249 | Focal: 0.000000 | Grad Norm: 1.3554 | Best Val IC: +0.1100
+[2026-11-05T07:58:59.499Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDOUT LOG ---
+[BATBOT_V11][LOCAL-TRAINER] Ingesting SafeTensors dataset: 'D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\data\cfc_features.safetensors' (10946176 bytes)...
+[BATBOT_V11][LOCAL-TRAINER] Hardware Acceleration: CPU Vectorized (8 Threads)
+[BATBOT_V11][LOCAL-TRAINER] Unfolded 2D feature matrix into 3D sequences: train=torch.Size([19969, 32, 16]), val=torch.Size([4969, 32, 16])
+[BATBOT_V11][LOCAL-TRAINER] Sequence Dataset Ready: 19969 train samples, 4969 val samples.
+[BATBOT_V11][WARM-START] Successfully loaded 14/14 parameter tensors from 'D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\models\cfc_weights.safetensors' (Transfer Learning Active).
+[BATBOT_V11][ASYM-HEAD-INIT] Meta head re-anchored to win-rate prior: emp_win_rate=0.4609 -> b_heads[1]=-0.1569 (log-odds prior)
+[BATBOT_V11][LOCAL-TRAINER] Starting Continuous Transfer-Learning Recalibration (10 Epochs, Batch Size: 256)...
+[BATBOT Epoch 01/10] Loss: 0.638387 | Focal: 0.000000 | Grad Norm: 1.4062 | Best Val IC: +0.1422
+[BATBOT Epoch 02/10] Loss: 0.638191 | Focal: 0.000000 | Grad Norm: 1.5896 | Best Val IC: +0.1422
+[BATBOT Epoch 03/10] Loss: 0.638155 | Focal: 0.000000 | Grad Norm: 1.4984 | Best Val IC: +0.1422
+[BATBOT Epoch 04/10] Loss: 0.638223 | Focal: 0.000000 | Grad Norm: 1.3527 | Best Val IC: +0.1422
+[BATBOT Epoch 05/10] Loss: 0.638543 | Focal: 0.000000 | Grad Norm: 1.5185 | Best Val IC: +0.1422
+[BATBOT Epoch 06/10] Loss: 0.640950 | Focal: 0.000000 | Grad Norm: 1.3545 | Best Val IC: +0.1549
+[BATBOT Epoch 07/10] Loss: 0.638562 | Focal: 0.000000 | Grad Norm: 1.3264 | Best Val IC: +0.1549
+[BATBOT Epoch 08/10] Loss: 0.655033 | Focal: 0.000000 | Grad Norm: 1.2833 | Best Val IC: +0.1549
+[BATBOT Epoch 09/10] Loss: 0.638173 | Focal: 0.000000 | Grad Norm: 1.1450 | Best Val IC: +0.1549
+[BATBOT Epoch 10/10] Loss: 0.638285 | Focal: 0.000000 | Grad Norm: 1.1538 | Best Val IC: +0.1549
+[BATBOT_V11][LOCAL-TRAINER] Restored best model weights with Validation IC: +0.1549
+[BATBOT_V11][LOCAL-TRAINER] Recalibration completed in 488.468s | Final Best Val IC: +0.1549
+[BATBOT_V11][CALIBRATION] Pre-fit diagnostics: active meta_logit mean=0.2477, std=0.2172 | active y_win base rate=0.6118 (Chop samples masked: 4799)
+[BATBOT_V11][IRP CALIBRATION SUCCESS] A: 3.0823 | B: 0.3126 | T: 2.3626 | Active Logit Var: 0.0803 | Active Conf Mean: 0.6108 | Active Conf Std: 0.0666
+[2026-11-05T13:35:23.676Z] [RECALIBRATION_FAILURE] Command failed: D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\.venv\Scripts\python.exe D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\training\local_async_trainer.py
+ [KILLED BY NODE TIMEOUT (signal: SIGTERM)]
+--- PYTHON STDOUT LOG ---
+[BATBOT_V11][LOCAL-TRAINER] Ingesting SafeTensors dataset: 'D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\data\cfc_features.safetensors' (10946176 bytes)...
+[BATBOT_V11][LOCAL-TRAINER] Hardware Acceleration: CPU Vectorized (8 Threads)
+[BATBOT_V11][LOCAL-TRAINER] Unfolded 2D feature matrix into 3D sequences: train=torch.Size([19969, 32, 16]), val=torch.Size([4969, 32, 16])
+[BATBOT_V11][LOCAL-TRAINER] Sequence Dataset Ready: 19969 train samples, 4969 val samples.
+[BATBOT_V11][WARM-START] Successfully loaded 14/14 parameter tensors from 'D:\AI Trading Bot\Trading Bot Virsions\BATBOT_V11-Antigravity\BATBOT_V11\models\cfc_weights.safetensors' (Transfer Learning Active).
+[BATBOT_V11][ASYM-HEAD-INIT] Meta head re-anchored to win-rate prior: emp_win_rate=0.4609 -> b_heads[1]=-0.1569 (log-odds prior)
+[BATBOT_V11][LOCAL-TRAINER] Starting Continuous Transfer-Learning Recalibration (10 Epochs, Batch Size: 256)...
+[BATBOT Epoch 01/10] Loss: 0.639758 | Focal: 0.000000 | Grad Norm: 1.4479 | Best Val IC: +0.1143
+[BATBOT Epoch 02/10] Loss: 0.639319 | Focal: 0.000000 | Grad Norm: 1.5539 | Best Val IC: +0.1143
+[BATBOT Epoch 03/10] Loss: 0.638208 | Focal: 0.000000 | Grad Norm: 1.5535 | Best Val IC: +0.1143
+[BATBOT Epoch 04/10] Loss: 0.641041 | Focal: 0.000000 | Grad Norm: 1.5466 | Best Val IC: +0.1143
+[BATBOT Epoch 05/10] Loss: 0.639406 | Focal: 0.000000 | Grad Norm: 1.4501 | Best Val IC: +0.1143
+[BATBOT Epoch 06/10] Loss: 0.645600 | Focal: 0.000000 | Grad Norm: 1.4174 | Best Val IC: +0.1143
+[BATBOT Epoch 07/10] Loss: 0.638456 | Focal: 0.000000 | Grad Norm: 1.2302 | Best Val IC: +0.1143
+[BATBOT Epoch 08/10] Loss: 0.638490 | Focal: 0.000000 | Grad Norm: 1.3288 | Best Val IC: +0.1143

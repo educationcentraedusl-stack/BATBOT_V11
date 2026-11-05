@@ -41,6 +41,7 @@ lazy_static! {
     pub static ref GLOBAL_MULTI_LOB_MANAGER: ArcSwapOption<MultiAssetLOBManager> = ArcSwapOption::from(None);
     pub static ref GLOBAL_MULTI_STREAM_MANAGER: ArcSwapOption<MultiStreamManager> = ArcSwapOption::from(None);
     pub static ref GLOBAL_STRATEGY_ORCHESTRATOR: ArcSwapOption<StrategyOrchestrator> = ArcSwapOption::from(None);
+    pub static ref GLOBAL_SAB_BRIDGE: ArcSwapOption<AtomicSharedMemoryBridge> = ArcSwapOption::from(None);
     static ref GLOBAL_RUNTIME: Option<tokio::runtime::Runtime> = {
         match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
             Ok(rt) => Some(rt),
@@ -159,6 +160,9 @@ pub fn run_ai_inference_asset_napi(sab_buffer: Buffer, asset_idx: u32) -> napi::
     let len = sab_buffer.len();
     let bridge = AtomicSharedMemoryBridge::new(raw_ptr, len)
         .map_err(|err| napi::Error::from_reason(err.to_string()))?;
+    if GLOBAL_SAB_BRIDGE.load().is_none() {
+        GLOBAL_SAB_BRIDGE.store(Some(Arc::new(bridge)));
+    }
     if let Some(engine) = GLOBAL_AI_ENGINE.load().as_ref() {
         engine
             .run_inference_asset(&bridge, asset_idx as usize)
@@ -175,6 +179,9 @@ pub fn bump_hotswap_epoch(sab_buffer: Buffer) -> napi::Result<f64> {
     let len = sab_buffer.len();
     let bridge = AtomicSharedMemoryBridge::new(raw_ptr, len)
         .map_err(|err| napi::Error::from_reason(err.to_string()))?;
+    if GLOBAL_SAB_BRIDGE.load().is_none() {
+        GLOBAL_SAB_BRIDGE.store(Some(Arc::new(bridge)));
+    }
     let max_assets = bridge.max_assets();
     let prev = bridge.load_f64_asset(0, HOTSWAP_EPOCH_SLOT);
     let next = prev + 1.0;
@@ -198,13 +205,31 @@ pub fn reset_ic_tracker() -> bool {
 }
 
 #[napi]
-pub fn record_trade_ic(prediction: f64, realized_return: f64, asset_idx: Option<u32>) -> bool {
+pub fn record_trade_ic(
+    prediction: f64,
+    realized_return: f64,
+    asset_idx: Option<u32>,
+    sab_buffer: Option<Buffer>,
+) -> bool {
     if let Some(active_engine) = GLOBAL_AI_ENGINE.load().as_ref() {
         let idx = asset_idx.unwrap_or(0) as usize;
+
+        // If caller provided an active SAB buffer, wrap it zero-copy and cache in GLOBAL_SAB_BRIDGE
+        if let Some(ref buf) = sab_buffer {
+            let raw_ptr = buf.as_ptr() as *mut u8;
+            let len = buf.len();
+            if let Ok(bridge) = AtomicSharedMemoryBridge::new(raw_ptr, len) {
+                GLOBAL_SAB_BRIDGE.store(Some(Arc::new(bridge)));
+            }
+        }
+
+        let loaded_sab = GLOBAL_SAB_BRIDGE.load();
+        let sab_ref = loaded_sab.as_deref();
+
         if let Ok(trackers) = active_engine.ic_trackers.read() {
             if let Some(tracker_mutex) = trackers.get(idx) {
                 if let Ok(mut tracker) = tracker_mutex.lock() {
-                    tracker.add_observation_asset(prediction, realized_return, None, idx);
+                    tracker.add_observation_asset(prediction, realized_return, sab_ref, idx);
                     return true;
                 }
             }
@@ -421,6 +446,7 @@ pub fn start_ingestion(sab_buffer: Buffer, symbols: Option<Vec<String>>) -> napi
 
     let bridge = Arc::new(IngestionBridge::new(atomic_bridge));
     GLOBAL_INGESTION_BRIDGE.store(Some(bridge.clone()));
+    GLOBAL_SAB_BRIDGE.store(Some(Arc::new(atomic_bridge)));
 
     for (idx, sym) in target_symbols.iter().enumerate() {
         let queue = LockFreeSpscQueue::new(4096);

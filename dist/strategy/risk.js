@@ -43,6 +43,39 @@ class RiskGuard {
     symbolExecutionHistory = new Map();
     consecutiveLosses = new Map();
     symbolCooldownExpiries = new Map();
+    // Global Portfolio-Wide Consecutive Loss Circuit Breaker state (shared across all symbols & instances)
+    static globalConsecutiveLosses = 0;
+    static globalCircuitBreakerExpiryMs = 0;
+    static DEFAULT_GLOBAL_CIRCUIT_BREAKER_TIMEOUT_MS = 900_000; // 15 min strict timeout
+    static getGlobalConsecutiveLosses() {
+        return RiskGuard.globalConsecutiveLosses;
+    }
+    static resetGlobalConsecutiveLosses() {
+        RiskGuard.globalConsecutiveLosses = 0;
+        RiskGuard.globalCircuitBreakerExpiryMs = 0;
+    }
+    static isGlobalCircuitBreakerActive(nowMs = Date.now()) {
+        if (RiskGuard.globalConsecutiveLosses < 5) {
+            return false;
+        }
+        if (RiskGuard.globalCircuitBreakerExpiryMs > 0 && nowMs >= RiskGuard.globalCircuitBreakerExpiryMs) {
+            RiskGuard.resetGlobalConsecutiveLosses();
+            return false;
+        }
+        return true;
+    }
+    static getGlobalCircuitBreakerRemainingMs(nowMs = Date.now()) {
+        if (!RiskGuard.isGlobalCircuitBreakerActive(nowMs)) {
+            return 0;
+        }
+        return Math.max(0, RiskGuard.globalCircuitBreakerExpiryMs - nowMs);
+    }
+    static tripGlobalCircuitBreaker(timeoutMs) {
+        RiskGuard.globalConsecutiveLosses = Math.max(5, RiskGuard.globalConsecutiveLosses);
+        const envTimeout = process.env.GLOBAL_CIRCUIT_BREAKER_TIMEOUT_MS ? parseInt(process.env.GLOBAL_CIRCUIT_BREAKER_TIMEOUT_MS, 10) : NaN;
+        const effectiveTimeout = timeoutMs ?? (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : RiskGuard.DEFAULT_GLOBAL_CIRCUIT_BREAKER_TIMEOUT_MS);
+        RiskGuard.globalCircuitBreakerExpiryMs = Date.now() + effectiveTimeout;
+    }
     constructor(config) {
         const envDailyProfitLock = process.env.DAILY_PROFIT_LOCK_USDT ? parseFloat(process.env.DAILY_PROFIT_LOCK_USDT) : NaN;
         const defaultProfitLock = !isNaN(envDailyProfitLock) ? envDailyProfitLock : 10.0;
@@ -104,12 +137,23 @@ class RiskGuard {
         const isWinningExit = realizedPnl > 0 && (netRoePercent !== undefined ? netRoePercent > 0.20 : true);
         if (isWinningExit) {
             this.consecutiveLosses.set(sym, 0);
+            RiskGuard.resetGlobalConsecutiveLosses();
             return 0;
         }
         else if (realizedPnl < 0 || (realizedPnl >= 0 && (netRoePercent !== undefined && netRoePercent <= 0.20))) {
             // Realized loss or scratch trade not clearing +0.20% Net ROE threshold
             const newLosses = realizedPnl < 0 ? currentLosses + 1 : (realizedPnl === 0 ? currentLosses + 1 : currentLosses);
             this.consecutiveLosses.set(sym, newLosses);
+            // Increment Global Portfolio-Wide Circuit Breaker counter across ALL assets on losing trade
+            if (realizedPnl < 0 || realizedPnl === 0) {
+                RiskGuard.globalConsecutiveLosses += 1;
+                if (RiskGuard.globalConsecutiveLosses >= 5) {
+                    const envTimeout = process.env.GLOBAL_CIRCUIT_BREAKER_TIMEOUT_MS ? parseInt(process.env.GLOBAL_CIRCUIT_BREAKER_TIMEOUT_MS, 10) : NaN;
+                    const timeout = Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : RiskGuard.DEFAULT_GLOBAL_CIRCUIT_BREAKER_TIMEOUT_MS;
+                    RiskGuard.globalCircuitBreakerExpiryMs = Date.now() + timeout;
+                    console.error(`[RiskGuard][GLOBAL_CIRCUIT_BREAKER_TRIPPED] Global consecutive losses reached ${RiskGuard.globalConsecutiveLosses} >= 5 across portfolio! All new entries blocked portfolio-wide for ${Math.round(timeout / 1000)}s or until manual reset.`);
+                }
+            }
             return newLosses;
         }
         return currentLosses;
@@ -124,6 +168,7 @@ class RiskGuard {
         }
         else {
             this.consecutiveLosses.clear();
+            RiskGuard.resetGlobalConsecutiveLosses();
         }
     }
     getSymbolCooldownExpiry(symbol) {
@@ -209,6 +254,15 @@ class RiskGuard {
             return exports.RISK_PASSED;
         }
         const now = Date.now();
+        // 0. Global Portfolio-Wide Circuit Breaker Enforcement (Cross-Asset Consecutive Loss Protection)
+        if (RiskGuard.isGlobalCircuitBreakerActive(now)) {
+            const remainingSec = Math.ceil(RiskGuard.getGlobalCircuitBreakerRemainingMs(now) / 1000);
+            return {
+                passed: false,
+                reasonCode: "CIRCUIT_BREAKER_ACTIVE",
+                message: `Order rejected: Global portfolio circuit breaker active (${RiskGuard.getGlobalConsecutiveLosses()} consecutive losses across portfolio). All new entries blocked (${remainingSec}s remaining or until manual reset).`,
+            };
+        }
         // 1. Cooldown & Consecutive-Loss Circuit Breaker Enforcement
         if (intent.symbol) {
             const expiry = this.getSymbolCooldownExpiry(intent.symbol);

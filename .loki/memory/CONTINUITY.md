@@ -745,3 +745,7 @@
 1. VEGAM Phase 7 is 100% audited, repaired, compiled, and verified with zero defects across all integration test suites.
 2. Clear system for Phase 8 execution.
 3. Launch and monitor live multi-asset TUI command center (`npm start` or `npm run start:live`).
+* 2026-11-05 - Incident Remediation Step 1 Completed & QA Verified:
+  - Fixed trade IC sign inversion in src/strategy/positionLedger.ts: short trades now correlate against true underlying market return ((exitPrice - entryPrice) / entryPrice) aligned with model prediction direction (-1.0).
+  - Fixed N-API SharedArrayBuffer bridge in src/lib.rs: record_trade_ic now accepts and caches SAB buffer zero-copy in GLOBAL_SAB_BRIDGE, ensuring atomic SAB Slots 101, 102, and 155 update instantly upon trade closure.
+  - 100% verified via cargo check, npm run build:rust (optimized release), and npm run build:ts (0 errors).

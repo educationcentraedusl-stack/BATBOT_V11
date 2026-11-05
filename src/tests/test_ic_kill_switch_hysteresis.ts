@@ -39,6 +39,7 @@ async function runICKillSwitchHysteresisTestSuite(): Promise<void> {
   const bigIntView = new BigInt64Array(sab);
   let nowMs = timeSynchronizer.getAdjustedNowMs();
   Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
+  client.setIcSampleCount(1000, 0);
 
   let simulatedNowMs = 1_000_000.0;
 

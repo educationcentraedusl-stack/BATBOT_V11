@@ -365,8 +365,9 @@ export async function runProductionTuiLauncher(): Promise<void> {
       const batch = multiEngine.evaluateAllTicks();
 
       // Active Model Drift Evaluation & Self-Healing Trigger (SAB Slot 101 & 102)
+      // Fetch true drift state directly from SAB Slot 102 for each independent asset.
       let rollingIc = client.getRollingIC();
-      let isDrifted = client.getIsModelDrifted();
+      let isDrifted = client.getIsModelDrifted(0);
       let sampleCount = 0;
 
       if (nativeModule && typeof nativeModule.getIcStatus === "function") {
@@ -392,19 +393,17 @@ export async function runProductionTuiLauncher(): Promise<void> {
         }
       }
 
-      // Physical Hard Gate: Clamp drift to false during warm-up period (< 1000 pairs)
-      if (sampleCount < 1000) {
-        isDrifted = false;
-        for (let i = 0; i < maxAssets; i++) {
-          client.setIsModelDrifted(false, i);
+      // Check true drift state across all independent assets directly from SAB Slot 102
+      let anyAssetDrifted = false;
+      let minIc = rollingIc;
+      for (let i = 0; i < maxAssets; i++) {
+        const assetDrift = client.getIsModelDrifted(i);
+        const assetIc = client.getRollingIC(i);
+        if (assetDrift) {
+          anyAssetDrifted = true;
         }
-      }
-
-      // Unconditional High-IC Alpha Immunity: strong positive alpha suppresses drift
-      if (rollingIc >= 0.0500) {
-        isDrifted = false;
-        for (let i = 0; i < maxAssets; i++) {
-          client.setIsModelDrifted(false, i);
+        if (Number.isFinite(assetIc) && assetIc < minIc) {
+          minIc = assetIc;
         }
       }
 
@@ -416,7 +415,7 @@ export async function runProductionTuiLauncher(): Promise<void> {
           recalibrationManager.evaluateShadowTick(seqNum, rollingIc);
         }
       } else {
-        recalibrationManager.evaluateTickDrift(rollingIc, isDrifted);
+        recalibrationManager.evaluateTickDrift(minIc, isDrifted || anyAssetDrifted);
       }
 
       // Check scheduled offline T-KAN initialization (throttled to once every 1000 ticks / ~10s and gated by 1000-pair warm-up)
