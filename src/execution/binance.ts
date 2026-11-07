@@ -6,6 +6,9 @@ import { URL } from "node:url";
 import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
 import { ClientOrderIdGenerator } from "./clientOrderIdGenerator";
 import { timeSynchronizer } from "../utils/timeSynchronizer";
+import { WsOrderClient, WsPlaceOrderParams, WsOrderResponse } from "./wsOrderClient";
+import { MarketDataClient } from "../marketDataClient";
+import { SAB_SLOTS } from "../ipc/sabSchema";
 
 export interface BinanceOrderParams {
   symbol: string;
@@ -359,6 +362,84 @@ export class BinanceExecutionClient {
   private isTimeSynced: boolean = false;
   private timeSyncPromise: Promise<number> | null = null;
   private inFlightClientOrderIds: Set<string> = new Set();
+
+  // ─── Phase 1 HFT Overhaul: WebSocket Order API Primary Path ─────────────────
+  // WsOrderClient is the primary execution path (~15ms RTT).
+  // REST HTTP remains as the automatic fallback when WS is not ready.
+  //
+  // Zero-GC invariant: wsClient and sabClient are plain object references.
+  // SAB Slots 159 (WS_ORDER_RTT_MS) and 160 (WS_ORDER_STREAM_HEALTH) are
+  // updated atomically via MarketDataClient.writeAtomicFloat64Asset() after
+  // every WS acknowledgement or fallback event.
+  private wsOrderClient: WsOrderClient | null = null;
+  private sabClient: MarketDataClient | null = null;
+  private wsAssetIndex: number = 0; // Per-asset SAB index for WS telemetry slots
+
+  /**
+   * Attaches a WsOrderClient and a MarketDataClient for WS-first execution.
+   * Must be called once during engine initialization, before the first order.
+   *
+   * @param wsClient  Fully constructed, connected WsOrderClient instance.
+   * @param sabClient MarketDataClient bound to the SharedArrayBuffer.
+   * @param assetIndex Asset index for SAB telemetry slot writes.
+   */
+  public attachWsOrderClient(
+    wsClient: WsOrderClient,
+    sabClient: MarketDataClient,
+    assetIndex: number = 0
+  ): void {
+    this.wsOrderClient = wsClient;
+    this.sabClient = sabClient;
+    this.wsAssetIndex = assetIndex;
+    // Immediately mark the WS stream as healthy in the SAB
+    sabClient.writeAtomicFloat64Asset(assetIndex, SAB_SLOTS.WS_ORDER_STREAM_HEALTH, 1.0);
+    console.log(
+      `[BinanceExecutionClient][WS_ORDER_CLIENT] WebSocket Order API primary path attached (assetIndex=${assetIndex}).`
+    );
+  }
+
+  /**
+   * Detaches the WsOrderClient and destroys it. Reverts to REST fallback.
+   * SAB Slot 160 is set to 0.0 (REST fallback active).
+   */
+  public detachWsOrderClient(): void {
+    if (this.wsOrderClient !== null) {
+      this.wsOrderClient.destroy();
+      this.wsOrderClient = null;
+    }
+    if (this.sabClient !== null) {
+      this.sabClient.writeAtomicFloat64Asset(
+        this.wsAssetIndex,
+        SAB_SLOTS.WS_ORDER_STREAM_HEALTH,
+        0.0
+      );
+    }
+    console.log(
+      "[BinanceExecutionClient][WS_ORDER_CLIENT] WebSocket Order API detached. Fallback to REST active."
+    );
+  }
+
+  /**
+   * Zero-GC SAB telemetry writer: atomically records WS RTT and health after each dispatch.
+   * Called only from the WS execution path — never from the REST fallback path.
+   *
+   * @param rttMs  Round-trip time in milliseconds from dispatch to Binance acknowledgement.
+   * @param healthy true = WS primary active, false = fallback to REST.
+   */
+  private _writeWsTelemetry(rttMs: number, healthy: boolean): void {
+    if (this.sabClient === null) return;
+    // Atomic writes: no GC allocation — scalar operations on Float64Array via BigInt64Array view
+    this.sabClient.writeAtomicFloat64Asset(
+      this.wsAssetIndex,
+      SAB_SLOTS.WS_ORDER_RTT_MS,
+      rttMs
+    );
+    this.sabClient.writeAtomicFloat64Asset(
+      this.wsAssetIndex,
+      SAB_SLOTS.WS_ORDER_STREAM_HEALTH,
+      healthy ? 1.0 : 0.0
+    );
+  }
 
   constructor(options?: BinanceClientOptions) {
     this.testnet = options?.useTestnet ?? (process.env.USE_TESTNET === "true" || process.env.USE_TESTNET === "1" || process.env.BINANCE_TESTNET === "true");
@@ -1078,6 +1159,118 @@ export class BinanceExecutionClient {
       }
       this.inFlightClientOrderIds.add(cid);
     }
+
+    // ─── Phase 1 HFT Overhaul: WS-First Execution Path ─────────────────────────
+    // Primary path: WebSocket Order API (~15ms RTT).
+    // Automatic fallback: REST HTTPS (~460ms RTT) if WS is not ready or throws.
+    //
+    // Eligibility: Only attempt WS for MARKET, LIMIT, STOP_MARKET, TAKE_PROFIT_MARKET
+    // order types on the first (non-retry) attempt.
+    // Conditional orders (STOP_MARKET / TAKE_PROFIT_MARKET) with closePosition=true
+    // are excluded from the WS path because Binance WS-FAPI does not support
+    // the closePosition flag for conditional orders as of Nov-2026.
+    // All retry passes (retryCount > 0) go through REST to preserve existing
+    // -4509/-4130/-5022 recovery logic unchanged.
+    if (
+      retryCount === 0 &&
+      this.wsOrderClient !== null &&
+      this.wsOrderClient.isReady()
+    ) {
+      const isClosePositionOrder =
+        params.closePosition === true ||
+        String(params.closePosition).toLowerCase() === "true";
+
+      // WS path supports MARKET and LIMIT orders, and conditional orders WITHOUT closePosition.
+      // closePosition=true conditional orders must remain on the REST path for full recovery logic.
+      const isWsEligible =
+        !isClosePositionOrder ||
+        (params.type !== "STOP_MARKET" && params.type !== "TAKE_PROFIT_MARKET");
+
+      if (isWsEligible) {
+        try {
+          const wsParams: WsPlaceOrderParams = {
+            symbol: params.symbol,
+            side: params.side,
+            type: params.type,
+            quantity: params.quantity,
+            price: params.price,
+            stopPrice: params.stopPrice,
+            timeInForce: params.timeInForce,
+            positionSide: params.positionSide,
+            reduceOnly: params.reduceOnly,
+            closePosition: params.closePosition,
+            workingType: params.workingType,
+            newClientOrderId: cid.length > 0 ? cid : undefined,
+            recvWindow: params.recvWindow,
+          };
+
+          const wsResponse: WsOrderResponse = await this.wsOrderClient.placeOrder(wsParams);
+
+          // Update SAB telemetry slots 159 and 160 atomically (zero-GC scalar writes)
+          this._writeWsTelemetry(wsResponse.rttMs, true);
+
+          if (wsResponse.result === null) {
+            throw new Error(
+              `[BinanceExecutionClient][WS_NULL_RESULT] WS order.place returned null result for ${params.symbol} cid=${cid}`
+            );
+          }
+
+          // Normalize WsOrderResult → BinanceOrderResponse (shape-compatible)
+          const r = wsResponse.result;
+          return {
+            orderId:        r.orderId,
+            symbol:         r.symbol,
+            status:         r.status,
+            clientOrderId:  r.clientOrderId,
+            price:          r.price,
+            avgPrice:       r.avgPrice,
+            origQty:        r.origQty,
+            executedQty:    r.executedQty,
+            cumQuote:       r.cumQuote,
+            timeInForce:    r.timeInForce,
+            type:           r.type,
+            reduceOnly:     r.reduceOnly,
+            side:           r.side,
+            positionSide:   r.positionSide,
+            stopPrice:      r.stopPrice,
+            workingType:    r.workingType,
+            updateTime:     r.updateTime,
+          };
+        } catch (wsErr: unknown) {
+          const wsErrMsg = wsErr instanceof Error ? wsErr.message : String(wsErr);
+
+          // If error is a Binance semantic rejection (non-5xx), do NOT fall through to REST.
+          // A WS Binance API error (e.g. insufficient margin, bad params) will return the same
+          // from REST. We only fall through on transport-level failures (timeout, disconnect).
+          const isBinanceSemanticError =
+            wsErrMsg.includes("Binance WS Order API Error") &&
+            !wsErrMsg.includes("timed out") &&
+            !wsErrMsg.includes("not ready") &&
+            !wsErrMsg.includes("destroyed") &&
+            !wsErrMsg.includes("Connection closed");
+
+          if (isBinanceSemanticError) {
+            // Mark WS health as degraded for this tick — still connected but returned an error
+            this._writeWsTelemetry(0.0, true);
+            // Re-throw directly: REST would return the same rejection
+            if (cid.length > 0 && retryCount === 0) {
+              this.inFlightClientOrderIds.delete(cid);
+            }
+            throw wsErr;
+          }
+
+          // Transport-level failure: WS disconnected, timed out, or destroyed.
+          // Fall through to REST path and mark stream health as degraded.
+          this._writeWsTelemetry(0.0, false);
+          console.warn(
+            `[BinanceExecutionClient][WS_FALLBACK] WS Order API transport failure for ${params.symbol} ` +
+            `(cid=${cid}): ${wsErrMsg}. Falling back to REST HTTPS.`
+          );
+          // Fall through to the existing REST path below
+        }
+      }
+    }
+    // ────────────────────────────────────────────────────────────────────────────
 
     try {
       const isClosePosition = params.closePosition === true || String(params.closePosition).toLowerCase() === "true";

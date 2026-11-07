@@ -346,6 +346,39 @@ export class StrategyEngine {
     }
 
     StrategyEngine.registerEngine(this);
+
+    // ─── Phase 1 HFT Overhaul: Autonomous WS Order Client Initialization ────────
+    // Conditionally create and connect a WsOrderClient if WS_ORDER_API_ENABLED=true.
+    // The WS client is attached to the BinanceExecutionClient as the primary execution
+    // path. If the WS connection fails, REST remains the seamless fallback.
+    // SAB Slots 159 (WS_ORDER_RTT_MS) and 160 (WS_ORDER_STREAM_HEALTH) are managed
+    // inside BinanceExecutionClient._writeWsTelemetry() after each dispatch.
+    const wsEnabled =
+      process.env.WS_ORDER_API_ENABLED === "true" ||
+      process.env.WS_ORDER_API_ENABLED === "1";
+
+    if (wsEnabled && this.executionClient && this.client) {
+      // Import lazily to avoid circular dependency during hot-reload scenarios.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { WsOrderClient } = require("../execution/wsOrderClient") as typeof import("../execution/wsOrderClient");
+      const wsClient = new WsOrderClient();
+      wsClient
+        .connect()
+        .then(() => {
+          this.executionClient.attachWsOrderClient(wsClient, this.client, this.assetIndex);
+          console.log(
+            `[StrategyEngine][${this.config.symbol}][WS_ORDER_API] WebSocket Order API primary path ACTIVE (assetIndex=${this.assetIndex}).`
+          );
+        })
+        .catch((err: unknown) => {
+          console.warn(
+            `[StrategyEngine][${this.config.symbol}][WS_ORDER_API] WS Order API connection failed — REST fallback active: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+        });
+    }
+    // ─────────────────────────────────────────────────────────────────────────────
   }
 
   /**

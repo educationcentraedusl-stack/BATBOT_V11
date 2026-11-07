@@ -105,6 +105,12 @@ export const SAB_SLOTS = {
   VEGAM_GK_ATR_COMPOSITE: 156, // GK_ATR_composite = sqrt(0.30×GK_1s + 0.70×GK_60s) — primary vol governor
   VEGAM_TRAIL_K_REGIME: 157,   // k_regime OBI-weighted trail multiplier [0.5 .. 2.0] — real-time trail distance scaler
   VEGAM_CADME_STATE: 158,      // CADME alpha-decay state: 0=INACTIVE, 1=MONITORING, 2=EXIT_TRIGGERED
+
+  // Phase 1 HFT Overhaul: WebSocket Order API Telemetry Slots (159..160)
+  // Written atomically by BinanceExecutionClient after each WS order acknowledgement.
+  // Zero-copy: written via MarketDataClient.writeAtomicFloat64Asset() — no allocation in hot-path.
+  WS_ORDER_RTT_MS: 159,        // Last WS Order API round-trip latency in milliseconds (0.0 if never dispatched)
+  WS_ORDER_STREAM_HEALTH: 160, // WS stream health: 1.0 = connected & primary path, 0.0 = disconnected / REST fallback active
 } as const;
 
 export const {
