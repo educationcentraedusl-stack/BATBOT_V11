@@ -358,21 +358,10 @@ export class StrategyEngine {
       process.env.WS_ORDER_API_ENABLED === "1";
 
     if (wsEnabled && this.executionClient && this.client) {
-      if (this.executionClient.hasWsOrderClient()) {
-        // Reuse existing WsOrderClient singleton connection; mark asset health in SAB
-        this.client.writeAtomicFloat64Asset(this.assetIndex, 160, 1.0);
-        console.log(
-          `[StrategyEngine][${this.config.symbol}][WS_ORDER_API] Reusing shared WebSocket Order API primary path (assetIndex=${this.assetIndex}).`
-        );
-      } else {
-        // Import lazily to avoid circular dependency during hot-reload scenarios.
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { WsOrderClient } = require("../execution/wsOrderClient") as typeof import("../execution/wsOrderClient");
-        const wsClient = new WsOrderClient();
-        wsClient
-          .connect()
+      if (typeof this.executionClient.ensureWsOrderClient === "function") {
+        this.executionClient
+          .ensureWsOrderClient(this.client, this.assetIndex, this.config.symbol)
           .then(() => {
-            this.executionClient.attachWsOrderClient(wsClient, this.client, this.assetIndex);
             console.log(
               `[StrategyEngine][${this.config.symbol}][WS_ORDER_API] WebSocket Order API primary path ACTIVE (assetIndex=${this.assetIndex}).`
             );
@@ -384,6 +373,11 @@ export class StrategyEngine {
               }`
             );
           });
+      } else if (this.executionClient.hasWsOrderClient()) {
+        this.client.writeAtomicFloat64Asset(this.assetIndex, 160, 1.0);
+        console.log(
+          `[StrategyEngine][${this.config.symbol}][WS_ORDER_API] Reusing shared WebSocket Order API primary path (assetIndex=${this.assetIndex}).`
+        );
       }
     }
     // ─────────────────────────────────────────────────────────────────────────────
@@ -889,7 +883,7 @@ export class StrategyEngine {
       }
       if (orderKey > 0) {
         // Positive key is real exchange OrderId: asynchronously dispatch cancel to exchange
-        this.executionClient.cancelOrder(this.config.symbol, orderKey).catch((err: unknown) => {
+        this.executionClient.cancelOrder(this.config.symbol, orderKey, undefined, this.assetIndex).catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);
           console.warn(`[AROS_CA][CANCEL_NOTICE] [${this.config.symbol}] Failed to cancel resting entry order #${orderKey}: ${msg}`);
         });
@@ -1522,7 +1516,7 @@ export class StrategyEngine {
           if (!sideSummary.isOccupied || sideSummary.totalQuantity <= 0) {
             const slId = this.hedgeLedger.getActiveStopLossOrderId(posSide);
             if (slId) {
-              this.executionClient.cancelOrder(this.config.symbol, slId).catch((err: unknown) => {
+              this.executionClient.cancelOrder(this.config.symbol, slId, undefined, this.assetIndex).catch((err: unknown) => {
                 console.warn(`[EXCHANGE_SL_ENGINE][CANCEL_WARN] [${this.config.symbol}:${posSide}] Unable to cancel resting SL on position close #${slId}: ${err instanceof Error ? err.message : String(err)}`);
               });
               this.hedgeLedger.registerActiveStopLossOrderId(posSide, 0);
@@ -1835,6 +1829,7 @@ export class StrategyEngine {
             const retryRes = await this.executionClient.placeOrder({
               ...rej.intent,
               price: newPrice,
+              assetIndex: this.assetIndex,
             });
             if (retryRes && retryRes.orderId) {
               const currentTps = this.hedgeLedger.getActiveTpOrderIds(slotId);
@@ -1898,6 +1893,7 @@ export class StrategyEngine {
             const retryRes = await this.executionClient.placeOrder({
               ...rej.intent,
               price: newPrice,
+              assetIndex: this.assetIndex,
             });
             if (retryRes && retryRes.orderId) {
               const currentTps = this.hedgeLedger.getActiveTpOrderIds(slotId);
@@ -1922,6 +1918,7 @@ export class StrategyEngine {
             const retryRes = await this.executionClient.placeOrder({
               ...intent,
               price: newPrice,
+              assetIndex: this.assetIndex,
             });
             if (retryRes && retryRes.orderId) {
               const currentTps = this.hedgeLedger.getActiveTpOrderIds(slotId);
@@ -2103,7 +2100,7 @@ export class StrategyEngine {
           );
           if (placedOrderId) {
             // Cancel orphaned new order if worker was evicted
-            this.executionClient.cancelOrder(this.config.symbol, placedOrderId).catch(() => {});
+            this.executionClient.cancelOrder(this.config.symbol, placedOrderId, undefined, this.assetIndex).catch(() => {});
           }
           return;
         }
@@ -2125,7 +2122,7 @@ export class StrategyEngine {
               `[EXCHANGE_SL_ENGINE][CLEANUP_OLD_SL] [${this.config.symbol}:${side}] SL_new #${placedOrderId} confirmed. Asynchronously cancelling superseded SL_old #${existingSlId}...`
             );
             this.executionClient
-              .cancelOrder(this.config.symbol, existingSlId, abortController.signal)
+              .cancelOrder(this.config.symbol, existingSlId, abortController.signal, this.assetIndex)
               .then(() => {
                 console.log(
                   `[EXCHANGE_SL_ENGINE][CLEANUP_SUCCESS] [${this.config.symbol}:${side}] Successfully cancelled superseded SL_old #${existingSlId}.`
@@ -3846,6 +3843,7 @@ export class StrategyEngine {
           quantity: this.reusableOrderIntent.quantity,
           positionSide: targetPosSide,
           clientOrderId: entryCid,
+          assetIndex: this.assetIndex,
         };
 
         if (orderType === "LIMIT") {
