@@ -814,6 +814,11 @@ export class HedgePositionLedger {
     }
   }
 
+  // Zero-GC caching for MHDC parameters to avoid C++ process.env table lookups in hot paths
+  private cachedMhdcMultiplier: number = 3.0;
+  private cachedMhdcDefaultHalfLifeSec: number = 120.0;
+  private lastMhdcNowMs: number = -1;
+
   public getMarketDataClient(): MarketDataClient | undefined {
     return this.marketDataClient;
   }
@@ -3471,17 +3476,28 @@ export class HedgePositionLedger {
       : (slot.openTime && slot.openTime > 0 ? slot.openTime : nowMs);
     const positionAgeSec = Math.max(0, (nowMs - effectiveOpenTime) / 1000.0);
 
+    if (nowMs !== this.lastMhdcNowMs) {
+      this.lastMhdcNowMs = nowMs;
+      const envMult = process.env.MHDC_MULTIPLIER;
+      this.cachedMhdcMultiplier = envMult ? parseFloat(envMult) : 3.0;
+      if (!Number.isFinite(this.cachedMhdcMultiplier) || this.cachedMhdcMultiplier <= 0) {
+        this.cachedMhdcMultiplier = 3.0;
+      }
+      const envHalfLife = process.env.MHDC_DEFAULT_HALF_LIFE_SEC;
+      this.cachedMhdcDefaultHalfLifeSec = envHalfLife ? parseFloat(envHalfLife) : 120.0;
+      if (!Number.isFinite(this.cachedMhdcDefaultHalfLifeSec) || this.cachedMhdcDefaultHalfLifeSec <= 0) {
+        this.cachedMhdcDefaultHalfLifeSec = 120.0;
+      }
+    }
+
     const rawHalfLife = this.marketDataClient
       ? this.marketDataClient.readAtomicFloat64Asset(this.assetIndex, SAB_SLOTS.VEGAM_CADME_STATE)
       : 0;
-    const defaultHalfLife = parseFloat(process.env.MHDC_DEFAULT_HALF_LIFE_SEC ?? "120.0");
     const dynamicHalfLifeSec = (Number.isFinite(rawHalfLife) && rawHalfLife > 2.0)
       ? rawHalfLife
-      : (Number.isFinite(defaultHalfLife) && defaultHalfLife > 0 ? defaultHalfLife : 120.0);
+      : this.cachedMhdcDefaultHalfLifeSec;
 
-    const mhdcMultiplier = parseFloat(process.env.MHDC_MULTIPLIER ?? "3.0");
-    const safeMhdcMultiplier = Number.isFinite(mhdcMultiplier) && mhdcMultiplier > 0 ? mhdcMultiplier : 3.0;
-    const mhdcSec = safeMhdcMultiplier * dynamicHalfLifeSec;
+    const mhdcSec = this.cachedMhdcMultiplier * dynamicHalfLifeSec;
 
     // Update SAB telemetry slots 164 and 163 (zero-GC atomic writes)
     if (this.marketDataClient && typeof this.assetIndex === "number") {

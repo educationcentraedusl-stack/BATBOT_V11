@@ -289,6 +289,86 @@ export class MarketDataClient {
     }
   }
 
+  /**
+   * Phase 3: Zero-allocation reader to populate separate pre-allocated top-5 Bid price & qty Float64Arrays.
+   * Reads Slots 11..20 (5 levels × 2 values).
+   */
+  public fillTop5Bids(outPrices: Float64Array, outQtys: Float64Array, assetIdx: number = 0): void {
+    const count = Math.min(5, outPrices.length, outQtys.length);
+    for (let i = 0; i < count; i++) {
+      const base = 11 + i * 2;
+      outPrices[i] = this.readAtomicFloat64Asset(assetIdx, base);
+      outQtys[i] = this.readAtomicFloat64Asset(assetIdx, base + 1);
+    }
+  }
+
+  /**
+   * Phase 3: Zero-allocation reader to populate separate pre-allocated top-5 Ask price & qty Float64Arrays.
+   * Reads Slots 51..60 (5 levels × 2 values).
+   */
+  public fillTop5Asks(outPrices: Float64Array, outQtys: Float64Array, assetIdx: number = 0): void {
+    const count = Math.min(5, outPrices.length, outQtys.length);
+    for (let i = 0; i < count; i++) {
+      const base = 51 + i * 2;
+      outPrices[i] = this.readAtomicFloat64Asset(assetIdx, base);
+      outQtys[i] = this.readAtomicFloat64Asset(assetIdx, base + 1);
+    }
+  }
+
+  /**
+   * Phase 3: Zero-allocation consolidated reader to populate top-5 Bid & Ask price/qty Float64Arrays in a single sweep.
+   * High-efficiency memory barrier batching for hot-path multi-level OFI evaluation.
+   */
+  public fillTop5Levels(
+    outBidPx: Float64Array,
+    outBidQty: Float64Array,
+    outAskPx: Float64Array,
+    outAskQty: Float64Array,
+    assetIdx: number = 0
+  ): void {
+    const count = Math.min(5, outBidPx.length, outBidQty.length, outAskPx.length, outAskQty.length);
+    for (let i = 0; i < count; i++) {
+      const bidBase = 11 + i * 2;
+      outBidPx[i] = this.readAtomicFloat64Asset(assetIdx, bidBase);
+      outBidQty[i] = this.readAtomicFloat64Asset(assetIdx, bidBase + 1);
+      const askBase = 51 + i * 2;
+      outAskPx[i] = this.readAtomicFloat64Asset(assetIdx, askBase);
+      outAskQty[i] = this.readAtomicFloat64Asset(assetIdx, askBase + 1);
+    }
+  }
+
+  /**
+   * Reads a single bid price level from SAB (level: 0..19).
+   */
+  public getBidPriceAtLevel(level: number, assetIdx: number = 0): number {
+    if (level < 0 || level >= 20) return 0.0;
+    return this.readAtomicFloat64Asset(assetIdx, 11 + level * 2);
+  }
+
+  /**
+   * Reads a single bid quantity level from SAB (level: 0..19).
+   */
+  public getBidQtyAtLevel(level: number, assetIdx: number = 0): number {
+    if (level < 0 || level >= 20) return 0.0;
+    return this.readAtomicFloat64Asset(assetIdx, 11 + level * 2 + 1);
+  }
+
+  /**
+   * Reads a single ask price level from SAB (level: 0..19).
+   */
+  public getAskPriceAtLevel(level: number, assetIdx: number = 0): number {
+    if (level < 0 || level >= 20) return 0.0;
+    return this.readAtomicFloat64Asset(assetIdx, 51 + level * 2);
+  }
+
+  /**
+   * Reads a single ask quantity level from SAB (level: 0..19).
+   */
+  public getAskQtyAtLevel(level: number, assetIdx: number = 0): number {
+    if (level < 0 || level >= 20) return 0.0;
+    return this.readAtomicFloat64Asset(assetIdx, 51 + level * 2 + 1);
+  }
+
   public getDroppedEvents(assetIdx: number = 0): bigint {
     return Atomics.load(this.bigIntView, this.getGlobalSlot(assetIdx, 91));
   }
@@ -888,6 +968,19 @@ export class MarketDataClient {
 
   public setPositionAgeSec(val: number, assetIdx: number = 0): void {
     this.writeAtomicFloat64Asset(assetIdx, 164, val);
+  }
+
+  /**
+   * Slot 166: 5-Level Aggregated Order Flow Imbalance (OFI) [-1.0, 1.0].
+   * Cont-Kukanov-Stoikov (2023) depth decay-weighted OFI (lambda = 0.5).
+   * Written atomically by StrategyEngine.evaluateTick() in the zero-GC hot-path.
+   */
+  public getMultiLevelOfi(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 166);
+  }
+
+  public setMultiLevelOfi(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 166, val);
   }
 
 

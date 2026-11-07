@@ -13,6 +13,7 @@
     "check": "cargo check",
     "test": "tsc --noEmit",
     "test:phase9": "tsc && node dist/tests/test_phase9_master_validation.js",
+    "test:ofi": "tsc && node dist/tests/test_multi_level_ofi.js",
     "start": "npm run start:live",
     "start:live": "npm run build:rust && npm run build:ts && node dist/supervisor/guardian.js",
     "bot:run": "npm run build:rust && npm run build:ts && node dist/supervisor/guardian.js",

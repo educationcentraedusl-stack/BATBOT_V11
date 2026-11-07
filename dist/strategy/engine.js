@@ -91,6 +91,11 @@ class StrategyEngine {
         bidPrice: 0,
         askPrice: 0,
     };
+    // Phase 3: Pre-allocated scratch Float64Arrays for Zero-GC 5-Level OFI evaluation
+    tickBidPx5 = new Float64Array(5);
+    tickBidQty5 = new Float64Array(5);
+    tickAskPx5 = new Float64Array(5);
+    tickAskQty5 = new Float64Array(5);
     constructor(client, riskGuard, executionClient, config, positionLedger, hedgeLedger) {
         this.client = client;
         this.riskGuard = riskGuard;
@@ -2193,6 +2198,10 @@ class StrategyEngine {
             const bestBidQty = this.client.getBestBidQuantity(this.assetIndex);
             const bestAskQty = this.client.getBestAskQuantity(this.assetIndex);
             this.hazardEngine.updateOrderBook(bidPrice, bestBidQty, askPrice, bestAskQty);
+            // Phase 3: Zero-GC 5-Level Aggregated OFI (Cont-Kukanov-Stoikov 2023) evaluation and SAB Slot 166 sync
+            this.client.fillTop5Levels(this.tickBidPx5, this.tickBidQty5, this.tickAskPx5, this.tickAskQty5, this.assetIndex);
+            const multiOfi = this.hazardEngine.computeMultiLevelOfi(this.tickBidPx5, this.tickBidQty5, this.tickAskPx5, this.tickAskQty5);
+            this.client.setMultiLevelOfi(multiOfi, this.assetIndex);
             this.volEngine.updatePrice(markPrice);
             const summary = this.hedgeLedger.getSummary(markPrice > 0 ? markPrice : 0);
             const activePosSide = summary.side === "SHORT" ? "SHORT" : "LONG";

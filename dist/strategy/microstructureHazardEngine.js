@@ -17,12 +17,22 @@ class MicrostructureHazardEngine {
     ofiRingIdx = 0;
     depthSampleCount = 0;
     ofiBufferSize;
-    // Order Book Previous State
+    // Order Book Previous State (L1)
     prevBidPx = 0;
     prevBidQty = 0;
     prevAskPx = 0;
     prevAskQty = 0;
     hasPrevBook = false;
+    // Phase 3: 5-Level Aggregated OFI (Cont-Kukanov-Stoikov 2023 Extension) Zero-GC state
+    DEPTH_LEVELS = 5;
+    DEPTH_DECAY_LAMBDA = 0.5;
+    prevBidPxLevels = new Float64Array(5);
+    prevBidQtyLevels = new Float64Array(5);
+    prevAskPxLevels = new Float64Array(5);
+    prevAskQtyLevels = new Float64Array(5);
+    depthWeights = new Float64Array(5);
+    hasPrevMultiLevelBook = false;
+    lastMultiLevelOfi = 0.0;
     // Trade Flow Imbalance Ring Buffers
     tradeBuyQtyRing;
     tradeSellQtyRing;
@@ -54,6 +64,7 @@ class MicrostructureHazardEngine {
         coxHazardRate: 0,
         survivalProbability: 1.0,
         isHazardExitTriggered: false,
+        multiLevelOfi: 0,
     }));
     metricsRingIdx = 0;
     // Cox Proportional Hazard Parameters (theta weights)
@@ -73,6 +84,10 @@ class MicrostructureHazardEngine {
         this.vpinBucketCount = vpinBucketCount;
         this.vpinBucketRing = new Float64Array(vpinBucketCount);
         this.hazardThreshold = hazardThreshold;
+        // Pre-compute exponential depth decay weights: w_l = e^(-0.5 * l)
+        for (let l = 0; l < this.DEPTH_LEVELS; l++) {
+            this.depthWeights[l] = Math.exp(-this.DEPTH_DECAY_LAMBDA * l);
+        }
     }
     reset() {
         this.ofiRingBuffer.fill(0);
@@ -98,6 +113,13 @@ class MicrostructureHazardEngine {
         this.currentBucketSellVol = 0;
         this.currentBucketTotalVol = 0;
         this.metricsRingIdx = 0;
+        // Reset multi-level OFI state
+        this.prevBidPxLevels.fill(0);
+        this.prevBidQtyLevels.fill(0);
+        this.prevAskPxLevels.fill(0);
+        this.prevAskQtyLevels.fill(0);
+        this.hasPrevMultiLevelBook = false;
+        this.lastMultiLevelOfi = 0.0;
     }
     /**
      * Consumes live L2 Order Book snapshot / update and calculates Cont-Kukanov-Stoikov OFI
@@ -280,6 +302,7 @@ class MicrostructureHazardEngine {
         res.coxHazardRate = coxHazardRate;
         res.survivalProbability = survivalProbability;
         res.isHazardExitTriggered = isHazardExitTriggered;
+        res.multiLevelOfi = this.lastMultiLevelOfi;
         return res;
     }
     setHazardThreshold(threshold) {
@@ -287,6 +310,231 @@ class MicrostructureHazardEngine {
     }
     getSymbol() {
         return this.symbol;
+    }
+    getDepthWeights() {
+        return this.depthWeights;
+    }
+    getPrevBidPxLevels() {
+        return this.prevBidPxLevels;
+    }
+    getPrevBidQtyLevels() {
+        return this.prevBidQtyLevels;
+    }
+    getPrevAskPxLevels() {
+        return this.prevAskPxLevels;
+    }
+    getPrevAskQtyLevels() {
+        return this.prevAskQtyLevels;
+    }
+    hasMultiLevelHistory() {
+        return this.hasPrevMultiLevelBook;
+    }
+    getLastMultiLevelOfi() {
+        return this.lastMultiLevelOfi;
+    }
+    computeMultiLevelOfi(arg0, arg1, arg2, arg3, arg4) {
+        let ofiSum = 0.0;
+        let weightSum = 0.0;
+        if (arg0 instanceof Float64Array && arg1 instanceof Float64Array && arg2 instanceof Float64Array && arg3 instanceof Float64Array) {
+            // Primary Zero-GC Hot-Path: Direct Float64Array views (0 heap allocations)
+            const bidPx = arg0;
+            const bidQty = arg1;
+            const askPx = arg2;
+            const askQty = arg3;
+            const rollingMeanDepths = arg4;
+            const numLevels = Math.min(this.DEPTH_LEVELS, bidPx.length, bidQty.length, askPx.length, askQty.length);
+            // Cold start: record initial levels and return neutral OFI 0.0
+            if (!this.hasPrevMultiLevelBook) {
+                for (let l = 0; l < numLevels; l++) {
+                    const bp = Number.isFinite(bidPx[l]) ? bidPx[l] : 0.0;
+                    const bq = Number.isFinite(bidQty[l]) && bidQty[l] > 0 ? bidQty[l] : 0.0;
+                    const ap = Number.isFinite(askPx[l]) ? askPx[l] : 0.0;
+                    const aq = Number.isFinite(askQty[l]) && askQty[l] > 0 ? askQty[l] : 0.0;
+                    this.prevBidPxLevels[l] = bp;
+                    this.prevBidQtyLevels[l] = bq;
+                    this.prevAskPxLevels[l] = ap;
+                    this.prevAskQtyLevels[l] = aq;
+                }
+                this.hasPrevMultiLevelBook = true;
+                this.lastMultiLevelOfi = 0.0;
+                return 0.0;
+            }
+            for (let l = 0; l < numLevels; l++) {
+                const bp = Number.isFinite(bidPx[l]) ? bidPx[l] : 0.0;
+                const bq = Number.isFinite(bidQty[l]) && bidQty[l] > 0 ? bidQty[l] : 0.0;
+                const ap = Number.isFinite(askPx[l]) ? askPx[l] : 0.0;
+                const aq = Number.isFinite(askQty[l]) && askQty[l] > 0 ? askQty[l] : 0.0;
+                const prevBp = this.prevBidPxLevels[l];
+                const prevBq = this.prevBidQtyLevels[l];
+                const prevAp = this.prevAskPxLevels[l];
+                const prevAq = this.prevAskQtyLevels[l];
+                // Skip level if neither current nor previous book had any depth
+                if (bp <= 0 && bq <= 0 && prevBp <= 0 && prevBq <= 0 &&
+                    ap <= 0 && aq <= 0 && prevAp <= 0 && prevAq <= 0) {
+                    continue;
+                }
+                // 1. Bid Order Flow: dQ_bid^(l)
+                let dQbid = 0.0;
+                if (bp <= 0) {
+                    dQbid = -prevBq; // Level vanished
+                }
+                else if (prevBp <= 0) {
+                    dQbid = bq; // New level appeared
+                }
+                else if (bp > prevBp) {
+                    dQbid = bq; // Bid price improved (aggressive liquidity addition)
+                }
+                else if (bp === prevBp) {
+                    dQbid = bq - prevBq; // Bid price unchanged (depth delta)
+                }
+                else {
+                    dQbid = -prevBq; // Bid price worsened (liquidity removed/walked)
+                }
+                // 2. Ask Order Flow: dQ_ask^(l)
+                let dQask = 0.0;
+                if (ap <= 0) {
+                    dQask = -prevAq; // Level vanished
+                }
+                else if (prevAp <= 0) {
+                    dQask = aq; // New level appeared
+                }
+                else if (ap < prevAp) {
+                    dQask = aq; // Ask price improved (lower ask = aggressive addition)
+                }
+                else if (ap === prevAp) {
+                    dQask = aq - prevAq; // Ask price unchanged (depth delta)
+                }
+                else {
+                    dQask = -prevAq; // Ask price worsened (higher ask = liquidity removed/walked)
+                }
+                // 3. Denominator Normalization: rollingMeanDepths[l] if valid & > 0, else instant depth
+                let meanDepth = 1.0;
+                if (rollingMeanDepths && l < rollingMeanDepths.length && Number.isFinite(rollingMeanDepths[l]) && rollingMeanDepths[l] > 0) {
+                    meanDepth = rollingMeanDepths[l];
+                }
+                else {
+                    const instantDepth = (bq + aq) * 0.5;
+                    if (instantDepth > 0) {
+                        meanDepth = instantDepth;
+                    }
+                    else {
+                        const prevDepth = (prevBq + prevAq) * 0.5;
+                        meanDepth = prevDepth > 0 ? prevDepth : 1.0;
+                    }
+                }
+                if (!Number.isFinite(meanDepth) || meanDepth <= 0) {
+                    meanDepth = 1.0;
+                }
+                const w = this.depthWeights[l];
+                ofiSum += w * ((dQbid - dQask) / meanDepth);
+                weightSum += w;
+                // In-place mutation of previous state for next tick (Zero-GC)
+                this.prevBidPxLevels[l] = bp;
+                this.prevBidQtyLevels[l] = bq;
+                this.prevAskPxLevels[l] = ap;
+                this.prevAskQtyLevels[l] = aq;
+            }
+        }
+        else {
+            // Architecture Report Compatibility Path: Array<{ price: number; qty: number }>
+            const bidLevels = arg0;
+            const askLevels = arg1;
+            const rollingMeanDepths = arg2;
+            const numLevels = Math.min(this.DEPTH_LEVELS, bidLevels.length, askLevels.length);
+            if (!this.hasPrevMultiLevelBook) {
+                for (let l = 0; l < numLevels; l++) {
+                    const b = bidLevels[l];
+                    const a = askLevels[l];
+                    const bp = b && Number.isFinite(b.price) ? b.price : 0.0;
+                    const bq = b && Number.isFinite(b.qty) && b.qty > 0 ? b.qty : 0.0;
+                    const ap = a && Number.isFinite(a.price) ? a.price : 0.0;
+                    const aq = a && Number.isFinite(a.qty) && a.qty > 0 ? a.qty : 0.0;
+                    this.prevBidPxLevels[l] = bp;
+                    this.prevBidQtyLevels[l] = bq;
+                    this.prevAskPxLevels[l] = ap;
+                    this.prevAskQtyLevels[l] = aq;
+                }
+                this.hasPrevMultiLevelBook = true;
+                this.lastMultiLevelOfi = 0.0;
+                return 0.0;
+            }
+            for (let l = 0; l < numLevels; l++) {
+                const b = bidLevels[l];
+                const a = askLevels[l];
+                const bp = b && Number.isFinite(b.price) ? b.price : 0.0;
+                const bq = b && Number.isFinite(b.qty) && b.qty > 0 ? b.qty : 0.0;
+                const ap = a && Number.isFinite(a.price) ? a.price : 0.0;
+                const aq = a && Number.isFinite(a.qty) && a.qty > 0 ? a.qty : 0.0;
+                const prevBp = this.prevBidPxLevels[l];
+                const prevBq = this.prevBidQtyLevels[l];
+                const prevAp = this.prevAskPxLevels[l];
+                const prevAq = this.prevAskQtyLevels[l];
+                if (bp <= 0 && bq <= 0 && prevBp <= 0 && prevBq <= 0 &&
+                    ap <= 0 && aq <= 0 && prevAp <= 0 && prevAq <= 0) {
+                    continue;
+                }
+                let dQbid = 0.0;
+                if (bp <= 0) {
+                    dQbid = -prevBq;
+                }
+                else if (prevBp <= 0) {
+                    dQbid = bq;
+                }
+                else if (bp > prevBp) {
+                    dQbid = bq;
+                }
+                else if (bp === prevBp) {
+                    dQbid = bq - prevBq;
+                }
+                else {
+                    dQbid = -prevBq;
+                }
+                let dQask = 0.0;
+                if (ap <= 0) {
+                    dQask = -prevAq;
+                }
+                else if (prevAp <= 0) {
+                    dQask = aq;
+                }
+                else if (ap < prevAp) {
+                    dQask = aq;
+                }
+                else if (ap === prevAp) {
+                    dQask = aq - prevAq;
+                }
+                else {
+                    dQask = -prevAq;
+                }
+                let meanDepth = 1.0;
+                if (rollingMeanDepths && l < rollingMeanDepths.length && Number.isFinite(rollingMeanDepths[l]) && rollingMeanDepths[l] > 0) {
+                    meanDepth = rollingMeanDepths[l];
+                }
+                else {
+                    const instantDepth = (bq + aq) * 0.5;
+                    if (instantDepth > 0) {
+                        meanDepth = instantDepth;
+                    }
+                    else {
+                        const prevDepth = (prevBq + prevAq) * 0.5;
+                        meanDepth = prevDepth > 0 ? prevDepth : 1.0;
+                    }
+                }
+                if (!Number.isFinite(meanDepth) || meanDepth <= 0) {
+                    meanDepth = 1.0;
+                }
+                const w = this.depthWeights[l];
+                ofiSum += w * ((dQbid - dQask) / meanDepth);
+                weightSum += w;
+                this.prevBidPxLevels[l] = bp;
+                this.prevBidQtyLevels[l] = bq;
+                this.prevAskPxLevels[l] = ap;
+                this.prevAskQtyLevels[l] = aq;
+            }
+        }
+        const rawResult = weightSum > 0 ? ofiSum / weightSum : 0.0;
+        const finalOfi = Number.isFinite(rawResult) ? Math.max(-1.0, Math.min(1.0, rawResult)) : 0.0;
+        this.lastMultiLevelOfi = finalOfi;
+        return finalOfi;
     }
 }
 exports.MicrostructureHazardEngine = MicrostructureHazardEngine;
