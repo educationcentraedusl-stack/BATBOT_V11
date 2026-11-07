@@ -3420,11 +3420,8 @@ export class HedgePositionLedger {
       }
     }
 
-    const rawHalfLife = this.marketDataClient
-      ? this.marketDataClient.readAtomicFloat64Asset(this.assetIndex, SAB_SLOTS.VEGAM_CADME_STATE)
-      : 0;
-    const dynamicHalfLifeSec = (Number.isFinite(rawHalfLife) && rawHalfLife > 2.0)
-      ? rawHalfLife
+    const dynamicHalfLifeSec = (typeof halfLifeSec === "number" && Number.isFinite(halfLifeSec) && halfLifeSec > 0)
+      ? halfLifeSec
       : this.cachedMhdcDefaultHalfLifeSec;
 
     const mhdcSec = this.cachedMhdcMultiplier * dynamicHalfLifeSec;

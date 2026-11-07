@@ -2631,11 +2631,8 @@ class HedgePositionLedger {
                 this.cachedMhdcDefaultHalfLifeSec = 120.0;
             }
         }
-        const rawHalfLife = this.marketDataClient
-            ? this.marketDataClient.readAtomicFloat64Asset(this.assetIndex, sabSchema_1.SAB_SLOTS.VEGAM_CADME_STATE)
-            : 0;
-        const dynamicHalfLifeSec = (Number.isFinite(rawHalfLife) && rawHalfLife > 2.0)
-            ? rawHalfLife
+        const dynamicHalfLifeSec = (typeof halfLifeSec === "number" && Number.isFinite(halfLifeSec) && halfLifeSec > 0)
+            ? halfLifeSec
             : this.cachedMhdcDefaultHalfLifeSec;
         const mhdcSec = this.cachedMhdcMultiplier * dynamicHalfLifeSec;
         // Update SAB telemetry slots 164 and 163 (zero-GC atomic writes)
