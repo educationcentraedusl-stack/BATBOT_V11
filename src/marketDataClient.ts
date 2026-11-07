@@ -1008,6 +1008,22 @@ export class MarketDataClient {
     this.writeAtomicFloat64Asset(assetIdx, 167, val);
   }
 
+  /**
+   * Slot 168: Live Perpetual Funding Rate.
+   * Current live perpetual funding rate (e.g., 0.0001 = 0.01% = 1 bp).
+   * Positive funding: Longs pay shorts (strictly block LONG entries, allow SHORT entries).
+   * Negative funding: Shorts pay longs (strictly block SHORT entries, allow LONG entries).
+   * Zero funding: Neutral (allow both).
+   * Written atomically via writeAtomicFloat64Asset (zero-GC).
+   */
+  public getFundingRate(assetIdx: number = 0): number {
+    return this.readAtomicFloat64Asset(assetIdx, 168);
+  }
+
+  public setFundingRate(val: number, assetIdx: number = 0): void {
+    this.writeAtomicFloat64Asset(assetIdx, 168, val);
+  }
+
 
   /**
    * Broadcasts atomic Kill-Switch activation across all asset slots simultaneously.

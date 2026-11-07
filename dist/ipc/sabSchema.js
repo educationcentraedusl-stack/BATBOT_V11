@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.URGENCY_SCORE = exports.MULTI_LEVEL_OFI = exports.QUEUE_POSITION_EST = exports.POSITION_AGE_SEC = exports.MAX_HOLD_DURATION_SEC = exports.WS_ORDER_STREAM_HEALTH = exports.WS_ORDER_RTT_MS = exports.VEGAM_CADME_STATE = exports.VEGAM_TRAIL_K_REGIME = exports.VEGAM_GK_ATR_COMPOSITE = exports.AI_PLATT_HEALTH = exports.AI_CONF_VARIANCE = exports.AI_META_LOGIT_ABS = exports.IS_MODEL_DRIFTED = exports.ROLLING_IC = exports.SURVIVAL_PROBABILITY = exports.HOTSWAP_EPOCH = exports.SAB_SLOTS = void 0;
+exports.FUNDING_RATE = exports.URGENCY_SCORE = exports.MULTI_LEVEL_OFI = exports.QUEUE_POSITION_EST = exports.POSITION_AGE_SEC = exports.MAX_HOLD_DURATION_SEC = exports.WS_ORDER_STREAM_HEALTH = exports.WS_ORDER_RTT_MS = exports.VEGAM_CADME_STATE = exports.VEGAM_TRAIL_K_REGIME = exports.VEGAM_GK_ATR_COMPOSITE = exports.AI_PLATT_HEALTH = exports.AI_CONF_VARIANCE = exports.AI_META_LOGIT_ABS = exports.IS_MODEL_DRIFTED = exports.ROLLING_IC = exports.SURVIVAL_PROBABILITY = exports.HOTSWAP_EPOCH = exports.SAB_SLOTS = void 0;
 exports.SAB_SLOTS = {
     TIMESTAMP_NS: 0,
     OBI: 1,
@@ -119,5 +119,13 @@ exports.SAB_SLOTS = {
     // Determines dynamic execution routing between PASSIVE_MAKER (1.8 bps) and AGGRESSIVE_MARKET (4.5 bps).
     // Written atomically by HedgePositionLedger in evaluateSotaDynamicExits() hot-path.
     URGENCY_SCORE: 167,
+    // Phase 5 HFT Overhaul: Perpetual Funding Rate Filter (Slot 168)
+    // Live 8h perpetual funding rate.
+    // Written atomically by MarketDataClient / Telemetry ingestion.
+    // Evaluated at order intent generation:
+    // If FUNDING_RATE > 0: LONG pays SHORT -> strictly block LONG entries (allow SHORT).
+    // If FUNDING_RATE < 0: SHORT pays LONG -> strictly block SHORT entries (allow LONG).
+    // If FUNDING_RATE == 0: Neutral -> allow both.
+    FUNDING_RATE: 168,
 };
-exports.HOTSWAP_EPOCH = exports.SAB_SLOTS.HOTSWAP_EPOCH, exports.SURVIVAL_PROBABILITY = exports.SAB_SLOTS.SURVIVAL_PROBABILITY, exports.ROLLING_IC = exports.SAB_SLOTS.ROLLING_IC, exports.IS_MODEL_DRIFTED = exports.SAB_SLOTS.IS_MODEL_DRIFTED, exports.AI_META_LOGIT_ABS = exports.SAB_SLOTS.AI_META_LOGIT_ABS, exports.AI_CONF_VARIANCE = exports.SAB_SLOTS.AI_CONF_VARIANCE, exports.AI_PLATT_HEALTH = exports.SAB_SLOTS.AI_PLATT_HEALTH, exports.VEGAM_GK_ATR_COMPOSITE = exports.SAB_SLOTS.VEGAM_GK_ATR_COMPOSITE, exports.VEGAM_TRAIL_K_REGIME = exports.SAB_SLOTS.VEGAM_TRAIL_K_REGIME, exports.VEGAM_CADME_STATE = exports.SAB_SLOTS.VEGAM_CADME_STATE, exports.WS_ORDER_RTT_MS = exports.SAB_SLOTS.WS_ORDER_RTT_MS, exports.WS_ORDER_STREAM_HEALTH = exports.SAB_SLOTS.WS_ORDER_STREAM_HEALTH, exports.MAX_HOLD_DURATION_SEC = exports.SAB_SLOTS.MAX_HOLD_DURATION_SEC, exports.POSITION_AGE_SEC = exports.SAB_SLOTS.POSITION_AGE_SEC, exports.QUEUE_POSITION_EST = exports.SAB_SLOTS.QUEUE_POSITION_EST, exports.MULTI_LEVEL_OFI = exports.SAB_SLOTS.MULTI_LEVEL_OFI, exports.URGENCY_SCORE = exports.SAB_SLOTS.URGENCY_SCORE;
+exports.HOTSWAP_EPOCH = exports.SAB_SLOTS.HOTSWAP_EPOCH, exports.SURVIVAL_PROBABILITY = exports.SAB_SLOTS.SURVIVAL_PROBABILITY, exports.ROLLING_IC = exports.SAB_SLOTS.ROLLING_IC, exports.IS_MODEL_DRIFTED = exports.SAB_SLOTS.IS_MODEL_DRIFTED, exports.AI_META_LOGIT_ABS = exports.SAB_SLOTS.AI_META_LOGIT_ABS, exports.AI_CONF_VARIANCE = exports.SAB_SLOTS.AI_CONF_VARIANCE, exports.AI_PLATT_HEALTH = exports.SAB_SLOTS.AI_PLATT_HEALTH, exports.VEGAM_GK_ATR_COMPOSITE = exports.SAB_SLOTS.VEGAM_GK_ATR_COMPOSITE, exports.VEGAM_TRAIL_K_REGIME = exports.SAB_SLOTS.VEGAM_TRAIL_K_REGIME, exports.VEGAM_CADME_STATE = exports.SAB_SLOTS.VEGAM_CADME_STATE, exports.WS_ORDER_RTT_MS = exports.SAB_SLOTS.WS_ORDER_RTT_MS, exports.WS_ORDER_STREAM_HEALTH = exports.SAB_SLOTS.WS_ORDER_STREAM_HEALTH, exports.MAX_HOLD_DURATION_SEC = exports.SAB_SLOTS.MAX_HOLD_DURATION_SEC, exports.POSITION_AGE_SEC = exports.SAB_SLOTS.POSITION_AGE_SEC, exports.QUEUE_POSITION_EST = exports.SAB_SLOTS.QUEUE_POSITION_EST, exports.MULTI_LEVEL_OFI = exports.SAB_SLOTS.MULTI_LEVEL_OFI, exports.URGENCY_SCORE = exports.SAB_SLOTS.URGENCY_SCORE, exports.FUNDING_RATE = exports.SAB_SLOTS.FUNDING_RATE;

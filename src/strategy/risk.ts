@@ -71,6 +71,7 @@ export interface RiskCheckResult {
     | "IC_MODEL_BROKEN"
     | "IC_DEGRADED_LOW_CONFIDENCE"
     | "PORTFOLIO_CONCENTRATION_LIMIT"
+    | "FUNDING_RATE_FILTER_BLOCKED"
     | "CRITICAL_EVALUATION_EXCEPTION";
   message: string;
 }

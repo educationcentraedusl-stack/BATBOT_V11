@@ -131,6 +131,15 @@ export const SAB_SLOTS = {
   // Determines dynamic execution routing between PASSIVE_MAKER (1.8 bps) and AGGRESSIVE_MARKET (4.5 bps).
   // Written atomically by HedgePositionLedger in evaluateSotaDynamicExits() hot-path.
   URGENCY_SCORE: 167,
+
+  // Phase 5 HFT Overhaul: Perpetual Funding Rate Filter (Slot 168)
+  // Live 8h perpetual funding rate.
+  // Written atomically by MarketDataClient / Telemetry ingestion.
+  // Evaluated at order intent generation:
+  // If FUNDING_RATE > 0: LONG pays SHORT -> strictly block LONG entries (allow SHORT).
+  // If FUNDING_RATE < 0: SHORT pays LONG -> strictly block SHORT entries (allow LONG).
+  // If FUNDING_RATE == 0: Neutral -> allow both.
+  FUNDING_RATE: 168,
 } as const;
 
 export const {
@@ -151,4 +160,5 @@ export const {
   QUEUE_POSITION_EST,
   MULTI_LEVEL_OFI,
   URGENCY_SCORE,
+  FUNDING_RATE,
 } = SAB_SLOTS;

@@ -178,6 +178,25 @@ export class StrategyEngine {
   private readonly tickAskPx5: Float64Array = new Float64Array(5);
   private readonly tickAskQty5: Float64Array = new Float64Array(5);
 
+  // Phase 5 HFT Overhaul: Pre-allocated RiskCheckResult for Zero-GC funding filter block
+  private readonly fundingBlockedRiskResult: RiskCheckResult = {
+    passed: false,
+    reasonCode: "FUNDING_RATE_FILTER_BLOCKED",
+    message: "Trade entry blocked: Perpetual funding rate requires position to pay funding fees.",
+  };
+
+  // Phase 5 HFT Overhaul: Pre-allocated scratch MicrostructureMetrics for Zero-GC risk evaluation
+  private readonly scratchMicroMetrics: DynamicMicrostructureMetrics = {
+    obi: 0,
+    cvd: 0,
+    rvGk: 0,
+    vpin: 0,
+    hurst: 0,
+    lobEntropy: 0,
+    regime: 0,
+    isSweepDetected: false,
+  };
+
   constructor(
     client: MarketDataClient,
     riskGuard: RiskGuard,
@@ -3740,27 +3759,52 @@ export class StrategyEngine {
         targetPrice = targetPrice + targetSlotIndex * 2.0 * this.config.tickSize;
       }
 
-      // Evaluate Dynamic Risk & Microstructure Trap Avoidance Profile
-      const microMetrics: DynamicMicrostructureMetrics = {
-        obi,
-        cvd,
-        rvGk: this.client.getGarmanKlassRV(this.assetIndex),
-        vpin: this.client.getVPIN(this.assetIndex),
-        hurst: hurstExponent,
-        lobEntropy: lobEntropy,
-        regime: this.client.getRegimeStateCode(this.assetIndex),
-        isSweepDetected: this.client.getIsSweepDetected(this.assetIndex),
-      };
+      // Evaluate Dynamic Risk & Microstructure Trap Avoidance Profile (Zero-GC Mutator)
+      this.scratchMicroMetrics.obi = obi;
+      this.scratchMicroMetrics.cvd = cvd;
+      this.scratchMicroMetrics.rvGk = this.client.getGarmanKlassRV(this.assetIndex);
+      this.scratchMicroMetrics.vpin = this.client.getVPIN(this.assetIndex);
+      this.scratchMicroMetrics.hurst = hurstExponent;
+      this.scratchMicroMetrics.lobEntropy = lobEntropy;
+      this.scratchMicroMetrics.regime = this.client.getRegimeStateCode(this.assetIndex);
+      this.scratchMicroMetrics.isSweepDetected = this.client.getIsSweepDetected(this.assetIndex);
 
       const riskProfile = this.dynamicRiskEngine.evaluateDynamicRisk(
         targetPrice,
         targetPosSide === "LONG" ? "LONG" : "SHORT",
-        microMetrics,
+        this.scratchMicroMetrics,
         Math.abs(askPrice - bidPrice),
         isDrawdown
       );
       riskProfile.isHighConfidenceAi = isHighConfidenceAi;
       riskProfile.aiConfidence = aiConfidence;
+
+      // ─── Phase 5 HFT Overhaul: Perpetual Funding Rate Filter (Fee Ledger Completion) ───
+      // Eradicates "Funding Fee Drag" by dynamically reading the live Perpetual Funding Rate (SAB Slot 168).
+      // Core Math Logic (Binance Standard):
+      // - If FundingRate > 0: LONG pays SHORT -> Strictly BLOCK LONG entries (allow SHORT entries).
+      // - If FundingRate < 0: SHORT pays LONG -> Strictly BLOCK SHORT entries (allow LONG entries).
+      // - If FundingRate == 0: Neutral -> Allow both.
+      // Enforced at the exact point of order intent generation (before trade is sent to execution client).
+      if (!this.isFundingRatePermitted(targetPosSide === "LONG" ? "LONG" : "SHORT")) {
+        const liveFundingRate = this.client.getFundingRate(this.assetIndex);
+        console.warn(
+          `[FUNDING_FILTER_BLOCKED] [${this.config.symbol}] ${targetPosSide} trade entry intercepted & blocked! Live funding rate: ${liveFundingRate} (${(liveFundingRate * 10000).toFixed(2)} bps). ${targetPosSide === "LONG" ? "LONG pays SHORT" : "SHORT pays LONG"}.`
+        );
+        this.staticResult.sequenceNum = seq;
+        this.staticResult.signalType = "NONE";
+        this.staticResult.positionSide = undefined;
+        this.staticResult.slotId = undefined;
+        this.staticResult.targetSlotIndex = undefined;
+        this.staticResult.obi = obi;
+        this.staticResult.cvd = cvd;
+        this.staticResult.spreadVelocity = spreadVelocity;
+        this.staticResult.bidPrice = bidPrice;
+        this.staticResult.askPrice = askPrice;
+        this.staticResult.riskResult = this.fundingBlockedRiskResult;
+        this.staticResult.executionPromise = undefined;
+        return this.staticResult;
+      }
 
       // Populate pre-allocated intent via Zero-GC Mutator
       this.prepareOrderIntent(
@@ -4119,6 +4163,31 @@ export class StrategyEngine {
 
   public getHazardEngine(): MicrostructureHazardEngine {
     return this.hazardEngine;
+  }
+
+  /**
+   * Phase 5 HFT Overhaul: Perpetual Funding Rate Filter
+   * Evaluates whether entering a position of the given side requires paying funding fees.
+   * Core Math Logic (Binance Standard):
+   * - If FundingRate > 0: LONG pays SHORT -> strictly block LONG entries (allow SHORT).
+   * - If FundingRate < 0: SHORT pays LONG -> strictly block SHORT entries (allow LONG).
+   * - If FundingRate == 0: Neutral -> allow both.
+   * Zero-GC compliant: pure scalar boolean return, zero heap allocations.
+   */
+  public isFundingRatePermitted(side: "LONG" | "SHORT"): boolean {
+    const rawRate = this.client.getFundingRate(this.assetIndex);
+    const fundingRate = Number.isFinite(rawRate) ? rawRate : 0.0;
+    if (side === "LONG" && fundingRate > 0) {
+      return false; // LONG pays SHORT -> strictly block LONG entries
+    }
+    if (side === "SHORT" && fundingRate < 0) {
+      return false; // SHORT pays LONG -> strictly block SHORT entries
+    }
+    return true; // Neutral (fundingRate == 0) or receiving funding -> allow entry
+  }
+
+  public getFundingRate(): number {
+    return this.client.getFundingRate(this.assetIndex);
   }
 }
 

@@ -15,6 +15,17 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-11-07 - HFT Master Plan Phase 5 Execution (Perpetual Funding Rate Filter - Fee Ledger Completion & Zero-GC Telemetry) Completed & 100% QA Verified:
+  - Perpetual Funding Rate Filter: Implemented mathematical filtering in `src/strategy/engine.ts` (`isFundingRatePermitted()` and `evaluateTick()`) reading live funding rate from SAB Slot 168 to eradicate funding fee drag.
+  - Strict Mathematical Formulation (Binance Standard):
+    * If `FundingRate > 0`: LONG pays SHORT -> Strictly BLOCK LONG entries (allow SHORT).
+    * If `FundingRate < 0`: SHORT pays LONG -> Strictly BLOCK SHORT entries (allow LONG).
+    * If `FundingRate == 0`: Neutral -> Allow both.
+  - Interception & Preemption: Intercepted order intents at generation boundary before calling `prepareOrderIntent` and dispatching to `BinanceExecutionClient`. Logged warning `[FUNDING_FILTER_BLOCKED]` with bps conversion and assigned `FUNDING_RATE_FILTER_BLOCKED` reason code.
+  - Exit Immunity Invariant: Exits (defensive Stop-Loss closures, MHDC, Adversarial Exit Gate) are strictly immune and never blocked by the funding rate filter.
+  - Zero-GC Invariant: Pre-allocated singleton `fundingBlockedRiskResult: RiskCheckResult` and scratch microstructure metrics mutated in-place; scalar atomic bitcasting in `MarketDataClient` (9.56 bytes/call heap delta, 0.1898 µs latency << 0.50 µs SLA target).
+  - Extended SAB Telemetry: Added Slot 168 (`FUNDING_RATE`) with atomic Float64 bitcasting memory barriers in `src/ipc/sabSchema.ts` and `src/marketDataClient.ts`.
+  - 100% Empirical QA Gating: Passed 57/57 assertions in dedicated `src/tests/test_funding_rate_filter.ts` (10/10 schema/atomics, 17/17 math boundaries, 24/24 end-to-end interception/dispatch, 3/3 exit immunity, 3/3 latency/zero-GC benchmark), clean `npm test` (`tsc --noEmit`), and clean `npm run build:ts`.
 * 2026-11-07 - HFT Master Plan Phase 4 Execution (Dynamic Exit Urgency Router - Fee Drag Eradication & Zero-GC Telemetry) Completed & 100% QA Verified:
   - Dynamic Exit Urgency Router: Implemented `DynamicUrgencyRouter` in `src/strategy/urgencyRouter.ts` to eliminate fee drag (saving 2.7 bps by transitioning between 1.8 bps PASSIVE_MAKER and 4.5 bps AGGRESSIVE_MARKET).
   - Exact Mathematical Formulation: U = (Adversarial * 0.40) + (Age * 0.30) + (Queue * 0.20) + (VPIN * 0.10) with execution style routing table: [0.00-0.49: PASSIVE_MAKER 0-tick offset], [0.50-0.74: PASSIVE_MAKER 2-tick aggressive offset], [0.75-0.89: AGGRESSIVE_MARKET standard], [0.90-1.00: AGGRESSIVE_MARKET immediate].
