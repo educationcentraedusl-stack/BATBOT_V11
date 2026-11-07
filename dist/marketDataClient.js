@@ -673,6 +673,28 @@ class MarketDataClient {
         this.writeAtomicFloat64Asset(assetIdx, 158, val);
     }
     /**
+     * Slot 163: Computed Maximum Hold Duration Cap (MHDC) in seconds.
+     * MHDC = MHDC_MULTIPLIER * halfLifeSec.
+     * Written atomically by HedgePositionLedger.evaluateSotaDynamicExits().
+     */
+    getMaxHoldDurationSec(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 163);
+    }
+    setMaxHoldDurationSec(val, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 163, val);
+    }
+    /**
+     * Slot 164: Current Position Age in seconds.
+     * positionAgeSec = (nowMs - (slot.originalOpenTime ?? slot.openTime)) / 1000.0.
+     * Written atomically by HedgePositionLedger.evaluateSotaDynamicExits().
+     */
+    getPositionAgeSec(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 164);
+    }
+    setPositionAgeSec(val, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 164, val);
+    }
+    /**
      * Broadcasts atomic Kill-Switch activation across all asset slots simultaneously.
      */
     setGlobalKillSwitch(active) {

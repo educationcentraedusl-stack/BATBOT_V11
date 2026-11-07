@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.WS_ORDER_STREAM_HEALTH = exports.WS_ORDER_RTT_MS = exports.VEGAM_CADME_STATE = exports.VEGAM_TRAIL_K_REGIME = exports.VEGAM_GK_ATR_COMPOSITE = exports.AI_PLATT_HEALTH = exports.AI_CONF_VARIANCE = exports.AI_META_LOGIT_ABS = exports.IS_MODEL_DRIFTED = exports.ROLLING_IC = exports.SURVIVAL_PROBABILITY = exports.HOTSWAP_EPOCH = exports.SAB_SLOTS = void 0;
+exports.POSITION_AGE_SEC = exports.MAX_HOLD_DURATION_SEC = exports.WS_ORDER_STREAM_HEALTH = exports.WS_ORDER_RTT_MS = exports.VEGAM_CADME_STATE = exports.VEGAM_TRAIL_K_REGIME = exports.VEGAM_GK_ATR_COMPOSITE = exports.AI_PLATT_HEALTH = exports.AI_CONF_VARIANCE = exports.AI_META_LOGIT_ABS = exports.IS_MODEL_DRIFTED = exports.ROLLING_IC = exports.SURVIVAL_PROBABILITY = exports.HOTSWAP_EPOCH = exports.SAB_SLOTS = void 0;
 exports.SAB_SLOTS = {
     TIMESTAMP_NS: 0,
     OBI: 1,
@@ -102,5 +102,11 @@ exports.SAB_SLOTS = {
     // Zero-copy: written via MarketDataClient.writeAtomicFloat64Asset() — no allocation in hot-path.
     WS_ORDER_RTT_MS: 159, // Last WS Order API round-trip latency in milliseconds (0.0 if never dispatched)
     WS_ORDER_STREAM_HEALTH: 160, // WS stream health: 1.0 = connected & primary path, 0.0 = disconnected / REST fallback active
+    // Phase 2 HFT Overhaul: Maximum Hold Duration Cap (MHDC) Telemetry Slots (163..164)
+    // Constitutional time-based position lifespan cap derived from OU alpha half-life.
+    // Eradicates "dead-alpha" position holds (e.g. 84-minute trades).
+    // Written atomically by HedgePositionLedger in evaluateSotaDynamicExits() hot-path.
+    MAX_HOLD_DURATION_SEC: 163, // Computed MHDC = MHDC_MULTIPLIER * halfLifeSec per asset
+    POSITION_AGE_SEC: 164, // Current position age in seconds (live counter)
 };
-exports.HOTSWAP_EPOCH = exports.SAB_SLOTS.HOTSWAP_EPOCH, exports.SURVIVAL_PROBABILITY = exports.SAB_SLOTS.SURVIVAL_PROBABILITY, exports.ROLLING_IC = exports.SAB_SLOTS.ROLLING_IC, exports.IS_MODEL_DRIFTED = exports.SAB_SLOTS.IS_MODEL_DRIFTED, exports.AI_META_LOGIT_ABS = exports.SAB_SLOTS.AI_META_LOGIT_ABS, exports.AI_CONF_VARIANCE = exports.SAB_SLOTS.AI_CONF_VARIANCE, exports.AI_PLATT_HEALTH = exports.SAB_SLOTS.AI_PLATT_HEALTH, exports.VEGAM_GK_ATR_COMPOSITE = exports.SAB_SLOTS.VEGAM_GK_ATR_COMPOSITE, exports.VEGAM_TRAIL_K_REGIME = exports.SAB_SLOTS.VEGAM_TRAIL_K_REGIME, exports.VEGAM_CADME_STATE = exports.SAB_SLOTS.VEGAM_CADME_STATE, exports.WS_ORDER_RTT_MS = exports.SAB_SLOTS.WS_ORDER_RTT_MS, exports.WS_ORDER_STREAM_HEALTH = exports.SAB_SLOTS.WS_ORDER_STREAM_HEALTH;
+exports.HOTSWAP_EPOCH = exports.SAB_SLOTS.HOTSWAP_EPOCH, exports.SURVIVAL_PROBABILITY = exports.SAB_SLOTS.SURVIVAL_PROBABILITY, exports.ROLLING_IC = exports.SAB_SLOTS.ROLLING_IC, exports.IS_MODEL_DRIFTED = exports.SAB_SLOTS.IS_MODEL_DRIFTED, exports.AI_META_LOGIT_ABS = exports.SAB_SLOTS.AI_META_LOGIT_ABS, exports.AI_CONF_VARIANCE = exports.SAB_SLOTS.AI_CONF_VARIANCE, exports.AI_PLATT_HEALTH = exports.SAB_SLOTS.AI_PLATT_HEALTH, exports.VEGAM_GK_ATR_COMPOSITE = exports.SAB_SLOTS.VEGAM_GK_ATR_COMPOSITE, exports.VEGAM_TRAIL_K_REGIME = exports.SAB_SLOTS.VEGAM_TRAIL_K_REGIME, exports.VEGAM_CADME_STATE = exports.SAB_SLOTS.VEGAM_CADME_STATE, exports.WS_ORDER_RTT_MS = exports.SAB_SLOTS.WS_ORDER_RTT_MS, exports.WS_ORDER_STREAM_HEALTH = exports.SAB_SLOTS.WS_ORDER_STREAM_HEALTH, exports.MAX_HOLD_DURATION_SEC = exports.SAB_SLOTS.MAX_HOLD_DURATION_SEC, exports.POSITION_AGE_SEC = exports.SAB_SLOTS.POSITION_AGE_SEC;

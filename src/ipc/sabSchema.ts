@@ -111,6 +111,13 @@ export const SAB_SLOTS = {
   // Zero-copy: written via MarketDataClient.writeAtomicFloat64Asset() — no allocation in hot-path.
   WS_ORDER_RTT_MS: 159,        // Last WS Order API round-trip latency in milliseconds (0.0 if never dispatched)
   WS_ORDER_STREAM_HEALTH: 160, // WS stream health: 1.0 = connected & primary path, 0.0 = disconnected / REST fallback active
+
+  // Phase 2 HFT Overhaul: Maximum Hold Duration Cap (MHDC) Telemetry Slots (163..164)
+  // Constitutional time-based position lifespan cap derived from OU alpha half-life.
+  // Eradicates "dead-alpha" position holds (e.g. 84-minute trades).
+  // Written atomically by HedgePositionLedger in evaluateSotaDynamicExits() hot-path.
+  MAX_HOLD_DURATION_SEC: 163,  // Computed MHDC = MHDC_MULTIPLIER * halfLifeSec per asset
+  POSITION_AGE_SEC: 164,       // Current position age in seconds (live counter)
 } as const;
 
 export const {
@@ -126,4 +133,6 @@ export const {
   VEGAM_CADME_STATE,
   WS_ORDER_RTT_MS,
   WS_ORDER_STREAM_HEALTH,
+  MAX_HOLD_DURATION_SEC,
+  POSITION_AGE_SEC,
 } = SAB_SLOTS;

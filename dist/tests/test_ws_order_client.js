@@ -115,7 +115,7 @@ class MockWebSocket {
     }
 }
 // ─── Test Suite ───────────────────────────────────────────────────────────────
-(0, node_test_1.describe)("WsOrderClient — Phase 1 HFT Test Suite (25 assertions)", () => {
+(0, node_test_1.describe)("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verification)", () => {
     // ── T01: Testnet endpoint ──────────────────────────────────────────────────
     (0, node_test_1.it)("T01: constructor resolves testnet endpoint", () => {
         process.env["USE_TESTNET"] = "true";
@@ -132,21 +132,14 @@ class MockWebSocket {
         node_assert_1.strict.ok(ep.includes("ws-fapi.binance.com"), `Expected mainnet endpoint, got: ${ep}`);
     });
     // ── T03: connect() resolves when socket opens ──────────────────────────────
-    (0, node_test_1.it)("T03: connect() resolves when WebSocket emits open", async () => {
+    (0, node_test_1.it)("T03: connect() is idempotent and respects connection state", async () => {
         const client = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
         const mockSocket = new MockWebSocket();
-        // Inject mock socket before connect
-        client.ws = null;
-        client.isConnected = false;
-        // Monkey-patch the internal connect to use our mock
-        const connectPromise = new Promise((resolve) => {
-            client.isConnected = true;
-            client.ws = mockSocket;
-            client.reconnectAttempts = 0;
-            resolve();
-        });
-        await connectPromise;
-        node_assert_1.strict.strictEqual(client.isConnected, true, "Should be connected after open");
+        client.isConnected = true;
+        client.ws = mockSocket;
+        // Must resolve immediately without creating another connection or throwing
+        await client.connect();
+        node_assert_1.strict.strictEqual(client.isReady(), true, "Should be ready");
     });
     // ── T04: placeOrder() rejects when not connected ───────────────────────────
     (0, node_test_1.it)("T04: placeOrder() rejects when WebSocket is not ready", async () => {
@@ -177,68 +170,79 @@ class MockWebSocket {
     // ── T07: MARKET order excludes timeInForce ─────────────────────────────────
     (0, node_test_1.it)("T07: MARKET order payload excludes timeInForce", () => {
         const client = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
-        const params = {
+        const payloadStr = client._buildPlaceOrderPayload({
             symbol: "BTCUSDT",
             side: "BUY",
             type: "MARKET",
-        };
-        // timeInForce should be excluded for MARKET orders
-        const hasTimeInForce = params["type"] !== "MARKET" &&
-            params["type"] !== "STOP_MARKET" &&
-            params["type"] !== "TAKE_PROFIT_MARKET";
-        node_assert_1.strict.strictEqual(hasTimeInForce, false, "MARKET order must not include timeInForce");
-        // suppress unused warning
-        void client;
+            quantity: 0.001,
+            timeInForce: "GTC",
+        }, "req-mkt-1");
+        const payload = JSON.parse(payloadStr);
+        node_assert_1.strict.strictEqual(payload.method, "order.place");
+        node_assert_1.strict.strictEqual(payload.params.symbol, "BTCUSDT");
+        node_assert_1.strict.strictEqual(payload.params.type, "MARKET");
+        node_assert_1.strict.strictEqual(payload.params.timeInForce, undefined, "MARKET order must NOT have timeInForce in params");
     });
     // ── T08: STOP_MARKET order excludes timeInForce ───────────────────────────
     (0, node_test_1.it)("T08: STOP_MARKET order payload excludes timeInForce", () => {
-        const params = { type: "STOP_MARKET" };
-        const include = params["type"] !== "MARKET" &&
-            params["type"] !== "STOP_MARKET" &&
-            params["type"] !== "TAKE_PROFIT_MARKET";
-        node_assert_1.strict.strictEqual(include, false);
+        const client = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
+        const payloadStr = client._buildPlaceOrderPayload({
+            symbol: "BTCUSDT",
+            side: "SELL",
+            type: "STOP_MARKET",
+            stopPrice: 60000,
+            quantity: 0.001,
+            timeInForce: "GTC",
+        }, "req-stop-1");
+        const payload = JSON.parse(payloadStr);
+        node_assert_1.strict.strictEqual(payload.params.type, "STOP_MARKET");
+        node_assert_1.strict.strictEqual(payload.params.timeInForce, undefined, "STOP_MARKET order must NOT have timeInForce in params");
     });
     // ── T09: TAKE_PROFIT_MARKET order excludes timeInForce ────────────────────
     (0, node_test_1.it)("T09: TAKE_PROFIT_MARKET order payload excludes timeInForce", () => {
-        const params = { type: "TAKE_PROFIT_MARKET" };
-        const include = params["type"] !== "MARKET" &&
-            params["type"] !== "STOP_MARKET" &&
-            params["type"] !== "TAKE_PROFIT_MARKET";
-        node_assert_1.strict.strictEqual(include, false);
+        const client = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
+        const payloadStr = client._buildPlaceOrderPayload({
+            symbol: "BTCUSDT",
+            side: "SELL",
+            type: "TAKE_PROFIT_MARKET",
+            stopPrice: 70000,
+            quantity: 0.001,
+            timeInForce: "GTC",
+        }, "req-tp-1");
+        const payload = JSON.parse(payloadStr);
+        node_assert_1.strict.strictEqual(payload.params.type, "TAKE_PROFIT_MARKET");
+        node_assert_1.strict.strictEqual(payload.params.timeInForce, undefined, "TAKE_PROFIT_MARKET order must NOT have timeInForce in params");
     });
     // ── T10: LIMIT order includes timeInForce ─────────────────────────────────
     (0, node_test_1.it)("T10: LIMIT order payload includes timeInForce", () => {
-        const params = {
+        const client = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
+        const payloadStr = client._buildPlaceOrderPayload({
+            symbol: "BTCUSDT",
+            side: "BUY",
             type: "LIMIT",
+            price: 60000,
+            quantity: 0.001,
             timeInForce: "GTX",
-        };
-        const include = params["type"] !== "MARKET" &&
-            params["type"] !== "STOP_MARKET" &&
-            params["type"] !== "TAKE_PROFIT_MARKET" &&
-            params["timeInForce"] !== undefined;
-        node_assert_1.strict.strictEqual(include, true, "LIMIT order must include timeInForce");
+        }, "req-limit-1");
+        const payload = JSON.parse(payloadStr);
+        node_assert_1.strict.strictEqual(payload.params.type, "LIMIT");
+        node_assert_1.strict.strictEqual(payload.params.timeInForce, "GTX", "LIMIT order MUST include timeInForce");
     });
-    // ── T11: closePosition=true excludes reduceOnly ───────────────────────────
-    (0, node_test_1.it)("T11: closePosition=true payload correctly sets closePosition string and excludes reduceOnly", () => {
-        // This mirrors the payload construction logic in _buildPlaceOrderPayload
-        const params = {
+    // ── T11: closePosition=true excludes reduceOnly and quantity ──────────────
+    (0, node_test_1.it)("T11: closePosition=true payload correctly sets closePosition string and excludes reduceOnly/quantity", () => {
+        const client = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
+        const payloadStr = client._buildPlaceOrderPayload({
             symbol: "BTCUSDT",
             side: "SELL",
             type: "MARKET",
             closePosition: true,
-            reduceOnly: true, // should be excluded
-        };
-        const isClosePosition = params.closePosition === true ||
-            String(params.closePosition).toLowerCase() === "true";
-        const p = {};
-        if (isClosePosition) {
-            p["closePosition"] = "true";
-        }
-        else if (params.reduceOnly !== undefined) {
-            p["reduceOnly"] = params.reduceOnly;
-        }
-        node_assert_1.strict.strictEqual(p["closePosition"], "true");
-        node_assert_1.strict.strictEqual(p["reduceOnly"], undefined, "reduceOnly must not be set when closePosition=true");
+            reduceOnly: true,
+            quantity: 1.5,
+        }, "req-close-1");
+        const payload = JSON.parse(payloadStr);
+        node_assert_1.strict.strictEqual(payload.params.closePosition, "true", "closePosition string must be 'true'");
+        node_assert_1.strict.strictEqual(payload.params.reduceOnly, undefined, "reduceOnly must NOT be present when closePosition=true");
+        node_assert_1.strict.strictEqual(payload.params.quantity, undefined, "quantity must NOT be present when closePosition=true");
     });
     // ── T12: quantity formatting via SymbolPrecisionRegistry ──────────────────
     (0, node_test_1.it)("T12: quantity formatted via SymbolPrecisionRegistry (3 decimal places for BTCUSDT)", () => {
@@ -353,6 +357,39 @@ class MockWebSocket {
             .update(expectedQs2)
             .digest("hex");
         node_assert_1.strict.strictEqual(p2["signature"], expectedSig2, "Order 2 signature must be unpolluted by Order 1");
+    });
+    // ── T15C: HMAC-SHA256 signing with custom keys strictly enforces ASCII order (Fix DEF-06) ─
+    (0, node_test_1.it)("T15C: HMAC-SHA256 signing with custom keys strictly enforces ASCII lexicographical order", () => {
+        const apiSecret = "custom_key_secret";
+        const apiKey = "custom_key_id";
+        const client = new wsOrderClient_1.WsOrderClient({
+            useTestnet: false,
+            apiKey,
+            apiSecret,
+        });
+        // Custom parameter 'activationPrice' comes alphabetically before 'apiKey'
+        // Custom parameter 'zetaFactor' comes alphabetically after 'workingType'
+        const p = {
+            activationPrice: 58000,
+            symbol: "BTCUSDT",
+            side: "BUY",
+            type: "LIMIT",
+            price: 59000,
+            quantity: 0.1,
+            zetaFactor: 99,
+        };
+        client._signParams(p, 5000);
+        const sortedKeys = Object.keys(p)
+            .filter((k) => k !== "signature")
+            .sort();
+        const expectedQueryString = sortedKeys
+            .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(String(p[k]))}`)
+            .join("&");
+        const expectedSig = crypto
+            .createHmac("sha256", apiSecret)
+            .update(expectedQueryString)
+            .digest("hex");
+        node_assert_1.strict.strictEqual(p["signature"], expectedSig, "Signature with custom unmapped keys must match unified strictly sorted query string");
     });
     // ── T16: _dispatch() registers pending request ────────────────────────────
     (0, node_test_1.it)("T16: _dispatch() registers a pending request in the internal map", async () => {
@@ -819,5 +856,186 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(wsCancelCalled, true, "cancelOrder must be dispatched via WebSocket");
         node_assert_1.strict.strictEqual(cancelRes.status, "CANCELED");
         node_assert_1.strict.strictEqual(cancelRes.orderId, 12345);
+    });
+    // ── T29B: cancelOrder with alphanumeric ID preserves full origClientOrderId (Fix DEF-07) ──
+    (0, node_test_1.it)("T29B: cancelOrder with alphanumeric string ID preserves origClientOrderId without numeric truncation", async () => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { BinanceExecutionClient } = require("../execution/binance");
+        const execClient = new BinanceExecutionClient();
+        let capturedParams = null;
+        const mockWs = {
+            isReady: () => true,
+            placeOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelOrder: async (params) => {
+                capturedParams = params;
+                return {
+                    id: "cancel-req-2",
+                    status: 200,
+                    result: {
+                        orderId: 0,
+                        symbol: params.symbol,
+                        status: "CANCELED",
+                        clientOrderId: params.origClientOrderId || "",
+                        price: "0", avgPrice: "0", origQty: "1", executedQty: "0", cumQuote: "0",
+                        timeInForce: "GTC", type: "LIMIT", reduceOnly: false, side: "BUY",
+                        positionSide: "BOTH", stopPrice: "0", workingType: "CONTRACT_PRICE", updateTime: Date.now(),
+                    },
+                    error: null,
+                    rateLimits: [],
+                    rttMs: 8.5,
+                };
+            },
+            cancelReplaceOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+        };
+        const mockSab = { writeAtomicFloat64Asset: () => { } };
+        execClient.attachWsOrderClient(mockWs, mockSab, 0);
+        // Call with clientOrderId that starts with digits: "12345_BATBOT_SL"
+        await execClient.cancelOrder("BTCUSDT", "12345_BATBOT_SL");
+        const resultParams = capturedParams;
+        node_assert_1.strict.ok(resultParams !== null, "cancelOrder must be called");
+        node_assert_1.strict.strictEqual(resultParams?.orderId, undefined, "orderId must be undefined for alphanumeric clientOrderId");
+        node_assert_1.strict.strictEqual(resultParams?.origClientOrderId, "12345_BATBOT_SL", "origClientOrderId must match full string without truncation");
+    });
+    // ── T30: -5022 POST_ONLY spread crossing on WS triggers 1-tick shift retry (Fix DEF-03) ──
+    (0, node_test_1.it)("T30: placeOrder recovers from -5022 WS rejection by shifting 1 tick away and retrying", async () => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { BinanceExecutionClient } = require("../execution/binance");
+        const execClient = new BinanceExecutionClient();
+        let attempt = 0;
+        const dispatchedPrices = [];
+        const mockWs = {
+            isReady: () => true,
+            placeOrder: async (params) => {
+                attempt++;
+                if (params.price !== undefined)
+                    dispatchedPrices.push(params.price);
+                if (attempt === 1) {
+                    throw new Error("[WsOrderClient] Binance WS Order API Error [-5022]: Post Only order would immediately trigger.");
+                }
+                return {
+                    id: "req-retry",
+                    status: 200,
+                    result: {
+                        orderId: 777123,
+                        symbol: "BTCUSDT",
+                        status: "NEW",
+                        clientOrderId: "GTX_RETRY_CID",
+                        price: String(params.price),
+                        avgPrice: "0",
+                        origQty: "0.1",
+                        executedQty: "0",
+                        cumQuote: "0",
+                        timeInForce: "GTX",
+                        type: "LIMIT",
+                        reduceOnly: false,
+                        side: "BUY",
+                        positionSide: "BOTH",
+                        stopPrice: "0",
+                        workingType: "CONTRACT_PRICE",
+                        updateTime: Date.now(),
+                    },
+                    error: null,
+                    rateLimits: [],
+                    rttMs: 12.0,
+                };
+            },
+            cancelOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelReplaceOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+        };
+        const mockSab = { writeAtomicFloat64Asset: () => { } };
+        execClient.attachWsOrderClient(mockWs, mockSab, 0);
+        const res = await execClient.placeOrder({
+            symbol: "BTCUSDT",
+            side: "BUY",
+            type: "LIMIT",
+            price: 60000.0,
+            quantity: 0.1,
+            timeInForce: "GTX",
+            clientOrderId: "GTX_TEST_CID",
+        });
+        node_assert_1.strict.strictEqual(attempt, 2, "placeOrder must have retried after -5022 rejection");
+        node_assert_1.strict.strictEqual(res.orderId, 777123, "Order must succeed on retry pass");
+        node_assert_1.strict.ok(dispatchedPrices.length === 2, "Must have recorded two price attempts");
+        node_assert_1.strict.ok(dispatchedPrices[1] < dispatchedPrices[0], "BUY retry price must be shifted 1 tick lower to clear spread");
+    });
+    // ── T31: Singleton ensureWsOrderClient eliminates startup race condition (Fix DEF-02) ──
+    (0, node_test_1.it)("T31: ensureWsOrderClient returns exact same singleton across 10 concurrent asset calls", async () => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { BinanceExecutionClient } = require("../execution/binance");
+        const execClient = new BinanceExecutionClient();
+        const mockSab = { writeAtomicFloat64Asset: () => { } };
+        const mockWs = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
+        const mockSocket = new MockWebSocket();
+        mockWs.ws = mockSocket;
+        mockWs.isConnected = true;
+        // Attach singleton
+        execClient.attachWsOrderClient(mockWs, mockSab, 0);
+        // Call ensureWsOrderClient concurrently for 10 assets
+        const promises = Array.from({ length: 10 }, (_, i) => execClient.ensureWsOrderClient(mockSab, i, `ASSET_${i}`));
+        const clients = await Promise.all(promises);
+        for (let i = 0; i < clients.length; i++) {
+            node_assert_1.strict.strictEqual(clients[i], mockWs, `Client ${i} must be identical to singleton instance`);
+        }
+    });
+    // ── T32: cancelReplaceOrder partial failure does NOT issue redundant REST cancel (Fix DEF-08) ──
+    (0, node_test_1.it)("T32: cancelReplaceOrder throws WS_CANCEL_REPLACE_PARTIAL and halts when cancel succeeded but new order failed", async () => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { BinanceExecutionClient } = require("../execution/binance");
+        const execClient = new BinanceExecutionClient();
+        let restPutCalled = false;
+        execClient.request = async () => {
+            restPutCalled = true;
+            return { orderId: 999 };
+        };
+        const mockWs = {
+            isReady: () => true,
+            placeOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelReplaceOrder: async () => ({
+                id: "cr-part-1",
+                status: 200,
+                result: {
+                    cancelResult: "SUCCESS",
+                    newOrderResult: "FAILURE",
+                    cancelResponse: { orderId: 111222, status: "CANCELED" },
+                    newOrderResponse: { code: -2010, msg: "Account has insufficient balance for new order" },
+                },
+                error: null,
+                rateLimits: [],
+                rttMs: 14.0,
+            }),
+        };
+        const mockSab = { writeAtomicFloat64Asset: () => { } };
+        execClient.attachWsOrderClient(mockWs, mockSab, 0);
+        await node_assert_1.strict.rejects(() => execClient.cancelReplaceOrder({
+            symbol: "BTCUSDT",
+            side: "BUY",
+            type: "LIMIT",
+            price: 50000,
+            quantity: 1,
+            cancelOrderId: 111222,
+        }), (err) => err.message.includes("[WS_CANCEL_REPLACE_PARTIAL]") &&
+            err.message.includes("insufficient balance"), "Must throw WS_CANCEL_REPLACE_PARTIAL indicating resting order was canceled but replacement failed");
+        node_assert_1.strict.strictEqual(restPutCalled, false, "REST PUT must NEVER be called when order was already canceled");
+    });
+    // ── T33: inFlightClientOrderIds is cleaned up even if pre-flight throws (Fix DEF-05) ──
+    (0, node_test_1.it)("T33: inFlightClientOrderIds is cleaned up in finally block even if pre-flight checks throw", async () => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { BinanceExecutionClient } = require("../execution/binance");
+        const execClient = new BinanceExecutionClient();
+        // Make resolveAssetIndex throw intentionally
+        execClient.resolveAssetIndex = () => {
+            throw new Error("Simulated pre-flight validation failure");
+        };
+        const testCid = "PREFLIGHT_FAIL_CID";
+        await node_assert_1.strict.rejects(() => execClient.placeOrder({
+            symbol: "BTCUSDT",
+            side: "BUY",
+            type: "MARKET",
+            quantity: 1,
+            clientOrderId: testCid,
+        }), /Simulated pre-flight validation failure/);
+        const inFlightMap = execClient.inFlightClientOrderIds;
+        node_assert_1.strict.strictEqual(inFlightMap.has(testCid), false, "inFlightClientOrderIds must be cleared in finally block after pre-flight exception");
     });
 });

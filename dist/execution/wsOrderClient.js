@@ -70,7 +70,9 @@ const symbolPrecision_1 = require("../config/symbolPrecision");
  * Guaranteed in strict lexicographical (ASCII) order to eliminate runtime sorting overhead.
  */
 exports.KNOWN_SORTED_KEYS = [
+    "activationPrice",
     "apiKey",
+    "callbackRate",
     "cancelOrderId",
     "cancelOrigClientOrderId",
     "cancelReplaceMode",
@@ -80,6 +82,7 @@ exports.KNOWN_SORTED_KEYS = [
     "origClientOrderId",
     "positionSide",
     "price",
+    "priceProtect",
     "quantity",
     "recvWindow",
     "reduceOnly",
@@ -384,22 +387,30 @@ class WsOrderClient {
         // Build lexicographically sorted query string for HMAC-SHA256 signing
         let queryString = "";
         let first = true;
+        let matchedKeysCount = 0;
         for (let i = 0; i < exports.KNOWN_SORTED_KEYS.length; i++) {
             const key = exports.KNOWN_SORTED_KEYS[i];
             const value = p[key];
             if (value !== undefined) {
+                matchedKeysCount++;
                 if (!first)
                     queryString += "&";
                 queryString += key + "=" + encodeURIComponent(String(value));
                 first = false;
             }
         }
-        // Safety fallback: if p contains any custom keys not in KNOWN_SORTED_KEYS (excluding 'signature')
-        const customKeys = Object.keys(p).filter((k) => k !== "signature" && !exports.KNOWN_SORTED_KEYS.includes(k));
-        if (customKeys.length > 0) {
-            customKeys.sort();
-            for (let i = 0; i < customKeys.length; i++) {
-                const key = customKeys[i];
+        // Zero-GC fast path: if matchedKeysCount matches total keys in p (excluding signature),
+        // we are mathematically guaranteed that all keys were processed in strict ASCII order.
+        // In the rare event of an unmapped custom parameter, perform a unified lexicographical sort across all keys.
+        const totalKeys = Object.keys(p).length;
+        if (matchedKeysCount !== totalKeys) {
+            queryString = "";
+            first = true;
+            const sortedKeys = Object.keys(p)
+                .filter((k) => k !== "signature")
+                .sort();
+            for (let i = 0; i < sortedKeys.length; i++) {
+                const key = sortedKeys[i];
                 const value = p[key];
                 if (value !== undefined) {
                     if (!first)
@@ -536,6 +547,9 @@ class WsOrderClient {
                 this.ws.ping();
             }
         }, WsOrderClient.HEARTBEAT_INTERVAL_MS);
+        if (this.heartbeatTimer && typeof this.heartbeatTimer.unref === "function") {
+            this.heartbeatTimer.unref();
+        }
     }
     _stopHeartbeat() {
         if (this.heartbeatTimer !== null) {

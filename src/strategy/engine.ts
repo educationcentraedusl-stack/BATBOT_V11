@@ -2930,7 +2930,8 @@ export class StrategyEngine {
             !isPassiveMakerExit && (
             primaryTrigger.reason.includes("HAZARD") ||
             primaryTrigger.reason === "STOP_LOSS" ||
-            primaryTrigger.reason === "BREAK_EVEN_STOP_LOSS");
+            primaryTrigger.reason === "BREAK_EVEN_STOP_LOSS" ||
+            primaryTrigger.reason.startsWith("MHDC_"));
 
           console.log(
             `[HEDGE_DYNAMIC_MONITORING] Slot ${primaryTrigger.slotId} ${primaryTrigger.reason} TRIGGERED! Side: ${primaryTrigger.side}, Executing aggregated exit qty: ${formattedExitQty}, Mark: $${markPrice.toFixed(2)}. Dispatching ${exitOrderType} (${primaryTrigger.executionStyle ?? "AGGRESSIVE_MARKET"}) close with positionSide: ${primaryTrigger.side}.${isHardStopTrigger ? " [RUTHLESS HARD STOP OVERRIDE ACTIVE]" : ""}`

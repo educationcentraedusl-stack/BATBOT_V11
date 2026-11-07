@@ -7,6 +7,7 @@ const clientOrderIdGenerator_1 = require("../execution/clientOrderIdGenerator");
 const hjbReservationEngine_1 = require("./hjbReservationEngine");
 const symbolPrecision_1 = require("../config/symbolPrecision");
 const tradingSymbols_1 = require("../config/tradingSymbols");
+const sabSchema_1 = require("../ipc/sabSchema");
 const vegamTpLadderEngine_1 = require("./vegamTpLadderEngine");
 const adversarialExitGate_1 = require("./adversarialExitGate");
 let nativeAddon = null;
@@ -575,6 +576,15 @@ class HedgePositionLedger {
     }
     getMarketDataClient() {
         return this.marketDataClient;
+    }
+    get client() {
+        return this.marketDataClient;
+    }
+    getAssetIndex() {
+        return this.assetIndex;
+    }
+    setAssetIndex(idx) {
+        this.assetIndex = idx;
     }
     getAdversarialExitGate() {
         return this.adversarialGate;
@@ -1621,7 +1631,10 @@ class HedgePositionLedger {
                 maxState = Math.max(maxState, slot.cadmeState ?? 0);
             }
         }
-        this.marketDataClient.setVegamCadmeState(maxState, this.assetIndex);
+        const currentVal = this.marketDataClient.readAtomicFloat64Asset(this.assetIndex, sabSchema_1.SAB_SLOTS.VEGAM_CADME_STATE);
+        if (maxState > 0 || currentVal <= 2.0) {
+            this.marketDataClient.setVegamCadmeState(maxState, this.assetIndex);
+        }
     }
     syncStartupPositions(recoveredPositions, longTpPct, longSlPct, shortTpPct, shortSlPct, liveLeverage) {
         if (liveLeverage !== undefined && liveLeverage > 0) {
@@ -2616,7 +2629,36 @@ class HedgePositionLedger {
             return;
         }
         // -------------------------------------------------------------------------
-        // 5. Avellaneda-Stoikov HJB Optimal Stopping Liquidation Boundary
+        // 5. Layer 5: Maximum Hold Duration Cap (MHDC) — Hard Alpha Expiration
+        // Constitutional time-based lifespan cap derived from OU alpha half-life.
+        // Eradicates "dead-alpha" position holds (e.g., 84-minute trades).
+        // Evaluated strictly AFTER Adversarial/Hard SL and BEFORE HJB Optimal Stopping.
+        // -------------------------------------------------------------------------
+        const effectiveOpenTime = (slot.originalOpenTime && slot.originalOpenTime > 0)
+            ? slot.originalOpenTime
+            : (slot.openTime && slot.openTime > 0 ? slot.openTime : nowMs);
+        const positionAgeSec = Math.max(0, (nowMs - effectiveOpenTime) / 1000.0);
+        const rawHalfLife = this.marketDataClient
+            ? this.marketDataClient.readAtomicFloat64Asset(this.assetIndex, sabSchema_1.SAB_SLOTS.VEGAM_CADME_STATE)
+            : 0;
+        const defaultHalfLife = parseFloat(process.env.MHDC_DEFAULT_HALF_LIFE_SEC ?? "120.0");
+        const dynamicHalfLifeSec = (Number.isFinite(rawHalfLife) && rawHalfLife > 2.0)
+            ? rawHalfLife
+            : (Number.isFinite(defaultHalfLife) && defaultHalfLife > 0 ? defaultHalfLife : 120.0);
+        const mhdcMultiplier = parseFloat(process.env.MHDC_MULTIPLIER ?? "3.0");
+        const safeMhdcMultiplier = Number.isFinite(mhdcMultiplier) && mhdcMultiplier > 0 ? mhdcMultiplier : 3.0;
+        const mhdcSec = safeMhdcMultiplier * dynamicHalfLifeSec;
+        // Update SAB telemetry slots 164 and 163 (zero-GC atomic writes)
+        if (this.marketDataClient && typeof this.assetIndex === "number") {
+            this.marketDataClient.writeAtomicFloat64Asset(this.assetIndex, sabSchema_1.SAB_SLOTS.POSITION_AGE_SEC, positionAgeSec);
+            this.marketDataClient.writeAtomicFloat64Asset(this.assetIndex, sabSchema_1.SAB_SLOTS.MAX_HOLD_DURATION_SEC, mhdcSec);
+        }
+        if (positionAgeSec >= mhdcSec) {
+            this.pushSotaTrigger(slot.slotId, slot.side, `MHDC_ALPHA_EXPIRATION_${slot.side}`, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "AGGRESSIVE_MARKET");
+            return;
+        }
+        // -------------------------------------------------------------------------
+        // 6. Avellaneda-Stoikov HJB Optimal Stopping Liquidation Boundary
         // SOTA Tier-1: Passive Maker Unwind / Scratch Order at Best Mid
         // -------------------------------------------------------------------------
         const effHjb = hjbEngine || this.hjbEngine;
