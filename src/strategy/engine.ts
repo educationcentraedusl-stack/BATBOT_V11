@@ -358,25 +358,33 @@ export class StrategyEngine {
       process.env.WS_ORDER_API_ENABLED === "1";
 
     if (wsEnabled && this.executionClient && this.client) {
-      // Import lazily to avoid circular dependency during hot-reload scenarios.
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { WsOrderClient } = require("../execution/wsOrderClient") as typeof import("../execution/wsOrderClient");
-      const wsClient = new WsOrderClient();
-      wsClient
-        .connect()
-        .then(() => {
-          this.executionClient.attachWsOrderClient(wsClient, this.client, this.assetIndex);
-          console.log(
-            `[StrategyEngine][${this.config.symbol}][WS_ORDER_API] WebSocket Order API primary path ACTIVE (assetIndex=${this.assetIndex}).`
-          );
-        })
-        .catch((err: unknown) => {
-          console.warn(
-            `[StrategyEngine][${this.config.symbol}][WS_ORDER_API] WS Order API connection failed — REST fallback active: ${
-              err instanceof Error ? err.message : String(err)
-            }`
-          );
-        });
+      if (this.executionClient.hasWsOrderClient()) {
+        // Reuse existing WsOrderClient singleton connection; mark asset health in SAB
+        this.client.writeAtomicFloat64Asset(this.assetIndex, 160, 1.0);
+        console.log(
+          `[StrategyEngine][${this.config.symbol}][WS_ORDER_API] Reusing shared WebSocket Order API primary path (assetIndex=${this.assetIndex}).`
+        );
+      } else {
+        // Import lazily to avoid circular dependency during hot-reload scenarios.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { WsOrderClient } = require("../execution/wsOrderClient") as typeof import("../execution/wsOrderClient");
+        const wsClient = new WsOrderClient();
+        wsClient
+          .connect()
+          .then(() => {
+            this.executionClient.attachWsOrderClient(wsClient, this.client, this.assetIndex);
+            console.log(
+              `[StrategyEngine][${this.config.symbol}][WS_ORDER_API] WebSocket Order API primary path ACTIVE (assetIndex=${this.assetIndex}).`
+            );
+          })
+          .catch((err: unknown) => {
+            console.warn(
+              `[StrategyEngine][${this.config.symbol}][WS_ORDER_API] WS Order API connection failed — REST fallback active: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          });
+      }
     }
     // ─────────────────────────────────────────────────────────────────────────────
   }

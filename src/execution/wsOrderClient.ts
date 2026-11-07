@@ -75,6 +75,13 @@ export interface WsCancelReplaceParams extends WsPlaceOrderParams {
   cancelReplaceMode?: "STOP_ON_FAILURE" | "ALLOW_FAILURE";
 }
 
+export interface WsCancelReplaceResult {
+  cancelResult: string;
+  newOrderResult: string;
+  cancelResponse?: WsOrderResult | { code: number; msg: string };
+  newOrderResponse?: WsOrderResult | { code: number; msg: string };
+}
+
 export interface WsOrderResult {
   orderId: number;
   symbol: string;
@@ -106,7 +113,7 @@ export interface WsRateLimit {
 export interface WsOrderResponse {
   id: string;
   status: number;
-  result: WsOrderResult | null;
+  result: WsOrderResult | WsCancelReplaceResult | null;
   error: { code: number; msg: string } | null;
   rateLimits: WsRateLimit[];
   rttMs: number; // Injected by client: wall-clock RTT from dispatch to acknowledgement
@@ -140,6 +147,33 @@ interface RawWsResponse {
 
 // ─── Implementation ─────────────────────────────────────────────────────────────
 
+/**
+ * Pre-sorted canonical keys for Binance Futures WebSocket API order methods.
+ * Guaranteed in strict lexicographical (ASCII) order to eliminate runtime sorting overhead.
+ */
+export const KNOWN_SORTED_KEYS = [
+  "apiKey",
+  "cancelOrderId",
+  "cancelOrigClientOrderId",
+  "cancelReplaceMode",
+  "closePosition",
+  "newClientOrderId",
+  "orderId",
+  "origClientOrderId",
+  "positionSide",
+  "price",
+  "quantity",
+  "recvWindow",
+  "reduceOnly",
+  "side",
+  "stopPrice",
+  "symbol",
+  "timeInForce",
+  "timestamp",
+  "type",
+  "workingType",
+] as const;
+
 export class WsOrderClient {
   private ws: WebSocket | null = null;
   private readonly wsEndpoint: string;
@@ -165,11 +199,6 @@ export class WsOrderClient {
   private static readonly BACKOFF_BASE_MS = 500;
   private static readonly BACKOFF_MAX_MS = 60_000;
 
-  // Zero-GC pre-allocated signing buffer for URLSearchParams construction
-  // We serialize params fresh each call (required for timestamp + recvWindow),
-  // but reuse the same URLSearchParams instance to avoid GC pressure.
-  private readonly signingParams: URLSearchParams = new URLSearchParams();
-
   constructor(options?: WsOrderClientOptions) {
     const useTestnet =
       options?.useTestnet ??
@@ -185,7 +214,8 @@ export class WsOrderClient {
       ? process.env.BINANCE_TESTNET_API_KEY ?? process.env.BINANCE_API_KEY ?? ""
       : process.env.BINANCE_API_KEY ?? "";
     const envSecret = useTestnet
-      ? process.env.BINANCE_TESTNET_SECRET_KEY ??
+      ? process.env.BINANCE_TESTNET_API_SECRET ??
+        process.env.BINANCE_TESTNET_SECRET_KEY ??
         process.env.BINANCE_API_SECRET ??
         process.env.BINANCE_SECRET_KEY ??
         ""
@@ -524,34 +554,59 @@ export class WsOrderClient {
   // ─── Signing ─────────────────────────────────────────────────────────────────
 
   /**
-   * Mutates `p` in-place: appends `timestamp`, `recvWindow`, `apiKey`, and `signature`.
-   * Uses pre-allocated `this.signingParams` URLSearchParams instance and clears it
-   * before each use to avoid allocating a new object per call.
+   * Mutates `p` in-place: appends `apiKey`, `recvWindow`, `timestamp`, and `signature`.
+   * Enforces strict lexicographical (alphabetical) sorting of all parameters.
+   * Zero-GC: avoids URLSearchParams entirely, utilizing pre-sorted compile-time keys.
    */
-  private _signParams(
+  public _signParams(
     p: Record<string, string | number | boolean>,
     recvWindow?: number
   ): void {
     const timestamp = timeSynchronizer.getAdjustedNowMs();
     const rw = recvWindow ?? parseInt(process.env.RECV_WINDOW_MS ?? "5000", 10);
 
+    // CRITICAL: apiKey, recvWindow, timestamp MUST be present in p BEFORE signature generation
+    p["apiKey"] = this.apiKey;
     p["recvWindow"] = rw;
     p["timestamp"] = timestamp;
 
-    // Build query string for signing using the pre-allocated URLSearchParams instance
-    this.signingParams.forEach((_v, k) => this.signingParams.delete(k));
-    for (const [key, value] of Object.entries(p)) {
-      this.signingParams.set(key, String(value));
+    // Build lexicographically sorted query string for HMAC-SHA256 signing
+    let queryString = "";
+    let first = true;
+
+    for (let i = 0; i < KNOWN_SORTED_KEYS.length; i++) {
+      const key = KNOWN_SORTED_KEYS[i];
+      const value = p[key];
+      if (value !== undefined) {
+        if (!first) queryString += "&";
+        queryString += key + "=" + encodeURIComponent(String(value));
+        first = false;
+      }
     }
 
-    const queryString = this.signingParams.toString();
+    // Safety fallback: if p contains any custom keys not in KNOWN_SORTED_KEYS (excluding 'signature')
+    const customKeys = Object.keys(p).filter(
+      (k) => k !== "signature" && !(KNOWN_SORTED_KEYS as readonly string[]).includes(k)
+    );
+    if (customKeys.length > 0) {
+      customKeys.sort();
+      for (let i = 0; i < customKeys.length; i++) {
+        const key = customKeys[i];
+        const value = p[key];
+        if (value !== undefined) {
+          if (!first) queryString += "&";
+          queryString += encodeURIComponent(key) + "=" + encodeURIComponent(String(value));
+          first = false;
+        }
+      }
+    }
+
     const signature = crypto
       .createHmac("sha256", this.apiSecret)
       .update(queryString)
       .digest("hex");
 
     p["signature"] = signature;
-    p["apiKey"] = this.apiKey;
   }
 
   // ─── Dispatch & Response ─────────────────────────────────────────────────────
@@ -646,7 +701,7 @@ export class WsOrderClient {
       pending.resolve({
         id,
         status: raw.status,
-        result: raw.result as WsOrderResult,
+        result: raw.result as WsOrderResult | WsCancelReplaceResult,
         error: null,
         rateLimits: raw.rateLimits ?? [],
         rttMs,
@@ -667,6 +722,13 @@ export class WsOrderClient {
   private _onClose(code: number, reason: string): void {
     this.isConnected = false;
     this._stopHeartbeat();
+
+    if (this.ws !== null) {
+      try {
+        this.ws.removeAllListeners();
+      } catch (_) {}
+      this.ws = null;
+    }
 
     // Reject all pending requests with a connection-lost error
     for (const [id, pending] of this.pendingRequests) {

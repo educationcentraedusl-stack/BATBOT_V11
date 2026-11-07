@@ -6,9 +6,10 @@ import { URL } from "node:url";
 import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
 import { ClientOrderIdGenerator } from "./clientOrderIdGenerator";
 import { timeSynchronizer } from "../utils/timeSynchronizer";
-import { WsOrderClient, WsPlaceOrderParams, WsOrderResponse } from "./wsOrderClient";
+import { WsOrderClient, WsPlaceOrderParams, WsOrderResponse, WsCancelOrderParams, WsCancelReplaceParams, WsOrderResult, WsCancelReplaceResult } from "./wsOrderClient";
 import { MarketDataClient } from "../marketDataClient";
 import { SAB_SLOTS } from "../ipc/sabSchema";
+import { getTradingSymbols } from "../config/tradingSymbols";
 
 export interface BinanceOrderParams {
   symbol: string;
@@ -24,6 +25,7 @@ export interface BinanceOrderParams {
   recvWindow?: number;
   positionSide?: "LONG" | "SHORT" | "BOTH";
   clientOrderId?: string;
+  assetIndex?: number; // Phase 1 HFT: explicit asset index for per-asset SAB telemetry routing
 }
 
 export interface BinanceUserTrade {
@@ -367,17 +369,44 @@ export class BinanceExecutionClient {
   // WsOrderClient is the primary execution path (~15ms RTT).
   // REST HTTP remains as the automatic fallback when WS is not ready.
   //
-  // Zero-GC invariant: wsClient and sabClient are plain object references.
+  // Zero-GC invariant: wsOrderClient and sabClient are plain object references.
   // SAB Slots 159 (WS_ORDER_RTT_MS) and 160 (WS_ORDER_STREAM_HEALTH) are
   // updated atomically via MarketDataClient.writeAtomicFloat64Asset() after
-  // every WS acknowledgement or fallback event.
+  // every WS acknowledgement or fallback event per asset.
   private wsOrderClient: WsOrderClient | null = null;
   private sabClient: MarketDataClient | null = null;
-  private wsAssetIndex: number = 0; // Per-asset SAB index for WS telemetry slots
+  private readonly symbolAssetIndexMap: Map<string, number> = new Map();
+
+  /**
+   * Resolves the assetIndex for SAB telemetry writes.
+   * Uses explicit index if passed, otherwise looks up from cached symbol-to-index map.
+   */
+  public resolveAssetIndex(symbol: string, explicitIdx?: number): number {
+    if (explicitIdx !== undefined && explicitIdx >= 0) {
+      return explicitIdx;
+    }
+    const sym = symbol.toUpperCase();
+    const cached = this.symbolAssetIndexMap.get(sym);
+    if (cached !== undefined) return cached;
+
+    const symbols = getTradingSymbols();
+    const idx = symbols.indexOf(sym);
+    const finalIdx = idx >= 0 ? idx : 0;
+    this.symbolAssetIndexMap.set(sym, finalIdx);
+    return finalIdx;
+  }
+
+  /**
+   * Returns true if a WsOrderClient is already attached to this execution client.
+   */
+  public hasWsOrderClient(): boolean {
+    return this.wsOrderClient !== null;
+  }
 
   /**
    * Attaches a WsOrderClient and a MarketDataClient for WS-first execution.
-   * Must be called once during engine initialization, before the first order.
+   * Safe to call multiple times across multiple StrategyEngine asset initializations.
+   * Reuses the existing WsOrderClient instance to avoid spawning multiple connections.
    *
    * @param wsClient  Fully constructed, connected WsOrderClient instance.
    * @param sabClient MarketDataClient bound to the SharedArrayBuffer.
@@ -388,10 +417,11 @@ export class BinanceExecutionClient {
     sabClient: MarketDataClient,
     assetIndex: number = 0
   ): void {
-    this.wsOrderClient = wsClient;
-    this.sabClient = sabClient;
-    this.wsAssetIndex = assetIndex;
-    // Immediately mark the WS stream as healthy in the SAB
+    if (this.wsOrderClient === null) {
+      this.wsOrderClient = wsClient;
+      this.sabClient = sabClient;
+    }
+    // Mark the WS stream as healthy for this asset in the SAB
     sabClient.writeAtomicFloat64Asset(assetIndex, SAB_SLOTS.WS_ORDER_STREAM_HEALTH, 1.0);
     console.log(
       `[BinanceExecutionClient][WS_ORDER_CLIENT] WebSocket Order API primary path attached (assetIndex=${assetIndex}).`
@@ -400,7 +430,7 @@ export class BinanceExecutionClient {
 
   /**
    * Detaches the WsOrderClient and destroys it. Reverts to REST fallback.
-   * SAB Slot 160 is set to 0.0 (REST fallback active).
+   * SAB Slot 160 is set to 0.0 (REST fallback active) across registered assets.
    */
   public detachWsOrderClient(): void {
     if (this.wsOrderClient !== null) {
@@ -408,11 +438,13 @@ export class BinanceExecutionClient {
       this.wsOrderClient = null;
     }
     if (this.sabClient !== null) {
-      this.sabClient.writeAtomicFloat64Asset(
-        this.wsAssetIndex,
-        SAB_SLOTS.WS_ORDER_STREAM_HEALTH,
-        0.0
-      );
+      for (const idx of this.symbolAssetIndexMap.values()) {
+        this.sabClient.writeAtomicFloat64Asset(
+          idx,
+          SAB_SLOTS.WS_ORDER_STREAM_HEALTH,
+          0.0
+        );
+      }
     }
     console.log(
       "[BinanceExecutionClient][WS_ORDER_CLIENT] WebSocket Order API detached. Fallback to REST active."
@@ -421,21 +453,20 @@ export class BinanceExecutionClient {
 
   /**
    * Zero-GC SAB telemetry writer: atomically records WS RTT and health after each dispatch.
-   * Called only from the WS execution path — never from the REST fallback path.
    *
+   * @param assetIndex Target asset index in the SharedArrayBuffer.
    * @param rttMs  Round-trip time in milliseconds from dispatch to Binance acknowledgement.
    * @param healthy true = WS primary active, false = fallback to REST.
    */
-  private _writeWsTelemetry(rttMs: number, healthy: boolean): void {
+  public _writeWsTelemetry(assetIndex: number, rttMs: number, healthy: boolean): void {
     if (this.sabClient === null) return;
-    // Atomic writes: no GC allocation — scalar operations on Float64Array via BigInt64Array view
     this.sabClient.writeAtomicFloat64Asset(
-      this.wsAssetIndex,
+      assetIndex,
       SAB_SLOTS.WS_ORDER_RTT_MS,
       rttMs
     );
     this.sabClient.writeAtomicFloat64Asset(
-      this.wsAssetIndex,
+      assetIndex,
       SAB_SLOTS.WS_ORDER_STREAM_HEALTH,
       healthy ? 1.0 : 0.0
     );
@@ -443,7 +474,7 @@ export class BinanceExecutionClient {
 
   constructor(options?: BinanceClientOptions) {
     this.testnet = options?.useTestnet ?? (process.env.USE_TESTNET === "true" || process.env.USE_TESTNET === "1" || process.env.BINANCE_TESTNET === "true");
-    
+
     const envApiKey = this.testnet
       ? (process.env.BINANCE_TESTNET_API_KEY || process.env.BINANCE_API_KEY || "")
       : (process.env.BINANCE_API_KEY || "");
@@ -466,8 +497,7 @@ export class BinanceExecutionClient {
 
     if (!this.apiKey || !this.apiSecret) {
       console.error(
-        `[CRITICAL][BinanceExecutionClient] Missing BINANCE_API_KEY or BINANCE_API_SECRET in environment variables. Execution mode: ${
-          this.testnet ? "BINANCE FUTURES TESTNET" : "LIVE PRODUCTION"
+        `[CRITICAL][BinanceExecutionClient] Missing BINANCE_API_KEY or BINANCE_API_SECRET in environment variables. Execution mode: ${this.testnet ? "BINANCE FUTURES TESTNET" : "LIVE PRODUCTION"
         }`
       );
     }
@@ -917,7 +947,7 @@ export class BinanceExecutionClient {
               for (const ord of stillActive) {
                 try {
                   await this.cancelOrder(symbol, ord.orderId, signal);
-                } catch (_) {}
+                } catch (_) { }
               }
             }
           } catch (recheckErr: unknown) {
@@ -933,8 +963,7 @@ export class BinanceExecutionClient {
       }
     } catch (queryErr: unknown) {
       console.warn(
-        `[BinanceExecutionClient][PRE_FLIGHT_QUERY_WARN] Pre-flight open orders query notice: ${
-          queryErr instanceof Error ? queryErr.message : String(queryErr)
+        `[BinanceExecutionClient][PRE_FLIGHT_QUERY_WARN] Pre-flight open orders query notice: ${queryErr instanceof Error ? queryErr.message : String(queryErr)
         }`
       );
     }
@@ -954,6 +983,74 @@ export class BinanceExecutionClient {
     },
     signal?: AbortSignal
   ): Promise<BinanceOrderResponse> {
+    const targetAssetIndex = this.resolveAssetIndex(params.symbol, params.assetIndex);
+
+    // Phase 1 HFT Overhaul: WS-First Cancel-Replace Path (~15ms RTT)
+    if (this.wsOrderClient !== null && this.wsOrderClient.isReady()) {
+      try {
+        const numCancelOrderId =
+          typeof params.cancelOrderId === "number"
+            ? params.cancelOrderId
+            : params.cancelOrderId !== undefined
+              ? parseInt(String(params.cancelOrderId), 10)
+              : undefined;
+
+        const wsParams: WsCancelReplaceParams = {
+          symbol: params.symbol,
+          side: params.side,
+          type: params.type,
+          quantity: params.quantity,
+          price: params.price,
+          stopPrice: params.stopPrice,
+          timeInForce: params.timeInForce,
+          positionSide: params.positionSide,
+          reduceOnly: params.reduceOnly,
+          closePosition: params.closePosition,
+          workingType: params.workingType,
+          newClientOrderId: params.clientOrderId,
+          cancelOrderId: Number.isFinite(numCancelOrderId) ? numCancelOrderId : undefined,
+          cancelOrigClientOrderId: params.cancelOrigClientOrderId,
+          cancelReplaceMode: params.cancelReplaceMode,
+          recvWindow: params.recvWindow,
+        };
+
+        const wsRes = await this.wsOrderClient.cancelReplaceOrder(wsParams);
+        this._writeWsTelemetry(targetAssetIndex, wsRes.rttMs, true);
+
+        if (wsRes.result !== null) {
+          const cr = wsRes.result as WsCancelReplaceResult;
+          const newOrder = cr.newOrderResponse as WsOrderResult | undefined;
+          if (newOrder && "orderId" in newOrder) {
+            return {
+              orderId: newOrder.orderId,
+              symbol: newOrder.symbol,
+              status: newOrder.status,
+              clientOrderId: newOrder.clientOrderId,
+              price: newOrder.price,
+              avgPrice: newOrder.avgPrice,
+              origQty: newOrder.origQty,
+              executedQty: newOrder.executedQty,
+              cumQuote: newOrder.cumQuote,
+              timeInForce: newOrder.timeInForce,
+              type: newOrder.type,
+              reduceOnly: newOrder.reduceOnly,
+              side: newOrder.side,
+              positionSide: newOrder.positionSide,
+              stopPrice: newOrder.stopPrice,
+              workingType: newOrder.workingType,
+              updateTime: newOrder.updateTime,
+            };
+          }
+        }
+      } catch (wsErr: unknown) {
+        const wsErrMsg = wsErr instanceof Error ? wsErr.message : String(wsErr);
+        this._writeWsTelemetry(targetAssetIndex, 0.0, false);
+        console.warn(
+          `[BinanceExecutionClient][WS_CANCEL_REPLACE_FALLBACK] WS cancelReplaceOrder failed for ${params.symbol}: ${wsErrMsg}. Falling back to REST PUT /fapi/v1/order.`
+        );
+      }
+    }
+
     const isClosePosition = params.closePosition === true || String(params.closePosition).toLowerCase() === "true";
     const formattedQty = params.quantity !== undefined ? SymbolPrecisionRegistry.formatQuantity(params.symbol, params.quantity) : 0;
     const cid = (params.clientOrderId || "").trim();
@@ -1002,7 +1099,7 @@ export class BinanceExecutionClient {
   ): Promise<BinanceOrderResponse> {
     const formattedSlPx = SymbolPrecisionRegistry.formatPrice(symbol, stopPrice);
     const cid = clientOrderId || ClientOrderIdGenerator.generate(symbol, positionSide === "LONG" ? "CORE_LONG" : "SHORT_AGG", "SL");
-    
+
     // Strict Zero-Trust Assertion:
     // SHORT position -> side MUST be "BUY"
     // LONG position -> side MUST be "SELL"
@@ -1055,7 +1152,7 @@ export class BinanceExecutionClient {
               const amt = Math.abs(parseFloat(matchPos.positionAmt || "0"));
               if (amt > 0) fallbackQty = amt;
             }
-          } catch (_) {}
+          } catch (_) { }
         }
 
         if (fallbackQty && fallbackQty > 0) {
@@ -1160,119 +1257,128 @@ export class BinanceExecutionClient {
       this.inFlightClientOrderIds.add(cid);
     }
 
-    // ─── Phase 1 HFT Overhaul: WS-First Execution Path ─────────────────────────
-    // Primary path: WebSocket Order API (~15ms RTT).
-    // Automatic fallback: REST HTTPS (~460ms RTT) if WS is not ready or throws.
-    //
-    // Eligibility: Only attempt WS for MARKET, LIMIT, STOP_MARKET, TAKE_PROFIT_MARKET
-    // order types on the first (non-retry) attempt.
-    // Conditional orders (STOP_MARKET / TAKE_PROFIT_MARKET) with closePosition=true
-    // are excluded from the WS path because Binance WS-FAPI does not support
-    // the closePosition flag for conditional orders as of Nov-2026.
-    // All retry passes (retryCount > 0) go through REST to preserve existing
-    // -4509/-4130/-5022 recovery logic unchanged.
-    if (
-      retryCount === 0 &&
-      this.wsOrderClient !== null &&
-      this.wsOrderClient.isReady()
-    ) {
-      const isClosePositionOrder =
-        params.closePosition === true ||
-        String(params.closePosition).toLowerCase() === "true";
-
-      // WS path supports MARKET and LIMIT orders, and conditional orders WITHOUT closePosition.
-      // closePosition=true conditional orders must remain on the REST path for full recovery logic.
-      const isWsEligible =
-        !isClosePositionOrder ||
-        (params.type !== "STOP_MARKET" && params.type !== "TAKE_PROFIT_MARKET");
-
-      if (isWsEligible) {
-        try {
-          const wsParams: WsPlaceOrderParams = {
-            symbol: params.symbol,
-            side: params.side,
-            type: params.type,
-            quantity: params.quantity,
-            price: params.price,
-            stopPrice: params.stopPrice,
-            timeInForce: params.timeInForce,
-            positionSide: params.positionSide,
-            reduceOnly: params.reduceOnly,
-            closePosition: params.closePosition,
-            workingType: params.workingType,
-            newClientOrderId: cid.length > 0 ? cid : undefined,
-            recvWindow: params.recvWindow,
-          };
-
-          const wsResponse: WsOrderResponse = await this.wsOrderClient.placeOrder(wsParams);
-
-          // Update SAB telemetry slots 159 and 160 atomically (zero-GC scalar writes)
-          this._writeWsTelemetry(wsResponse.rttMs, true);
-
-          if (wsResponse.result === null) {
-            throw new Error(
-              `[BinanceExecutionClient][WS_NULL_RESULT] WS order.place returned null result for ${params.symbol} cid=${cid}`
-            );
-          }
-
-          // Normalize WsOrderResult → BinanceOrderResponse (shape-compatible)
-          const r = wsResponse.result;
-          return {
-            orderId:        r.orderId,
-            symbol:         r.symbol,
-            status:         r.status,
-            clientOrderId:  r.clientOrderId,
-            price:          r.price,
-            avgPrice:       r.avgPrice,
-            origQty:        r.origQty,
-            executedQty:    r.executedQty,
-            cumQuote:       r.cumQuote,
-            timeInForce:    r.timeInForce,
-            type:           r.type,
-            reduceOnly:     r.reduceOnly,
-            side:           r.side,
-            positionSide:   r.positionSide,
-            stopPrice:      r.stopPrice,
-            workingType:    r.workingType,
-            updateTime:     r.updateTime,
-          };
-        } catch (wsErr: unknown) {
-          const wsErrMsg = wsErr instanceof Error ? wsErr.message : String(wsErr);
-
-          // If error is a Binance semantic rejection (non-5xx), do NOT fall through to REST.
-          // A WS Binance API error (e.g. insufficient margin, bad params) will return the same
-          // from REST. We only fall through on transport-level failures (timeout, disconnect).
-          const isBinanceSemanticError =
-            wsErrMsg.includes("Binance WS Order API Error") &&
-            !wsErrMsg.includes("timed out") &&
-            !wsErrMsg.includes("not ready") &&
-            !wsErrMsg.includes("destroyed") &&
-            !wsErrMsg.includes("Connection closed");
-
-          if (isBinanceSemanticError) {
-            // Mark WS health as degraded for this tick — still connected but returned an error
-            this._writeWsTelemetry(0.0, true);
-            // Re-throw directly: REST would return the same rejection
-            if (cid.length > 0 && retryCount === 0) {
-              this.inFlightClientOrderIds.delete(cid);
-            }
-            throw wsErr;
-          }
-
-          // Transport-level failure: WS disconnected, timed out, or destroyed.
-          // Fall through to REST path and mark stream health as degraded.
-          this._writeWsTelemetry(0.0, false);
-          console.warn(
-            `[BinanceExecutionClient][WS_FALLBACK] WS Order API transport failure for ${params.symbol} ` +
-            `(cid=${cid}): ${wsErrMsg}. Falling back to REST HTTPS.`
-          );
-          // Fall through to the existing REST path below
-        }
-      }
-    }
-    // ────────────────────────────────────────────────────────────────────────────
+    const targetAssetIndex = this.resolveAssetIndex(params.symbol, params.assetIndex);
 
     try {
+      // ─── Phase 1 HFT Overhaul: WS-First Execution Path ─────────────────────────
+      // Primary path: WebSocket Order API (~15ms RTT).
+      // Automatic fallback: REST HTTPS (~460ms RTT) if WS is not ready or throws.
+      //
+      // Eligibility: Only attempt WS for MARKET, LIMIT, STOP_MARKET, TAKE_PROFIT_MARKET
+      // order types on the first (non-retry) attempt.
+      // Conditional orders (STOP_MARKET / TAKE_PROFIT_MARKET) with closePosition=true
+      // are excluded from the WS path because Binance WS-FAPI does not support
+      // the closePosition flag for conditional orders as of Nov-2026.
+      // All retry passes (retryCount > 0) go through REST to preserve existing
+      // -4509/-4130/-5022 recovery logic unchanged.
+      if (
+        retryCount === 0 &&
+        this.wsOrderClient !== null &&
+        this.wsOrderClient.isReady()
+      ) {
+        const isClosePositionOrder =
+          params.closePosition === true ||
+          String(params.closePosition).toLowerCase() === "true";
+
+        // WS path supports MARKET and LIMIT orders, and conditional orders WITHOUT closePosition.
+        // closePosition=true conditional orders must remain on the REST path for full recovery logic.
+        const isWsEligible =
+          !isClosePositionOrder ||
+          (params.type !== "STOP_MARKET" && params.type !== "TAKE_PROFIT_MARKET");
+
+        if (isWsEligible) {
+          try {
+            const wsParams: WsPlaceOrderParams = {
+              symbol: params.symbol,
+              side: params.side,
+              type: params.type,
+              quantity: params.quantity,
+              price: params.price,
+              stopPrice: params.stopPrice,
+              timeInForce: params.timeInForce,
+              positionSide: params.positionSide,
+              reduceOnly: params.reduceOnly,
+              closePosition: params.closePosition,
+              workingType: params.workingType,
+              newClientOrderId: cid.length > 0 ? cid : undefined,
+              recvWindow: params.recvWindow,
+            };
+
+            const wsResponse: WsOrderResponse = await this.wsOrderClient.placeOrder(wsParams);
+
+            // Update SAB telemetry slots 159 and 160 atomically (zero-GC scalar writes)
+            this._writeWsTelemetry(targetAssetIndex, wsResponse.rttMs, true);
+
+            if (wsResponse.result === null) {
+              throw new Error(
+                `[BinanceExecutionClient][WS_NULL_RESULT] WS order.place returned null result for ${params.symbol} cid=${cid}`
+              );
+            }
+
+            // Normalize WsOrderResult → BinanceOrderResponse (shape-compatible)
+            const r = wsResponse.result as WsOrderResult;
+            return {
+              orderId: r.orderId,
+              symbol: r.symbol,
+              status: r.status,
+              clientOrderId: r.clientOrderId,
+              price: r.price,
+              avgPrice: r.avgPrice,
+              origQty: r.origQty,
+              executedQty: r.executedQty,
+              cumQuote: r.cumQuote,
+              timeInForce: r.timeInForce,
+              type: r.type,
+              reduceOnly: r.reduceOnly,
+              side: r.side,
+              positionSide: r.positionSide,
+              stopPrice: r.stopPrice,
+              workingType: r.workingType,
+              updateTime: r.updateTime,
+            };
+          } catch (wsErr: unknown) {
+            const wsErrMsg = wsErr instanceof Error ? wsErr.message : String(wsErr);
+
+            // Mandatory Fix 4: Signature errors (-1022, -2015), server errors (-1000, -1001, 5xx),
+            // timeouts, and transport disconnects cleanly and immediately fall back to REST HTTPS.
+            const isTransportOrSignatureError =
+              wsErrMsg.includes("-1022") ||
+              wsErrMsg.includes("Signature") ||
+              wsErrMsg.includes("-2015") ||
+              wsErrMsg.includes("-1000") ||
+              wsErrMsg.includes("-1001") ||
+              wsErrMsg.includes("-1003") ||
+              wsErrMsg.includes("timed out") ||
+              wsErrMsg.includes("not ready") ||
+              wsErrMsg.includes("destroyed") ||
+              wsErrMsg.includes("Connection closed") ||
+              wsErrMsg.includes("ECONN") ||
+              wsErrMsg.includes("EPIPE") ||
+              wsErrMsg.includes("ETIMEDOUT");
+
+            const isBinanceSemanticError =
+              !isTransportOrSignatureError &&
+              wsErrMsg.includes("Binance WS Order API Error");
+
+            if (isBinanceSemanticError) {
+              // Mark WS health as degraded for this tick — still connected but returned an error
+              this._writeWsTelemetry(targetAssetIndex, 0.0, true);
+              // Re-throw directly: outer finally block cleans up inFlightClientOrderIds
+              throw wsErr;
+            }
+
+            // Transport or signature failure: degrade WS health and fall through to REST
+            this._writeWsTelemetry(targetAssetIndex, 0.0, false);
+            console.warn(
+              `[BinanceExecutionClient][WS_FALLBACK] WS Order API transport/signature failure for ${params.symbol} ` +
+              `(cid=${cid}): ${wsErrMsg}. Falling back to REST HTTPS.`
+            );
+            // Fall through to the existing REST path below
+          }
+        }
+      }
+      // ────────────────────────────────────────────────────────────────────────────
+
       const isClosePosition = params.closePosition === true || String(params.closePosition).toLowerCase() === "true";
       const formattedQty = params.quantity !== undefined ? SymbolPrecisionRegistry.formatQuantity(params.symbol, params.quantity) : 0;
       const payload: Record<string, string | number | boolean> = {
@@ -1287,7 +1393,7 @@ export class BinanceExecutionClient {
 
       if (params.price !== undefined) payload.price = SymbolPrecisionRegistry.formatPrice(params.symbol, params.price);
       if (params.stopPrice !== undefined) payload.stopPrice = SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
-      
+
       // Binance API Error -1106: Parameter 'timeinforce' sent when not required.
       // timeInForce MUST NOT be sent for MARKET, STOP_MARKET, or TAKE_PROFIT_MARKET orders.
       if (
@@ -1471,10 +1577,10 @@ export class BinanceExecutionClient {
    */
   public async placeBatchOrders(orders: BinanceOrderParams[]): Promise<BinanceOrderResponse[]> {
     if (!orders || orders.length === 0) return [];
-    
+
     const maxBatchLimit = parseInt(process.env.BATCH_ORDER_MAX_LIMIT || "5", 10);
     const recvWindow = parseInt(process.env.RECV_WINDOW_MS || "5000", 10);
-    
+
     if (orders.length > maxBatchLimit) {
       console.warn(`[BinanceExecutionClient] Batch order count (${orders.length}) exceeds BATCH_ORDER_MAX_LIMIT (${maxBatchLimit}). Truncating to ${maxBatchLimit}.`);
     }
@@ -1484,7 +1590,7 @@ export class BinanceExecutionClient {
       const cid = params.clientOrderId || "";
       const isClosePosition = params.closePosition === true || String(params.closePosition).toLowerCase() === "true";
       const formattedQty = params.quantity !== undefined ? SymbolPrecisionRegistry.formatQuantity(params.symbol, params.quantity) : 0;
-      
+
       const payload: Record<string, string | number | boolean> = {
         symbol: params.symbol,
         side: params.side,
@@ -1497,7 +1603,7 @@ export class BinanceExecutionClient {
 
       if (params.price !== undefined) payload.price = SymbolPrecisionRegistry.formatPrice(params.symbol, params.price);
       if (params.stopPrice !== undefined) payload.stopPrice = SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
-      
+
       // Binance API Error -1106: Parameter 'timeinforce' sent when not required.
       // timeInForce MUST NOT be sent for MARKET, STOP_MARKET, or TAKE_PROFIT_MARKET orders.
       if (
@@ -1538,7 +1644,7 @@ export class BinanceExecutionClient {
 
   public async cancelBatchOrders(symbol: string, orderIdList: (number | string)[]): Promise<BinanceOrderResponse[]> {
     if (!orderIdList || orderIdList.length === 0) return [];
-    
+
     const recvWindow = parseInt(process.env.RECV_WINDOW_MS || "5000", 10);
     const maxBatchLimit = parseInt(process.env.BATCH_ORDER_MAX_LIMIT || "5", 10);
     const targetIds = orderIdList.slice(0, maxBatchLimit);
@@ -1552,7 +1658,59 @@ export class BinanceExecutionClient {
     return this.request<BinanceOrderResponse[]>("DELETE", "/fapi/v1/batchOrders", payload, true);
   }
 
-  public async cancelOrder(symbol: string, orderId: number | string, signal?: AbortSignal): Promise<BinanceOrderResponse> {
+  public async cancelOrder(
+    symbol: string,
+    orderId: number | string,
+    signal?: AbortSignal,
+    assetIndex?: number
+  ): Promise<BinanceOrderResponse> {
+    const targetAssetIndex = this.resolveAssetIndex(symbol, assetIndex);
+
+    // Phase 1 HFT Overhaul: WS-First Cancellation Path (~15ms RTT)
+    if (this.wsOrderClient !== null && this.wsOrderClient.isReady()) {
+      try {
+        const numOrderId = typeof orderId === "number" ? orderId : parseInt(orderId, 10);
+        const cancelParams: WsCancelOrderParams = {
+          symbol,
+          ...(Number.isFinite(numOrderId) && numOrderId > 0
+            ? { orderId: numOrderId }
+            : { origClientOrderId: String(orderId) }),
+        };
+
+        const wsRes = await this.wsOrderClient.cancelOrder(cancelParams);
+        this._writeWsTelemetry(targetAssetIndex, wsRes.rttMs, true);
+
+        if (wsRes.result !== null) {
+          const r = wsRes.result as WsOrderResult;
+          return {
+            orderId: r.orderId,
+            symbol: r.symbol,
+            status: r.status,
+            clientOrderId: r.clientOrderId,
+            price: r.price,
+            avgPrice: r.avgPrice,
+            origQty: r.origQty,
+            executedQty: r.executedQty,
+            cumQuote: r.cumQuote,
+            timeInForce: r.timeInForce,
+            type: r.type,
+            reduceOnly: r.reduceOnly,
+            side: r.side,
+            positionSide: r.positionSide,
+            stopPrice: r.stopPrice,
+            workingType: r.workingType,
+            updateTime: r.updateTime,
+          };
+        }
+      } catch (wsErr: unknown) {
+        const wsErrMsg = wsErr instanceof Error ? wsErr.message : String(wsErr);
+        this._writeWsTelemetry(targetAssetIndex, 0.0, false);
+        console.warn(
+          `[BinanceExecutionClient][WS_CANCEL_FALLBACK] WS cancelOrder failed for ${symbol} orderId=${orderId}: ${wsErrMsg}. Falling back to REST.`
+        );
+      }
+    }
+
     try {
       return await this.request<BinanceOrderResponse>(
         "DELETE",
@@ -1691,23 +1849,20 @@ export class BinanceExecutionClient {
       const posRiskErr = (posRiskRes as PromiseRejectedResult).reason;
       const accountInfoErr = (accountInfoRes as PromiseRejectedResult).reason;
       throw new Error(
-        `[BinanceExecutionClient][CONSENSUS_FAILURE] Dual-source position consensus failed: positionRisk error (${
-          posRiskErr?.message || String(posRiskErr)
+        `[BinanceExecutionClient][CONSENSUS_FAILURE] Dual-source position consensus failed: positionRisk error (${posRiskErr?.message || String(posRiskErr)
         }), accountInfo error (${accountInfoErr?.message || String(accountInfoErr)})`
       );
     }
 
     if (posRiskRes.status === "rejected") {
       console.warn(
-        `[BinanceExecutionClient][CONSENSUS_DEGRADED] positionRisk query failed: ${
-          (posRiskRes as PromiseRejectedResult).reason?.message
+        `[BinanceExecutionClient][CONSENSUS_DEGRADED] positionRisk query failed: ${(posRiskRes as PromiseRejectedResult).reason?.message
         }. Relying on accountInfo ledger.`
       );
     }
     if (accountInfoRes.status === "rejected") {
       console.warn(
-        `[BinanceExecutionClient][CONSENSUS_DEGRADED] accountInfo query failed: ${
-          (accountInfoRes as PromiseRejectedResult).reason?.message
+        `[BinanceExecutionClient][CONSENSUS_DEGRADED] accountInfo query failed: ${(accountInfoRes as PromiseRejectedResult).reason?.message
         }. Relying on positionRisk stream.`
       );
     }
@@ -1979,8 +2134,8 @@ export class BinanceExecutionClient {
     if (!this.isConfigured()) return;
 
     // 1. Initial one-shot immediate reconciliation
-    this.fetchReconciledAccountBalanceAsync().catch(() => {});
-    this.syncIncomeBackground(symbols).catch(() => {});
+    this.fetchReconciledAccountBalanceAsync().catch(() => { });
+    this.syncIncomeBackground(symbols).catch(() => { });
     // Polling intervals deactivated: trades and balance mutations are processed via WebSocket stream
   }
 
