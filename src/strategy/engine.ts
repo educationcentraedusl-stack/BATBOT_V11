@@ -3317,7 +3317,7 @@ export class StrategyEngine {
       const BASELINE_WIN_PRIOR = 0.460;
       const excessEdge = Math.min(1.0, Math.max(0.0, (aiConfidence - BASELINE_WIN_PRIOR) / 0.06));
       const aiScore = Math.max(-1.0, Math.min(1.0, aiDirection * (0.50 + 0.50 * excessEdge)));
-      const ofiScore = Math.max(-1.0, Math.min(1.0, hazardMetrics.ofi));
+      const ofiScore = Math.max(-1.0, Math.min(1.0, hazardMetrics.multiLevelOfi ?? hazardMetrics.ofi));
 
       // SOTA Continuous 4-Factor Alpha Fusion: 50% AI Direction*Conf, 20% LOB OBI, 15% Rolling CVD Velocity, 15% Multi-Level OFI
       const compositeScore = 0.50 * aiScore + 0.20 * obiScore + 0.15 * cvdScore + 0.15 * ofiScore;

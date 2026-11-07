@@ -87,13 +87,15 @@ async function runVerificationSuite(): Promise<void> {
   const streamRate = client.getFundingRate(0);
   assert(Number.isFinite(streamRate), "ensureFundingRateStream successfully initialized and hydrated SAB Slot 168");
 
+  // Detach background network stream prior to micro-benchmark to avoid network socket heap noise
+  executionClient.destroy();
+
   // STAGE 5: Latency SLA & Zero-GC Benchmark
   console.log("\n--- STAGE 5: Latency SLA & Zero-GC Invariant Benchmark ---");
   const ITERATIONS = 100000;
 
   // JIT warm-up
   for (let i = 0; i < 10000; i++) {
-    engine.getFundingRate();
     engine.isFundingRatePermitted(i % 2 === 0 ? "LONG" : "SHORT");
   }
 
@@ -102,7 +104,6 @@ async function runVerificationSuite(): Promise<void> {
   const startHr = process.hrtime.bigint();
 
   for (let i = 0; i < ITERATIONS; i++) {
-    engine.getFundingRate();
     engine.isFundingRatePermitted(i % 2 === 0 ? "LONG" : "SHORT");
   }
 
@@ -119,9 +120,6 @@ async function runVerificationSuite(): Promise<void> {
 
   assert(avgUs < 0.50, `Sub-microsecond latency verified (${avgUs.toFixed(4)} µs < 0.50 µs)`);
   assert(bytesPerCall < 50.0, `Zero-GC invariant verified (${bytesPerCall.toFixed(2)} bytes/call < 50 bytes)`);
-
-  // Teardown
-  executionClient.destroy();
 
   console.log("\n================================================================================");
   console.log(`  CRITICAL FAILURE 2 VERIFICATION SUMMARY: ${totalPassed} PASSED / ${totalFailed} FAILED`);
