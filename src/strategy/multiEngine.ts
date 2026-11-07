@@ -220,6 +220,25 @@ export class MultiAssetStrategyEngine {
     }
   }
 
+  /**
+   * Phase 5 HFT Overhaul: Synchronizes live perpetual funding rates from Binance
+   * into SAB Slot 168 across all active asset engines.
+   */
+  public async syncFundingRates(): Promise<void> {
+    try {
+      if (typeof this.executionClient.syncAllFundingRates === "function") {
+        await this.executionClient.syncAllFundingRates(this.client);
+      } else {
+        for (const engine of this.engines.values()) {
+          await engine.syncFundingRate();
+        }
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[MultiAssetStrategyEngine] syncFundingRates notice: ${msg}`);
+    }
+  }
+
   public async syncExchangeState(): Promise<void> {
     if (!this.executionClient.isConfigured()) {
       return;

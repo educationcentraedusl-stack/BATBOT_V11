@@ -407,6 +407,22 @@ export class StrategyEngine {
       }
     }
     // ─────────────────────────────────────────────────────────────────────────────
+
+    // ─── Phase 5 HFT Overhaul: Activate Live Perpetual Funding Rate Telemetry ───
+    // Hydrate SAB Slot 168 immediately from Binance and attach @markPrice@1s WebSocket stream
+    if (this.executionClient && this.client) {
+      if (typeof this.executionClient.ensureFundingRateStream === "function") {
+        this.executionClient
+          .ensureFundingRateStream(this.client, this.assetIndex, this.config.symbol)
+          .catch((err: unknown) => {
+            console.warn(
+              `[StrategyEngine][${this.config.symbol}][FUNDING_TELEMETRY] Live funding stream startup notice: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          });
+      }
+    }
   }
 
   /**
@@ -4189,6 +4205,23 @@ export class StrategyEngine {
 
   public getFundingRate(): number {
     return this.client.getFundingRate(this.assetIndex);
+  }
+
+  /**
+   * Phase 5 HFT Overhaul: Syncs live perpetual funding rate from Binance
+   * and atomically writes to SAB Slot 168 via client.setFundingRate.
+   */
+  public async syncFundingRate(): Promise<number> {
+    if (!this.executionClient) return 0.0;
+    try {
+      const rate = await this.executionClient.fetchFundingRate(this.config.symbol);
+      this.client.setFundingRate(rate, this.assetIndex);
+      return rate;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[StrategyEngine][${this.config.symbol}] syncFundingRate warning: ${msg}`);
+      return 0.0;
+    }
   }
 }
 

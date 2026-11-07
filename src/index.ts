@@ -76,6 +76,18 @@ export async function syncStateOnStartup(
       }
     }
 
+    // 2.7. Synchronize Live Perpetual Funding Rate to SAB Slot 168 (Fee Ledger Completion)
+    try {
+      if (strategyEngine instanceof MultiAssetStrategyEngine) {
+        await strategyEngine.syncFundingRates();
+      } else if (strategyEngine instanceof StrategyEngine) {
+        await strategyEngine.syncFundingRate();
+      }
+      console.log("[StateSync] Live Perpetual Funding Rate synchronized to SAB Slot 168.");
+    } catch (e: unknown) {
+      console.warn(`[StateSync] Notice syncing live funding rates: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     // 3. Fetch USDT Account Balance
     const balance = await executionClient.fetchUsdtBalanceAsync();
     console.log(`[StateSync] Binance Wallet Available Balance Synced: $${balance.toFixed(2)} USDT`);

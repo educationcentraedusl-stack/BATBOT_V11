@@ -32,6 +32,9 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.BinanceExecutionClient = exports.BinanceRateLimiter = void 0;
 require("dotenv/config");
@@ -45,6 +48,7 @@ const timeSynchronizer_1 = require("../utils/timeSynchronizer");
 const wsOrderClient_1 = require("./wsOrderClient");
 const sabSchema_1 = require("../ipc/sabSchema");
 const tradingSymbols_1 = require("../config/tradingSymbols");
+const ws_1 = __importDefault(require("ws"));
 class BinanceRateLimiter {
     static MAX_WEIGHT_1M = 2400;
     static MAX_ORDERS_10S = 300;
@@ -190,6 +194,14 @@ class BinanceExecutionClient {
     wsOrderClientInitPromise = null;
     sabClient = null;
     symbolAssetIndexMap = new Map();
+    // ─── Phase 5 HFT Overhaul: Live Perpetual Funding Rate Telemetry ──────────────
+    // Streaming @markPrice@1s WebSocket and resilient REST /fapi/v1/premiumIndex
+    // directly writing to SAB Slot 168 (FUNDING_RATE) via setFundingRate().
+    fundingRateWs = null;
+    fundingRatePollTimer = null;
+    fundingRateReconnectTimer = null;
+    registeredFundingSymbols = new Map();
+    isFundingRateConnecting = false;
     /**
      * Resolves the assetIndex for SAB telemetry writes.
      * Uses explicit index if passed, otherwise looks up from cached symbol-to-index map.
@@ -377,6 +389,209 @@ class BinanceExecutionClient {
     }
     async fetchExchangeInfo() {
         return this.request("GET", "/fapi/v1/exchangeInfo", {}, false);
+    }
+    /**
+     * Phase 5 HFT Overhaul: Fetches mark price and live perpetual funding rate
+     * from Binance Futures REST API (/fapi/v1/premiumIndex).
+     * Public unsigned endpoint — requires zero API credentials.
+     */
+    async fetchPremiumIndex(symbol) {
+        const params = {};
+        if (symbol) {
+            params.symbol = symbol.toUpperCase();
+        }
+        return this.request("GET", "/fapi/v1/premiumIndex", params, false);
+    }
+    /**
+     * Phase 5 HFT Overhaul: Fetches the scalar live perpetual funding rate for a specific symbol.
+     * Returns funding rate as a float (e.g. 0.0001 = 1 bp).
+     */
+    async fetchFundingRate(symbol) {
+        try {
+            const res = await this.fetchPremiumIndex(symbol);
+            const item = Array.isArray(res) ? res.find((p) => p.symbol === symbol.toUpperCase()) : res;
+            if (item && item.lastFundingRate) {
+                const rate = parseFloat(item.lastFundingRate);
+                return Number.isFinite(rate) ? rate : 0.0;
+            }
+            return 0.0;
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[BinanceExecutionClient] Failed to fetch funding rate for ${symbol}: ${msg}`);
+            return 0.0;
+        }
+    }
+    /**
+     * Phase 5 HFT Overhaul: Batch fetches live perpetual funding rates for all Binance Futures symbols
+     * in a single round-trip and atomically populates SAB Slot 168 across all registered/active asset indices.
+     */
+    async syncAllFundingRates(client) {
+        try {
+            const allRates = await this.fetchPremiumIndex();
+            if (!Array.isArray(allRates))
+                return;
+            const rateMap = new Map();
+            for (const item of allRates) {
+                const r = parseFloat(item.lastFundingRate || "0");
+                if (Number.isFinite(r)) {
+                    rateMap.set(item.symbol.toUpperCase(), r);
+                }
+            }
+            // Update explicitly registered symbols
+            for (const [sym, entry] of this.registeredFundingSymbols) {
+                const rate = rateMap.get(sym);
+                if (rate !== undefined) {
+                    entry.client.setFundingRate(rate, entry.assetIndex);
+                }
+            }
+            // If client was passed, also update standard symbols
+            if (client) {
+                const symbols = (0, tradingSymbols_1.getTradingSymbols)();
+                for (let i = 0; i < symbols.length; i++) {
+                    const sym = symbols[i];
+                    const rate = rateMap.get(sym);
+                    if (rate !== undefined) {
+                        client.setFundingRate(rate, i);
+                    }
+                }
+            }
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[BinanceExecutionClient] Batch funding rate sync notice: ${msg}`);
+        }
+    }
+    /**
+     * Phase 5 HFT Overhaul: Ensures live funding rate telemetry ingestion for the given symbol and assetIndex:
+     * 1. Immediately hydrates SAB Slot 168 via REST /fapi/v1/premiumIndex.
+     * 2. Registers symbol for ongoing real-time WebSocket updates.
+     * 3. Establishes / updates the real-time WebSocket connection to @markPrice@1s on /market/stream.
+     * 4. Starts periodic background polling fallback (every 30s).
+     */
+    async ensureFundingRateStream(client, assetIndex, symbol) {
+        const sym = symbol ? symbol.toUpperCase() : "BTCUSDT";
+        this.registeredFundingSymbols.set(sym, { client, assetIndex });
+        this.resolveAssetIndex(sym, assetIndex);
+        // 1. Immediate REST hydration to guarantee SAB Slot 168 is populated right away
+        try {
+            const initialRate = await this.fetchFundingRate(sym);
+            client.setFundingRate(initialRate, assetIndex);
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[BinanceExecutionClient] Initial funding rate fetch notice for ${sym}: ${msg}`);
+        }
+        // 2. Start or update real-time WebSocket stream
+        this.startOrUpdateFundingRateWs();
+        // 3. Ensure periodic background poll timer is active
+        if (!this.fundingRatePollTimer) {
+            this.fundingRatePollTimer = setInterval(() => {
+                this.syncAllFundingRates(client).catch(() => { });
+            }, 30000);
+            if (this.fundingRatePollTimer.unref) {
+                this.fundingRatePollTimer.unref();
+            }
+        }
+    }
+    /**
+     * Establishes or maintains the persistent WebSocket stream for @markPrice@1s
+     * across all registered trading symbols.
+     */
+    startOrUpdateFundingRateWs() {
+        if (this.registeredFundingSymbols.size === 0)
+            return;
+        const streams = Array.from(this.registeredFundingSymbols.keys())
+            .map((s) => `${s.toLowerCase()}@markPrice@1s`)
+            .join("/");
+        const wsEndpoint = `${this.wsUrl}/market/stream?streams=${streams}`;
+        if (this.fundingRateWs && this.fundingRateWs.readyState === ws_1.default.OPEN) {
+            return;
+        }
+        if (this.isFundingRateConnecting)
+            return;
+        this.isFundingRateConnecting = true;
+        try {
+            if (this.fundingRateWs) {
+                try {
+                    this.fundingRateWs.removeAllListeners();
+                    this.fundingRateWs.terminate();
+                }
+                catch (_) { }
+                this.fundingRateWs = null;
+            }
+            const ws = new ws_1.default(wsEndpoint);
+            this.fundingRateWs = ws;
+            ws.on("open", () => {
+                this.isFundingRateConnecting = false;
+                console.log(`[BinanceExecutionClient][FUNDING_WS] Live Perpetual Funding Rate stream connected (${this.registeredFundingSymbols.size} symbols).`);
+            });
+            ws.on("message", (raw) => {
+                try {
+                    const msgStr = raw.toString();
+                    if (!msgStr.includes("markPriceUpdate"))
+                        return;
+                    const parsed = JSON.parse(msgStr);
+                    const data = "data" in parsed && parsed.data ? parsed.data : ("e" in parsed && parsed.e === "markPriceUpdate" ? parsed : undefined);
+                    if (!data || !data.s || data.r === undefined)
+                        return;
+                    const rate = parseFloat(data.r);
+                    if (!Number.isFinite(rate))
+                        return;
+                    const sym = data.s.toUpperCase();
+                    const target = this.registeredFundingSymbols.get(sym);
+                    if (target) {
+                        target.client.setFundingRate(rate, target.assetIndex);
+                    }
+                }
+                catch (_) {
+                    // Zero-GC hot stream: ignore JSON parse anomalies
+                }
+            });
+            ws.on("error", (err) => {
+                this.isFundingRateConnecting = false;
+                console.warn(`[BinanceExecutionClient][FUNDING_WS] WebSocket warning: ${err.message}. REST poller remains active.`);
+            });
+            ws.on("close", () => {
+                this.isFundingRateConnecting = false;
+                this.fundingRateWs = null;
+                if (this.fundingRateReconnectTimer)
+                    clearTimeout(this.fundingRateReconnectTimer);
+                this.fundingRateReconnectTimer = setTimeout(() => {
+                    this.startOrUpdateFundingRateWs();
+                }, 5000);
+                if (this.fundingRateReconnectTimer.unref) {
+                    this.fundingRateReconnectTimer.unref();
+                }
+            });
+        }
+        catch (err) {
+            this.isFundingRateConnecting = false;
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[BinanceExecutionClient][FUNDING_WS] Connection error: ${msg}. REST poller active.`);
+        }
+    }
+    /**
+     * Destroys all background timers and sockets associated with this execution client.
+     */
+    destroy() {
+        if (this.fundingRateWs) {
+            try {
+                this.fundingRateWs.removeAllListeners();
+                this.fundingRateWs.terminate();
+            }
+            catch (_) { }
+            this.fundingRateWs = null;
+        }
+        if (this.fundingRatePollTimer) {
+            clearInterval(this.fundingRatePollTimer);
+            this.fundingRatePollTimer = null;
+        }
+        if (this.fundingRateReconnectTimer) {
+            clearTimeout(this.fundingRateReconnectTimer);
+            this.fundingRateReconnectTimer = null;
+        }
+        this.detachWsOrderClient();
     }
     getUsdtAvailableBalance() {
         return this.cachedUsdtAvailableBalance;

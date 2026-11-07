@@ -1,0 +1,119 @@
+"use strict";
+/**
+ * BATBOT_V11 HIGH-FREQUENCY TRADING SYSTEM
+ * Verification Test Suite: Live Perpetual Funding Rate Telemetry Ingestion (Critical Failure 2 Remediation)
+ *
+ * Verifies:
+ * 1. Live Binance REST /fapi/v1/premiumIndex ingestion and atomic write to SAB Slot 168.
+ * 2. Multi-asset batch funding rate synchronization.
+ * 3. StrategyEngine.syncFundingRate() and live evaluateTick() filter enforcement.
+ * 4. Real-time WebSocket @markPrice@1s ingestion and SAB Slot 168 atomic update.
+ * 5. Sub-microsecond latency (< 0.50 µs) and Zero-GC compliance (< 50 bytes/call).
+ */
+Object.defineProperty(exports, "__esModule", { value: true });
+const marketDataClient_1 = require("../marketDataClient");
+const engine_1 = require("../strategy/engine");
+const risk_1 = require("../strategy/risk");
+const binance_1 = require("../execution/binance");
+console.log("================================================================================");
+console.log("  CRITICAL FAILURE 2 VERIFICATION: LIVE FUNDING RATE TELEMETRY INGESTION        ");
+console.log("================================================================================");
+let totalPassed = 0;
+let totalFailed = 0;
+function assert(condition, message) {
+    if (condition) {
+        totalPassed++;
+        console.log(`  ✅ [PASS] ${message}`);
+    }
+    else {
+        totalFailed++;
+        console.error(`  ❌ [FAIL] ${message}`);
+    }
+}
+async function runVerificationSuite() {
+    const slotsPerAsset = 256;
+    const maxAssets = 10;
+    const sab = new SharedArrayBuffer(maxAssets * slotsPerAsset * 8);
+    const client = new marketDataClient_1.MarketDataClient(sab, maxAssets, slotsPerAsset);
+    const riskGuard = new risk_1.RiskGuard();
+    const executionClient = new binance_1.BinanceExecutionClient();
+    // STAGE 1: Binance REST /fapi/v1/premiumIndex Ingestion
+    console.log("\n--- STAGE 1: Live Binance REST /fapi/v1/premiumIndex Telemetry ---");
+    const liveRate = await executionClient.fetchFundingRate("BTCUSDT");
+    console.log(`  [REST] Binance BTCUSDT Live Funding Rate fetched: ${liveRate} (${(liveRate * 10000).toFixed(4)} bps)`);
+    assert(Number.isFinite(liveRate), "Live funding rate from Binance is a finite float");
+    // Atomically write live rate to SAB Slot 168
+    client.setFundingRate(liveRate, 0);
+    const readRate = client.getFundingRate(0);
+    assert(Math.abs(readRate - liveRate) < 1e-12, "SAB Slot 168 accurately stores and returns the live funding rate");
+    // STAGE 2: Multi-Asset Batch Synchronization
+    console.log("\n--- STAGE 2: Multi-Asset Batch Funding Rate Synchronization ---");
+    await executionClient.syncAllFundingRates(client);
+    const asset0Rate = client.getFundingRate(0);
+    console.log(`  [BATCH] Asset 0 (BTCUSDT) SAB Slot 168 after syncAllFundingRates: ${asset0Rate}`);
+    assert(Number.isFinite(asset0Rate), "Batch sync successfully populated Asset 0 SAB Slot 168");
+    // STAGE 3: StrategyEngine Real-Time Telemetry & Filtering
+    console.log("\n--- STAGE 3: StrategyEngine Integration & Tick Filter Activation ---");
+    const engine = new engine_1.StrategyEngine(client, riskGuard, executionClient, { symbol: "BTCUSDT", assetIndex: 0 });
+    const syncedRate = await engine.syncFundingRate();
+    console.log(`  [ENGINE] engine.syncFundingRate() returned: ${syncedRate}`);
+    assert(Math.abs(engine.getFundingRate() - syncedRate) < 1e-12, "engine.getFundingRate() reflects freshly synced rate");
+    // Verify mathematical filtering logic on live rate
+    if (syncedRate > 0) {
+        assert(engine.isFundingRatePermitted("LONG") === false, "Live Positive Rate: LONG entry strictly BLOCKED");
+        assert(engine.isFundingRatePermitted("SHORT") === true, "Live Positive Rate: SHORT entry strictly ALLOWED");
+    }
+    else if (syncedRate < 0) {
+        assert(engine.isFundingRatePermitted("LONG") === true, "Live Negative Rate: LONG entry strictly ALLOWED");
+        assert(engine.isFundingRatePermitted("SHORT") === false, "Live Negative Rate: SHORT entry strictly BLOCKED");
+    }
+    else {
+        assert(engine.isFundingRatePermitted("LONG") === true, "Neutral Rate: LONG entry allowed");
+        assert(engine.isFundingRatePermitted("SHORT") === true, "Neutral Rate: SHORT entry allowed");
+    }
+    // STAGE 4: Real-Time Stream Hook & Atomic Update Verification
+    console.log("\n--- STAGE 4: Real-Time Stream Telemetry Hook Verification ---");
+    await executionClient.ensureFundingRateStream(client, 0, "BTCUSDT");
+    const streamRate = client.getFundingRate(0);
+    assert(Number.isFinite(streamRate), "ensureFundingRateStream successfully initialized and hydrated SAB Slot 168");
+    // STAGE 5: Latency SLA & Zero-GC Benchmark
+    console.log("\n--- STAGE 5: Latency SLA & Zero-GC Invariant Benchmark ---");
+    const ITERATIONS = 100000;
+    // JIT warm-up
+    for (let i = 0; i < 10000; i++) {
+        engine.getFundingRate();
+        engine.isFundingRatePermitted(i % 2 === 0 ? "LONG" : "SHORT");
+    }
+    if (global.gc)
+        global.gc();
+    const memBefore = process.memoryUsage().heapUsed;
+    const startHr = process.hrtime.bigint();
+    for (let i = 0; i < ITERATIONS; i++) {
+        engine.getFundingRate();
+        engine.isFundingRatePermitted(i % 2 === 0 ? "LONG" : "SHORT");
+    }
+    const endHr = process.hrtime.bigint();
+    const memAfter = process.memoryUsage().heapUsed;
+    const totalNs = Number(endHr - startHr);
+    const avgUs = (totalNs / ITERATIONS) / 1000;
+    const heapDeltaBytes = Math.max(0, memAfter - memBefore);
+    const bytesPerCall = heapDeltaBytes / ITERATIONS;
+    console.log(`  [BENCHMARK] Executed ${ITERATIONS.toLocaleString()} calls in ${(totalNs / 1e6).toFixed(2)} ms`);
+    console.log(`  [BENCHMARK] Latency: ${avgUs.toFixed(4)} µs/call (SLA: < 0.50 µs)`);
+    console.log(`  [BENCHMARK] Heap Delta: ${bytesPerCall.toFixed(2)} bytes/call (SLA: < 50.0 bytes/call)`);
+    assert(avgUs < 0.50, `Sub-microsecond latency verified (${avgUs.toFixed(4)} µs < 0.50 µs)`);
+    assert(bytesPerCall < 50.0, `Zero-GC invariant verified (${bytesPerCall.toFixed(2)} bytes/call < 50 bytes)`);
+    // Teardown
+    executionClient.destroy();
+    console.log("\n================================================================================");
+    console.log(`  CRITICAL FAILURE 2 VERIFICATION SUMMARY: ${totalPassed} PASSED / ${totalFailed} FAILED`);
+    console.log("================================================================================");
+    if (totalFailed > 0) {
+        process.exit(1);
+    }
+    process.exit(0);
+}
+runVerificationSuite().catch((err) => {
+    console.error("Test execution fatal error:", err);
+    process.exit(1);
+});

@@ -17,6 +17,7 @@
     "test:ofi": "tsc && node dist/tests/test_multi_level_ofi.js",
     "test:urgency": "tsc && node dist/tests/test_urgency_router.js",
     "test:funding": "tsc && node dist/tests/test_funding_rate_filter.js",
+    "test:funding:live": "tsc && node dist/tests/test_live_funding_rate_ingestion.js",
     "start": "npm run start:live",
     "start:live": "npm run build:rust && npm run build:ts && node dist/supervisor/guardian.js",
     "bot:run": "npm run build:rust && npm run build:ts && node dist/supervisor/guardian.js",
