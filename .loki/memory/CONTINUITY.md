@@ -15,6 +15,11 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-11-07 - Master HFT Overhaul Remediation: Critical Failure 1 (Activate Phase 1 WebSocket Order API) Completed & 100% QA Verified:
+  - Root Cause Diagnosed: Phase 1 WS Order API was dormant in production because `WS_ORDER_API_ENABLED=true` was absent from `.env`, and `StrategyEngine` failed closed to REST HTTPS when `process.env.WS_ORDER_API_ENABLED` was undefined.
+  - Configuration Activation: Explicitly appended `WS_ORDER_API_ENABLED=true`, `WS_ORDER_REQUEST_TIMEOUT_MS=5000`, and `WS_ORDER_MAX_RECONNECT_ATTEMPTS=10` to `.env`. Verified `.env.example` aligns.
+  - Engine Fail-Open Logic: Refactored `src/strategy/engine.ts` constructor to evaluate `wsEnabled = process.env.WS_ORDER_API_ENABLED !== "false" && process.env.WS_ORDER_API_ENABLED !== "0"`, defaulting to `true` (Phase 1 WS primary path active) while allowing operators to explicitly opt-out with "false"/"0".
+  - Empirical Verification: Verified `ensureWsOrderClient` is correctly triggered upon startup across undefined, explicit "true", and explicit "false" scenarios. Passed all 36/36 tests in `test_ws_order_client.ts`, strict TypeScript compilation (`npm test` and `npm run build:ts` exit 0). Added `"test:ws"` to `package.json`.
 * 2026-11-07 - HFT Master Plan Phase 5 Execution (Perpetual Funding Rate Filter - Fee Ledger Completion & Zero-GC Telemetry) Completed & 100% QA Verified:
   - Perpetual Funding Rate Filter: Implemented mathematical filtering in `src/strategy/engine.ts` (`isFundingRatePermitted()` and `evaluateTick()`) reading live funding rate from SAB Slot 168 to eradicate funding fee drag.
   - Strict Mathematical Formulation (Binance Standard):

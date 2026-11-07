@@ -13,6 +13,7 @@
     "check": "cargo check",
     "test": "tsc --noEmit",
     "test:phase9": "tsc && node dist/tests/test_phase9_master_validation.js",
+    "test:ws": "tsc && node dist/tests/test_ws_order_client.js",
     "test:ofi": "tsc && node dist/tests/test_multi_level_ofi.js",
     "test:urgency": "tsc && node dist/tests/test_urgency_router.js",
     "test:funding": "tsc && node dist/tests/test_funding_rate_filter.js",

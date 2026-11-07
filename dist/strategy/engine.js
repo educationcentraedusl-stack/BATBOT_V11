@@ -266,13 +266,14 @@ class StrategyEngine {
         }
         StrategyEngine.registerEngine(this);
         // ─── Phase 1 HFT Overhaul: Autonomous WS Order Client Initialization ────────
-        // Conditionally create and connect a WsOrderClient if WS_ORDER_API_ENABLED=true.
+        // Create and connect WsOrderClient as the primary execution path (~15ms RTT).
+        // Defaults to true (fail-open) unless explicitly disabled via WS_ORDER_API_ENABLED=false/0.
         // The WS client is attached to the BinanceExecutionClient as the primary execution
         // path. If the WS connection fails, REST remains the seamless fallback.
         // SAB Slots 159 (WS_ORDER_RTT_MS) and 160 (WS_ORDER_STREAM_HEALTH) are managed
         // inside BinanceExecutionClient._writeWsTelemetry() after each dispatch.
-        const wsEnabled = process.env.WS_ORDER_API_ENABLED === "true" ||
-            process.env.WS_ORDER_API_ENABLED === "1";
+        const wsEnabled = process.env.WS_ORDER_API_ENABLED !== "false" &&
+            process.env.WS_ORDER_API_ENABLED !== "0";
         if (wsEnabled && this.executionClient && this.client) {
             if (typeof this.executionClient.ensureWsOrderClient === "function") {
                 this.executionClient
