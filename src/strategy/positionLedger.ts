@@ -15,6 +15,7 @@ import {
   VegamTpLevels,
 } from "./vegamTpLadderEngine";
 import { AdversarialExitGate, AdversarialExitConfig, DEFAULT_ADVERSARIAL_CONFIG, AdversarialExitResult } from "./adversarialExitGate";
+import { DynamicUrgencyRouter, ExecutionStyle, UrgencyComponents } from "./urgencyRouter";
 
 interface NativeTradingAddon {
   recordTradeIc?: (dir: number, realizedReturn: number, assetIndex: number, sabBuffer?: Buffer) => boolean | void;
@@ -713,6 +714,7 @@ export class HedgePositionLedger {
   private marketDataClient?: MarketDataClient;
   private assetIndex: number = 0;
   private adversarialGate: AdversarialExitGate = new AdversarialExitGate();
+  private urgencyRouter: DynamicUrgencyRouter = new DynamicUrgencyRouter();
   private hjbEngine: HJBReservationEngine;
 
   constructor(
@@ -841,6 +843,14 @@ export class HedgePositionLedger {
 
   public setAdversarialExitGate(gate: AdversarialExitGate): void {
     this.adversarialGate = gate;
+  }
+
+  public getUrgencyRouter(): DynamicUrgencyRouter {
+    return this.urgencyRouter;
+  }
+
+  public setUrgencyRouter(router: DynamicUrgencyRouter): void {
+    this.urgencyRouter = router;
   }
 
   public getHjbReservationEngine(): HJBReservationEngine {
@@ -3389,6 +3399,50 @@ export class HedgePositionLedger {
     }
 
     // -------------------------------------------------------------------------
+    // Position Lifecycle & Lifespan Progression Context (MHDC & Urgency)
+    // -------------------------------------------------------------------------
+    const effectiveOpenTime = (slot.originalOpenTime && slot.originalOpenTime > 0)
+      ? slot.originalOpenTime
+      : (slot.openTime && slot.openTime > 0 ? slot.openTime : nowMs);
+    const positionAgeSec = Math.max(0, (nowMs - effectiveOpenTime) / 1000.0);
+
+    if (nowMs !== this.lastMhdcNowMs) {
+      this.lastMhdcNowMs = nowMs;
+      const envMult = process.env.MHDC_MULTIPLIER;
+      this.cachedMhdcMultiplier = envMult ? parseFloat(envMult) : 3.0;
+      if (!Number.isFinite(this.cachedMhdcMultiplier) || this.cachedMhdcMultiplier <= 0) {
+        this.cachedMhdcMultiplier = 3.0;
+      }
+      const envHalfLife = process.env.MHDC_DEFAULT_HALF_LIFE_SEC;
+      this.cachedMhdcDefaultHalfLifeSec = envHalfLife ? parseFloat(envHalfLife) : 120.0;
+      if (!Number.isFinite(this.cachedMhdcDefaultHalfLifeSec) || this.cachedMhdcDefaultHalfLifeSec <= 0) {
+        this.cachedMhdcDefaultHalfLifeSec = 120.0;
+      }
+    }
+
+    const rawHalfLife = this.marketDataClient
+      ? this.marketDataClient.readAtomicFloat64Asset(this.assetIndex, SAB_SLOTS.VEGAM_CADME_STATE)
+      : 0;
+    const dynamicHalfLifeSec = (Number.isFinite(rawHalfLife) && rawHalfLife > 2.0)
+      ? rawHalfLife
+      : this.cachedMhdcDefaultHalfLifeSec;
+
+    const mhdcSec = this.cachedMhdcMultiplier * dynamicHalfLifeSec;
+
+    // Update SAB telemetry slots 164 and 163 (zero-GC atomic writes)
+    if (this.marketDataClient && typeof this.assetIndex === "number") {
+      this.marketDataClient.writeAtomicFloat64Asset(this.assetIndex, SAB_SLOTS.POSITION_AGE_SEC, positionAgeSec);
+      this.marketDataClient.writeAtomicFloat64Asset(this.assetIndex, SAB_SLOTS.MAX_HOLD_DURATION_SEC, mhdcSec);
+    }
+
+    // Read Queue depth ratio from SAB Slot 165
+    const queueRatio = this.marketDataClient
+      ? this.marketDataClient.readAtomicFloat64Asset(this.assetIndex, SAB_SLOTS.QUEUE_POSITION_EST)
+      : 0.0;
+    const safeQueueRatio = Number.isFinite(queueRatio) && queueRatio >= 0 ? Math.min(1.0, queueRatio) : (liveSweep ? 1.0 : 0.0);
+    const safeLiveVpin = hazardMetrics && Number.isFinite(hazardMetrics.vpin) ? Math.min(1.0, Math.max(0.0, hazardMetrics.vpin)) : 0.0;
+
+    // -------------------------------------------------------------------------
     // 2. Layer 4: Adversarial Exit Gate (Ultra-Low-Latency Defensive Shield)
     // Multi-signal consensus (>= 2 signals) + adverse price velocity shock
     // -------------------------------------------------------------------------
@@ -3403,7 +3457,25 @@ export class HedgePositionLedger {
       nowMs
     );
 
+    // Phase 4: Dynamic Urgency Router Evaluation (Zero-GC Hot-Path)
+    // U = (Adversarial * 0.40) + (Age * 0.30) + (Queue * 0.20) + (VPIN * 0.10)
+    const urgency = this.urgencyRouter.compute(
+      advResult.activeSignalCount,
+      this.adversarialGate.getConfig().adversarialMinSignals,
+      positionAgeSec,
+      mhdcSec,
+      safeQueueRatio,
+      safeLiveVpin
+    );
+    const currentUrgencyScore = urgency.compositeUrgency;
+
+    // Extend SAB Telemetry: Atomic write to Slot 167 (URGENCY_SCORE) on every exit evaluation
+    if (this.marketDataClient && typeof this.assetIndex === "number") {
+      this.marketDataClient.writeAtomicFloat64Asset(this.assetIndex, SAB_SLOTS.URGENCY_SCORE, currentUrgencyScore);
+    }
+
     if (advResult.isBreached) {
+      const advExecStyle = advResult.executionStyle ?? this.urgencyRouter.resolveExecutionStyle(currentUrgencyScore);
       this.pushSotaTrigger(
         slot.slotId,
         slot.side,
@@ -3414,7 +3486,7 @@ export class HedgePositionLedger {
         false,
         slot.activeTpOrderIds,
         slot.activeStopLossOrderId,
-        "AGGRESSIVE_MARKET"
+        advExecStyle
       );
       return;
     }
@@ -3470,42 +3542,10 @@ export class HedgePositionLedger {
     // Constitutional time-based lifespan cap derived from OU alpha half-life.
     // Eradicates "dead-alpha" position holds (e.g., 84-minute trades).
     // Evaluated strictly AFTER Adversarial/Hard SL and BEFORE HJB Optimal Stopping.
+    // Dynamically routed through Phase 4 Dynamic Urgency Router.
     // -------------------------------------------------------------------------
-    const effectiveOpenTime = (slot.originalOpenTime && slot.originalOpenTime > 0)
-      ? slot.originalOpenTime
-      : (slot.openTime && slot.openTime > 0 ? slot.openTime : nowMs);
-    const positionAgeSec = Math.max(0, (nowMs - effectiveOpenTime) / 1000.0);
-
-    if (nowMs !== this.lastMhdcNowMs) {
-      this.lastMhdcNowMs = nowMs;
-      const envMult = process.env.MHDC_MULTIPLIER;
-      this.cachedMhdcMultiplier = envMult ? parseFloat(envMult) : 3.0;
-      if (!Number.isFinite(this.cachedMhdcMultiplier) || this.cachedMhdcMultiplier <= 0) {
-        this.cachedMhdcMultiplier = 3.0;
-      }
-      const envHalfLife = process.env.MHDC_DEFAULT_HALF_LIFE_SEC;
-      this.cachedMhdcDefaultHalfLifeSec = envHalfLife ? parseFloat(envHalfLife) : 120.0;
-      if (!Number.isFinite(this.cachedMhdcDefaultHalfLifeSec) || this.cachedMhdcDefaultHalfLifeSec <= 0) {
-        this.cachedMhdcDefaultHalfLifeSec = 120.0;
-      }
-    }
-
-    const rawHalfLife = this.marketDataClient
-      ? this.marketDataClient.readAtomicFloat64Asset(this.assetIndex, SAB_SLOTS.VEGAM_CADME_STATE)
-      : 0;
-    const dynamicHalfLifeSec = (Number.isFinite(rawHalfLife) && rawHalfLife > 2.0)
-      ? rawHalfLife
-      : this.cachedMhdcDefaultHalfLifeSec;
-
-    const mhdcSec = this.cachedMhdcMultiplier * dynamicHalfLifeSec;
-
-    // Update SAB telemetry slots 164 and 163 (zero-GC atomic writes)
-    if (this.marketDataClient && typeof this.assetIndex === "number") {
-      this.marketDataClient.writeAtomicFloat64Asset(this.assetIndex, SAB_SLOTS.POSITION_AGE_SEC, positionAgeSec);
-      this.marketDataClient.writeAtomicFloat64Asset(this.assetIndex, SAB_SLOTS.MAX_HOLD_DURATION_SEC, mhdcSec);
-    }
-
     if (positionAgeSec >= mhdcSec) {
+      const mhdcExecStyle = this.urgencyRouter.resolveExecutionStyle(currentUrgencyScore);
       this.pushSotaTrigger(
         slot.slotId,
         slot.side,
@@ -3516,7 +3556,7 @@ export class HedgePositionLedger {
         false,
         slot.activeTpOrderIds,
         slot.activeStopLossOrderId,
-        "AGGRESSIVE_MARKET"
+        mhdcExecStyle
       );
       return;
     }

@@ -10,6 +10,7 @@ const tradingSymbols_1 = require("../config/tradingSymbols");
 const sabSchema_1 = require("../ipc/sabSchema");
 const vegamTpLadderEngine_1 = require("./vegamTpLadderEngine");
 const adversarialExitGate_1 = require("./adversarialExitGate");
+const urgencyRouter_1 = require("./urgencyRouter");
 let nativeAddon = null;
 try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -484,6 +485,7 @@ class HedgePositionLedger {
     marketDataClient;
     assetIndex = 0;
     adversarialGate = new adversarialExitGate_1.AdversarialExitGate();
+    urgencyRouter = new urgencyRouter_1.DynamicUrgencyRouter();
     hjbEngine;
     constructor(symbol = "BTCUSDT", maxShortSlots = 3, marketDataClient, assetIndex) {
         this.symbol = symbol;
@@ -595,6 +597,12 @@ class HedgePositionLedger {
     }
     setAdversarialExitGate(gate) {
         this.adversarialGate = gate;
+    }
+    getUrgencyRouter() {
+        return this.urgencyRouter;
+    }
+    setUrgencyRouter(router) {
+        this.urgencyRouter = router;
     }
     getHjbReservationEngine() {
         return this.hjbEngine;
@@ -2604,39 +2612,7 @@ class HedgePositionLedger {
             return;
         }
         // -------------------------------------------------------------------------
-        // 2. Layer 4: Adversarial Exit Gate (Ultra-Low-Latency Defensive Shield)
-        // Multi-signal consensus (>= 2 signals) + adverse price velocity shock
-        // -------------------------------------------------------------------------
-        const advResult = this.adversarialGate.evaluate(slot, markPrice, hazardMetrics, liveGkAtr, liveHawkes, liveSweep, liveEntropy, nowMs);
-        if (advResult.isBreached) {
-            this.pushSotaTrigger(slot.slotId, slot.side, advResult.reason, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "AGGRESSIVE_MARKET");
-            return;
-        }
-        // -------------------------------------------------------------------------
-        // 3. Cox Proportional Hazard Rate Survival Exit
-        // -------------------------------------------------------------------------
-        if (hazardMetrics && hazardMetrics.isHazardExitTriggered) {
-            this.pushSotaTrigger(slot.slotId, slot.side, `HAZARD_FLUSH_EXIT_${slot.side}`, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "AGGRESSIVE_MARKET");
-            return;
-        }
-        // -------------------------------------------------------------------------
-        // 4. Stop-Loss / Hard Break-Even Trailing SL Exit (SUPREME OVER PASSIVE EXITS)
-        // -------------------------------------------------------------------------
-        const isStopTriggered = isLong
-            ? markPrice <= slot.stopLossPrice
-            : markPrice >= slot.stopLossPrice;
-        if (isStopTriggered) {
-            const exitReason = slot.timeDecayTier && slot.timeDecayTier >= 1
-                ? "BREAK_EVEN_STOP_LOSS"
-                : `MVA_TRAILING_STOP_${slot.side}`;
-            this.pushSotaTrigger(slot.slotId, slot.side, exitReason, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "AGGRESSIVE_MARKET");
-            return;
-        }
-        // -------------------------------------------------------------------------
-        // 5. Layer 5: Maximum Hold Duration Cap (MHDC) — Hard Alpha Expiration
-        // Constitutional time-based lifespan cap derived from OU alpha half-life.
-        // Eradicates "dead-alpha" position holds (e.g., 84-minute trades).
-        // Evaluated strictly AFTER Adversarial/Hard SL and BEFORE HJB Optimal Stopping.
+        // Position Lifecycle & Lifespan Progression Context (MHDC & Urgency)
         // -------------------------------------------------------------------------
         const effectiveOpenTime = (slot.originalOpenTime && slot.originalOpenTime > 0)
             ? slot.originalOpenTime
@@ -2667,8 +2643,60 @@ class HedgePositionLedger {
             this.marketDataClient.writeAtomicFloat64Asset(this.assetIndex, sabSchema_1.SAB_SLOTS.POSITION_AGE_SEC, positionAgeSec);
             this.marketDataClient.writeAtomicFloat64Asset(this.assetIndex, sabSchema_1.SAB_SLOTS.MAX_HOLD_DURATION_SEC, mhdcSec);
         }
+        // Read Queue depth ratio from SAB Slot 165
+        const queueRatio = this.marketDataClient
+            ? this.marketDataClient.readAtomicFloat64Asset(this.assetIndex, sabSchema_1.SAB_SLOTS.QUEUE_POSITION_EST)
+            : 0.0;
+        const safeQueueRatio = Number.isFinite(queueRatio) && queueRatio >= 0 ? Math.min(1.0, queueRatio) : (liveSweep ? 1.0 : 0.0);
+        const safeLiveVpin = hazardMetrics && Number.isFinite(hazardMetrics.vpin) ? Math.min(1.0, Math.max(0.0, hazardMetrics.vpin)) : 0.0;
+        // -------------------------------------------------------------------------
+        // 2. Layer 4: Adversarial Exit Gate (Ultra-Low-Latency Defensive Shield)
+        // Multi-signal consensus (>= 2 signals) + adverse price velocity shock
+        // -------------------------------------------------------------------------
+        const advResult = this.adversarialGate.evaluate(slot, markPrice, hazardMetrics, liveGkAtr, liveHawkes, liveSweep, liveEntropy, nowMs);
+        // Phase 4: Dynamic Urgency Router Evaluation (Zero-GC Hot-Path)
+        // U = (Adversarial * 0.40) + (Age * 0.30) + (Queue * 0.20) + (VPIN * 0.10)
+        const urgency = this.urgencyRouter.compute(advResult.activeSignalCount, this.adversarialGate.getConfig().adversarialMinSignals, positionAgeSec, mhdcSec, safeQueueRatio, safeLiveVpin);
+        const currentUrgencyScore = urgency.compositeUrgency;
+        // Extend SAB Telemetry: Atomic write to Slot 167 (URGENCY_SCORE) on every exit evaluation
+        if (this.marketDataClient && typeof this.assetIndex === "number") {
+            this.marketDataClient.writeAtomicFloat64Asset(this.assetIndex, sabSchema_1.SAB_SLOTS.URGENCY_SCORE, currentUrgencyScore);
+        }
+        if (advResult.isBreached) {
+            const advExecStyle = advResult.executionStyle ?? this.urgencyRouter.resolveExecutionStyle(currentUrgencyScore);
+            this.pushSotaTrigger(slot.slotId, slot.side, advResult.reason, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, advExecStyle);
+            return;
+        }
+        // -------------------------------------------------------------------------
+        // 3. Cox Proportional Hazard Rate Survival Exit
+        // -------------------------------------------------------------------------
+        if (hazardMetrics && hazardMetrics.isHazardExitTriggered) {
+            this.pushSotaTrigger(slot.slotId, slot.side, `HAZARD_FLUSH_EXIT_${slot.side}`, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "AGGRESSIVE_MARKET");
+            return;
+        }
+        // -------------------------------------------------------------------------
+        // 4. Stop-Loss / Hard Break-Even Trailing SL Exit (SUPREME OVER PASSIVE EXITS)
+        // -------------------------------------------------------------------------
+        const isStopTriggered = isLong
+            ? markPrice <= slot.stopLossPrice
+            : markPrice >= slot.stopLossPrice;
+        if (isStopTriggered) {
+            const exitReason = slot.timeDecayTier && slot.timeDecayTier >= 1
+                ? "BREAK_EVEN_STOP_LOSS"
+                : `MVA_TRAILING_STOP_${slot.side}`;
+            this.pushSotaTrigger(slot.slotId, slot.side, exitReason, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "AGGRESSIVE_MARKET");
+            return;
+        }
+        // -------------------------------------------------------------------------
+        // 5. Layer 5: Maximum Hold Duration Cap (MHDC) — Hard Alpha Expiration
+        // Constitutional time-based lifespan cap derived from OU alpha half-life.
+        // Eradicates "dead-alpha" position holds (e.g., 84-minute trades).
+        // Evaluated strictly AFTER Adversarial/Hard SL and BEFORE HJB Optimal Stopping.
+        // Dynamically routed through Phase 4 Dynamic Urgency Router.
+        // -------------------------------------------------------------------------
         if (positionAgeSec >= mhdcSec) {
-            this.pushSotaTrigger(slot.slotId, slot.side, `MHDC_ALPHA_EXPIRATION_${slot.side}`, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "AGGRESSIVE_MARKET");
+            const mhdcExecStyle = this.urgencyRouter.resolveExecutionStyle(currentUrgencyScore);
+            this.pushSotaTrigger(slot.slotId, slot.side, `MHDC_ALPHA_EXPIRATION_${slot.side}`, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, mhdcExecStyle);
             return;
         }
         // -------------------------------------------------------------------------

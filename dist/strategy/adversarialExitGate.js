@@ -19,6 +19,7 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AdversarialExitGate = exports.DEFAULT_ADVERSARIAL_CONFIG = void 0;
+const urgencyRouter_1 = require("./urgencyRouter");
 exports.DEFAULT_ADVERSARIAL_CONFIG = Object.freeze({
     adversarialMinSignals: 2,
     vpinToxicFloor: 0.65,
@@ -48,6 +49,8 @@ class AdversarialExitGate {
         adverseVelocity: 0,
         thresholdVelocity: 0,
         reason: "",
+        urgencyScore: 0,
+        executionStyle: "PASSIVE_MAKER",
     }));
     ringIdx = 0;
     // Pre-allocated static singleton for zero-GC static evaluation
@@ -66,6 +69,8 @@ class AdversarialExitGate {
         adverseVelocity: 0,
         thresholdVelocity: 0,
         reason: "",
+        urgencyScore: 0,
+        executionStyle: "PASSIVE_MAKER",
     };
     constructor(config) {
         this.config = config ? { ...exports.DEFAULT_ADVERSARIAL_CONFIG, ...config } : { ...exports.DEFAULT_ADVERSARIAL_CONFIG };
@@ -102,6 +107,8 @@ class AdversarialExitGate {
         out.adverseVelocity = 0;
         out.thresholdVelocity = 0;
         out.reason = "";
+        out.urgencyScore = 0;
+        out.executionStyle = "PASSIVE_MAKER";
         if (!slot.isOccupied || slot.quantity <= 0 || slot.entryPrice <= 0 || markPrice <= 0) {
             return out;
         }
@@ -181,12 +188,27 @@ class AdversarialExitGate {
             activeSignalCount++;
         out.activeSignalCount = activeSignalCount;
         // -------------------------------------------------------------------------
-        // 4. Breach Evaluation: Consensus >= adversarialMinSignals (default: 2)
-        // Concurrently with adverse price velocity shock exceeding dynamic ATR threshold
+        // 4. Breach Evaluation & Dynamic Urgency Resolution (Phase 4)
+        // Consensus >= adversarialMinSignals (default: 2) concurrently with
+        // adverse price velocity shock exceeding dynamic ATR threshold.
         // -------------------------------------------------------------------------
+        const openTime = (slot.originalOpenTime && slot.originalOpenTime > 0)
+            ? slot.originalOpenTime
+            : (slot.openTime && slot.openTime > 0 ? slot.openTime : nowMs);
+        const effectiveNow = nowMs > 0 ? nowMs : Date.now();
+        const durationSec = Math.max(0, (effectiveNow - openTime) / 1000);
+        const queueRatio = liveSweep ? 1.0 : 0.0;
+        const urgency = urgencyRouter_1.DynamicUrgencyRouter.compute(activeSignalCount, cfg.adversarialMinSignals, durationSec, 360.0, queueRatio, liveVpin);
         if (activeSignalCount >= cfg.adversarialMinSignals && isPriceShock) {
             out.isBreached = true;
             out.reason = `ADVERSARIAL_CASCADE_EXIT_${slot.side}`;
+            // In a verified catastrophic breach (consensus anomaly + price collapse), urgency is critical (>= 0.75)
+            out.urgencyScore = Math.max(0.75, urgency.compositeUrgency);
+            out.executionStyle = "AGGRESSIVE_MARKET";
+        }
+        else {
+            out.urgencyScore = urgency.compositeUrgency;
+            out.executionStyle = urgency.executionStyle;
         }
         return out;
     }

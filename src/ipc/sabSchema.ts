@@ -118,12 +118,19 @@ export const SAB_SLOTS = {
   // Written atomically by HedgePositionLedger in evaluateSotaDynamicExits() hot-path.
   MAX_HOLD_DURATION_SEC: 163,  // Computed MHDC = MHDC_MULTIPLIER * halfLifeSec per asset
   POSITION_AGE_SEC: 164,       // Current position age in seconds (live counter)
+  QUEUE_POSITION_EST: 165,     // Limit order book queue position estimate [0.0, 1.0]
 
   // Phase 3 HFT Overhaul: 5-Level Aggregated OFI Telemetry Slot (166)
   // Cont-Kukanov-Stoikov (2023) multi-level order flow imbalance weighted by depth decay e^(-0.5*l).
   // Delivers ~40% higher predictive accuracy for sub-second alpha.
   // Written atomically by StrategyEngine in evaluateTick() hot-path.
   MULTI_LEVEL_OFI: 166,        // 5-level aggregated weighted OFI [-1.0, 1.0]
+
+  // Phase 4 HFT Overhaul: Dynamic Exit Urgency Router Telemetry Slot (167)
+  // Continuous Urgency Score [0.0, 1.0] = (Adversarial * 0.40) + (Age * 0.30) + (Queue * 0.20) + (VPIN * 0.10)
+  // Determines dynamic execution routing between PASSIVE_MAKER (1.8 bps) and AGGRESSIVE_MARKET (4.5 bps).
+  // Written atomically by HedgePositionLedger in evaluateSotaDynamicExits() hot-path.
+  URGENCY_SCORE: 167,
 } as const;
 
 export const {
@@ -141,5 +148,7 @@ export const {
   WS_ORDER_STREAM_HEALTH,
   MAX_HOLD_DURATION_SEC,
   POSITION_AGE_SEC,
+  QUEUE_POSITION_EST,
   MULTI_LEVEL_OFI,
+  URGENCY_SCORE,
 } = SAB_SLOTS;

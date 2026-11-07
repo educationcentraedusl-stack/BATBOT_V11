@@ -144,8 +144,9 @@ const triggers360 = ledger.evaluateSotaDynamicExits(
 assert(triggers360.length === 1, `MHDC trigger fires exactly at boundary: expected 1 trigger, got ${triggers360.length}`);
 const trgLong = triggers360[0];
 assert(trgLong.reason === "MHDC_ALPHA_EXPIRATION_LONG", `Exact reason string matched: got ${trgLong.reason}`);
-assert(trgLong.executionStyle === "AGGRESSIVE_MARKET", `Execution style is strictly AGGRESSIVE_MARKET: got ${trgLong.executionStyle}`);
-assert(trgLong.executionType === "AGGRESSIVE_MARKET", `Execution type is strictly AGGRESSIVE_MARKET: got ${trgLong.executionType}`);
+// Phase 4 Dynamic Urgency Routing: in neutral/calm market (U = 0.35 < 0.50), dynamically routes to PASSIVE_MAKER (fee drag eradicated)
+assert(trgLong.executionStyle === "PASSIVE_MAKER", `Execution style dynamically routed to PASSIVE_MAKER in calm market: got ${trgLong.executionStyle}`);
+assert(trgLong.executionType === "PASSIVE_MAKER", `Execution type dynamically routed to PASSIVE_MAKER in calm market: got ${trgLong.executionType}`);
 assert(trgLong.quantity === entryQty, `Full position quantity liquidated: expected ${entryQty}, got ${trgLong.quantity}`);
 assert(Math.abs(mdClient.getPositionAgeSec(assetIndex) - 360.0) < 1e-6, `SAB Slot 164 updated to boundary age: got ${mdClient.getPositionAgeSec(assetIndex)}`);
 
@@ -204,7 +205,8 @@ const triggersShortBoundary = ledger.evaluateSotaDynamicExits(
 assert(triggersShortBoundary.length === 1, `Short MHDC fires at boundary: expected 1 trigger, got ${triggersShortBoundary.length}`);
 const trgShort = triggersShortBoundary[0];
 assert(trgShort.reason === "MHDC_ALPHA_EXPIRATION_SHORT", `Short reason string matched: got ${trgShort.reason}`);
-assert(trgShort.executionStyle === "AGGRESSIVE_MARKET", `Short execution style is AGGRESSIVE_MARKET: got ${trgShort.executionStyle}`);
+// Phase 4 Dynamic Urgency Routing: calm market routes to PASSIVE_MAKER
+assert(trgShort.executionStyle === "PASSIVE_MAKER", `Short execution style dynamically routed to PASSIVE_MAKER: got ${trgShort.executionStyle}`);
 assert(trgShort.quantity === 0.05, `Short liquidated quantity matches: expected 0.05, got ${trgShort.quantity}`);
 
 ledger.releaseShortSlot(0);

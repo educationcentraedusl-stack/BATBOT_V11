@@ -766,6 +766,16 @@ class MarketDataClient {
         this.writeAtomicFloat64Asset(assetIdx, 164, val);
     }
     /**
+     * Slot 165: Limit Order Book Queue Position Estimate [0.0, 1.0].
+     * 0.0 = front of queue, 1.0 = deeply buried / back of queue.
+     */
+    getQueuePositionEst(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 165);
+    }
+    setQueuePositionEst(val, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 165, val);
+    }
+    /**
      * Slot 166: 5-Level Aggregated Order Flow Imbalance (OFI) [-1.0, 1.0].
      * Cont-Kukanov-Stoikov (2023) depth decay-weighted OFI (lambda = 0.5).
      * Written atomically by StrategyEngine.evaluateTick() in the zero-GC hot-path.
@@ -775,6 +785,17 @@ class MarketDataClient {
     }
     setMultiLevelOfi(val, assetIdx = 0) {
         this.writeAtomicFloat64Asset(assetIdx, 166, val);
+    }
+    /**
+     * Slot 167: Dynamic Exit Urgency Score [0.0, 1.0].
+     * Linear composite of Adversarial (40%), Age (30%), Queue (20%), and VPIN (10%).
+     * Written atomically by HedgePositionLedger.evaluateSotaDynamicExits() in the zero-GC hot-path.
+     */
+    getUrgencyScore(assetIdx = 0) {
+        return this.readAtomicFloat64Asset(assetIdx, 167);
+    }
+    setUrgencyScore(val, assetIdx = 0) {
+        this.writeAtomicFloat64Asset(assetIdx, 167, val);
     }
     /**
      * Broadcasts atomic Kill-Switch activation across all asset slots simultaneously.

@@ -15,6 +15,13 @@
 * Hot-Path Zero GC Allocation: Strategy tick evaluation must use pre-allocated static objects and scalar getters to prevent V8 GC pause spikes.
 
 ## Last Known State
+* 2026-11-07 - HFT Master Plan Phase 4 Execution (Dynamic Exit Urgency Router - Fee Drag Eradication & Zero-GC Telemetry) Completed & 100% QA Verified:
+  - Dynamic Exit Urgency Router: Implemented `DynamicUrgencyRouter` in `src/strategy/urgencyRouter.ts` to eliminate fee drag (saving 2.7 bps by transitioning between 1.8 bps PASSIVE_MAKER and 4.5 bps AGGRESSIVE_MARKET).
+  - Exact Mathematical Formulation: U = (Adversarial * 0.40) + (Age * 0.30) + (Queue * 0.20) + (VPIN * 0.10) with execution style routing table: [0.00-0.49: PASSIVE_MAKER 0-tick offset], [0.50-0.74: PASSIVE_MAKER 2-tick aggressive offset], [0.75-0.89: AGGRESSIVE_MARKET standard], [0.90-1.00: AGGRESSIVE_MARKET immediate].
+  - Zero-GC Invariant: Pre-allocated static and instance `UrgencyComponents` mutated in-place for strict Zero-GC compliance (0.04 bytes/call heap delta, 0.1772 µs latency << 0.50 µs SLA target).
+  - Extended SAB Telemetry: Added Slot 167 (`URGENCY_SCORE`) and Slot 165 (`QUEUE_POSITION_EST`) with atomic Float64 bitcasting barriers in `sabSchema.ts` and `marketDataClient.ts`.
+  - Strategy & Ledger Integration: Integrated dynamic urgency evaluation into `positionLedger.ts` (`evalSingleSlotSota()`) writing Slot 167 atomically on every exit check, and dynamically routing Layer 4 Adversarial Exit Gate and Layer 5 MHDC exits.
+  - 100% Comprehensive Empirical QA Gating: Passed 91/91 assertions in `test_urgency_router.ts` (0.1772 µs latency, 0.04 bytes/call GC noise), 39/39 in `test_mhdc_alpha_expiration.ts`, 37/37 in `test_adversarial_exit_gate.ts`, 68/68 in `test_multi_level_ofi.ts`, 53/53 in `test_phase9_master_validation.ts`, and clean TypeScript compilation (`npm test` and `npm run build:ts` exit 0).
 * 2026-11-07 - HFT Master Plan Phase 3 Execution (5-Level Aggregated OFI Engine - Cont-Kukanov-Stoikov 2023) Completed & 100% QA Verified:
   - Extended SAB Telemetry: Added Slot 166 (`MULTI_LEVEL_OFI`) for 5-level aggregated weighted OFI [-1.0, 1.0].
   - MarketDataClient Zero-Copy L2 Depth Readers: Implemented `fillTop5Bids`, `fillTop5Asks`, `fillTop5Levels`, `getMultiLevelOfi`, and `setMultiLevelOfi` reading directly from SAB slots 11-20 and 51-60 with zero memory allocation.
