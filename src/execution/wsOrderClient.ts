@@ -226,8 +226,20 @@ export class WsOrderClient {
 
     this.apiKey = options?.apiKey ?? envKey;
     this.apiSecret = options?.apiSecret ?? envSecret;
-    this.requestTimeoutMs = options?.requestTimeoutMs ?? 5_000;
-    this.maxReconnectAttempts = options?.maxReconnectAttempts ?? 10;
+
+    const envTimeout = process.env.WS_ORDER_REQUEST_TIMEOUT_MS
+      ? parseInt(process.env.WS_ORDER_REQUEST_TIMEOUT_MS, 10)
+      : undefined;
+    const envMaxReconnect = process.env.WS_ORDER_MAX_RECONNECT_ATTEMPTS
+      ? parseInt(process.env.WS_ORDER_MAX_RECONNECT_ATTEMPTS, 10)
+      : undefined;
+
+    this.requestTimeoutMs =
+      options?.requestTimeoutMs ??
+      (Number.isFinite(envTimeout) && (envTimeout as number) > 0 ? (envTimeout as number) : 5_000);
+    this.maxReconnectAttempts =
+      options?.maxReconnectAttempts ??
+      (Number.isFinite(envMaxReconnect) && (envMaxReconnect as number) >= 0 ? (envMaxReconnect as number) : 10);
 
     if (!this.apiKey || !this.apiSecret) {
       console.error(

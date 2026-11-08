@@ -569,6 +569,17 @@ class HedgePositionLedger {
                 cadmeState: 0,
             };
         }
+        // Zero-GC caching for MHDC parameters from environment:
+        const envMult = process.env.MHDC_MULTIPLIER;
+        this.cachedMhdcMultiplier = envMult ? parseFloat(envMult) : 3.0;
+        if (!Number.isFinite(this.cachedMhdcMultiplier) || this.cachedMhdcMultiplier <= 0) {
+            this.cachedMhdcMultiplier = 3.0;
+        }
+        const envHalfLife = process.env.MHDC_DEFAULT_HALF_LIFE_SEC;
+        this.cachedMhdcDefaultHalfLifeSec = envHalfLife ? parseFloat(envHalfLife) : 120.0;
+        if (!Number.isFinite(this.cachedMhdcDefaultHalfLifeSec) || this.cachedMhdcDefaultHalfLifeSec <= 0) {
+            this.cachedMhdcDefaultHalfLifeSec = 120.0;
+        }
     }
     setMarketDataClient(client, assetIndex) {
         this.marketDataClient = client;
@@ -579,7 +590,22 @@ class HedgePositionLedger {
     // Zero-GC caching for MHDC parameters to avoid C++ process.env table lookups in hot paths
     cachedMhdcMultiplier = 3.0;
     cachedMhdcDefaultHalfLifeSec = 120.0;
-    lastMhdcNowMs = -1;
+    getMhdcMultiplier() {
+        return this.cachedMhdcMultiplier;
+    }
+    setMhdcMultiplier(m) {
+        if (Number.isFinite(m) && m > 0) {
+            this.cachedMhdcMultiplier = m;
+        }
+    }
+    getMhdcDefaultHalfLifeSec() {
+        return this.cachedMhdcDefaultHalfLifeSec;
+    }
+    setMhdcDefaultHalfLifeSec(s) {
+        if (Number.isFinite(s) && s > 0) {
+            this.cachedMhdcDefaultHalfLifeSec = s;
+        }
+    }
     getMarketDataClient() {
         return this.marketDataClient;
     }
@@ -2404,14 +2430,14 @@ class HedgePositionLedger {
      *      * Phase 3: Passive Maker Unwind (2*t_half <= tau < 4*t_half) -> Tier 2 Lock
      *      * Phase 4: Terminal Horizon Hard Kill (tau >= T_max) -> Force Liquidation
      */
-    evaluateSotaDynamicExits(bestBidOrMark, bestAskOrHazard, hazardOrHjb, hjbOrVol, volMetricsOrNowMs, nowMs = Date.now(), hurstExponent = 0.50, liveIcOverride) {
+    evaluateSotaDynamicExits(bestBidOrMark, bestAskOrHazard, hazardOrHjb, hjbOrVol, volMetricsOrNowMs, nowMs = 0, hurstExponent = 0.50, liveIcOverride, halfLifeOverride) {
         this.sotaTriggers.length = 0;
         let bestBid = 0;
         let bestAsk = 0;
         let hazardMetrics;
         let hjbEngine;
         let volSurfMetrics;
-        let effectiveNowMs = nowMs;
+        let effectiveNowMs = nowMs > 0 ? nowMs : 0;
         let effectiveHurst = hurstExponent;
         if (typeof bestAskOrHazard === "number") {
             bestBid = bestBidOrMark;
@@ -2436,10 +2462,13 @@ class HedgePositionLedger {
             volSurfMetrics = hjbOrVol;
             if (typeof volMetricsOrNowMs === "number") {
                 effectiveNowMs = volMetricsOrNowMs;
-                if (typeof nowMs === "number" && nowMs <= 1.0 && nowMs >= 0.0) {
+                if (typeof nowMs === "number" && nowMs <= 1.0 && nowMs > 0) {
                     effectiveHurst = nowMs;
                 }
             }
+        }
+        if (effectiveNowMs <= 0) {
+            effectiveNowMs = Date.now();
         }
         const midPrice = (bestBid > 0 && bestAsk > 0) ? (bestBid + bestAsk) / 2.0 : Math.max(bestBid, bestAsk);
         const spread = (bestBid > 0 && bestAsk > 0 && bestAsk >= bestBid) ? bestAsk - bestBid : 0;
@@ -2464,20 +2493,29 @@ class HedgePositionLedger {
         // Ornstein-Uhlenbeck half-life calibration (August 2026 SOTA):
         // t_half = -Δt × ln(2) / (2 × ln(H + 0.5)), Δt = 0.1s (100ms tick)
         // Hybrid: mean-reverting (H < 0.5) uses OU formula; trending (H ≥ 0.5) uses linear scaling.
-        // Linear scaling: H=0.50 → 90s, H=0.75 → 495s, H=0.95 → 819s (captures alpha persistence gradient)
+        // Linear scaling: H=0.50 → default cached 120s (yielding 360s MHDC), H=0.75 → 495s, H=0.95 → 819s.
         // OU floor: 60s (sufficient for micro-trend to develop); OU ceiling: 900s (15-min alpha limit)
         let halfLifeSec;
-        if (safeHurst < 0.5) {
-            // Mean-reverting regime: OU formula, clamped to [60, 600]s
-            const hurstShifted = safeHurst + 0.5; // maps [0.05, 0.50) → [0.55, 1.00)
-            const lnHurstSafe = Math.max(Math.abs(Math.log(hurstShifted)), 0.001);
-            const ouHalfLifeRaw = (0.1 * Math.LN2) / (2.0 * lnHurstSafe);
-            halfLifeSec = Math.max(60.0, Math.min(600.0, ouHalfLifeRaw));
+        if (typeof halfLifeOverride === "number" && Number.isFinite(halfLifeOverride) && halfLifeOverride > 0) {
+            halfLifeSec = halfLifeOverride;
+        }
+        else if (typeof effectiveHurst === "number" && Number.isFinite(effectiveHurst) && effectiveHurst > 0 && effectiveHurst !== 0.50) {
+            if (safeHurst < 0.5) {
+                // Mean-reverting regime: OU formula, clamped to [60, 600]s
+                const hurstShifted = safeHurst + 0.5; // maps [0.05, 0.50) → [0.55, 1.00)
+                const lnHurstSafe = Math.max(Math.abs(Math.log(hurstShifted)), 0.001);
+                const ouHalfLifeRaw = (0.1 * Math.LN2) / (2.0 * lnHurstSafe);
+                halfLifeSec = Math.max(60.0, Math.min(600.0, ouHalfLifeRaw));
+            }
+            else {
+                // Trending regime: linear interpolation 90s (H=0.50) → 900s (H=1.00)
+                // Captures alpha signal persistence: more trending → longer edge half-life
+                halfLifeSec = Math.max(90.0, Math.min(900.0, 90.0 + (safeHurst - 0.5) * 1620.0));
+            }
         }
         else {
-            // Trending regime: linear interpolation 90s (H=0.50) → 900s (H=1.00)
-            // Captures alpha signal persistence: more trending → longer edge half-life
-            halfLifeSec = Math.max(90.0, Math.min(900.0, 90.0 + (safeHurst - 0.5) * 1620.0));
+            // Default / Neutral Hurst (0.50) uses cached default half-life (120s -> 360s MHDC)
+            halfLifeSec = this.cachedMhdcDefaultHalfLifeSec;
         }
         // Garman-Klass Volatility Warm-Up Gate (Defect #3 Fix):
         // GK variance requires >= 2 complete OHLC bars for statistical validity.
@@ -2618,19 +2656,6 @@ class HedgePositionLedger {
             ? slot.originalOpenTime
             : (slot.openTime && slot.openTime > 0 ? slot.openTime : nowMs);
         const positionAgeSec = Math.max(0, (nowMs - effectiveOpenTime) / 1000.0);
-        if (nowMs !== this.lastMhdcNowMs) {
-            this.lastMhdcNowMs = nowMs;
-            const envMult = process.env.MHDC_MULTIPLIER;
-            this.cachedMhdcMultiplier = envMult ? parseFloat(envMult) : 3.0;
-            if (!Number.isFinite(this.cachedMhdcMultiplier) || this.cachedMhdcMultiplier <= 0) {
-                this.cachedMhdcMultiplier = 3.0;
-            }
-            const envHalfLife = process.env.MHDC_DEFAULT_HALF_LIFE_SEC;
-            this.cachedMhdcDefaultHalfLifeSec = envHalfLife ? parseFloat(envHalfLife) : 120.0;
-            if (!Number.isFinite(this.cachedMhdcDefaultHalfLifeSec) || this.cachedMhdcDefaultHalfLifeSec <= 0) {
-                this.cachedMhdcDefaultHalfLifeSec = 120.0;
-            }
-        }
         const dynamicHalfLifeSec = (typeof halfLifeSec === "number" && Number.isFinite(halfLifeSec) && halfLifeSec > 0)
             ? halfLifeSec
             : this.cachedMhdcDefaultHalfLifeSec;
@@ -2650,7 +2675,7 @@ class HedgePositionLedger {
         // 2. Layer 4: Adversarial Exit Gate (Ultra-Low-Latency Defensive Shield)
         // Multi-signal consensus (>= 2 signals) + adverse price velocity shock
         // -------------------------------------------------------------------------
-        const advResult = this.adversarialGate.evaluate(slot, markPrice, hazardMetrics, liveGkAtr, liveHawkes, liveSweep, liveEntropy, nowMs);
+        const advResult = this.adversarialGate.evaluate(slot, markPrice, hazardMetrics, liveGkAtr, liveHawkes, liveSweep, liveEntropy, nowMs, mhdcSec, safeQueueRatio);
         // Phase 4: Dynamic Urgency Router Evaluation (Zero-GC Hot-Path)
         // U = (Adversarial * 0.40) + (Age * 0.30) + (Queue * 0.20) + (VPIN * 0.10)
         const urgency = this.urgencyRouter.compute(advResult.activeSignalCount, this.adversarialGate.getConfig().adversarialMinSignals, positionAgeSec, mhdcSec, safeQueueRatio, safeLiveVpin);
@@ -2706,8 +2731,8 @@ class HedgePositionLedger {
                 ? volMetrics.garmanKlass1s
                 : liveGkAtr;
             const targetHorizonSec = (typeof halfLifeSec === "number" && halfLifeSec > 0)
-                ? halfLifeSec * 2.0
-                : effHjb.getTargetHorizonSeconds();
+                ? halfLifeSec * 1.5
+                : effHjb.getTargetHorizonSeconds() * 1.5;
             const hjbEval = effHjb.getOptimalExitBoundary(slot.side, slot.entryPrice, stoikovMicroPrice, slot.quantity, durationMs, safeGkVol, 200.0, targetHorizonSec);
             if (hjbEval.isLiquidationTriggered) {
                 this.pushSotaTrigger(slot.slotId, slot.side, hjbEval.exitReason, slot.quantity, slot.entryPrice, markPrice, false, slot.activeTpOrderIds, slot.activeStopLossOrderId, "PASSIVE_MAKER");

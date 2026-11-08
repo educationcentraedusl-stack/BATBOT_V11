@@ -250,10 +250,18 @@ class BinanceExecutionClient {
         }
         this.wsOrderClientInitPromise = (async () => {
             try {
+                const envTimeout = process.env.WS_ORDER_REQUEST_TIMEOUT_MS
+                    ? parseInt(process.env.WS_ORDER_REQUEST_TIMEOUT_MS, 10)
+                    : undefined;
+                const envMaxReconnect = process.env.WS_ORDER_MAX_RECONNECT_ATTEMPTS
+                    ? parseInt(process.env.WS_ORDER_MAX_RECONNECT_ATTEMPTS, 10)
+                    : undefined;
                 const wsClient = new wsOrderClient_1.WsOrderClient({
                     useTestnet: this.testnet,
                     apiKey: this.apiKey,
                     apiSecret: this.apiSecret,
+                    requestTimeoutMs: Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : undefined,
+                    maxReconnectAttempts: Number.isFinite(envMaxReconnect) && envMaxReconnect >= 0 ? envMaxReconnect : undefined,
                 });
                 await wsClient.connect();
                 this.attachWsOrderClient(wsClient, sabClient, assetIndex);
@@ -470,6 +478,8 @@ class BinanceExecutionClient {
      * 4. Starts periodic background polling fallback (every 30s).
      */
     async ensureFundingRateStream(client, assetIndex, symbol) {
+        if (process.env.NODE_ENV === "test")
+            return;
         const sym = symbol ? symbol.toUpperCase() : "BTCUSDT";
         this.registeredFundingSymbols.set(sym, { client, assetIndex });
         this.resolveAssetIndex(sym, assetIndex);

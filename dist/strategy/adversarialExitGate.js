@@ -82,18 +82,18 @@ class AdversarialExitGate {
      * Evaluates the Adversarial Exit Gate on an occupied position slot.
      * Hot-path zero heap allocation execution (< 0.5 µs latency).
      */
-    evaluate(slot, markPrice, hazardMetrics, gkAtrComposite, hawkesIntensity, isSweepDetected, lobEntropy, nowMs = 0) {
+    evaluate(slot, markPrice, hazardMetrics, gkAtrComposite, hawkesIntensity, isSweepDetected, lobEntropy, nowMs = 0, mhdcSec = 360.0, queueRatioOverride) {
         const out = this.resultRing[this.ringIdx];
         this.ringIdx = (this.ringIdx + 1) & 7;
-        return AdversarialExitGate.evaluateInternal(slot, markPrice, hazardMetrics, gkAtrComposite, hawkesIntensity, isSweepDetected, lobEntropy, nowMs, this.config, out);
+        return AdversarialExitGate.evaluateInternal(slot, markPrice, hazardMetrics, gkAtrComposite, hawkesIntensity, isSweepDetected, lobEntropy, nowMs, this.config, out, mhdcSec, queueRatioOverride);
     }
     /**
      * Static evaluation using pre-allocated singleton
      */
-    static evaluate(slot, markPrice, hazardMetrics, gkAtrComposite, hawkesIntensity, isSweepDetected, lobEntropy, nowMs = 0, config) {
-        return AdversarialExitGate.evaluateInternal(slot, markPrice, hazardMetrics, gkAtrComposite, hawkesIntensity, isSweepDetected, lobEntropy, nowMs, config ?? exports.DEFAULT_ADVERSARIAL_CONFIG, AdversarialExitGate.STATIC_RESULT);
+    static evaluate(slot, markPrice, hazardMetrics, gkAtrComposite, hawkesIntensity, isSweepDetected, lobEntropy, nowMs = 0, config, mhdcSec = 360.0, queueRatioOverride) {
+        return AdversarialExitGate.evaluateInternal(slot, markPrice, hazardMetrics, gkAtrComposite, hawkesIntensity, isSweepDetected, lobEntropy, nowMs, config ?? exports.DEFAULT_ADVERSARIAL_CONFIG, AdversarialExitGate.STATIC_RESULT, mhdcSec, queueRatioOverride);
     }
-    static evaluateInternal(slot, markPrice, hazardMetrics, gkAtrComposite, hawkesIntensity, isSweepDetected, lobEntropy, nowMs, cfg, out) {
+    static evaluateInternal(slot, markPrice, hazardMetrics, gkAtrComposite, hawkesIntensity, isSweepDetected, lobEntropy, nowMs, cfg, out, mhdcSec = 360.0, queueRatioOverride) {
         // Reset output struct
         out.isBreached = false;
         out.activeSignalCount = 0;
@@ -197,8 +197,13 @@ class AdversarialExitGate {
             : (slot.openTime && slot.openTime > 0 ? slot.openTime : nowMs);
         const effectiveNow = nowMs > 0 ? nowMs : Date.now();
         const durationSec = Math.max(0, (effectiveNow - openTime) / 1000);
-        const queueRatio = liveSweep ? 1.0 : 0.0;
-        const urgency = urgencyRouter_1.DynamicUrgencyRouter.compute(activeSignalCount, cfg.adversarialMinSignals, durationSec, 360.0, queueRatio, liveVpin);
+        const effectiveMhdcSec = (typeof mhdcSec === "number" && Number.isFinite(mhdcSec) && mhdcSec > 0)
+            ? mhdcSec
+            : 360.0;
+        const queueRatio = (typeof queueRatioOverride === "number" && Number.isFinite(queueRatioOverride) && queueRatioOverride >= 0)
+            ? Math.min(1.0, queueRatioOverride)
+            : (liveSweep ? 1.0 : 0.0);
+        const urgency = urgencyRouter_1.DynamicUrgencyRouter.compute(activeSignalCount, cfg.adversarialMinSignals, durationSec, effectiveMhdcSec, queueRatio, liveVpin);
         if (activeSignalCount >= cfg.adversarialMinSignals && isPriceShock) {
             out.isBreached = true;
             out.reason = `ADVERSARIAL_CASCADE_EXIT_${slot.side}`;

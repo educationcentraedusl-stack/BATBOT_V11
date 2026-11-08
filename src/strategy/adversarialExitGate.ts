@@ -139,7 +139,9 @@ export class AdversarialExitGate {
     hawkesIntensity?: number,
     isSweepDetected?: boolean,
     lobEntropy?: number,
-    nowMs: number = 0
+    nowMs: number = 0,
+    mhdcSec: number = 360.0,
+    queueRatioOverride?: number
   ): AdversarialExitResult {
     const out = this.resultRing[this.ringIdx];
     this.ringIdx = (this.ringIdx + 1) & 7;
@@ -154,7 +156,9 @@ export class AdversarialExitGate {
       lobEntropy,
       nowMs,
       this.config,
-      out
+      out,
+      mhdcSec,
+      queueRatioOverride
     );
   }
 
@@ -170,7 +174,9 @@ export class AdversarialExitGate {
     isSweepDetected?: boolean,
     lobEntropy?: number,
     nowMs: number = 0,
-    config?: AdversarialExitConfig
+    config?: AdversarialExitConfig,
+    mhdcSec: number = 360.0,
+    queueRatioOverride?: number
   ): AdversarialExitResult {
     return AdversarialExitGate.evaluateInternal(
       slot,
@@ -182,7 +188,9 @@ export class AdversarialExitGate {
       lobEntropy,
       nowMs,
       config ?? DEFAULT_ADVERSARIAL_CONFIG,
-      AdversarialExitGate.STATIC_RESULT
+      AdversarialExitGate.STATIC_RESULT,
+      mhdcSec,
+      queueRatioOverride
     );
   }
 
@@ -196,7 +204,9 @@ export class AdversarialExitGate {
     lobEntropy: number | undefined,
     nowMs: number,
     cfg: AdversarialExitConfig,
-    out: AdversarialExitResult
+    out: AdversarialExitResult,
+    mhdcSec: number = 360.0,
+    queueRatioOverride?: number
   ): AdversarialExitResult {
     // Reset output struct
     out.isBreached = false;
@@ -311,13 +321,18 @@ export class AdversarialExitGate {
       : (slot.openTime && slot.openTime > 0 ? slot.openTime : nowMs);
     const effectiveNow = nowMs > 0 ? nowMs : Date.now();
     const durationSec = Math.max(0, (effectiveNow - openTime) / 1000);
-    const queueRatio = liveSweep ? 1.0 : 0.0;
+    const effectiveMhdcSec = (typeof mhdcSec === "number" && Number.isFinite(mhdcSec) && mhdcSec > 0)
+      ? mhdcSec
+      : 360.0;
+    const queueRatio = (typeof queueRatioOverride === "number" && Number.isFinite(queueRatioOverride) && queueRatioOverride >= 0)
+      ? Math.min(1.0, queueRatioOverride)
+      : (liveSweep ? 1.0 : 0.0);
 
     const urgency = DynamicUrgencyRouter.compute(
       activeSignalCount,
       cfg.adversarialMinSignals,
       durationSec,
-      360.0,
+      effectiveMhdcSec,
       queueRatio,
       liveVpin
     );

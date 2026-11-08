@@ -134,8 +134,18 @@ class WsOrderClient {
             : process.env.BINANCE_API_SECRET ?? process.env.BINANCE_SECRET_KEY ?? "";
         this.apiKey = options?.apiKey ?? envKey;
         this.apiSecret = options?.apiSecret ?? envSecret;
-        this.requestTimeoutMs = options?.requestTimeoutMs ?? 5_000;
-        this.maxReconnectAttempts = options?.maxReconnectAttempts ?? 10;
+        const envTimeout = process.env.WS_ORDER_REQUEST_TIMEOUT_MS
+            ? parseInt(process.env.WS_ORDER_REQUEST_TIMEOUT_MS, 10)
+            : undefined;
+        const envMaxReconnect = process.env.WS_ORDER_MAX_RECONNECT_ATTEMPTS
+            ? parseInt(process.env.WS_ORDER_MAX_RECONNECT_ATTEMPTS, 10)
+            : undefined;
+        this.requestTimeoutMs =
+            options?.requestTimeoutMs ??
+                (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 5_000);
+        this.maxReconnectAttempts =
+            options?.maxReconnectAttempts ??
+                (Number.isFinite(envMaxReconnect) && envMaxReconnect >= 0 ? envMaxReconnect : 10);
         if (!this.apiKey || !this.apiSecret) {
             console.error("[WsOrderClient][CRITICAL] Missing API key or secret. Order submission will fail.");
         }

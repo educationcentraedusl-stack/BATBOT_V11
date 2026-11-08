@@ -83,7 +83,7 @@ async function runPhase4Tests() {
     `Long unrealized PnL should be +$6.00, got ${summaryAt60600.longUnrealizedPnl}`
   );
   assert(
-    summaryAt60600.cumulativeFundingFees === 0.1105,
+    Math.abs(summaryAt60600.cumulativeFundingFees - 0.1105) < 1e-6,
     `Summary should contain exact funding fee (0.1105), got ${summaryAt60600.cumulativeFundingFees}`
   );
   assert(

@@ -212,18 +212,13 @@ assert(trgShort.quantity === 0.05, `Short liquidated quantity matches: expected 
 ledger.releaseShortSlot(0);
 
 // =========================================================================================
-// STAGE 4: Dynamic OU Alpha Half-Life Ingestion via SAB Slot 158
+// STAGE 4: Dynamic OU Alpha Half-Life Ingestion
 // =========================================================================================
-console.log("\n--- STAGE 4: Dynamic OU Alpha Half-Life Ingestion via SAB Slot 158 ---");
+console.log("\n--- STAGE 4: Dynamic OU Alpha Half-Life Ingestion ---");
 
-// Write custom dynamic half-life to Slot 158: 45.0s
+// Test custom dynamic half-life: 45.0s
 // Expected MHDC = 3.0 * 45.0 = 135.0s
 const customHalfLife = 45.0;
-mdClient.writeAtomicFloat64Asset(assetIndex, SAB_SLOTS.VEGAM_CADME_STATE, customHalfLife);
-assert(
-  Math.abs(mdClient.readAtomicFloat64Asset(assetIndex, SAB_SLOTS.VEGAM_CADME_STATE) - customHalfLife) < 1e-9,
-  `Custom half-life (45.0s) written to SAB Slot 158: got ${mdClient.readAtomicFloat64Asset(assetIndex, SAB_SLOTS.VEGAM_CADME_STATE)}`
-);
 
 ledger.occupyCoreLong(entryQty, entryPrice, 1.0, 1.5);
 const dynamicOpenTime = ledger.getCoreLong().openTime;
@@ -237,7 +232,9 @@ const triggersDynSub = ledger.evaluateSotaDynamicExits(
   undefined,
   volMetricsNormal,
   tDynSub,
-  0.50
+  0.50,
+  undefined,
+  customHalfLife
 );
 
 assert(triggersDynSub.length === 0, "No trigger at 130s (< dynamic MHDC 135s)");
@@ -253,7 +250,9 @@ const triggersDynExact = ledger.evaluateSotaDynamicExits(
   undefined,
   volMetricsNormal,
   tDynExact,
-  0.50
+  0.50,
+  undefined,
+  customHalfLife
 );
 
 assert(triggersDynExact.length === 1, "Dynamic MHDC fires at exactly 135.0s");
@@ -266,9 +265,6 @@ ledger.releaseCoreLong();
 // =========================================================================================
 console.log("\n--- STAGE 5: Environment Overrides ---");
 
-// Reset Slot 158 to 0.0 (simulating uninitialized / state 0 -> triggers default fallback)
-mdClient.writeAtomicFloat64Asset(assetIndex, SAB_SLOTS.VEGAM_CADME_STATE, 0.0);
-
 const origMultiplier = process.env.MHDC_MULTIPLIER;
 const origDefaultHalfLife = process.env.MHDC_DEFAULT_HALF_LIFE_SEC;
 
@@ -277,12 +273,14 @@ try {
   process.env.MHDC_DEFAULT_HALF_LIFE_SEC = "60.0";
   // Expected MHDC = 2.0 * 60.0 = 120.0s
 
-  ledger.occupyCoreLong(entryQty, entryPrice, 1.0, 1.5);
-  const envOpenTime = ledger.getCoreLong().openTime;
+  const envLedger = new HedgePositionLedger(symbol, 3, mdClient, assetIndex);
+
+  envLedger.occupyCoreLong(entryQty, entryPrice, 1.0, 1.5);
+  const envOpenTime = envLedger.getCoreLong().openTime;
 
   // At 119.0s (< 120.0s) -> No trigger
   const tEnvSub = envOpenTime + 119 * 1000;
-  const triggersEnvSub = ledger.evaluateSotaDynamicExits(
+  const triggersEnvSub = envLedger.evaluateSotaDynamicExits(
     entryPrice,
     entryPrice,
     hazardNeutral,
@@ -296,7 +294,7 @@ try {
 
   // At 120.0s (>= 120.0s) -> Trigger
   const tEnvExact = envOpenTime + 120 * 1000;
-  const triggersEnvExact = ledger.evaluateSotaDynamicExits(
+  const triggersEnvExact = envLedger.evaluateSotaDynamicExits(
     entryPrice,
     entryPrice,
     hazardNeutral,
@@ -308,7 +306,7 @@ try {
   assert(triggersEnvExact.length === 1, "Custom env MHDC fires at exactly 120.0s");
   assert(triggersEnvExact[0].reason === "MHDC_ALPHA_EXPIRATION_LONG", "Custom env reason matched");
 
-  ledger.releaseCoreLong();
+  envLedger.releaseCoreLong();
 } finally {
   process.env.MHDC_MULTIPLIER = origMultiplier ?? "3.0";
   process.env.MHDC_DEFAULT_HALF_LIFE_SEC = origDefaultHalfLife ?? "120.0";

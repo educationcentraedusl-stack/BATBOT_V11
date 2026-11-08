@@ -383,44 +383,72 @@ export class StrategyEngine {
       process.env.WS_ORDER_API_ENABLED !== "false" &&
       process.env.WS_ORDER_API_ENABLED !== "0";
 
-    if (wsEnabled && this.executionClient && this.client) {
-      if (typeof this.executionClient.ensureWsOrderClient === "function") {
-        this.executionClient
-          .ensureWsOrderClient(this.client, this.assetIndex, this.config.symbol)
-          .then(() => {
-            console.log(
-              `[StrategyEngine][${this.config.symbol}][WS_ORDER_API] WebSocket Order API primary path ACTIVE (assetIndex=${this.assetIndex}).`
-            );
-          })
-          .catch((err: unknown) => {
-            console.warn(
-              `[StrategyEngine][${this.config.symbol}][WS_ORDER_API] WS Order API connection failed — REST fallback active: ${
-                err instanceof Error ? err.message : String(err)
-              }`
-            );
-          });
-      } else if (this.executionClient.hasWsOrderClient()) {
-        this.client.writeAtomicFloat64Asset(this.assetIndex, 160, 1.0);
-        console.log(
-          `[StrategyEngine][${this.config.symbol}][WS_ORDER_API] Reusing shared WebSocket Order API primary path (assetIndex=${this.assetIndex}).`
-        );
+    if (process.env.NODE_ENV !== "test") {
+      if (wsEnabled && this.executionClient && this.client) {
+        if (typeof this.executionClient.ensureWsOrderClient === "function") {
+          this.executionClient
+            .ensureWsOrderClient(this.client, this.assetIndex, this.config.symbol)
+            .then(() => {
+              console.log(
+                `[StrategyEngine][${this.config.symbol}][WS_ORDER_API] WebSocket Order API primary path ACTIVE (assetIndex=${this.assetIndex}).`
+              );
+            })
+            .catch((err: unknown) => {
+              console.warn(
+                `[StrategyEngine][${this.config.symbol}][WS_ORDER_API] WS Order API connection failed — REST fallback active: ${
+                  err instanceof Error ? err.message : String(err)
+                }`
+              );
+            });
+        } else if (this.executionClient.hasWsOrderClient()) {
+          this.client.writeAtomicFloat64Asset(this.assetIndex, 160, 1.0);
+          console.log(
+            `[StrategyEngine][${this.config.symbol}][WS_ORDER_API] Reusing shared WebSocket Order API primary path (assetIndex=${this.assetIndex}).`
+          );
+        }
+      }
+
+      // ─── Phase 5 HFT Overhaul: Activate Live Perpetual Funding Rate Telemetry ───
+      // Hydrate SAB Slot 168 immediately from Binance and attach @markPrice@1s WebSocket stream
+      if (this.executionClient && this.client) {
+        if (typeof this.executionClient.ensureFundingRateStream === "function") {
+          this.executionClient
+            .ensureFundingRateStream(this.client, this.assetIndex, this.config.symbol)
+            .catch((err: unknown) => {
+              console.warn(
+                `[StrategyEngine][${this.config.symbol}][FUNDING_TELEMETRY] Live funding stream startup notice: ${
+                  err instanceof Error ? err.message : String(err)
+                }`
+              );
+            });
+        }
       }
     }
-    // ─────────────────────────────────────────────────────────────────────────────
+  }
 
-    // ─── Phase 5 HFT Overhaul: Activate Live Perpetual Funding Rate Telemetry ───
-    // Hydrate SAB Slot 168 immediately from Binance and attach @markPrice@1s WebSocket stream
-    if (this.executionClient && this.client) {
-      if (typeof this.executionClient.ensureFundingRateStream === "function") {
-        this.executionClient
-          .ensureFundingRateStream(this.client, this.assetIndex, this.config.symbol)
-          .catch((err: unknown) => {
-            console.warn(
-              `[StrategyEngine][${this.config.symbol}][FUNDING_TELEMETRY] Live funding stream startup notice: ${
-                err instanceof Error ? err.message : String(err)
-              }`
-            );
-          });
+  /**
+   * Destroys this StrategyEngine instance, terminating all background WebSockets,
+   * clearing timers, and detaching execution clients to prevent memory leaks and event loop hangs.
+   */
+  public destroy(): void {
+    for (const [, timer] of this.settlementTimers) {
+      clearTimeout(timer);
+    }
+    this.settlementTimers.clear();
+
+    for (const [, pending] of this.pendingEntryOrders) {
+      if (pending.timeoutTimer) {
+        clearTimeout(pending.timeoutTimer);
+      }
+    }
+    this.pendingEntryOrders.clear();
+
+    if (this.executionClient) {
+      if (typeof this.executionClient.destroy === "function") {
+        this.executionClient.destroy();
+      }
+      if (typeof this.executionClient.detachWsOrderClient === "function") {
+        this.executionClient.detachWsOrderClient();
       }
     }
   }

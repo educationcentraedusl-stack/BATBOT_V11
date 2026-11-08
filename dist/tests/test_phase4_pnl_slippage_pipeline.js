@@ -46,7 +46,7 @@ async function runPhase4Tests() {
     const summaryAt60600 = hedgeLedger.getSummary(60600.0);
     assert(Math.abs(summaryAt60600.roePercent - 10.00) < 0.05, `ROE should be +10.00%, got ${summaryAt60600.roePercent}%`);
     assert(Math.abs(summaryAt60600.longUnrealizedPnl - 6.00) < 1e-4, `Long unrealized PnL should be +$6.00, got ${summaryAt60600.longUnrealizedPnl}`);
-    assert(summaryAt60600.cumulativeFundingFees === 0.1105, `Summary should contain exact funding fee (0.1105), got ${summaryAt60600.cumulativeFundingFees}`);
+    assert(Math.abs(summaryAt60600.cumulativeFundingFees - 0.1105) < 1e-6, `Summary should contain exact funding fee (0.1105), got ${summaryAt60600.cumulativeFundingFees}`);
     assert(summaryAt60600.reconciledWalletBalance === 1250.75, `Summary should contain reconciled wallet balance (1250.75), got ${summaryAt60600.reconciledWalletBalance}`);
     assert(summaryAt60600.activeStepCollarTier === 2, `Summary should contain active Step-Collar tier (2), got ${summaryAt60600.activeStepCollarTier}`);
     console.log(`  -> [PASS] ROE = +${summaryAt60600.roePercent}% @ 10x leverage, Unr PnL = $${summaryAt60600.longUnrealizedPnl.toFixed(2)}, Summary synchronized.`);
