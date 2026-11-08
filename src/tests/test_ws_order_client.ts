@@ -80,9 +80,9 @@ class MockWebSocket {
     }
   }
 
-  public send(data: string, cb?: (err?: Error) => void): void {
+  public send(data: string, cb?: (err?: Error | null) => void): void {
     this.sentMessages.push(data);
-    if (cb) cb(undefined);
+    if (cb) cb(null);
   }
 
   public ping(): void {}
@@ -1237,6 +1237,107 @@ describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verification)", 
       inFlightMap.has(testCid),
       false,
       "inFlightClientOrderIds must be cleared in finally block after pre-flight exception"
+    );
+  });
+
+  // ── T34: _dispatch() handles cb(null) as successful transmission without throwing TypeError ──
+  it("T34: _dispatch() handles cb(null) as successful transmission without throwing TypeError", async () => {
+    const client = new WsOrderClient({
+      useTestnet: false,
+      apiKey: "test_key",
+      apiSecret: "test_secret",
+      requestTimeoutMs: 1000,
+    });
+
+    const mockSocket = new MockWebSocket();
+    let callbackReceivedNull = false;
+    mockSocket.send = (data: string, cb?: (err?: Error | null) => void) => {
+      mockSocket.sentMessages.push(data);
+      if (cb) {
+        callbackReceivedNull = true;
+        cb(null);
+      }
+    };
+
+    (client as unknown as { ws: MockWebSocket }).ws = mockSocket;
+    (client as unknown as { isConnected: boolean }).isConnected = true;
+
+    // Dispatch order and immediately simulate response to resolve it
+    const orderPromise = client.placeOrder({
+      symbol: "ETHUSDT",
+      side: "SELL",
+      type: "MARKET",
+      quantity: 0.05,
+      positionSide: "LONG",
+    });
+
+    assert.strictEqual(callbackReceivedNull, true, "Mock socket must have invoked cb(null)");
+
+    const sentRaw = mockSocket.sentMessages[0];
+    assert.ok(sentRaw, "Payload must be sent over mock socket");
+    const sentPayload = JSON.parse(sentRaw) as { id: string };
+
+    // Emit 200 response
+    (client as unknown as { _onMessage: (data: string) => void })._onMessage(
+      JSON.stringify({
+        id: sentPayload.id,
+        status: 200,
+        result: {
+          orderId: 777123,
+          symbol: "ETHUSDT",
+          status: "FILLED",
+          clientOrderId: "TEST_EXIT_CID",
+          price: "0",
+          avgPrice: "2236.40",
+          origQty: "0.05",
+          executedQty: "0.05",
+          cumQuote: "111.82",
+          timeInForce: "GTC",
+          type: "MARKET",
+          reduceOnly: false,
+          side: "SELL",
+          positionSide: "LONG",
+          stopPrice: "0",
+          workingType: "CONTRACT_PRICE",
+          updateTime: Date.now(),
+        },
+      })
+    );
+
+    const response = await orderPromise;
+    assert.strictEqual(response.status, 200);
+    assert.ok(response.result);
+  });
+
+  // ── T35: _dispatch() intercepts synchronous ws.send exception and rejects promise cleanly ──
+  it("T35: _dispatch() intercepts synchronous ws.send exception and rejects promise cleanly", async () => {
+    const client = new WsOrderClient({
+      useTestnet: false,
+      apiKey: "test_key",
+      apiSecret: "test_secret",
+      requestTimeoutMs: 1000,
+    });
+
+    const mockSocket = new MockWebSocket();
+    mockSocket.send = () => {
+      throw new Error("WebSocket is not open: readyState 2 (CLOSING)");
+    };
+
+    (client as unknown as { ws: MockWebSocket }).ws = mockSocket;
+    (client as unknown as { isConnected: boolean }).isConnected = true;
+
+    await assert.rejects(
+      () =>
+        client.placeOrder({
+          symbol: "BTCUSDT",
+          side: "BUY",
+          type: "MARKET",
+          quantity: 0.001,
+        }),
+      (err: Error) =>
+        err.message.includes("[WsOrderClient] Synchronous socket send error") &&
+        err.message.includes("WebSocket is not open: readyState 2 (CLOSING)"),
+      "Must cleanly reject Promise on synchronous socket send error without crashing"
     );
   });
 });

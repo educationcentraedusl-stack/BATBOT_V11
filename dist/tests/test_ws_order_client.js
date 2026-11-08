@@ -107,7 +107,7 @@ class MockWebSocket {
     send(data, cb) {
         this.sentMessages.push(data);
         if (cb)
-            cb(undefined);
+            cb(null);
     }
     ping() { }
     close(_code, _reason) {
@@ -1037,5 +1037,86 @@ class MockWebSocket {
         }), /Simulated pre-flight validation failure/);
         const inFlightMap = execClient.inFlightClientOrderIds;
         node_assert_1.strict.strictEqual(inFlightMap.has(testCid), false, "inFlightClientOrderIds must be cleared in finally block after pre-flight exception");
+    });
+    // ── T34: _dispatch() handles cb(null) as successful transmission without throwing TypeError ──
+    (0, node_test_1.it)("T34: _dispatch() handles cb(null) as successful transmission without throwing TypeError", async () => {
+        const client = new wsOrderClient_1.WsOrderClient({
+            useTestnet: false,
+            apiKey: "test_key",
+            apiSecret: "test_secret",
+            requestTimeoutMs: 1000,
+        });
+        const mockSocket = new MockWebSocket();
+        let callbackReceivedNull = false;
+        mockSocket.send = (data, cb) => {
+            mockSocket.sentMessages.push(data);
+            if (cb) {
+                callbackReceivedNull = true;
+                cb(null);
+            }
+        };
+        client.ws = mockSocket;
+        client.isConnected = true;
+        // Dispatch order and immediately simulate response to resolve it
+        const orderPromise = client.placeOrder({
+            symbol: "ETHUSDT",
+            side: "SELL",
+            type: "MARKET",
+            quantity: 0.05,
+            positionSide: "LONG",
+        });
+        node_assert_1.strict.strictEqual(callbackReceivedNull, true, "Mock socket must have invoked cb(null)");
+        const sentRaw = mockSocket.sentMessages[0];
+        node_assert_1.strict.ok(sentRaw, "Payload must be sent over mock socket");
+        const sentPayload = JSON.parse(sentRaw);
+        // Emit 200 response
+        client._onMessage(JSON.stringify({
+            id: sentPayload.id,
+            status: 200,
+            result: {
+                orderId: 777123,
+                symbol: "ETHUSDT",
+                status: "FILLED",
+                clientOrderId: "TEST_EXIT_CID",
+                price: "0",
+                avgPrice: "2236.40",
+                origQty: "0.05",
+                executedQty: "0.05",
+                cumQuote: "111.82",
+                timeInForce: "GTC",
+                type: "MARKET",
+                reduceOnly: false,
+                side: "SELL",
+                positionSide: "LONG",
+                stopPrice: "0",
+                workingType: "CONTRACT_PRICE",
+                updateTime: Date.now(),
+            },
+        }));
+        const response = await orderPromise;
+        node_assert_1.strict.strictEqual(response.status, 200);
+        node_assert_1.strict.ok(response.result);
+    });
+    // ── T35: _dispatch() intercepts synchronous ws.send exception and rejects promise cleanly ──
+    (0, node_test_1.it)("T35: _dispatch() intercepts synchronous ws.send exception and rejects promise cleanly", async () => {
+        const client = new wsOrderClient_1.WsOrderClient({
+            useTestnet: false,
+            apiKey: "test_key",
+            apiSecret: "test_secret",
+            requestTimeoutMs: 1000,
+        });
+        const mockSocket = new MockWebSocket();
+        mockSocket.send = () => {
+            throw new Error("WebSocket is not open: readyState 2 (CLOSING)");
+        };
+        client.ws = mockSocket;
+        client.isConnected = true;
+        await node_assert_1.strict.rejects(() => client.placeOrder({
+            symbol: "BTCUSDT",
+            side: "BUY",
+            type: "MARKET",
+            quantity: 0.001,
+        }), (err) => err.message.includes("[WsOrderClient] Synchronous socket send error") &&
+            err.message.includes("WebSocket is not open: readyState 2 (CLOSING)"), "Must cleanly reject Promise on synchronous socket send error without crashing");
     });
 });

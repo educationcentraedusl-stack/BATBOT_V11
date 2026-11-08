@@ -187,7 +187,7 @@ class WsOrderClient {
                 this._onMessage(data);
             });
             socket.on("close", (code, reason) => {
-                this._onClose(code, reason.toString());
+                this._onClose(code, reason ? reason.toString() : "");
             });
             socket.on("error", (err) => {
                 console.error(`[WsOrderClient] Socket error: ${err.message}`);
@@ -205,10 +205,11 @@ class WsOrderClient {
             this.reconnectTimer = null;
         }
         // Drain all pending requests with a shutdown error
-        for (const [id, pending] of this.pendingRequests) {
+        const pendingEntries = Array.from(this.pendingRequests.entries());
+        this.pendingRequests.clear();
+        for (const [, pending] of pendingEntries) {
             clearTimeout(pending.timeoutHandle);
             pending.reject(new Error("[WsOrderClient] Client destroyed — request aborted."));
-            this.pendingRequests.delete(id);
         }
         if (this.ws !== null) {
             try {
@@ -460,13 +461,20 @@ class WsOrderClient {
                 timeoutHandle,
                 dispatchedAtMs,
             });
-            this.ws.send(payload, (err) => {
-                if (err !== undefined) {
-                    clearTimeout(timeoutHandle);
-                    this.pendingRequests.delete(id);
-                    reject(new Error(`[WsOrderClient] Failed to send payload for request ${id}: ${err.message}`));
-                }
-            });
+            try {
+                this.ws.send(payload, (err) => {
+                    if (err) {
+                        clearTimeout(timeoutHandle);
+                        this.pendingRequests.delete(id);
+                        reject(new Error(`[WsOrderClient] Failed to send payload for request ${id}: ${err.message}`));
+                    }
+                });
+            }
+            catch (sendErr) {
+                clearTimeout(timeoutHandle);
+                this.pendingRequests.delete(id);
+                reject(new Error(`[WsOrderClient] Synchronous socket send error for request ${id}: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`));
+            }
         });
     }
     /**
@@ -526,10 +534,11 @@ class WsOrderClient {
             this.ws = null;
         }
         // Reject all pending requests with a connection-lost error
-        for (const [id, pending] of this.pendingRequests) {
+        const pendingEntries = Array.from(this.pendingRequests.entries());
+        this.pendingRequests.clear();
+        for (const [id, pending] of pendingEntries) {
             clearTimeout(pending.timeoutHandle);
             pending.reject(new Error(`[WsOrderClient] Connection closed (code=${code}, reason=${reason}) — request ${id} aborted.`));
-            this.pendingRequests.delete(id);
         }
         if (this.isShuttingDown) {
             return;
