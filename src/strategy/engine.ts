@@ -185,6 +185,10 @@ export class StrategyEngine {
     message: "Trade entry blocked: Perpetual funding rate requires position to pay funding fees.",
   };
 
+  // Perpetual Funding Rate Filter: Default tolerance 0.01% (10 bps / 8h)
+  public static readonly DEFAULT_MAX_PERMITTED_FUNDING_RATE: number = 0.0001;
+  private maxPermittedFundingRate: number = StrategyEngine.DEFAULT_MAX_PERMITTED_FUNDING_RATE;
+
   // Phase 5 HFT Overhaul: Pre-allocated scratch MicrostructureMetrics for Zero-GC risk evaluation
   private readonly scratchMicroMetrics: DynamicMicrostructureMetrics = {
     obi: 0,
@@ -249,6 +253,8 @@ export class StrategyEngine {
     const envCooldownMs = process.env.COOLDOWN_MS ? parseInt(process.env.COOLDOWN_MS, 10) : NaN;
     const envVpinThreshold = process.env.VPIN_THRESHOLD ? parseFloat(process.env.VPIN_THRESHOLD) : NaN;
     const envVpinBucketVolume = process.env.VPIN_BUCKET_VOLUME ? parseFloat(process.env.VPIN_BUCKET_VOLUME) : NaN;
+    const envMaxFunding = process.env.MAX_PERMITTED_FUNDING_RATE ? parseFloat(process.env.MAX_PERMITTED_FUNDING_RATE) : NaN;
+    this.maxPermittedFundingRate = !isNaN(envMaxFunding) && envMaxFunding > 0 ? envMaxFunding : StrategyEngine.DEFAULT_MAX_PERMITTED_FUNDING_RATE;
 
     const defaultLongTp = !isNaN(envLongTp) ? envLongTp : 1.0;
     const defaultLongSl = !isNaN(envLongSl) ? envLongSl : 1.50;
@@ -2624,7 +2630,9 @@ export class StrategyEngine {
 
   /**
    * Institutional SOTA Dynamic Friction Hurdle Calculation (BPS).
-   * Incorporates round-trip exchange fees (taker entry + maker TP, or conservative 2x taker),
+   * For POST_ONLY Maker limit entries, removes taker fee and half-spread crossing cost.
+   * Effective hurdle is primarily makerFeeRate * 10000 + MIN_NET_ALPHA (~3.5 - 5.0 bps).
+   * For taker entries, incorporates round-trip exchange fees (taker entry + maker TP),
    * half-spread compensation, VPIN & Volatility-driven adverse selection slippage,
    * and the minimum required net alpha margin.
    */
@@ -2633,8 +2641,20 @@ export class StrategyEngine {
     takerFeeRate: number,
     halfSpreadBps: number,
     vpin: number,
-    volEstimate: number
+    volEstimate: number,
+    isMakerOrder: boolean = true
   ): number {
+    // Minimum required net margin (e.g., 1.5 - 4.0 bps net profit target)
+    const minNetAlpha = this.hedgeLedger.getSizingCalculator().getMinNetAlpha();
+    const minMarginBps = (Number.isFinite(minNetAlpha) && minNetAlpha > 0 ? minNetAlpha : 0.00015) * 10000.0;
+
+    if (isMakerOrder) {
+      // POST_ONLY Maker limit entries: zero half-spread cross cost and no taker fee.
+      // Hurdle is primarily makerFeeRate * 10000 + MIN_NET_ALPHA
+      const safeMakerFee = Number.isFinite(makerFeeRate) && makerFeeRate >= 0 ? makerFeeRate : 0.0002;
+      return safeMakerFee * 10000.0 + minMarginBps;
+    }
+
     // Round-trip fee: taker entry + maker TP (or conservative round-trip)
     const effectiveFeeBps = (takerFeeRate + makerFeeRate) * 10000.0;
     // On Testnet: clamp half-spread cost so artificial testnet illiquidity does not block test execution
@@ -2645,10 +2665,6 @@ export class StrategyEngine {
     const safeVpin = Number.isFinite(vpin) ? Math.max(0.0, Math.min(1.0, vpin)) : 0.50;
     const safeVol = Number.isFinite(volEstimate) && volEstimate > 0 ? volEstimate : 0.005;
     const slippageBps = Math.max(0.50, safeVpin * (safeVol * 10000.0) * 0.15);
-
-    // Minimum required net margin (e.g., 4 bps net profit target)
-    const minNetAlpha = this.hedgeLedger.getSizingCalculator().getMinNetAlpha();
-    const minMarginBps = (Number.isFinite(minNetAlpha) && minNetAlpha > 0 ? minNetAlpha : 0.0004) * 10000.0;
 
     return effectiveFeeBps + halfSpreadCostBps + slippageBps + minMarginBps;
   }
@@ -3289,17 +3305,19 @@ export class StrategyEngine {
       const hawkesMultiplier = 1.0 + 0.15 * Math.log(1.0 + safeHawkes);
 
       // SOTA Alpha-to-Friction Barrier Model (Phase 1 Dynamic Hurdle Gating)
-      // E[alpha] = |aiDirection| * volEstimate * sqrt(horizon_s) * hawkesMultiplier
-      // Hurdle (bps) = EffectiveFee + HalfSpread + Slippage(VPIN, Vol) + MinNetMargin
-      const horizonSec = 5.0;
-      const expectedAlpha = aiDirectionMag * volEstimate * Math.sqrt(horizonSec / 60.0) * hawkesMultiplier;
+      // E[alpha] = |aiDirection| * volEstimate * sqrt(horizon_s / 60.0) * hawkesMultiplier
+      // Hurdle (bps) = EffectiveFee + MinNetMargin (Maker execution)
+      const horizonSec = 60.0; // 60-second trade holding horizon matching 60s Garman-Klass volatility baseline
+      const safeVolEstimate = Math.max(0.0020, volEstimate);
+      const expectedAlpha = aiDirectionMag * safeVolEstimate * Math.sqrt(horizonSec / 60.0) * hawkesMultiplier;
       const expectedAlphaBps = expectedAlpha * 10000.0;
       const frictionHurdleBps = this.computeFrictionHurdleBps(
         makerFeeRate,
         takerFeeRate,
         halfSpreadBps,
         hazardMetrics.vpin,
-        volEstimate
+        volEstimate,
+        true // POST_ONLY Maker limit order
       );
       const expectedNetAlpha = (expectedAlphaBps - frictionHurdleBps) / 10000.0;
       const isAlphaFrictionPassed = expectedAlphaBps >= frictionHurdleBps;
@@ -3421,8 +3439,22 @@ export class StrategyEngine {
                     + 0.30 * sigmoid(-obiVelocity * 5.0)
                     + 0.20 * sigmoid(-obiAccel * 2.0);
 
-      const isLeadingConfirmationBuy = lciBuy >= 0.55;
-      const isLeadingConfirmationSell = lciSell >= 0.55;
+      // Dynamic Leading Confirmation Index (LCI) Threshold
+      // In low-volatility / consolidation periods, microprice dev and OBI velocity are muted (~0.50 baseline).
+      // Relax threshold from 0.55 down to 0.505 in low-volatility regimes (volEstimate < 0.0020),
+      // transitioning smoothly up to 0.530 during volatility expansions.
+      let lciThreshold = 0.530;
+      if (volEstimate < 0.0020) {
+        lciThreshold = 0.505; // Low-volatility / consolidation regime
+      } else if (volEstimate < 0.0035) {
+        const t = (volEstimate - 0.0020) / (0.0035 - 0.0020);
+        lciThreshold = 0.505 + t * (0.530 - 0.505);
+      } else {
+        lciThreshold = 0.530; // High-volatility regime
+      }
+
+      const isLeadingConfirmationBuy = lciBuy >= lciThreshold;
+      const isLeadingConfirmationSell = lciSell >= lciThreshold;
 
       let isBuySignal = false;
       let isSellSignal = false;
@@ -3834,7 +3866,7 @@ export class StrategyEngine {
       if (!this.isFundingRatePermitted(targetPosSide === "LONG" ? "LONG" : "SHORT")) {
         const liveFundingRate = this.client.getFundingRate(this.assetIndex);
         console.warn(
-          `[FUNDING_FILTER_BLOCKED] [${this.config.symbol}] ${targetPosSide} trade entry intercepted & blocked! Live funding rate: ${liveFundingRate} (${(liveFundingRate * 10000).toFixed(2)} bps). ${targetPosSide === "LONG" ? "LONG pays SHORT" : "SHORT pays LONG"}.`
+          `[FUNDING_FILTER_BLOCKED] [${this.config.symbol}] ${targetPosSide} trade entry intercepted & blocked! Live funding rate: ${liveFundingRate} (${(liveFundingRate * 10000).toFixed(2)} bps) exceeds threshold (${(this.maxPermittedFundingRate * 10000).toFixed(2)} bps). ${targetPosSide === "LONG" ? "LONG pays SHORT" : "SHORT pays LONG"}.`
         );
         this.staticResult.sequenceNum = seq;
         this.staticResult.signalType = "NONE";
@@ -4210,25 +4242,35 @@ export class StrategyEngine {
     return this.hazardEngine;
   }
 
+  public getMaxPermittedFundingRate(): number {
+    return this.maxPermittedFundingRate;
+  }
+
+  public setMaxPermittedFundingRate(rate: number): void {
+    this.maxPermittedFundingRate = rate;
+  }
+
   /**
    * Phase 5 HFT Overhaul: Perpetual Funding Rate Filter
-   * Evaluates whether entering a position of the given side requires paying funding fees.
-   * Core Math Logic (Binance Standard):
-   * - If FundingRate > 0: LONG pays SHORT -> strictly block LONG entries (allow SHORT).
-   * - If FundingRate < 0: SHORT pays LONG -> strictly block SHORT entries (allow LONG).
-   * - If FundingRate == 0: Neutral -> allow both.
+   * Evaluates whether entering a position of the given side incurs dangerous funding fee drag.
+   * Tolerates normal baseline rates (e.g. <= 0.01% / 0.0001), blocking ONLY if the funding rate
+   * exceeds MAX_PERMITTED_FUNDING_RATE in the adverse direction:
+   * - If FundingRate > +threshold: LONG pays SHORT -> block LONG entries.
+   * - If FundingRate < -threshold: SHORT pays LONG -> block SHORT entries.
+   * - Otherwise: Within permitted funding tolerance or receiving funding -> allow entry.
    * Zero-GC compliant: pure scalar boolean return, zero heap allocations.
    */
   public isFundingRatePermitted(side: "LONG" | "SHORT"): boolean {
     const rawRate = this.client.getFundingRate(this.assetIndex);
     const fundingRate = Number.isFinite(rawRate) ? rawRate : 0.0;
-    if (side === "LONG" && fundingRate > 0) {
-      return false; // LONG pays SHORT -> strictly block LONG entries
+    const threshold = this.maxPermittedFundingRate;
+    if (side === "LONG" && fundingRate > threshold) {
+      return false; // LONG pays SHORT exceeding tolerance -> block LONG entries
     }
-    if (side === "SHORT" && fundingRate < 0) {
-      return false; // SHORT pays LONG -> strictly block SHORT entries
+    if (side === "SHORT" && fundingRate < -threshold) {
+      return false; // SHORT pays LONG exceeding tolerance -> block SHORT entries
     }
-    return true; // Neutral (fundingRate == 0) or receiving funding -> allow entry
+    return true; // Within permitted tolerance or receiving funding -> allow entry
   }
 
   public getFundingRate(): number {

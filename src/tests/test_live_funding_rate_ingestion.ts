@@ -70,15 +70,16 @@ async function runVerificationSuite(): Promise<void> {
   assert(Math.abs(engine.getFundingRate() - syncedRate) < 1e-12, "engine.getFundingRate() reflects freshly synced rate");
 
   // Verify mathematical filtering logic on live rate
-  if (syncedRate > 0) {
-    assert(engine.isFundingRatePermitted("LONG") === false, "Live Positive Rate: LONG entry strictly BLOCKED");
-    assert(engine.isFundingRatePermitted("SHORT") === true, "Live Positive Rate: SHORT entry strictly ALLOWED");
-  } else if (syncedRate < 0) {
-    assert(engine.isFundingRatePermitted("LONG") === true, "Live Negative Rate: LONG entry strictly ALLOWED");
-    assert(engine.isFundingRatePermitted("SHORT") === false, "Live Negative Rate: SHORT entry strictly BLOCKED");
+  const maxFunding = engine.getMaxPermittedFundingRate();
+  if (syncedRate > maxFunding) {
+    assert(engine.isFundingRatePermitted("LONG") === false, "Live High Positive Rate: LONG entry strictly BLOCKED");
+    assert(engine.isFundingRatePermitted("SHORT") === true, "Live High Positive Rate: SHORT entry strictly ALLOWED");
+  } else if (syncedRate < -maxFunding) {
+    assert(engine.isFundingRatePermitted("LONG") === true, "Live High Negative Rate: LONG entry strictly ALLOWED");
+    assert(engine.isFundingRatePermitted("SHORT") === false, "Live High Negative Rate: SHORT entry strictly BLOCKED");
   } else {
-    assert(engine.isFundingRatePermitted("LONG") === true, "Neutral Rate: LONG entry allowed");
-    assert(engine.isFundingRatePermitted("SHORT") === true, "Neutral Rate: SHORT entry allowed");
+    assert(engine.isFundingRatePermitted("LONG") === true, "Within-Tolerance Rate: LONG entry allowed");
+    assert(engine.isFundingRatePermitted("SHORT") === true, "Within-Tolerance Rate: SHORT entry allowed");
   }
 
   // STAGE 4: Real-Time Stream Hook & Atomic Update Verification

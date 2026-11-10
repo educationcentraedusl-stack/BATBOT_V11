@@ -1031,9 +1031,9 @@ impl AIEngine {
             // DEF-R1: Balanced microstructure logit modulation & SINGLE outer tanh WITHOUT temperature divisor
             let composite_logit = scaled_dir + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
 
-            // DEF-R2: Signed Directional Concordance Index (SDCI) — Continuous Sigmoidal Soft-Gating
+            // DEF-R2: Signed Directional Concordance Index (SDCI) — Relaxed Continuous Sigmoidal Soft-Gating
             let snr_score = signed_z.compute_sdci(composite_logit);
-            let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
+            let sdci_gate = 1.0 / (1.0 + (-6.0 * (snr_score - 0.35)).exp());
             let dir = composite_logit.tanh() * sdci_gate;
 
             // QA-4204 FIX: Platt-scaled meta-logit confidence replaces self-referential percentile rank.
@@ -1066,9 +1066,9 @@ impl AIEngine {
             let scale_dir = self.calibration_params.logit_scale.clamp(-2.0, 5.0).exp();
             let scaled_dir = raw_direction * scale_dir;
 
-            // CfC path: SDCI continuous sigmoidal soft-gate
+            // CfC path: SDCI relaxed continuous sigmoidal soft-gate
             let snr_score = signed_z.compute_sdci(scaled_dir);
-            let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
+            let sdci_gate = 1.0 / (1.0 + (-6.0 * (snr_score - 0.35)).exp());
             let dir = scaled_dir.tanh() * sdci_gate;
 
             // CfC model has no native meta-logit head — use neutral confidence 0.50
@@ -1221,9 +1221,9 @@ impl AIEngine {
             let obi = *features.get(8).ok_or_else(|| Error::Msg("Missing feature[8] for obi".to_string()))?;
             // DEF-4305: Use genuine OFI and Hawkes asymmetry, never aliasing spatial index 17 or 27
             let composite_logit = scaled_dir + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
-            // SDCI continuous sigmoidal soft-gate
+            // SDCI relaxed continuous sigmoidal soft-gate
             let snr_score = signed_z.compute_sdci(composite_logit);
-            let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
+            let sdci_gate = 1.0 / (1.0 + (-6.0 * (snr_score - 0.35)).exp());
             let dir = composite_logit.tanh() * sdci_gate;
             let conf = compute_platt_confidence(
                 meta_logit,
@@ -1239,9 +1239,9 @@ impl AIEngine {
             let raw_scalar = flat.get(0)?.to_scalar::<f32>()?;
             let scale_dir = self.calibration_params.logit_scale.clamp(-2.0, 5.0).exp();
             let scaled_dir = (raw_scalar as f64) * scale_dir;
-            // CfC path: SDCI continuous sigmoidal soft-gate
+            // CfC path: SDCI relaxed continuous sigmoidal soft-gate
             let snr_score = signed_z.compute_sdci(scaled_dir);
-            let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
+            let sdci_gate = 1.0 / (1.0 + (-6.0 * (snr_score - 0.35)).exp());
             let raw_dir = scaled_dir.tanh() * sdci_gate;
             // CfC model has no native meta-logit head — use neutral confidence 0.50
             let conf = 0.50;
@@ -1298,9 +1298,9 @@ impl AIEngine {
             let hawkes_asym = sab.load_f64_asset(0, 149);
             let composite_logit = scaled_dir + 0.15 * obi + 0.10 * ofi + 0.05 * hawkes_asym;
 
-            // SDCI continuous sigmoidal soft-gate
+            // SDCI relaxed continuous sigmoidal soft-gate
             let snr_score = signed_z.compute_sdci(composite_logit);
-            let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
+            let sdci_gate = 1.0 / (1.0 + (-6.0 * (snr_score - 0.35)).exp());
             let dir = composite_logit.tanh() * sdci_gate;
 
             let conf = compute_platt_confidence(
@@ -1337,9 +1337,9 @@ impl AIEngine {
             let horiz = if flat_out.elem_count() > 2 { flat_out.get(2)?.to_scalar::<f32>()? as f64 } else { 100.0 };
             let scale_dir = self.calibration_params.logit_scale.clamp(-2.0, 5.0).exp();
             let scaled_dir = raw_dir * scale_dir;
-            // CfC path: SDCI continuous sigmoidal soft-gate
+            // CfC path: SDCI relaxed continuous sigmoidal soft-gate
             let snr_score = signed_z.compute_sdci(scaled_dir);
-            let sdci_gate = 1.0 / (1.0 + (-12.0 * (snr_score - 0.45)).exp());
+            let sdci_gate = 1.0 / (1.0 + (-6.0 * (snr_score - 0.35)).exp());
             let dir = scaled_dir.tanh() * sdci_gate;
             // CfC model has no native meta-logit head — neutral confidence 0.50
             let conf = 0.50;
@@ -1840,11 +1840,11 @@ mod tests {
 
     #[test]
     fn test_sdci_continuous_sigmoidal_gate() {
-        let gate = |snr: f64| 1.0 / (1.0 + (-12.0 * (snr - 0.45)).exp());
-        assert!((gate(0.45) - 0.50).abs() < 1e-6);
-        assert!(gate(0.10) < 0.02);
-        assert!(gate(0.50) > 0.60 && gate(0.50) < 0.70);
-        assert!(gate(0.80) > 0.95);
+        let gate = |snr: f64| 1.0 / (1.0 + (-6.0 * (snr - 0.35)).exp());
+        assert!((gate(0.35) - 0.50).abs() < 1e-6);
+        assert!(gate(0.10) < 0.25);
+        assert!(gate(0.50) > 0.65 && gate(0.50) < 0.75);
+        assert!(gate(0.80) > 0.90);
     }
 
     #[test]

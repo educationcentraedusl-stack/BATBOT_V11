@@ -336,13 +336,16 @@ async function runPhase5MasterSimulationSuite() {
     // STAGE 5: DYNAMIC ALPHA HURDLE & ASYMMETRIC PAYOFF RATIO BARRIER
     // ---------------------------------------------------------------------------
     console.log("--- STAGE 5: Dynamic Alpha Hurdle & Asymmetric Payoff Ratio Barrier ---");
-    // 5A: Dynamic Hurdle Calculation
-    // makerFee: 0.0002 (2 bps), takerFee: 0.0005 (5 bps) -> 7 bps round-trip
-    // halfSpread: 0.0001 (1 bps) -> 1 bps cost
-    // vpin: 0.20, volEstimate: 0.0030 -> adverse selection slippage
-    const hurdleBps = engine.computeFrictionHurdleBps(0.0002, 0.0005, 0.0001, 0.20, 0.0030);
-    console.log(`[Stage 5A] Calculated Dynamic Friction Hurdle: ${hurdleBps.toFixed(2)} bps`);
-    (0, node_assert_1.default)(hurdleBps >= 12.0, `Dynamic hurdle (${hurdleBps.toFixed(2)} bps) must exceed 12.0 bps floor`);
+    // 5A: Dynamic Hurdle Calculation (Taker & Maker Verification)
+    // Taker mode: makerFee: 0.0002 (2 bps), takerFee: 0.0005 (5 bps) -> 7 bps round-trip + 1 bps spread + slippage
+    const takerHurdleBps = engine.computeFrictionHurdleBps(0.0002, 0.0005, 0.0001, 0.20, 0.0030, false);
+    console.log(`[Stage 5A] Calculated Dynamic Taker Friction Hurdle: ${takerHurdleBps.toFixed(2)} bps`);
+    (0, node_assert_1.default)(takerHurdleBps >= 12.0, `Dynamic taker hurdle (${takerHurdleBps.toFixed(2)} bps) must exceed 12.0 bps floor`);
+    // Maker mode: POST_ONLY Maker limit order -> primarily makerFee + MIN_NET_ALPHA (~3.5 - 5.0 bps)
+    const makerHurdleBps = engine.computeFrictionHurdleBps(0.0002, 0.0005, 0.0001, 0.20, 0.0030, true);
+    console.log(`[Stage 5A] Calculated Dynamic Maker Friction Hurdle: ${makerHurdleBps.toFixed(2)} bps`);
+    (0, node_assert_1.default)(makerHurdleBps >= 3.5 && makerHurdleBps <= 8.0, `Dynamic maker hurdle (${makerHurdleBps.toFixed(2)} bps) must align with 3.5-8.0 bps target`);
+    const hurdleBps = takerHurdleBps;
     // 5B: Hurdle Rejection vs Acceptance
     const subHurdleAlphaBps = 8.0; // 8 bps < hurdleBps (rejected)
     const isSubHurdlePassed = subHurdleAlphaBps >= hurdleBps;

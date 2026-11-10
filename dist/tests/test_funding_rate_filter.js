@@ -101,14 +101,14 @@ const engine = new engine_1.StrategyEngine(client, riskGuard, executionClient, {
     assetIndex: 0,
     cooldownMs: 0,
 });
-// Case A: Rate > 0 (+0.0001 = 1 bp / 8h) -> Long pays Short
-client.setFundingRate(0.0001, 0);
-assert(engine.isFundingRatePermitted("LONG") === false, "Rate > 0: LONG entry strictly BLOCKED (Long pays Short)");
-assert(engine.isFundingRatePermitted("SHORT") === true, "Rate > 0: SHORT entry strictly ALLOWED (Short receives from Long)");
-// Case B: Rate < 0 (-0.0001 = -1 bp / 8h) -> Short pays Long
-client.setFundingRate(-0.0001, 0);
-assert(engine.isFundingRatePermitted("LONG") === true, "Rate < 0: LONG entry strictly ALLOWED (Long receives from Short)");
-assert(engine.isFundingRatePermitted("SHORT") === false, "Rate < 0: SHORT entry strictly BLOCKED (Short pays Long)");
+// Case A: Rate > MAX_PERMITTED_FUNDING_RATE (+0.0002 > 0.0001) -> Long pays Short exceeding tolerance
+client.setFundingRate(0.0002, 0);
+assert(engine.isFundingRatePermitted("LONG") === false, "Rate > tolerance: LONG entry strictly BLOCKED (Long pays Short)");
+assert(engine.isFundingRatePermitted("SHORT") === true, "Rate > tolerance: SHORT entry strictly ALLOWED (Short receives from Long)");
+// Case B: Rate < -MAX_PERMITTED_FUNDING_RATE (-0.0002 < -0.0001) -> Short pays Long exceeding tolerance
+client.setFundingRate(-0.0002, 0);
+assert(engine.isFundingRatePermitted("LONG") === true, "Rate < -tolerance: LONG entry strictly ALLOWED (Long receives from Short)");
+assert(engine.isFundingRatePermitted("SHORT") === false, "Rate < -tolerance: SHORT entry strictly BLOCKED (Short pays Long)");
 // Case C: Rate == 0.0 (Neutral) -> Neither pays
 client.setFundingRate(0.0, 0);
 assert(engine.isFundingRatePermitted("LONG") === true, "Rate == 0: LONG entry strictly ALLOWED (Neutral)");
@@ -121,18 +121,26 @@ assert(engine.isFundingRatePermitted("SHORT") === true, "Extreme Rate +50 bps: S
 client.setFundingRate(-0.0050, 0);
 assert(engine.isFundingRatePermitted("LONG") === true, "Extreme Rate -50 bps: LONG strictly ALLOWED");
 assert(engine.isFundingRatePermitted("SHORT") === false, "Extreme Rate -50 bps: SHORT strictly BLOCKED");
-// Case F: Microscopic positive rate (+1e-8)
+// Case F: Normal baseline positive rate within tolerance (+0.00008 <= 0.0001) -> Tolerated, not blocked!
+client.setFundingRate(0.00008, 0);
+assert(engine.isFundingRatePermitted("LONG") === true, "Normal positive rate within tolerance: LONG entry ALLOWED");
+assert(engine.isFundingRatePermitted("SHORT") === true, "Normal positive rate within tolerance: SHORT entry ALLOWED");
+// Case G: Normal baseline negative rate within tolerance (-0.00008 >= -0.0001) -> Tolerated, not blocked!
+client.setFundingRate(-0.00008, 0);
+assert(engine.isFundingRatePermitted("LONG") === true, "Normal negative rate within tolerance: LONG entry ALLOWED");
+assert(engine.isFundingRatePermitted("SHORT") === true, "Normal negative rate within tolerance: SHORT entry ALLOWED");
+// Case H: Microscopic positive rate (+1e-8 <= 0.0001)
 client.setFundingRate(1e-8, 0);
-assert(engine.isFundingRatePermitted("LONG") === false, "Microscopic positive (+1e-8): LONG strictly BLOCKED");
-assert(engine.isFundingRatePermitted("SHORT") === true, "Microscopic positive (+1e-8): SHORT strictly ALLOWED");
-// Case G: Microscopic negative rate (-1e-8)
+assert(engine.isFundingRatePermitted("LONG") === true, "Microscopic positive (+1e-8) within tolerance: LONG entry ALLOWED");
+assert(engine.isFundingRatePermitted("SHORT") === true, "Microscopic positive (+1e-8) within tolerance: SHORT entry ALLOWED");
+// Case I: Microscopic negative rate (-1e-8 >= -0.0001)
 client.setFundingRate(-1e-8, 0);
-assert(engine.isFundingRatePermitted("LONG") === true, "Microscopic negative (-1e-8): LONG strictly ALLOWED");
-assert(engine.isFundingRatePermitted("SHORT") === false, "Microscopic negative (-1e-8): SHORT strictly BLOCKED");
-// Case H: Engine public getter parity
+assert(engine.isFundingRatePermitted("LONG") === true, "Microscopic negative (-1e-8) within tolerance: LONG entry ALLOWED");
+assert(engine.isFundingRatePermitted("SHORT") === true, "Microscopic negative (-1e-8) within tolerance: SHORT entry ALLOWED");
+// Case J: Engine public getter parity
 client.setFundingRate(0.00025, 0);
 assert(engine.getFundingRate() === 0.00025, "engine.getFundingRate() accurately reflects SAB Slot 168");
-// Case I: Safe fallback for uninitialized / non-finite values (defensive runtime robustness)
+// Case K: Safe fallback for uninitialized / non-finite values (defensive runtime robustness)
 client.setFundingRate(NaN, 0);
 assert(engine.isFundingRatePermitted("LONG") === true, "NaN funding rate safely falls back to neutral (LONG allowed, no crash)");
 assert(engine.isFundingRatePermitted("SHORT") === true, "NaN funding rate safely falls back to neutral (SHORT allowed, no crash)");
@@ -259,10 +267,10 @@ function resetTestState() {
 }
 async function runStage3AndBeyond() {
     // -----------------------------------------------------------------------------------------
-    // Test 3A: Bullish Signal + Positive Funding Rate (+0.0001) -> LONG MUST BE INTERCEPTED
+    // Test 3A: Bullish Signal + High Adverse Funding Rate (+0.0002 > threshold) -> LONG MUST BE INTERCEPTED
     // -----------------------------------------------------------------------------------------
     resetTestState();
-    client.setFundingRate(0.0001, 0); // +1 bp funding rate (Longs pay Shorts)
+    client.setFundingRate(0.0002, 0); // +2 bps funding rate > MAX_PERMITTED_FUNDING_RATE (Longs pay Shorts)
     await triggerBullishBreakout(11n);
     const tickRes1 = engine.evaluateTick();
     assert(tickRes1.signalType === "NONE", "Test 3A: evaluateTick returned signalType 'NONE' for blocked LONG entry");
@@ -288,10 +296,10 @@ async function runStage3AndBeyond() {
         assert(dispatchedOrders[0].positionSide === "LONG", "Test 3B: Dispatched order positionSide is 'LONG'");
     }
     // -----------------------------------------------------------------------------------------
-    // Test 3C: Bullish Signal + Negative Funding Rate (-0.0001) -> LONG MUST BE PERMITTED
+    // Test 3C: Bullish Signal + Negative Funding Rate (-0.0002) -> LONG MUST BE PERMITTED
     // -----------------------------------------------------------------------------------------
     resetTestState();
-    client.setFundingRate(-0.0001, 0); // Negative funding (Shorts pay Longs -> Long receives)
+    client.setFundingRate(-0.0002, 0); // Negative funding (Shorts pay Longs -> Long receives)
     await triggerBullishBreakout(13n);
     const tickRes3 = engine.evaluateTick();
     if (tickRes3.executionPromise) {
@@ -303,10 +311,10 @@ async function runStage3AndBeyond() {
         assert(dispatchedOrders[0].positionSide === "LONG", "Test 3C: Order positionSide is 'LONG'");
     }
     // -----------------------------------------------------------------------------------------
-    // Test 3D: Bearish Signal + Negative Funding Rate (-0.0001) -> SHORT MUST BE INTERCEPTED
+    // Test 3D: Bearish Signal + High Adverse Funding Rate (-0.0002 < -threshold) -> SHORT MUST BE INTERCEPTED
     // -----------------------------------------------------------------------------------------
     resetTestState();
-    client.setFundingRate(-0.0001, 0); // -1 bp funding rate (Shorts pay Longs)
+    client.setFundingRate(-0.0002, 0); // -2 bps funding rate < -MAX_PERMITTED_FUNDING_RATE (Shorts pay Longs)
     await triggerBearishBreakdown(21n);
     const tickRes4 = engine.evaluateTick();
     assert(tickRes4.signalType === "NONE", "Test 3D: evaluateTick returned signalType 'NONE' for blocked SHORT entry");
@@ -314,10 +322,10 @@ async function runStage3AndBeyond() {
     assert(dispatchedOrders.length === 0, "Test 3D (CRITICAL): Blocked SHORT trade NEVER reached BinanceExecutionClient");
     assert(engine.getHedgeLedger().getShortSlots()[0].isOccupied === false, "Test 3D: Short slot was NOT occupied");
     // -----------------------------------------------------------------------------------------
-    // Test 3E: Bearish Signal + Positive Funding Rate (+0.0001) -> SHORT MUST BE PERMITTED
+    // Test 3E: Bearish Signal + Positive Funding Rate (+0.0002) -> SHORT MUST BE PERMITTED
     // -----------------------------------------------------------------------------------------
     resetTestState();
-    client.setFundingRate(0.0001, 0); // Positive funding (Longs pay Shorts -> Short receives)
+    client.setFundingRate(0.0002, 0); // Positive funding (Longs pay Shorts -> Short receives)
     await triggerBearishBreakdown(22n);
     const tickRes5 = engine.evaluateTick();
     if (tickRes5.executionPromise) {
