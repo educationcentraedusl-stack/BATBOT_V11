@@ -79,8 +79,9 @@ export const ExecutionView: React.FC = () => {
 
         try {
           uplotInstance.current = new uPlot(opts, [initialTs, initialPnl], container);
-        } catch {
-          // Defensive catch for zero-dimension instantiation
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`[ExecutionView] uPlot initialization deferred: ${msg}`);
         }
       } else {
         uplotInstance.current.setSize({ width, height });
@@ -190,7 +191,7 @@ export const ExecutionView: React.FC = () => {
         <h3 className="text-xs font-bold text-yellow-500 uppercase tracking-wider">
           PnL EQUITY CURVE STREAM (CANVAS 2D)
         </h3>
-        <div ref={chartRef} className="w-full h-36 min-h-[140px] flex items-center justify-center"></div>
+        <div ref={chartRef} className="uplot-financial w-full h-36 min-h-[140px] flex items-center justify-center"></div>
       </div>
 
       {/* Virtualized Order Execution Log with react-virtuoso */}

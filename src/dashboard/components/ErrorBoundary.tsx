@@ -44,7 +44,9 @@ export class ErrorBoundary extends Component<Props, State> {
             {this.state.error?.message || "Render failure intercepted"}
           </div>
           <button
-            onClick={() => this.setState({ hasError: false, error: null })}
+            onClick={() => {
+              this.setState({ hasError: false, error: null });
+            }}
             className="px-3 py-1.5 bg-yellow-600 hover:bg-yellow-500 text-slate-950 font-bold text-xs rounded uppercase tracking-wider transition"
           >
             RESTART PANEL

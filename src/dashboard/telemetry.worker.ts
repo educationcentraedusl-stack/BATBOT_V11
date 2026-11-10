@@ -40,34 +40,54 @@ export interface WorkerFrameData {
   };
 }
 
+export type ConnectionStatus = "DISCONNECTED" | "CONNECTING" | "CONNECTED" | "ERROR";
+
+export type TelemetryWorkerInboundMessage =
+  | { type: "CONNECT"; url?: string }
+  | { type: "SEND_COMMAND"; command?: ControlCommand }
+  | { type: "DISCONNECT" };
+
+export type TelemetryWorkerOutboundMessage =
+  | { type: "STATUS"; status: ConnectionStatus }
+  | { type: "FRAME_BATCH"; frame: WorkerFrameData; recentCount: number };
+
+interface TelemetryWorkerScope {
+  postMessage: (message: TelemetryWorkerOutboundMessage) => void;
+  onmessage: ((e: MessageEvent<TelemetryWorkerInboundMessage>) => void) | null;
+}
+
 let socket: WebSocket | null = null;
 let latestFrame: WorkerFrameData | null = null;
 let frameQueue: WorkerFrameData[] = [];
-let batchInterval: any = null;
+let batchInterval: ReturnType<typeof setInterval> | null = null;
 
-ctx().onmessage = (e: MessageEvent) => {
-  const { type, url, command } = e.data;
+function ctx(): TelemetryWorkerScope {
+  return globalThis;
+}
 
-  if (type === "CONNECT") {
-    connectWebSocket(url || "ws://localhost:8080");
-  } else if (type === "SEND_COMMAND") {
-    if (socket && socket.readyState === WebSocket.OPEN && command) {
-      // Direct Protobuf binary command encoding
-      const binaryCmd = encodeControlCommand(command as ControlCommand);
+ctx().onmessage = (e: MessageEvent<TelemetryWorkerInboundMessage>) => {
+  const msg = e.data;
+
+  if (msg.type === "CONNECT") {
+    connectWebSocket(msg.url ?? "ws://localhost:8080");
+  } else if (msg.type === "SEND_COMMAND") {
+    if (socket && socket.readyState === WebSocket.OPEN && msg.command) {
+      const binaryCmd = encodeControlCommand(msg.command);
       socket.send(binaryCmd);
     }
-  } else if (type === "DISCONNECT") {
+  } else {
     if (socket) socket.close();
   }
 };
 
-function ctx(): Worker {
-  return self as any;
-}
-
-function connectWebSocket(url: string) {
+function connectWebSocket(url: string): void {
   if (socket) {
-    try { socket.close(); } catch {}
+    try {
+      socket.close();
+    } catch (closeErr: unknown) {
+      const msg = closeErr instanceof Error ? closeErr.message : String(closeErr);
+      console.warn(`[telemetry.worker] Socket close warning during reconnect: ${msg}`);
+    }
   }
 
   socket = new WebSocket(url);
@@ -77,15 +97,14 @@ function connectWebSocket(url: string) {
     ctx().postMessage({ type: "STATUS", status: "CONNECTED" });
   };
 
-  socket.onmessage = (event: MessageEvent) => {
+  socket.onmessage = (event: MessageEvent<unknown>) => {
     try {
       if (event.data instanceof ArrayBuffer) {
-        // Strict binary Protobuf telemetry frame deserialization
         const decodedFrame = decodeTelemetryFrame(new Uint8Array(event.data));
         const workerFrame: WorkerFrameData = {
           ...decodedFrame,
           sequenceNum: decodedFrame.sequenceNum.toString(),
-          aiInferenceLatencyNs: (decodedFrame.aiInferenceLatencyNs || 0n).toString(),
+          aiInferenceLatencyNs: (decodedFrame.aiInferenceLatencyNs ?? 0n).toString(),
           aiDirection: decodedFrame.aiDirection ?? 0,
           aiConfidence: decodedFrame.aiConfidence ?? 0,
           rollingIc: decodedFrame.rollingIc ?? 0,
@@ -101,23 +120,22 @@ function connectWebSocket(url: string) {
           frameQueue.shift();
         }
       }
-    } catch (err) {
-      // Ignore partial/corrupted frames
+    } catch (decodeErr: unknown) {
+      const errMsg = decodeErr instanceof Error ? decodeErr.message : String(decodeErr);
+      console.warn(`[telemetry.worker] Frame decode warning: ${errMsg}`);
     }
   };
 
   socket.onclose = () => {
     ctx().postMessage({ type: "STATUS", status: "DISCONNECTED" });
-    // Auto reconnect after 2 seconds
-    setTimeout(() => connectWebSocket(url), 2000);
+    setTimeout(() => { connectWebSocket(url); }, 2000);
   };
 
   socket.onerror = () => {
     ctx().postMessage({ type: "STATUS", status: "ERROR" });
   };
 
-  // Start 60Hz (16.6ms) batch flush to main thread
-  if (batchInterval) clearInterval(batchInterval);
+  if (batchInterval !== null) clearInterval(batchInterval);
   batchInterval = setInterval(() => {
     if (latestFrame) {
       ctx().postMessage({
@@ -129,4 +147,3 @@ function connectWebSocket(url: string) {
     }
   }, 16);
 }
-

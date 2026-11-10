@@ -63,7 +63,7 @@ export function useTelemetryRefMutator(refs: TelemetryRefMap): void {
         }
 
         // 4. AI Direction
-        const direction = frame.aiDirection ?? 0;
+        const direction = frame.aiDirection;
         if (refs.directionRef?.current) {
           const formattedDir = direction >= 0 ? `+${direction.toFixed(4)}` : direction.toFixed(4);
           refs.directionRef.current.textContent = formattedDir;
@@ -85,7 +85,7 @@ export function useTelemetryRefMutator(refs: TelemetryRefMap): void {
         }
 
         // 6. AI Neural Confidence & Inference Latency
-        const confidence = (frame.aiConfidence ?? 0) * 100;
+        const confidence = frame.aiConfidence * 100;
         if (refs.confidenceRef?.current) {
           refs.confidenceRef.current.textContent = `${confidence.toFixed(1)}%`;
         }
@@ -96,71 +96,71 @@ export function useTelemetryRefMutator(refs: TelemetryRefMap): void {
         }
 
         // 7. Gate 1–4 Validation Radar
-        const rollingIc = frame.rollingIc ?? 0;
+        const rollingIc = frame.rollingIc;
         if (refs.gate1Ref?.current) {
           const pass = rollingIc >= 0.03;
           refs.gate1Ref.current.textContent = `${rollingIc.toFixed(4)} [${pass ? "PASSED" : "WARN"}]`;
           refs.gate1Ref.current.className = `font-bold ${pass ? "text-emerald-400" : "text-yellow-400"}`;
         }
 
-        const latencyPenalty = frame.latencyPenalty ?? 1.0;
+        const latencyPenalty = frame.latencyPenalty;
         if (refs.gate2Ref?.current) {
           const pass = latencyPenalty > 0 && latencyPenalty <= 1.05;
           refs.gate2Ref.current.textContent = `${latencyPenalty.toFixed(2)}x [${pass ? "OPTIMAL" : "DEGRADED"}]`;
           refs.gate2Ref.current.className = `font-bold ${pass ? "text-emerald-400" : "text-amber-400"}`;
         }
 
-        const riskStatus = frame.riskStatus ?? "STANDBY";
-        const drawPct = frame.usdtBalance > 0 ? (Math.abs(frame.stats?.unrealizedPnl ?? 0) / frame.usdtBalance) * 100 : 0;
+        const riskStatus = frame.riskStatus;
+        const drawPct = frame.usdtBalance > 0 ? (Math.abs(frame.stats.unrealizedPnl) / frame.usdtBalance) * 100 : 0;
         if (refs.gate3Ref?.current) {
           const pass = riskStatus === "PASSED";
           refs.gate3Ref.current.textContent = `${drawPct.toFixed(2)}% / VaR [${riskStatus}]`;
           refs.gate3Ref.current.className = `font-bold ${pass ? "text-emerald-400" : "text-rose-400"}`;
         }
 
-        const slippageTicks = frame.slippageTicks ?? 2;
+        const slippageTicks = frame.slippageTicks;
         if (refs.gate4Ref?.current) {
-          refs.gate4Ref.current.textContent = `+${slippageTicks} TICKS [OK]`;
+          refs.gate4Ref.current.textContent = `+${String(slippageTicks)} TICKS [OK]`;
         }
 
         // 8. Realized & Unrealized PnL, Win Rate, Total Trades
-        const realizedPnl = frame.stats?.realizedPnl ?? 0;
+        const realizedPnl = frame.stats.realizedPnl;
         if (refs.realizedPnlRef?.current) {
           refs.realizedPnlRef.current.textContent = `$${realizedPnl.toFixed(2)}`;
           refs.realizedPnlRef.current.className = `text-base font-bold ${realizedPnl >= 0 ? "text-emerald-400" : "text-rose-400"}`;
         }
 
-        const unrealizedPnl = frame.stats?.unrealizedPnl ?? 0;
+        const unrealizedPnl = frame.stats.unrealizedPnl;
         if (refs.unrealizedPnlRef?.current) {
           refs.unrealizedPnlRef.current.textContent = `$${unrealizedPnl.toFixed(2)}`;
           refs.unrealizedPnlRef.current.className = `text-base font-bold ${unrealizedPnl >= 0 ? "text-emerald-400" : "text-rose-400"}`;
         }
 
-        const winRate = frame.stats?.winRatePercent ?? 0;
+        const winRate = frame.stats.winRatePercent;
         if (refs.winRateRef?.current) {
           refs.winRateRef.current.textContent = `${winRate.toFixed(1)}%`;
         }
 
-        const totalTrades = frame.stats?.totalTrades ?? 0;
+        const totalTrades = frame.stats.totalTrades;
         if (refs.totalTradesRef?.current) {
-          refs.totalTradesRef.current.textContent = `${totalTrades}`;
+          refs.totalTradesRef.current.textContent = String(totalTrades);
         }
 
         // 9. Order Book Imbalance (OBI) & CVD
-        const obi = frame.obi ?? 0;
+        const obi = frame.obi;
         if (refs.obiValRef?.current) {
           refs.obiValRef.current.textContent = obi >= 0 ? `+${obi.toFixed(4)}` : obi.toFixed(4);
         }
 
         const obiNorm = ((Math.max(-1, Math.min(1, obi)) + 1) / 2) * 100;
         if (refs.obiBarGreenRef?.current) {
-          refs.obiBarGreenRef.current.style.width = `${obiNorm}%`;
+          refs.obiBarGreenRef.current.style.width = `${obiNorm.toFixed(2)}%`;
         }
         if (refs.obiBarRedRef?.current) {
-          refs.obiBarRedRef.current.style.width = `${100 - obiNorm}%`;
+          refs.obiBarRedRef.current.style.width = `${(100 - obiNorm).toFixed(2)}%`;
         }
 
-        const cvd = frame.cvd ?? 0;
+        const cvd = frame.cvd;
         if (refs.cvdValRef?.current) {
           refs.cvdValRef.current.textContent = cvd >= 0 ? `+${cvd.toFixed(2)}` : cvd.toFixed(2);
         }

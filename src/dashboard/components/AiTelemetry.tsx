@@ -71,8 +71,9 @@ export const AiTelemetry: React.FC = () => {
 
         try {
           uplotInstance.current = new uPlot(opts, [initialTs, initialNorms], container);
-        } catch {
-          // Prevent crash on zero dimensions or invalid DOM state
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`[AiTelemetry] uPlot initialization deferred: ${msg}`);
         }
       } else {
         uplotInstance.current.setSize({ width, height });
@@ -188,7 +189,7 @@ export const AiTelemetry: React.FC = () => {
         <h3 className="text-xs font-bold text-yellow-500 uppercase tracking-wider">
           CfC RECURRENT CELL STATE NORM (CANVAS 2D)
         </h3>
-        <div ref={chartRef} className="w-full h-36 min-h-[140px] flex items-center justify-center"></div>
+        <div ref={chartRef} className="uplot-financial w-full h-36 min-h-[140px] flex items-center justify-center"></div>
       </div>
     </div>
   );
