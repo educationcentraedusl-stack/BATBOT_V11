@@ -2,7 +2,20 @@ import "dotenv/config";
 import { HedgePositionLedger } from "../strategy/positionLedger";
 import { RiskGuard } from "../strategy/risk";
 import { BinanceExecutionClient, BinanceOrderParams, BinanceOrderResponse } from "../execution/binance";
-import { ClientOrderIdGenerator } from "../execution/clientOrderIdGenerator";
+
+interface SimulatedExchangeOrder {
+  orderId: number;
+  symbol: string;
+  side: string;
+  type: string;
+  positionSide: string | undefined;
+  price: string;
+  stopPrice: string;
+  closePosition: boolean;
+  clientOrderId: string;
+  status: string;
+  quantity?: number;
+}
 
 function assert(condition: boolean, message: string): void {
   if (!condition) {
@@ -21,16 +34,16 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
   const riskGuard = new RiskGuard();
 
   // Mock / Simulated Binance Execution Tracking Store
-  const exchangeOrders: Map<number, Record<string, any>> = new Map();
+  const exchangeOrders: Map<number, SimulatedExchangeOrder> = new Map();
   let orderIdCounter = 100000;
 
   // Intercept and record placed orders
   const mockExecutionClient = new BinanceExecutionClient();
-  mockExecutionClient.placeOrder = async (params: BinanceOrderParams): Promise<BinanceOrderResponse> => {
+  mockExecutionClient.placeOrder = (params: BinanceOrderParams): Promise<BinanceOrderResponse> => {
     orderIdCounter++;
     const orderId = orderIdCounter;
     const isClosePos = params.closePosition === true || String(params.closePosition).toLowerCase() === "true";
-    const record: Record<string, any> = {
+    const record: SimulatedExchangeOrder = {
       orderId,
       symbol: params.symbol,
       side: params.side,
@@ -47,14 +60,14 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
     }
     exchangeOrders.set(orderId, record);
 
-    return {
+    return Promise.resolve({
       orderId,
       symbol: params.symbol,
       status: "NEW",
       clientOrderId: record.clientOrderId,
       price: record.price,
       avgPrice: "0",
-      origQty: record.quantity ? String(record.quantity) : "0",
+      origQty: record.quantity !== undefined ? String(record.quantity) : "0",
       executedQty: "0",
       cumQuote: "0",
       timeInForce: params.timeInForce || "GTC",
@@ -65,7 +78,7 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
       stopPrice: record.stopPrice,
       workingType: "CONTRACT_PRICE",
       updateTime: Date.now(),
-    };
+    });
   };
 
   mockExecutionClient.placeBatchOrders = async (orders: BinanceOrderParams[]): Promise<BinanceOrderResponse[]> => {
@@ -77,13 +90,31 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
     return results;
   };
 
-  mockExecutionClient.cancelOrder = async (sym: string, orderId: number): Promise<any> => {
-    if (exchangeOrders.has(orderId)) {
-      const ord = exchangeOrders.get(orderId)!;
+  mockExecutionClient.cancelOrder = (sym: string, orderId: number | string): Promise<BinanceOrderResponse> => {
+    const numId = Number(orderId);
+    const ord = exchangeOrders.get(numId);
+    if (ord) {
       ord.status = "CANCELED";
-      return { symbol: sym, orderId, status: "CANCELED" };
     }
-    return { symbol: sym, orderId, status: "CANCELED" };
+    return Promise.resolve({
+      orderId: numId,
+      symbol: sym,
+      status: "CANCELED",
+      clientOrderId: "",
+      price: "0",
+      avgPrice: "0",
+      origQty: "0",
+      executedQty: "0",
+      cumQuote: "0",
+      timeInForce: "GTC",
+      type: "STOP_MARKET",
+      reduceOnly: false,
+      side: "BUY",
+      positionSide: "SHORT",
+      stopPrice: "0",
+      workingType: "CONTRACT_PRICE",
+      updateTime: Date.now(),
+    });
   };
 
   // -----------------------------------------------------------------------------------------
@@ -99,9 +130,9 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
   ledger.occupyShortSlot(0, fill1Qty, fill1Px, tpPercent, slPercent, false);
   const agg1 = ledger.getAggregatedSideSummary("SHORT");
 
-  assert(agg1.isOccupied === true, "SHORT position must be occupied");
-  assert(Math.abs(agg1.totalQuantity - 0.0008) < 1e-6, `Aggregated quantity must be 0.0008, got ${agg1.totalQuantity}`);
-  assert(Math.abs(agg1.vwapEntryPrice - 64250.0) < 1e-2, `VWAP must be 64250.0, got ${agg1.vwapEntryPrice}`);
+  assert(agg1.isOccupied, "SHORT position must be occupied");
+  assert(Math.abs(agg1.totalQuantity - 0.0008) < 1e-6, `Aggregated quantity must be 0.0008, got ${String(agg1.totalQuantity)}`);
+  assert(Math.abs(agg1.vwapEntryPrice - 64250.0) < 1e-2, `VWAP must be 64250.0, got ${String(agg1.vwapEntryPrice)}`);
 
   // Dispatch Position Stop Loss with closePosition: true
   const sl1Res = await mockExecutionClient.placePositionStopLoss(symbol, "BUY", "SHORT", agg1.stopLossPrice);
@@ -113,7 +144,7 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
   assert(placedSl1?.closePosition === true, "closePosition MUST be strictly true");
   assert(placedSl1?.quantity === undefined, "Quantity MUST be omitted when closePosition=true");
   assert(placedSl1?.positionSide === "SHORT", "positionSide must be SHORT");
-  console.log(`  ✓ Stage 1 Passed: Single fill 0.0008 BTC verified with closePosition=true SL OrderId #${sl1Res.orderId}`);
+  console.log(`  ✓ Stage 1 Passed: Single fill 0.0008 BTC verified with closePosition=true SL OrderId #${String(sl1Res.orderId)}`);
 
   // -----------------------------------------------------------------------------------------
   // STAGE 2: Pyramiding Fill (0.0008 -> 0.0016) & Atomic TP Cancel-Replace Verification
@@ -134,13 +165,13 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
 
   const agg2 = ledger.getAggregatedSideSummary("SHORT");
   const expectedVwap2 = (fill1Qty * fill1Px + fill2Qty * fill2Px) / (fill1Qty + fill2Qty); // 64275.0
-  assert(Math.abs(agg2.totalQuantity - 0.0016) < 1e-6, `Aggregated quantity must be 0.0016, got ${agg2.totalQuantity}`);
-  assert(Math.abs(agg2.vwapEntryPrice - expectedVwap2) < 1e-2, `VWAP must be exactly ${expectedVwap2}, got ${agg2.vwapEntryPrice}`);
+  assert(Math.abs(agg2.totalQuantity - 0.0016) < 1e-6, `Aggregated quantity must be 0.0016, got ${String(agg2.totalQuantity)}`);
+  assert(Math.abs(agg2.vwapEntryPrice - expectedVwap2) < 1e-2, `VWAP must be exactly ${String(expectedVwap2)}, got ${String(agg2.vwapEntryPrice)}`);
 
   // Atomic TP Cancel: Cancel old TP orders
   for (const oldTpId of initialTpOrderIds) {
     await mockExecutionClient.cancelOrder(symbol, oldTpId);
-    assert(exchangeOrders.get(oldTpId)?.status === "CANCELED", `Old TP order #${oldTpId} must be CANCELED`);
+    assert(exchangeOrders.get(oldTpId)?.status === "CANCELED", `Old TP order #${String(oldTpId)} must be CANCELED`);
   }
   console.log("  ✓ Old resting TP orders successfully cancelled");
 
@@ -151,7 +182,7 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
   ledger.registerActiveTpOrderIds("SHORT_SLOT_0", newTpOrderIds);
 
   const sumNewTpQty = newTpIntents.reduce((acc, c) => acc + (c.quantity || 0), 0);
-  assert(Math.abs(sumNewTpQty - 0.0016) < 1e-6, `Total new TP ladder quantity must equal 0.0016, got ${sumNewTpQty}`);
+  assert(Math.abs(sumNewTpQty - 0.0016) < 1e-6, `Total new TP ladder quantity must equal 0.0016, got ${String(sumNewTpQty)}`);
 
   // Re-sync Position SL anchored to new VWAP (64275.0)
   await mockExecutionClient.cancelOrder(symbol, sl1Res.orderId);
@@ -161,7 +192,7 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
   const placedSl2 = exchangeOrders.get(sl2Res.orderId);
   assert(placedSl2?.closePosition === true, "SL order must maintain closePosition=true");
   assert(placedSl2?.quantity === undefined, "Quantity must be omitted for closePosition=true");
-  console.log(`  ✓ Stage 2 Passed: Pyramiding fill aggregated to 0.0016 BTC. TP ladder recalculated for 0.0016 BTC. SL updated to OrderId #${sl2Res.orderId}`);
+  console.log(`  ✓ Stage 2 Passed: Pyramiding fill aggregated to 0.0016 BTC. TP ladder recalculated for 0.0016 BTC. SL updated to OrderId #${String(sl2Res.orderId)}`);
 
   // -----------------------------------------------------------------------------------------
   // STAGE 3: Third Fill (0.0016 -> 0.0032) & 100% Aggregated Protection
@@ -173,13 +204,13 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
 
   const agg3 = ledger.getAggregatedSideSummary("SHORT");
   const expectedVwap3 = (0.0016 * expectedVwap2 + fill3Qty * fill3Px) / 0.0032; // 64312.50
-  assert(Math.abs(agg3.totalQuantity - 0.0032) < 1e-6, `Aggregated quantity must be 0.0032, got ${agg3.totalQuantity}`);
-  assert(Math.abs(agg3.vwapEntryPrice - expectedVwap3) < 1e-2, `VWAP must be exactly ${expectedVwap3}, got ${agg3.vwapEntryPrice}`);
+  assert(Math.abs(agg3.totalQuantity - 0.0032) < 1e-6, `Aggregated quantity must be 0.0032, got ${String(agg3.totalQuantity)}`);
+  assert(Math.abs(agg3.vwapEntryPrice - expectedVwap3) < 1e-2, `VWAP must be exactly ${String(expectedVwap3)}, got ${String(agg3.vwapEntryPrice)}`);
 
   // Generate and verify TP intents for full 0.0032
   const tpIntents3 = ledger.generateAggregatedBatchTpIntents("SHORT", agg3.totalQuantity, agg3.vwapEntryPrice, "SHORT_SLOT_0", 0.00906);
   const sumTp3Qty = tpIntents3.reduce((acc, c) => acc + (c.quantity || 0), 0);
-  assert(Math.abs(sumTp3Qty - 0.0032) < 1e-6, `Aggregated TP ladder quantity must equal 0.0032, got ${sumTp3Qty}`);
+  assert(Math.abs(sumTp3Qty - 0.0032) < 1e-6, `Aggregated TP ladder quantity must equal 0.0032, got ${String(sumTp3Qty)}`);
   console.log(`  ✓ Stage 3 Passed: 0.0032 BTC fully aggregated across short slots with exact VWAP $${agg3.vwapEntryPrice.toFixed(2)}`);
 
   // -----------------------------------------------------------------------------------------
@@ -193,8 +224,8 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
   // With isAuthoritativeSnapshot = true, it must REPLACE, NOT ADD
   ledger.occupyShortSlot(0, wsPositionAmt, wsEntryPrice, tpPercent, slPercent, true);
   const postWsSlot = ledger.getShortSlots()[0];
-  assert(Math.abs(postWsSlot.quantity - 0.0032) < 1e-6, `Slot quantity must strictly equal 0.0032 (NOT 0.0048 or 0.0064), got ${postWsSlot.quantity}`);
-  console.log(`  ✓ Stage 4 Passed: Authoritative snapshot preserved exact position size ${postWsSlot.quantity} without phantom additive doubling`);
+  assert(Math.abs(postWsSlot.quantity - 0.0032) < 1e-6, `Slot quantity must strictly equal 0.0032 (NOT 0.0048 or 0.0064), got ${String(postWsSlot.quantity)}`);
+  console.log(`  ✓ Stage 4 Passed: Authoritative snapshot preserved exact position size ${String(postWsSlot.quantity)} without phantom additive doubling`);
 
   // -----------------------------------------------------------------------------------------
   // STAGE 5: Partial TP Limit Fill Scale-Out & Residual Invariant
@@ -204,8 +235,8 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
   const partialFillPx = 63800.0;
 
   const tpFillRes = ledger.processTpLimitFill("SHORT_SLOT_0", newTpOrderIds[0] || 100001, partialFillQty, partialFillPx, true);
-  assert(tpFillRes.isPositionClosed === false, "Position must not be closed on partial TP fill");
-  assert(Math.abs(tpFillRes.remainingQuantity - 0.0022) < 1e-6, `Remaining quantity must be 0.0022, got ${tpFillRes.remainingQuantity}`);
+  assert(!tpFillRes.isPositionClosed, "Position must not be closed on partial TP fill");
+  assert(Math.abs(tpFillRes.remainingQuantity - 0.0022) < 1e-6, `Remaining quantity must be 0.0022, got ${String(tpFillRes.remainingQuantity)}`);
   console.log(`  ✓ Stage 5 Passed: Scaled out 0.0010 BTC, remaining 0.0022 BTC continues to be shielded`);
 
   // -----------------------------------------------------------------------------------------
@@ -215,13 +246,13 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
   
   // Test 6A: Invariant check detects unprotected active position
   const auditUnprotected = riskGuard.auditAggregatedPositionRisk(symbol, "SHORT", 0.0022, 0);
-  assert(auditUnprotected.isProtected === false, "Audit must fail when activeStopLossOrderId is 0");
+  assert(!auditUnprotected.isProtected, "Audit must fail when activeStopLossOrderId is 0");
   assert(auditUnprotected.reason?.includes("UNPROTECTED_EXPOSURE") === true, "Reason must report UNPROTECTED_EXPOSURE");
-  console.log(`  ✓ Invariant correctly caught unprotected exposure: ${auditUnprotected.reason}`);
+  console.log(`  ✓ Invariant correctly caught unprotected exposure: ${String(auditUnprotected.reason)}`);
 
   // Test 6B: Invariant check passes when activeStopLossOrderId is valid
   const auditProtected = riskGuard.auditAggregatedPositionRisk(symbol, "SHORT", 0.0022, 100050);
-  assert(auditProtected.isProtected === true, "Audit must pass when activeStopLossOrderId > 0");
+  assert(auditProtected.isProtected, "Audit must pass when activeStopLossOrderId > 0");
   console.log("  ✓ Invariant correctly validates protected position");
 
   // Test 6C: Sub-1.5 µs Invariant & VWAP Evaluation Latency Benchmark
@@ -252,8 +283,10 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
   console.log("================================================================================\n");
 }
 
-runAggregatedRiskAndSlTpSyncTestSuite().catch((err) => {
-  console.error(`[TEST_SUITE_ERROR] ${err.message}`);
-  console.error(err.stack);
+runAggregatedRiskAndSlTpSyncTestSuite().catch((err: unknown) => {
+  const msg = err instanceof Error ? err.message : String(err);
+  const stack = err instanceof Error ? err.stack : "";
+  console.error(`[TEST_SUITE_ERROR] ${msg}`);
+  if (stack) console.error(stack);
   process.exit(1);
 });

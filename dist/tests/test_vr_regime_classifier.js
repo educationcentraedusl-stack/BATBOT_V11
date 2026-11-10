@@ -7,7 +7,7 @@ function assert(condition, message) {
         throw new Error(`ASSERTION_FAILED: ${message}`);
     }
 }
-async function runVRRegimeClassifierTestSuite() {
+function runVRRegimeClassifierTestSuite() {
     console.log("================================================================================");
     console.log("  TEST: SOTA LO-MACKINLAY ONLINE VARIANCE RATIO REGIME CLASSIFIER (DEF-R5)");
     console.log("================================================================================\n");
@@ -24,7 +24,7 @@ async function runVRRegimeClassifierTestSuite() {
     for (const p of initialPrices) {
         classifier.updatePrice(p);
     }
-    assert(classifier.getCount() === 4, `Sample count must be 4, got ${classifier.getCount()}`);
+    assert(classifier.getCount() === 4, `Sample count must be 4, got ${String(classifier.getCount())}`);
     assert(classifier.getRegimeState() === "RANDOM_WALK", "Warm-up (< k+2) must strictly return RANDOM_WALK");
     console.log("  ✓ Warm-up invariants strictly enforced (< k+2 returns RANDOM_WALK)\n");
     // --------------------------------------------------------------------------
@@ -73,13 +73,17 @@ async function runVRRegimeClassifierTestSuite() {
     }
     assert(classifier.getCount() === 60, "Buffer count must saturate at windowSize (60)");
     const vrBounded = classifier.getVarianceRatio();
-    assert(Number.isFinite(vrBounded) && vrBounded > 0, `VR must remain finite and positive, got ${vrBounded}`);
+    assert(Number.isFinite(vrBounded) && vrBounded > 0, `VR must remain finite and positive, got ${String(vrBounded)}`);
     console.log(`  ✓ 10,000 tick circular buffer test passed (VR: ${vrBounded.toFixed(4)}, finite and bounded)\n`);
     console.log("================================================================================");
     console.log("  ✅ ALL 4 TEST STAGES PASSED (100% SOTA DEF-R5 SPECIFICATION COMPLIANCE)");
     console.log("================================================================================\n");
 }
-runVRRegimeClassifierTestSuite().catch((err) => {
-    console.error(`\n❌ TEST SUITE FAILED: ${err?.stack || err?.message || String(err)}\n`);
+try {
+    runVRRegimeClassifierTestSuite();
+}
+catch (err) {
+    const errDetail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    console.error(`\n❌ TEST SUITE FAILED: ${errDetail}\n`);
     process.exit(1);
-});
+}

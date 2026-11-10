@@ -16,7 +16,7 @@ async function runPhase6BacktesterQaSuite() {
     const maxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || "10", 10);
     const slotsPerAsset = parseInt(process.env.SAB_SLOTS_PER_ASSET || "256", 10);
     const requiredBytes = maxAssets * slotsPerAsset * 8;
-    console.log(`[QA Test 1] Allocating 10-Asset SharedArrayBuffer (${requiredBytes} bytes)...`);
+    console.log(`[QA Test 1] Allocating 10-Asset SharedArrayBuffer (${String(requiredBytes)} bytes)...`);
     const sab = new SharedArrayBuffer(requiredBytes);
     const engine = new multiAssetBacktester_1.MultiAssetBacktestEngine(sab, {
         initialCapital: 100000.0,
@@ -75,15 +75,15 @@ async function runPhase6BacktesterQaSuite() {
             aiConfidence: 0.85,
         });
     }
-    console.log(`  ✅ Generated ${ticks.length} multi-asset historical ticks across 10 asset pairs.\n`);
+    console.log(`  ✅ Generated ${String(ticks.length)} multi-asset historical ticks across 10 asset pairs.\n`);
     console.log(`[QA Test 3] Running In-Memory Multi-Asset Backtest Engine...`);
     const result = engine.runTicks(ticks);
     // 1. Trade Tally Arithmetic Verification
     assert(result.totalTicksEvaluated === ticks.length, "Total ticks evaluated must equal 2000");
     assert(result.totalSignalsGenerated > 0, "Signals must be generated during test");
     assert(result.totalTradesExecuted > 0, "Completed round-trip trades must be > 0");
-    assert(result.totalTradesExecuted === result.winningTrades + result.losingTrades, `Completed round-trip trade tally arithmetic mismatch: ${result.totalTradesExecuted} !== ${result.winningTrades} + ${result.losingTrades}`);
-    console.log(`  ✅ Trade Tally Arithmetic verified: Completed Round-Trips (${result.totalTradesExecuted}) = Win (${result.winningTrades}) + Loss (${result.losingTrades}).`);
+    assert(result.totalTradesExecuted === result.winningTrades + result.losingTrades, `Completed round-trip trade tally arithmetic mismatch: ${String(result.totalTradesExecuted)} !== ${String(result.winningTrades)} + ${String(result.losingTrades)}`);
+    console.log(`  ✅ Trade Tally Arithmetic verified: Completed Round-Trips (${String(result.totalTradesExecuted)}) = Win (${String(result.winningTrades)}) + Loss (${String(result.losingTrades)}).`);
     // 2. Strict Mathematical PnL Reconciliation Verification
     let sumAssetRealizedPnl = 0;
     let activeAssetCount = 0;
@@ -95,7 +95,7 @@ async function runPhase6BacktesterQaSuite() {
     const pnlDiff = Math.abs(sumAssetRealizedPnl - result.netPnlUsd);
     console.log(`  Per-Asset PnL Sum: $${sumAssetRealizedPnl.toFixed(2)} | Global Net PnL: $${result.netPnlUsd.toFixed(2)} | Discrepancy: $${pnlDiff.toFixed(2)}`);
     assert(pnlDiff < 0.05, `Mathematical PnL Reconciliation failed! Per-asset sum $${sumAssetRealizedPnl.toFixed(2)} !== Global Net PnL $${result.netPnlUsd.toFixed(2)}`);
-    assert(activeAssetCount === maxAssets, `Trades must execute across ALL 10 assets (Active: ${activeAssetCount}/10)`);
+    assert(activeAssetCount === maxAssets, `Trades must execute across ALL 10 assets (Active: ${String(activeAssetCount)}/10)`);
     console.log("  ✅ Mathematical PnL Reconciliation verified: Sum of per-asset PnLs matches Portfolio Net PnL perfectly.");
     console.log("  ✅ Dynamic Multi-Asset Routing verified: Trades executed across all 10 asset pairs.\n");
     console.log(`[QA Test 4] Testing Memory-Safe CSV Stream Backtesting Engine...`);
@@ -107,7 +107,7 @@ async function runPhase6BacktesterQaSuite() {
         const ap = (parseFloat(bp) + 0.1).toFixed(2);
         const cycle = Math.floor(i / maxAssets);
         const aiDir = cycle % 10 === 2 ? "0.7" : cycle % 10 === 7 ? "-0.7" : "0.0";
-        csvLines.push(`${assetIdx},${sym},${now + i * 100},${bp},${ap},0.2,500.0,1.5,0.015,${aiDir}`);
+        csvLines.push(`${String(assetIdx)},${sym},${String(now + i * 100)},${bp},${ap},0.2,500.0,1.5,0.015,${aiDir}`);
     }
     const csvStream = stream_1.Readable.from(csvLines.join("\n"));
     const streamResult = await engine.runStream(csvStream);

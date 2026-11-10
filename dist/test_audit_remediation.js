@@ -59,7 +59,7 @@ class MockMarketDataClient extends marketDataClient_1.MarketDataClient {
         return 0;
     }
 }
-async function runAuditRemediationTest() {
+function runAuditRemediationTest() {
     console.log("=================================================");
     console.log("RUNNING HOSTILE AUDIT REMEDIATION VERIFICATION");
     console.log("=================================================");
@@ -75,7 +75,7 @@ async function runAuditRemediationTest() {
     const engineBtc = new engine_1.StrategyEngine(client, riskGuard, executionClient, { symbol: "BTCUSDT" });
     const configBtc = engineBtc.getConfig();
     if (configBtc.orderQuantity !== 0.05) {
-        throw new Error(`FAIL: BTC orderQuantity should be 0.05 from .env, got ${configBtc.orderQuantity}`);
+        throw new Error(`FAIL: BTC orderQuantity should be 0.05 from .env, got ${String(configBtc.orderQuantity)}`);
     }
     console.log("✓ Test 1 Passed: BTC orderQuantity strictly trusts .env (0.05) without hardcoded override.");
     if (configBtc.maxSpreadEth !== 0.50 || configBtc.maxSpreadBtc !== 5.0 || configBtc.minNotionalUsdt !== 55.0 || configBtc.cooldownMs !== 250) {
@@ -87,7 +87,7 @@ async function runAuditRemediationTest() {
     client.setSequence(100n);
     const result1 = engineBtc.evaluateTick();
     if (result1.riskResult?.reasonCode !== "INVALID_TICK_DATA") {
-        throw new Error(`FAIL: Invalid tick data (bid=0) should return INVALID_TICK_DATA, got ${result1.riskResult?.reasonCode}`);
+        throw new Error(`FAIL: Invalid tick data (bid=0) should return INVALID_TICK_DATA, got ${String(result1.riskResult?.reasonCode)}`);
     }
     console.log("✓ Test 3 Passed: Invalid tick data (bid=0) evaluated spread to Infinity and rejected with INVALID_TICK_DATA.");
     // Test 3: Crossed orderbook (bid > ask)
@@ -95,7 +95,7 @@ async function runAuditRemediationTest() {
     client.setSequence(101n);
     const result2 = engineBtc.evaluateTick();
     if (result2.riskResult?.reasonCode !== "INVALID_TICK_DATA") {
-        throw new Error(`FAIL: Crossed orderbook (bid > ask) should return INVALID_TICK_DATA, got ${result2.riskResult?.reasonCode}`);
+        throw new Error(`FAIL: Crossed orderbook (bid > ask) should return INVALID_TICK_DATA, got ${String(result2.riskResult?.reasonCode)}`);
     }
     console.log("✓ Test 4 Passed: Crossed orderbook evaluated spread to Infinity and rejected with INVALID_TICK_DATA.");
     // Test 4: Spread exceeding dynamic BPS threshold
@@ -104,14 +104,17 @@ async function runAuditRemediationTest() {
     client.setSequence(102n);
     const result3 = engineEth.evaluateTick();
     if (result3.riskResult?.reasonCode !== "REJECTED_LIQUIDITY_SWEEP_TRAP") {
-        throw new Error(`FAIL: Spread 10.0 > dynamic BPS limit should reject with REJECTED_LIQUIDITY_SWEEP_TRAP, got ${result3.riskResult?.reasonCode}`);
+        throw new Error(`FAIL: Spread 10.0 > dynamic BPS limit should reject with REJECTED_LIQUIDITY_SWEEP_TRAP, got ${String(result3.riskResult?.reasonCode)}`);
     }
     console.log("✓ Test 5 Passed: Spread 10.0 USDT > dynamic BPS limit correctly blocked order with REJECTED_LIQUIDITY_SWEEP_TRAP.");
     console.log("=================================================");
     console.log("✅ ALL AUDIT REMEDIATION VERIFICATION TESTS PASSED!");
     console.log("=================================================");
 }
-runAuditRemediationTest().catch((err) => {
+try {
+    runAuditRemediationTest();
+}
+catch (err) {
     console.error(err);
     process.exit(1);
-});
+}

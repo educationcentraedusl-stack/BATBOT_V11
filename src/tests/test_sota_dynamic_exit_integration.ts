@@ -4,7 +4,7 @@ import { VolatilitySurfaceEngine } from "../strategy/volatilitySurfaceEngine";
 import { HJBReservationEngine } from "../strategy/hjbReservationEngine";
 import { MarketDataClient } from "../marketDataClient";
 
-async function runSotaDynamicExitIntegrationTestSuite() {
+function runSotaDynamicExitIntegrationTestSuite(): void {
   console.log("=========================================================================");
   console.log("  BATBOT_V11 SOTA PHASE 3: DYNAMIC EXITS INTEGRATION TEST SUITE          ");
   console.log("=========================================================================\n");
@@ -39,14 +39,14 @@ async function runSotaDynamicExitIntegrationTestSuite() {
 
   // Evaluate SOTA dynamic exit at markPrice = $60,250
   const triggers1 = ledger.evaluateSotaDynamicExits(60250, hazardMetrics1, hjbEngine, volMetrics1);
-  console.log(`  - MarkPrice $60,250: Triggers count=${triggers1.length}`);
+  console.log(`  - MarkPrice $60,250: Triggers count=${String(triggers1.length)}`);
   if (triggers1.length > 0) {
     throw new Error(`❌ Test 1 Failed! Position should not be stopped out at $60,250.`);
   }
 
   // Drop price to $60,050 (below $60,075 Break-Even floor)
   const triggers1Exit = ledger.evaluateSotaDynamicExits(60050, hazardMetrics1, hjbEngine, volMetrics1);
-  console.log(`  - MarkPrice $60,050: Triggers count=${triggers1Exit.length}, Reason=${triggers1Exit[0]?.reason}`);
+  console.log(`  - MarkPrice $60,050: Triggers count=${String(triggers1Exit.length)}, Reason=${String(triggers1Exit.at(0)?.reason)}`);
 
   if (triggers1Exit.length === 0 || !triggers1Exit[0].reason.startsWith("MVA_TRAILING_STOP")) {
     throw new Error(`❌ Test 1 Failed! MVA-TS with zero-loss floor must trigger exit at $60,050.`);
@@ -66,7 +66,7 @@ async function runSotaDynamicExitIntegrationTestSuite() {
 
   // Price jumps to $61,500 breaching Short HJB liquidation boundary ($60,580 - $60,650) without hitting 5.0% SL ($63,000)
   const triggers2 = ledger.evaluateSotaDynamicExits(61500, hazardMetrics2, hjbEngine, volMetrics2);
-  console.log(`  - MarkPrice $61,500 (SHORT): Triggers count=${triggers2.length}, Reason=${triggers2[0]?.reason}`);
+  console.log(`  - MarkPrice $61,500 (SHORT): Triggers count=${String(triggers2.length)}, Reason=${String(triggers2.at(0)?.reason)}`);
 
   if (triggers2.length === 0 || triggers2[0].reason !== "HJB_RESERVATION_LIQUIDATE_SHORT") {
     throw new Error(`❌ Test 2 Failed! HJB boundary breach must trigger HJB_RESERVATION_LIQUIDATE_SHORT.`);
@@ -82,7 +82,7 @@ async function runSotaDynamicExitIntegrationTestSuite() {
   console.log("[TEST 2B] Testing Hard Stop-Loss Preemption over HJB Liquidation...");
   // MarkPrice jumps to $63,500 breaching Stop-Loss ($63,000) as well as HJB boundary
   const triggers2B = ledger.evaluateSotaDynamicExits(63500, hazardMetrics2, hjbEngine, volMetrics2);
-  console.log(`  - MarkPrice $63,500 (SHORT): Triggers count=${triggers2B.length}, Reason=${triggers2B[0]?.reason}, Style=${triggers2B[0]?.executionStyle}`);
+  console.log(`  - MarkPrice $63,500 (SHORT): Triggers count=${String(triggers2B.length)}, Reason=${String(triggers2B.at(0)?.reason)}, Style=${String(triggers2B.at(0)?.executionStyle)}`);
 
   if (triggers2B.length === 0 || triggers2B[0].reason !== "MVA_TRAILING_STOP_SHORT") {
     throw new Error(`❌ Test 2B Failed! Stop-Loss breach must emit MVA_TRAILING_STOP_SHORT.`);
@@ -111,7 +111,7 @@ async function runSotaDynamicExitIntegrationTestSuite() {
 
   // Evaluate SOTA exit at $59,950 (normal price, but extreme toxic hazard flow)
   const triggers3 = ledger.evaluateSotaDynamicExits(59950, toxicHazardMetrics, hjbEngine, volMetrics3);
-  console.log(`  - Toxic Order Flow (MarkPrice $59,950): Triggers count=${triggers3.length}, Reason=${triggers3[0]?.reason}`);
+  console.log(`  - Toxic Order Flow (MarkPrice $59,950): Triggers count=${String(triggers3.length)}, Reason=${String(triggers3.at(0)?.reason)}`);
 
   if (triggers3.length === 0 || triggers3[0].reason !== "HAZARD_FLUSH_EXIT_LONG") {
     throw new Error(`❌ Test 3 Failed! Toxic order flow spike must trigger HAZARD_FLUSH_EXIT_LONG.`);
@@ -142,10 +142,10 @@ async function runSotaDynamicExitIntegrationTestSuite() {
   const readSurvival = client.getSurvivalProbability(0);
   const readSL = client.getDynamicStopLossPrice(0);
 
-  console.log(`  - Read OFI (Slot 138): ${readOFI.toFixed(4)} (Expected ${testOFI})`);
-  console.log(`  - Read HJB Res (Slot 139): $${readHJB.toFixed(2)} (Expected $${testHJB})`);
+  console.log(`  - Read OFI (Slot 138): ${readOFI.toFixed(4)} (Expected ${String(testOFI)})`);
+  console.log(`  - Read HJB Res (Slot 139): $${readHJB.toFixed(2)} (Expected $${String(testHJB)})`);
   console.log(`  - Read Survival (Slot 140): ${(readSurvival * 100).toFixed(1)}% (Expected ${(testSurvival * 100).toFixed(1)}%)`);
-  console.log(`  - Read Dynamic SL (Slot 141): $${readSL.toFixed(2)} (Expected $${testSL})`);
+  console.log(`  - Read Dynamic SL (Slot 141): $${readSL.toFixed(2)} (Expected $${String(testSL)})`);
 
   if (Math.abs(readOFI - testOFI) > 1e-4 || Math.abs(readHJB - testHJB) > 1e-4) {
     throw new Error(`❌ Test 4 Failed! SharedArrayBuffer telemetry slot value mismatch.`);
@@ -191,7 +191,9 @@ async function runSotaDynamicExitIntegrationTestSuite() {
   console.log("=========================================================================");
 }
 
-runSotaDynamicExitIntegrationTestSuite().catch((err) => {
+try {
+  runSotaDynamicExitIntegrationTestSuite();
+} catch (err: unknown) {
   console.error("❌ FATAL TEST ERROR:", err);
   process.exit(1);
-});
+}

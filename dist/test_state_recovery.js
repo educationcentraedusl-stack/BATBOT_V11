@@ -4,7 +4,7 @@ const marketDataClient_1 = require("./marketDataClient");
 const engine_1 = require("./strategy/engine");
 const risk_1 = require("./strategy/risk");
 const binance_1 = require("./execution/binance");
-async function testStateRecovery() {
+function testStateRecovery() {
     console.log("=================================================");
     console.log("RUNNING STARTUP STATE RECOVERY VERIFICATION TEST");
     console.log("=================================================");
@@ -60,12 +60,12 @@ async function testStateRecovery() {
     strategyEngine.reconcileStartupPositions(mockPositions);
     // 2. Verify active trades monitor returns recovered position
     const activeTrades = strategyEngine.getActiveTrades(1876.03);
-    console.log(`Active trades recovered count: ${activeTrades.length}`);
+    console.log(`Active trades recovered count: ${String(activeTrades.length)}`);
     if (activeTrades.length !== 1) {
-        throw new Error(`FAIL: Expected 1 active trade, got ${activeTrades.length}`);
+        throw new Error(`FAIL: Expected 1 active trade, got ${String(activeTrades.length)}`);
     }
     const trade = activeTrades[0];
-    console.log(`Recovered Trade Symbol: ${trade.symbol}, Side: ${trade.side}, Size: ${trade.size}, Entry: $${trade.entryPrice}`);
+    console.log(`Recovered Trade Symbol: ${trade.symbol}, Side: ${trade.side}, Size: ${String(trade.size)}, Entry: $${String(trade.entryPrice)}`);
     if (trade.symbol !== "ETHUSDT" || trade.side !== "BUY/LONG" || trade.size !== 0.038 || trade.entryPrice !== 1875.22) {
         throw new Error(`FAIL: Recovered trade fields mismatched!`);
     }
@@ -73,7 +73,7 @@ async function testStateRecovery() {
     // 3. Verify position ledger summary
     const summary = strategyEngine.getPositionLedger().getSummary(1876.03);
     if (summary.side !== "LONG" || summary.netQuantity !== 0.038 || summary.averageEntryPrice !== 1875.22) {
-        throw new Error(`FAIL: PositionLedger summary mismatch: side=${summary.side}, netQty=${summary.netQuantity}`);
+        throw new Error(`FAIL: PositionLedger summary mismatch: side=${summary.side}, netQty=${String(summary.netQuantity)}`);
     }
     console.log("✓ Test 2 Passed: PositionLedger summary correctly aligned with recovered position.");
     // Write seq #1 in Slot 92 and Best Bid = 1882.0 (Slot 4), Best Ask = 1882.5 (Slot 6)
@@ -86,16 +86,19 @@ async function testStateRecovery() {
     fView[0] = 1882.5;
     Atomics.store(new BigInt64Array(sab), 6, bView[0]);
     const tickResult = strategyEngine.evaluateTick();
-    console.log(`Tick Result Signal: ${tickResult.signalType}, PositionSide: ${tickResult.positionSide}, ExitReason: ${tickResult.exitReason}`);
+    console.log(`Tick Result Signal: ${tickResult.signalType}, PositionSide: ${String(tickResult.positionSide)}, ExitReason: ${String(tickResult.exitReason)}`);
     if (tickResult.signalType !== "SELL" || tickResult.positionSide !== "LONG" || !tickResult.exitReason?.startsWith("TAKE_PROFIT")) {
-        throw new Error(`FAIL: AI monitoring loop failed to trigger dynamic exit for recovered position! Got: ${tickResult.exitReason}`);
+        throw new Error(`FAIL: AI monitoring loop failed to trigger dynamic exit for recovered position! Got: ${String(tickResult.exitReason)}`);
     }
     console.log("✓ Test 3 Passed: AI Monitoring Loop dynamically intercepted and triggered TAKE_PROFIT exit for recovered trade.");
     console.log("=================================================");
     console.log("✅ ALL STARTUP STATE RECOVERY TESTS PASSED!");
     console.log("=================================================");
 }
-testStateRecovery().catch((err) => {
+try {
+    testStateRecovery();
+}
+catch (err) {
     console.error("❌ VERIFICATION TEST FAILED:", err);
     process.exit(1);
-});
+}

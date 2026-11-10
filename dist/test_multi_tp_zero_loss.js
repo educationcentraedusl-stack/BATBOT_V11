@@ -5,7 +5,7 @@ const marketDataClient_1 = require("./marketDataClient");
 const recalibrationWorker_1 = require("./ai/recalibrationWorker");
 const dynamicRiskEngine_1 = require("./strategy/dynamicRiskEngine");
 const positionLedger_1 = require("./strategy/positionLedger");
-async function runMultiTpZeroLossTests() {
+function runMultiTpZeroLossTests() {
     console.log("================================================================================");
     console.log("    BATBOT_V11 AI CALIBRATION & 5-STAGE ZERO-LOSS TP VERIFICATION SUITE       ");
     console.log("================================================================================");
@@ -29,67 +29,67 @@ async function runMultiTpZeroLossTests() {
     const expectedLongBe = entryPrice * (1.0 + 0.0005 * 2.5);
     const expectedShortBe = entryPrice * (1.0 - 0.0005 * 2.5);
     if (Math.abs(longBreakEven - expectedLongBe) > 1e-4 || Math.abs(shortBreakEven - expectedShortBe) > 1e-4) {
-        throw new Error(`FAIL: Fee-Adjusted Break-Even price calculation mismatch! Got Long: ${longBreakEven}, Short: ${shortBreakEven}`);
+        throw new Error(`FAIL: Fee-Adjusted Break-Even price calculation mismatch! Got Long: ${String(longBreakEven)}, Short: ${String(shortBreakEven)}`);
     }
-    console.log(`  ✓ LONG Entry: $${entryPrice} -> Zero-Loss Fee-Adjusted Break-Even SL: $${longBreakEven.toFixed(2)} (+0.125% fee buffer)`);
-    console.log(`  ✓ SHORT Entry: $${entryPrice} -> Zero-Loss Fee-Adjusted Break-Even SL: $${shortBreakEven.toFixed(2)} (-0.125% fee buffer)`);
+    console.log(`  ✓ LONG Entry: $${String(entryPrice)} -> Zero-Loss Fee-Adjusted Break-Even SL: $${longBreakEven.toFixed(2)} (+0.125% fee buffer)`);
+    console.log(`  ✓ SHORT Entry: $${String(entryPrice)} -> Zero-Loss Fee-Adjusted Break-Even SL: $${shortBreakEven.toFixed(2)} (-0.125% fee buffer)`);
     // 3. Verify Binance Lot Size Trap & Merge Guard
     console.log("\n[TEST 3] Verifying Binance Lot Size Trap & Merge Protection...");
     // Standard chunk: 20% of 0.010 BTC = 0.002 BTC (valid)
     const validChunk = (0, positionLedger_1.calculatePartialExitChunk)(0.010, 0.010, 20, 0.001, 0.001, 5.0, 60000.0);
     if (validChunk !== 0.002) {
-        throw new Error(`FAIL: Expected valid chunk 0.002, got ${validChunk}`);
+        throw new Error(`FAIL: Expected valid chunk 0.002, got ${String(validChunk)}`);
     }
-    console.log(`  ✓ Standard 20% chunk of 0.010 BTC -> ${validChunk} BTC (Passed LOT-SIZE & MIN_NOTIONAL)`);
+    console.log(`  ✓ Standard 20% chunk of 0.010 BTC -> ${String(validChunk)} BTC (Passed LOT-SIZE & MIN_NOTIONAL)`);
     // Micro chunk trap: 20% of 0.001 BTC = 0.0002 BTC (< minQty 0.001 BTC). Should dynamically merge to full 0.001!
     const mergedChunk = (0, positionLedger_1.calculatePartialExitChunk)(0.001, 0.001, 20, 0.001, 0.001, 5.0, 60000.0);
     if (mergedChunk !== 0.001) {
-        throw new Error(`FAIL: Expected lot size trap guard to merge chunk into full 0.001, got ${mergedChunk}`);
+        throw new Error(`FAIL: Expected lot size trap guard to merge chunk into full 0.001, got ${String(mergedChunk)}`);
     }
-    console.log(`  ✓ Micro lot trap guard (20% of 0.001 BTC = 0.0002 BTC < minQty) -> Dynamically MERGED to ${mergedChunk} BTC! (Prevented LOT_SIZE API rejection)`);
+    console.log(`  ✓ Micro lot trap guard (20% of 0.001 BTC = 0.0002 BTC < minQty) -> Dynamically MERGED to ${String(mergedChunk)} BTC! (Prevented LOT_SIZE API rejection)`);
     // 3B. DEFECT 4 SOTA NaN & Zero-Division Boundary Hazard Test Suite
     console.log("\n[TEST 3B] Verifying DEFECT 4 SOTA IEEE 754 Zero-Division & NaN Safety Guards...");
     // Hazard 1: stepSize = 0 (Division by zero / -Infinity hazard)
     const zeroStepChunk = (0, positionLedger_1.calculatePartialExitChunk)(0.010, 0.010, 20, 0, 0.001, 5.0, 60000.0);
     if (!Number.isFinite(zeroStepChunk) || Number.isNaN(zeroStepChunk)) {
-        throw new Error(`FAIL: stepSize=0 produced non-finite or NaN value: ${zeroStepChunk}`);
+        throw new Error(`FAIL: stepSize=0 produced non-finite or NaN value: ${String(zeroStepChunk)}`);
     }
-    console.log(`  ✓ stepSize=0 Safety Guard -> ${zeroStepChunk} (Handled safely with default fallback, zero division prevented)`);
+    console.log(`  ✓ stepSize=0 Safety Guard -> ${String(zeroStepChunk)} (Handled safely with default fallback, zero division prevented)`);
     // Hazard 2: stepSize = -0.001 (Negative step size hazard)
     const negStepChunk = (0, positionLedger_1.calculatePartialExitChunk)(0.010, 0.010, 20, -0.001, 0.001, 5.0, 60000.0);
     if (!Number.isFinite(negStepChunk) || Number.isNaN(negStepChunk)) {
-        throw new Error(`FAIL: stepSize=-0.001 produced non-finite value: ${negStepChunk}`);
+        throw new Error(`FAIL: stepSize=-0.001 produced non-finite value: ${String(negStepChunk)}`);
     }
-    console.log(`  ✓ stepSize=-0.001 Safety Guard -> ${negStepChunk} (Handled safely with default fallback)`);
+    console.log(`  ✓ stepSize=-0.001 Safety Guard -> ${String(negStepChunk)} (Handled safely with default fallback)`);
     // Hazard 3: stepSize = NaN (NaN propagation hazard)
     const nanStepChunk = (0, positionLedger_1.calculatePartialExitChunk)(0.010, 0.010, 20, NaN, 0.001, 5.0, 60000.0);
     if (!Number.isFinite(nanStepChunk) || Number.isNaN(nanStepChunk)) {
-        throw new Error(`FAIL: stepSize=NaN produced non-finite value: ${nanStepChunk}`);
+        throw new Error(`FAIL: stepSize=NaN produced non-finite value: ${String(nanStepChunk)}`);
     }
-    console.log(`  ✓ stepSize=NaN Safety Guard -> ${nanStepChunk} (Handled safely without RangeError or NaN propagation)`);
+    console.log(`  ✓ stepSize=NaN Safety Guard -> ${String(nanStepChunk)} (Handled safely without RangeError or NaN propagation)`);
     // Hazard 4: stepSize = Infinity (Infinity hazard)
     const infStepChunk = (0, positionLedger_1.calculatePartialExitChunk)(0.010, 0.010, 20, Infinity, 0.001, 5.0, 60000.0);
     if (!Number.isFinite(infStepChunk) || Number.isNaN(infStepChunk)) {
-        throw new Error(`FAIL: stepSize=Infinity produced non-finite value: ${infStepChunk}`);
+        throw new Error(`FAIL: stepSize=Infinity produced non-finite value: ${String(infStepChunk)}`);
     }
-    console.log(`  ✓ stepSize=Infinity Safety Guard -> ${infStepChunk} (Handled safely)`);
+    console.log(`  ✓ stepSize=Infinity Safety Guard -> ${String(infStepChunk)} (Handled safely)`);
     // Hazard 5: Exponent overflow subnormal step size 1e-15
     const subnormalChunk = (0, positionLedger_1.calculatePartialExitChunk)(0.010, 0.010, 20, 1e-15, 0.001, 5.0, 60000.0);
     if (!Number.isFinite(subnormalChunk) || Number.isNaN(subnormalChunk)) {
-        throw new Error(`FAIL: stepSize=1e-15 produced non-finite value: ${subnormalChunk}`);
+        throw new Error(`FAIL: stepSize=1e-15 produced non-finite value: ${String(subnormalChunk)}`);
     }
-    console.log(`  ✓ stepSize=1e-15 Precision Clamping -> ${subnormalChunk} (Precision clamped to max 8 decimal places)`);
+    console.log(`  ✓ stepSize=1e-15 Precision Clamping -> ${String(subnormalChunk)} (Precision clamped to max 8 decimal places)`);
     // Hazard 6: Non-power-of-10 step size 0.25 (Quantization multiple check: 30% of 1.0 = 0.30 -> floor to 0.25)
     const nonPower10Chunk = (0, positionLedger_1.calculatePartialExitChunk)(1.0, 1.0, 30, 0.25, 0.25, 5.0, 100.0);
     if (nonPower10Chunk !== 0.25) {
-        throw new Error(`FAIL: stepSize=0.25 expected quantized chunk 0.25, got ${nonPower10Chunk}`);
+        throw new Error(`FAIL: stepSize=0.25 expected quantized chunk 0.25, got ${String(nonPower10Chunk)}`);
     }
-    console.log(`  ✓ Non-power-of-10 step size (stepSize=0.25, raw 0.30) -> Quantized strictly to ${nonPower10Chunk} (Exact integer multiple)`);
+    console.log(`  ✓ Non-power-of-10 step size (stepSize=0.25, raw 0.30) -> Quantized strictly to ${String(nonPower10Chunk)} (Exact integer multiple)`);
     // Hazard 7: Out-of-bounds inputs (markPrice=0, percent=0, quantity=NaN)
     const zeroPriceChunk = (0, positionLedger_1.calculatePartialExitChunk)(0.010, 0.010, 20, 0.001, 0.001, 5.0, 0);
     const nanQtyChunk = (0, positionLedger_1.calculatePartialExitChunk)(NaN, 0.010, 20, 0.001, 0.001, 5.0, 60000.0);
     if (zeroPriceChunk !== 0 || nanQtyChunk !== 0) {
-        throw new Error(`FAIL: Expected 0 for out-of-bounds inputs, got zeroPrice: ${zeroPriceChunk}, nanQty: ${nanQtyChunk}`);
+        throw new Error(`FAIL: Expected 0 for out-of-bounds inputs, got zeroPrice: ${String(zeroPriceChunk)}, nanQty: ${String(nanQtyChunk)}`);
     }
     console.log(`  ✓ Out-of-bounds input protection (markPrice=0, qty=NaN) -> Returned 0 safely`);
     // 4. Verify 5-Stage Partial TP Execution & Trailing SL Ladder
@@ -101,32 +101,36 @@ async function runMultiTpZeroLossTests() {
     if (tp1Triggers.length === 0 || tp1Triggers[0].reason !== "TAKE_PROFIT_TP1") {
         throw new Error(`FAIL: Expected TAKE_PROFIT_TP1 trigger, got: ${JSON.stringify(tp1Triggers)}`);
     }
-    console.log(`  ✓ Stage 1 Triggered: ${tp1Triggers[0].reason} | Partial Exit: ${tp1Triggers[0].quantity} BTC @ $61,250`);
+    console.log(`  ✓ Stage 1 Triggered: ${tp1Triggers[0].reason} | Partial Exit: ${String(tp1Triggers[0].quantity)} BTC @ $61,250`);
     const coreLongAfterTp1 = hedgeLedger.getCoreLong();
     if (!coreLongAfterTp1.breakEvenLocked || coreLongAfterTp1.stopLossPrice < 60000.0) {
-        throw new Error(`FAIL: Break-Even SL lock failed after TP1! SL Price: ${coreLongAfterTp1.stopLossPrice}`);
+        throw new Error(`FAIL: Break-Even SL lock failed after TP1! SL Price: ${String(coreLongAfterTp1.stopLossPrice)}`);
     }
     console.log(`  ✓ Break-Even SL Locked: $${coreLongAfterTp1.stopLossPrice.toFixed(2)} (Position is now ZERO-LOSS guaranteed)`);
-    console.log(`  ✓ Remaining Slot Position Quantity: ${coreLongAfterTp1.quantity} BTC`);
+    console.log(`  ✓ Remaining Slot Position Quantity: ${String(coreLongAfterTp1.quantity)} BTC`);
     // Stage 2: Price rises to $61,850 (+3.08% -> TP2 Target)
     const tp2Triggers = hedgeLedger.evaluateHedgeDynamicTpSl(61850.0);
     if (tp2Triggers.length === 0 || tp2Triggers[0].reason !== "TAKE_PROFIT_TP2") {
         throw new Error(`FAIL: Expected TAKE_PROFIT_TP2 trigger, got: ${JSON.stringify(tp2Triggers)}`);
     }
-    console.log(`  ✓ Stage 2 Triggered: ${tp2Triggers[0].reason} | Partial Exit: ${tp2Triggers[0].quantity} BTC @ $61,850`);
+    console.log(`  ✓ Stage 2 Triggered: ${tp2Triggers[0].reason} | Partial Exit: ${String(tp2Triggers[0].quantity)} BTC @ $61,850`);
     console.log(`  ✓ SL Trailed to TP1 level: $${hedgeLedger.getCoreLong().stopLossPrice.toFixed(2)}`);
     // Stage 3: Price drops back to hit Trailed SL (TP1 price $61,200)
     const slTriggers = hedgeLedger.evaluateHedgeDynamicTpSl(61150.0);
     if (slTriggers.length === 0 || slTriggers[0].reason !== "BREAK_EVEN_STOP_LOSS") {
         throw new Error(`FAIL: Expected BREAK_EVEN_STOP_LOSS trigger when price retraces, got: ${JSON.stringify(slTriggers)}`);
     }
-    console.log(`  ✓ Trailed Zero-Loss SL Triggered on Retrace: ${slTriggers[0].reason} @ $61,150 | Exit Size: ${slTriggers[0].quantity} BTC`);
+    console.log(`  ✓ Trailed Zero-Loss SL Triggered on Retrace: ${slTriggers[0].reason} @ $61,150 | Exit Size: ${String(slTriggers[0].quantity)} BTC`);
     console.log(`  ✓ Final Position State: FLAT (100% Locked Profit Realized with ZERO Loss)`);
     console.log("\n================================================================================");
     console.log("       ALL 4 MASTER-LEVEL ZERO-LOSS & TP VERIFICATION TESTS PASSED!             ");
     console.log("================================================================================");
 }
-runMultiTpZeroLossTests().catch((err) => {
-    console.error("Critical Test Failure:", err.message);
+try {
+    runMultiTpZeroLossTests();
+}
+catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error("Critical Test Failure:", errMsg);
     process.exit(1);
-});
+}

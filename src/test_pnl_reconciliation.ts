@@ -90,7 +90,7 @@ async function testPnlReconciliationIntegration() {
   console.log(`\n[STEP 2] Price moves to $61,000. Floating Unrealized PnL: $${unrealizedPnl.toFixed(4)}`);
   const expectedUnrealized = (61000 - 60001) * 0.001; // = 0.999
   if (Math.abs(unrealizedPnl - expectedUnrealized) > 1e-4) {
-    throw new Error(`Unrealized PnL error. Expected ${expectedUnrealized}, got ${unrealizedPnl}`);
+    throw new Error(`Unrealized PnL error. Expected ${String(expectedUnrealized)}, got ${String(unrealizedPnl)}`);
   }
 
   // Step 3: SELL Signal tick at Bid=61000, Ask=61001
@@ -137,7 +137,7 @@ async function testPnlReconciliationIntegration() {
   console.log(`  Expected Realized PnL: $${expectedRealizedPnl.toFixed(4)}, Received: $${ledgerResult2.realizedPnl.toFixed(4)}`);
 
   if (ledgerResult2.positionSideAfterFill !== "FLAT" || Math.abs(ledgerResult2.realizedPnl - expectedRealizedPnl) > 1e-4) {
-    throw new Error(`Sell fill Realized PnL reconciliation failed. Expected ${expectedRealizedPnl}, got ${ledgerResult2.realizedPnl}`);
+    throw new Error(`Sell fill Realized PnL reconciliation failed. Expected ${String(expectedRealizedPnl)}, got ${String(ledgerResult2.realizedPnl)}`);
   }
 
   const posSummary = positionLedger.getSummary(61000);
@@ -150,7 +150,7 @@ async function testPnlReconciliationIntegration() {
   console.log("\n[STEP 4] Logger Stats Telemetry:", stats);
 
   if (stats.realizedPnl <= 0 || stats.winRatePercent !== 100) {
-    throw new Error(`Logger stats fail. Expected positive realized PnL and 100% win rate. Received PnL: $${stats.realizedPnl}`);
+    throw new Error(`Logger stats fail. Expected positive realized PnL and 100% win rate. Received PnL: $${String(stats.realizedPnl)}`);
   }
 
   await logger.close();
@@ -160,7 +160,7 @@ async function testPnlReconciliationIntegration() {
   console.log("==================================================");
 }
 
-testPnlReconciliationIntegration().catch((err) => {
+testPnlReconciliationIntegration().catch((err: unknown) => {
   console.error("Integration harness failed:", err);
   process.exit(1);
 });

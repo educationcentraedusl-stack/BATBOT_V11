@@ -34,6 +34,23 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const fs = __importStar(require("fs"));
+function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isAuditTradeRecord(value) {
+    return (isRecord(value) &&
+        typeof value["time"] === "number" &&
+        typeof value["symbol"] === "string" &&
+        typeof value["id"] === "number" &&
+        typeof value["orderId"] === "number");
+}
+function isAuditOrderRecord(value) {
+    return (isRecord(value) &&
+        typeof value["time"] === "number" &&
+        typeof value["symbol"] === "string" &&
+        typeof value["orderId"] === "number" &&
+        typeof value["clientOrderId"] === "string");
+}
 function detailedAudit() {
     const logContent = fs.readFileSync("C:/Users/SMART PLUS/.gemini/antigravity-ide/brain/3f60ccb6-1145-44a0-a4a7-c544bfb2e603/.system_generated/tasks/task-69.log", "utf8");
     // Extract all user trade JSON arrays
@@ -42,9 +59,18 @@ function detailedAudit() {
     for (const match of tradeMatches) {
         try {
             const parsed = JSON.parse(match[2]);
-            allTrades.push(...parsed);
+            if (Array.isArray(parsed)) {
+                for (const item of parsed) {
+                    if (isAuditTradeRecord(item)) {
+                        allTrades.push(item);
+                    }
+                }
+            }
         }
-        catch (e) { }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[detailedAudit] Failed to parse trade JSON block: ${msg}`);
+        }
     }
     // Extract all orders
     const orderMatches = logContent.matchAll(/--- Orders for (\w+) \(\d+ orders found\) ---\s*(\[\s*[\s\S]*?\])\s*(?=--- Orders for|$)/g);
@@ -52,9 +78,18 @@ function detailedAudit() {
     for (const match of orderMatches) {
         try {
             const parsed = JSON.parse(match[2]);
-            allOrders.push(...parsed);
+            if (Array.isArray(parsed)) {
+                for (const item of parsed) {
+                    if (isAuditOrderRecord(item)) {
+                        allOrders.push(item);
+                    }
+                }
+            }
         }
-        catch (e) { }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[detailedAudit] Failed to parse order JSON block: ${msg}`);
+        }
     }
     allTrades.sort((a, b) => a.time - b.time);
     allOrders.sort((a, b) => a.time - b.time);

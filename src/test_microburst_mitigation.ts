@@ -14,7 +14,7 @@ function storeAtomicFloat64(view: BigInt64Array, slot: number, value: number): v
   Atomics.store(view, slot, rawBits);
 }
 
-async function runMicroburstMitigationTests() {
+function runMicroburstMitigationTests(): void {
   console.log("=================================================");
   console.log("BATBOT_V11 MICRO-BURST EXECUTION MITIGATION SUITE");
   console.log("=================================================");
@@ -116,7 +116,7 @@ async function runMicroburstMitigationTests() {
   // Tick 1: Expect SELL signal for SHORT_SLOT_0
   const res1 = engine.evaluateTick();
   if (res1.signalType !== "SELL" || res1.slotId !== "SHORT_SLOT_0") {
-    throw new Error(`FAIL: Tick 1 expected SELL signal for SHORT_SLOT_0, got ${res1.signalType} (${res1.slotId})`);
+    throw new Error(`FAIL: Tick 1 expected SELL signal for SHORT_SLOT_0, got ${res1.signalType} (${String(res1.slotId)})`);
   }
   console.log("  ✓ Tick 1: Generated SELL signal for SHORT_SLOT_0.");
 
@@ -137,7 +137,9 @@ async function runMicroburstMitigationTests() {
   console.log("=================================================");
 }
 
-runMicroburstMitigationTests().catch((err) => {
+try {
+  runMicroburstMitigationTests();
+} catch (err: unknown) {
   console.error(err);
   process.exit(1);
-});
+}

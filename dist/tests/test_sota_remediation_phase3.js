@@ -106,15 +106,17 @@ console.log("=== D9: Tier 4 Idempotency ===");
 {
     let count = 0;
     let tier = 0;
+    let durationSec = 1850;
     for (let i = 0; i < 10; i++) {
-        if (1900 >= 1800) {
+        durationSec += 5;
+        if (durationSec >= 1800) {
             if (!tier || tier < 4) {
                 tier = 4;
                 count++;
             }
         }
     }
-    assert(count === 1, `D9: Tier 4 trigger emitted exactly ONCE [count=${count}]`);
+    assert(count === 1, `D9: Tier 4 trigger emitted exactly ONCE [count=${String(count)}]`);
 }
 console.log("=== D10: Ledger Delta PnL Pattern ===");
 {
@@ -132,12 +134,12 @@ console.log("=== D10: Ledger Delta PnL Pattern ===");
     assert(delta > 0, "D10: Profitable trade gives positive delta");
 }
 console.log(`\n${"=".repeat(50)}`);
-console.log(`Total: ${passed + failed} | Passed: ${passed} | Failed: ${failed}`);
+console.log(`Total: ${String(passed + failed)} | Passed: ${String(passed)} | Failed: ${String(failed)}`);
 if (failed > 0) {
-    console.error(`\nFAIL: ${failed} test(s) failed.`);
+    console.error(`\nFAIL: ${String(failed)} test(s) failed.`);
     process.exit(1);
 }
 else {
-    console.log(`\nPASS: All ${passed} tests passed. Defects 1-10 VERIFIED.`);
+    console.log(`\nPASS: All ${String(passed)} tests passed. Defects 1-10 VERIFIED.`);
     process.exit(0);
 }

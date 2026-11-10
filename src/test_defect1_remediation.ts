@@ -1,6 +1,6 @@
 import { MarketDataClient } from "./marketDataClient";
 import { RiskGuard } from "./strategy/risk";
-import { BinanceExecutionClient } from "./execution/binance";
+import { BinanceExecutionClient, BinanceOrderResponse } from "./execution/binance";
 import { StrategyEngine } from "./strategy/engine";
 
 async function runDefect1Test() {
@@ -13,13 +13,13 @@ async function runDefect1Test() {
   const client = new MarketDataClient(sab);
 
   // Write market data & AI prediction metrics to SAB via MarketDataClient
-  (client as any).writeAtomicFloat64Asset(0, 1, 0.85);    // OBI
-  (client as any).writeAtomicFloat64Asset(0, 2, 1000.0);  // CVD
-  (client as any).writeAtomicFloat64Asset(0, 3, 0.1);     // Spread Velocity
-  (client as any).writeAtomicFloat64Asset(0, 4, 60000.0); // Best Bid Price
-  (client as any).writeAtomicFloat64Asset(0, 6, 60000.1); // Best Ask Price
-  (client as any).writeAtomicFloat64Asset(0, 93, 1.0);    // AI Direction BUY (+1.0)
-  (client as any).writeAtomicFloat64Asset(0, 94, 0.95);   // AI Confidence (95%)
+  client.writeAtomicFloat64Asset(0, 1, 0.85);    // OBI
+  client.writeAtomicFloat64Asset(0, 2, 1000.0);  // CVD
+  client.writeAtomicFloat64Asset(0, 3, 0.1);     // Spread Velocity
+  client.writeAtomicFloat64Asset(0, 4, 60000.0); // Best Bid Price
+  client.writeAtomicFloat64Asset(0, 6, 60000.1); // Best Ask Price
+  client.writeAtomicFloat64Asset(0, 93, 1.0);    // AI Direction BUY (+1.0)
+  client.writeAtomicFloat64Asset(0, 94, 0.95);   // AI Confidence (95%)
 
   const riskGuard = new RiskGuard();
   const executionClient = new BinanceExecutionClient({
@@ -28,9 +28,10 @@ async function runDefect1Test() {
   });
 
   // Mock placeOrder to simulate a severe Binance REST API network failure / timeout
-  executionClient.placeOrder = async () => {
-    throw new Error("SIMULATED_BINANCE_API_NETWORK_TIMEOUT (-1001: Internal error; unable to process request)");
-  };
+  executionClient.placeOrder = () =>
+    Promise.reject(
+      new Error("SIMULATED_BINANCE_API_NETWORK_TIMEOUT (-1001: Internal error; unable to process request)")
+    );
 
   const engine = new StrategyEngine(client, riskGuard, executionClient, {
     symbol: "BTCUSDT",
@@ -53,16 +54,16 @@ async function runDefect1Test() {
   console.log("  ✓ executionPromise generated. Awaiting resolution...");
 
   // Await the executionPromise. It should resolve to null (handled error) without throwing an exception!
-  let res: any = undefined;
-  let uncaughtError: any = null;
+  let res: BinanceOrderResponse | null | undefined = undefined;
+  let uncaughtError: unknown = null;
 
   try {
     res = await signalResult.executionPromise;
-  } catch (err: any) {
+  } catch (err: unknown) {
     uncaughtError = err;
   }
 
-  if (uncaughtError) {
+  if (uncaughtError !== null) {
     console.error("  ❌ FAIL: Execution promise threw an uncaught error!", uncaughtError);
     process.exit(1);
   }
@@ -75,9 +76,9 @@ async function runDefect1Test() {
   console.log("  ✓ executionPromise resolved to null gracefully without throwing an exception.");
 
   // Verify that isOrderInFlight is reset to false
-  const inFlight = (engine as any).isOrderInFlight;
-  if (inFlight !== false) {
-    console.error(`  ❌ FAIL: Expected isOrderInFlight to be false, got ${inFlight}`);
+  const inFlight = (engine as unknown as { isOrderInFlight: boolean }).isOrderInFlight;
+  if (inFlight) {
+    console.error(`  ❌ FAIL: Expected isOrderInFlight to be false, got ${String(inFlight)}`);
     process.exit(1);
   }
   console.log("  ✓ Engine state 'isOrderInFlight' successfully reset to false in finally block.");
@@ -88,7 +89,7 @@ async function runDefect1Test() {
   console.log("=================================================");
 }
 
-runDefect1Test().catch((err) => {
+runDefect1Test().catch((err: unknown) => {
   console.error("Fatal test runner error:", err);
   process.exit(1);
 });

@@ -4,26 +4,69 @@ import { MultiAssetPositionLedger } from "./strategy/positionLedger";
 import { MultiAssetStrategyEngine } from "./strategy/engine";
 import { BinanceExecutionClient } from "./execution/binance";
 
-import * as path from "path";
+type NativeRiskModule = typeof import("../index");
 
-// Import native C++ / Rust N-API bindings
-let nativeCore: any = null;
-const possiblePaths = [
-  path.join(process.cwd(), "index.win32-x64-msvc.node"),
-  path.join(__dirname, "../index.win32-x64-msvc.node"),
-  path.join(process.cwd(), "batbot_v11_core.win32-x64-msvc.node"),
-  path.join(__dirname, "../batbot_v11_core.win32-x64-msvc.node"),
-];
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
-for (const p of possiblePaths) {
+interface CcDfkSizingResponse {
+  is_approved: boolean;
+  fraction: number;
+  notional_usd: number;
+  contract_quantity: number;
+}
+
+interface MultiAssetCollarsResponse {
+  stop_loss: number;
+  take_profit: number;
+}
+
+function parseCcDfkSizing(rawJson: string): CcDfkSizingResponse {
+  const parsed: unknown = JSON.parse(rawJson);
+  if (
+    !isRecord(parsed) ||
+    typeof parsed["is_approved"] !== "boolean" ||
+    typeof parsed["fraction"] !== "number" ||
+    typeof parsed["notional_usd"] !== "number" ||
+    typeof parsed["contract_quantity"] !== "number"
+  ) {
+    throw new Error(`Invalid CC-DFK sizing response JSON: ${rawJson}`);
+  }
+  return {
+    is_approved: parsed["is_approved"],
+    fraction: parsed["fraction"],
+    notional_usd: parsed["notional_usd"],
+    contract_quantity: parsed["contract_quantity"],
+  };
+}
+
+function parseMultiAssetCollars(rawJson: string): MultiAssetCollarsResponse {
+  const parsed: unknown = JSON.parse(rawJson);
+  if (
+    !isRecord(parsed) ||
+    typeof parsed["stop_loss"] !== "number" ||
+    typeof parsed["take_profit"] !== "number"
+  ) {
+    throw new Error(`Invalid Multi-Asset collars JSON: ${rawJson}`);
+  }
+  return {
+    stop_loss: parsed["stop_loss"],
+    take_profit: parsed["take_profit"],
+  };
+}
+
+async function loadNativeCore(): Promise<NativeRiskModule | null> {
   try {
-    nativeCore = require(p);
-    if (nativeCore) {
-      console.log(`[TestMultiAssetRisk] Loaded native binary from: ${p}`);
-      console.log(`[TestMultiAssetRisk] Native functions available:`, Object.keys(nativeCore));
-      break;
-    }
-  } catch (e) {}
+    const mod = await import("../index");
+    console.log(`[TestMultiAssetRisk] Loaded native bindings via ../index`);
+    console.log(`[TestMultiAssetRisk] Native functions available:`, Object.keys(mod));
+    return mod;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[TestMultiAssetRisk] Native N-API module unavailable (${msg}); using fallback mode.`);
+    return null;
+  }
 }
 
 async function runMultiAssetRiskVerification() {
@@ -54,28 +97,24 @@ async function runMultiAssetRiskVerification() {
   const engine = new MultiAssetStrategyEngine(client, riskGuard, execClient, ACTIVE_SYMBOLS, positionLedger);
 
   console.log("[QA-1] Validating Native N-API Covariance Matrix & CC-DFK Sizing...");
-  const updateRetFn = nativeCore?.updateAssetReturnNapi || nativeCore?.update_asset_return_napi;
-  const getCovFn = nativeCore?.getCovarianceMatrixNapi || nativeCore?.get_covariance_matrix_napi;
-  const getCorrFn = nativeCore?.getCorrelationMatrixNapi || nativeCore?.get_correlation_matrix_napi;
-  const calcCcDfkFn = nativeCore?.calculateCcDfkSizeNapi || nativeCore?.calculate_cc_dfk_size_napi;
-  const getCollarsFn = nativeCore?.getMultiAssetCollarsNapi || nativeCore?.get_multi_asset_collars_napi;
+  const nativeCore = await loadNativeCore();
 
-  if (typeof updateRetFn === "function") {
+  if (nativeCore) {
     // Feed synthetic returns for 10 assets (centered zero-mean distribution)
     for (let tick = 0; tick < 100; tick++) {
       for (let k = 0; k < 10; k++) {
         const ret = (Math.random() - 0.5) * 0.02; // Centered zero-mean distribution
-        updateRetFn(k, ret);
+        nativeCore.updateAssetReturnNapi(k, ret);
       }
     }
 
-    const covJson = getCovFn();
-    const corrJson = getCorrFn();
-    console.log(`  -> Covariance Matrix (10x10): ${covJson ? "VALIDATED (JSON Length: " + covJson.length + ")" : "FAILED"}`);
-    console.log(`  -> Correlation Matrix (10x10): ${corrJson ? "VALIDATED (JSON Length: " + corrJson.length + ")" : "FAILED"}`);
+    const covJson = nativeCore.getCovarianceMatrixNapi();
+    const corrJson = nativeCore.getCorrelationMatrixNapi();
+    console.log(`  -> Covariance Matrix (10x10): ${covJson.length > 0 ? "VALIDATED (JSON Length: " + String(covJson.length) + ")" : "FAILED"}`);
+    console.log(`  -> Correlation Matrix (10x10): ${corrJson.length > 0 ? "VALIDATED (JSON Length: " + String(corrJson.length) + ")" : "FAILED"}`);
 
     // Test CC-DFK Position Sizing N-API
-    const sizingJson = calcCcDfkFn(
+    const sizingJson = nativeCore.calculateCcDfkSizeNapi(
       0,          // asset index 0 (ETHUSDT)
       0.005,      // 0.5% expected return
       0.015,      // 1.5% GK Volatility
@@ -84,13 +123,13 @@ async function runMultiAssetRiskVerification() {
       3_000.0,    // $3,000 ETH price
       JSON.stringify([0.1, 0.1, 0.05, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     );
-    const sizing = JSON.parse(sizingJson);
-    console.log(`  -> CC-DFK Sizing Result for ETH: Approved=${sizing.is_approved}, Fraction=${(sizing.fraction * 100).toFixed(2)}%, Notional=$${sizing.notional_usd.toFixed(2)}, Qty=${sizing.contract_quantity.toFixed(4)}`);
+    const sizing = parseCcDfkSizing(sizingJson);
+    console.log(`  -> CC-DFK Sizing Result for ETH: Approved=${String(sizing.is_approved)}, Fraction=${(sizing.fraction * 100).toFixed(2)}%, Notional=$${sizing.notional_usd.toFixed(2)}, Qty=${sizing.contract_quantity.toFixed(4)}`);
 
     // Test Dynamic Collars N-API
-    const collarsJson = getCollarsFn(3000.0, 0.02, true);
-    const collars = JSON.parse(collarsJson);
-    console.log(`  -> Dynamic Collars for ETH (Long $3000): StopLoss=$${collars.stop_loss}, TakeProfit=$${collars.take_profit}`);
+    const collarsJson = nativeCore.getMultiAssetCollarsNapi(3000.0, 0.02, true);
+    const collars = parseMultiAssetCollars(collarsJson);
+    console.log(`  -> Dynamic Collars for ETH (Long $3000): StopLoss=$${String(collars.stop_loss)}, TakeProfit=$${String(collars.take_profit)}`);
   } else {
     console.log("  -> (Native N-API functions active via fallback mode)");
   }
@@ -112,7 +151,7 @@ async function runMultiAssetRiskVerification() {
     true
   );
 
-  console.log(`  -> Excessive Leverage Order Check: Passed=${excessiveOrder.passed}, Reason=${excessiveOrder.reasonCode}, Message=${excessiveOrder.message}`);
+  console.log(`  -> Excessive Leverage Order Check: Passed=${String(excessiveOrder.passed)}, Reason=${excessiveOrder.reasonCode}, Message=${excessiveOrder.message}`);
   if (!excessiveOrder.passed && excessiveOrder.reasonCode === "EXCEEDS_MAX_POSITION") {
     console.log("  -> SUCCESS: Portfolio leverage cap (3.0x) correctly REJECTED excessive order!");
   } else {
@@ -129,7 +168,7 @@ async function runMultiAssetRiskVerification() {
     },
     true
   );
-  console.log(`  -> Valid Leverage Order Check: Passed=${validOrder.passed}, Reason=${validOrder.reasonCode}`);
+  console.log(`  -> Valid Leverage Order Check: Passed=${String(validOrder.passed)}, Reason=${validOrder.reasonCode}`);
 
   console.log(`\n[QA-3] Executing ${NUM_TICKS.toLocaleString()} Synthetic Multi-Asset Ticks...`);
   const startTime = Date.now();
@@ -157,17 +196,17 @@ async function runMultiAssetRiskVerification() {
   const ticksPerSec = (NUM_TICKS / (elapsedMs / 1000)).toFixed(0);
   const avgMicrosecondsPerTick = ((elapsedMs * 1000) / NUM_TICKS).toFixed(2);
 
-  console.log(`  -> ${NUM_TICKS.toLocaleString()} ticks executed in ${elapsedMs} ms`);
+  console.log(`  -> ${NUM_TICKS.toLocaleString()} ticks executed in ${String(elapsedMs)} ms`);
   console.log(`  -> Throughput: ${Number(ticksPerSec).toLocaleString()} ticks/sec`);
   console.log(`  -> Average Latency: ${avgMicrosecondsPerTick} μs per tick evaluation`);
-  console.log(`  -> Approved Trading Signals Generated: ${approvedSignals}`);
+  console.log(`  -> Approved Trading Signals Generated: ${String(approvedSignals)}`);
 
   console.log("\n================================================================================");
   console.log("        ✅ PHASE 3 MULTI-ASSET RISK & STRATEGY ENGINE QA PASSED 100%           ");
   console.log("================================================================================\n");
 }
 
-runMultiAssetRiskVerification().catch(err => {
+runMultiAssetRiskVerification().catch((err: unknown) => {
   console.error("Multi-Asset Risk Verification Failed:", err);
   process.exit(1);
 });

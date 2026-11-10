@@ -57,10 +57,8 @@ export default tseslint.config(
       "ecosystem.config.js",
       "update_csv.js",
       "scripts/**",
-      // Frozen core strategy and deferred legacy standalone test scripts:
+      // Frozen core strategy:
       "src/strategy/**",
-      "src/tests/**",
-      "src/test_*.ts",
     ],
   },
   {

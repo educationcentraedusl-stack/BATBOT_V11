@@ -1,5 +1,4 @@
 import { BinanceExecutionClient } from "./execution/binance";
-import * as https from "node:https";
 
 async function httpGet(urlStr: string): Promise<{ status: number; body: string }> {
   const res = await fetch(urlStr, {
@@ -24,12 +23,12 @@ async function runPhase6DeploymentTests() {
   process.env.USE_TESTNET = "true";
   const testnetClient = new BinanceExecutionClient();
   console.log("[TEST 1] Testing BinanceExecutionClient under USE_TESTNET=true...");
-  console.log(`  - isTestnet(): ${testnetClient.isTestnet()}`);
+  console.log(`  - isTestnet(): ${String(testnetClient.isTestnet())}`);
   console.log(`  - getBaseUrl(): ${testnetClient.getBaseUrl()}`);
   console.log(`  - getWsUrl(): ${testnetClient.getWsUrl()}`);
 
   if (
-    testnetClient.isTestnet() === true &&
+    testnetClient.isTestnet() &&
     testnetClient.getBaseUrl() === "https://testnet.binancefuture.com" &&
     testnetClient.getWsUrl() === "wss://stream.binancefuture.com"
   ) {
@@ -43,12 +42,12 @@ async function runPhase6DeploymentTests() {
   totalTests++;
   const liveClient = new BinanceExecutionClient({ useTestnet: false });
   console.log("[TEST 2] Testing BinanceExecutionClient under useTestnet=false...");
-  console.log(`  - isTestnet(): ${liveClient.isTestnet()}`);
+  console.log(`  - isTestnet(): ${String(liveClient.isTestnet())}`);
   console.log(`  - getBaseUrl(): ${liveClient.getBaseUrl()}`);
   console.log(`  - getWsUrl(): ${liveClient.getWsUrl()}`);
 
   if (
-    liveClient.isTestnet() === false &&
+    !liveClient.isTestnet() &&
     liveClient.getBaseUrl() === "https://fapi.binance.com" &&
     liveClient.getWsUrl() === "wss://fstream.binance.com"
   ) {
@@ -63,12 +62,12 @@ async function runPhase6DeploymentTests() {
   console.log("[TEST 3] Pinging Binance Futures Testnet Endpoint (https://testnet.binancefuture.com/fapi/v1/ping)...");
   try {
     const res = await httpGet("https://testnet.binancefuture.com/fapi/v1/ping");
-    console.log(`  - HTTP Status: ${res.status}`);
+    console.log(`  - HTTP Status: ${String(res.status)}`);
     if (res.status === 200) {
       console.log("  ✅ TEST 3 PASSED: Binance Futures Testnet endpoint is online and reachable.\n");
       passedTests++;
     } else {
-      console.error(`  ❌ TEST 3 FAILED: Non-200 status from Testnet (${res.status}).\n`);
+      console.error(`  ❌ TEST 3 FAILED: Non-200 status from Testnet (${String(res.status)}).\n`);
     }
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -80,12 +79,12 @@ async function runPhase6DeploymentTests() {
   console.log("[TEST 4] Pinging Binance Futures Production Endpoint (https://fapi.binance.com/fapi/v1/ping)...");
   try {
     const res = await httpGet("https://fapi.binance.com/fapi/v1/ping");
-    console.log(`  - HTTP Status: ${res.status}`);
+    console.log(`  - HTTP Status: ${String(res.status)}`);
     if (res.status === 200) {
       console.log("  ✅ TEST 4 PASSED: Binance Futures Production endpoint is online and reachable.\n");
       passedTests++;
     } else {
-      console.error(`  ❌ TEST 4 FAILED: Non-200 status from Production (${res.status}).\n`);
+      console.error(`  ❌ TEST 4 FAILED: Non-200 status from Production (${String(res.status)}).\n`);
     }
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -93,7 +92,7 @@ async function runPhase6DeploymentTests() {
   }
 
   console.log("=================================================");
-  console.log(`SUMMARY: ${passedTests} / ${totalTests} Deployment Verification Tests Passed`);
+  console.log(`SUMMARY: ${String(passedTests)} / ${String(totalTests)} Deployment Verification Tests Passed`);
   console.log("=================================================");
 
   if (passedTests === totalTests) {
@@ -105,4 +104,4 @@ async function runPhase6DeploymentTests() {
   }
 }
 
-runPhase6DeploymentTests();
+void runPhase6DeploymentTests();

@@ -8,7 +8,7 @@ function assert(condition: boolean, message: string): void {
   }
 }
 
-async function runVolatilityAdjustedStopsTestSuite() {
+function runVolatilityAdjustedStopsTestSuite(): void {
   console.log("================================================================================");
   console.log("  BATBOT_V11 SOTA: VOLATILITY-ADJUSTED STOPS & CHOP REGIME FILTER TEST SUITE");
   console.log("  - Phase 1: Garman-Klass RV Volatility-Adjusted Stops (max(1.00%, 3.50 * vol))");
@@ -30,20 +30,20 @@ async function runVolatilityAdjustedStopsTestSuite() {
 
   // 1. Low Volatility Regime (sigma = 0.0010 / 10 bps) -> 1.00% floor clamp
   const lowVol = calculateDynamicSlTp(0.0010);
-  assert(lowVol.dynamicSlPercent === 1.00, `Low vol SL should clamp to 1.00%, got ${lowVol.dynamicSlPercent}%`);
-  assert(lowVol.dynamicTpPercent === 2.50, `Low vol TP should be 2.50%, got ${lowVol.dynamicTpPercent}%`);
+  assert(lowVol.dynamicSlPercent === 1.00, `Low vol SL should clamp to 1.00%, got ${String(lowVol.dynamicSlPercent)}%`);
+  assert(lowVol.dynamicTpPercent === 2.50, `Low vol TP should be 2.50%, got ${String(lowVol.dynamicTpPercent)}%`);
   console.log("  ✓ Low Volatility (10 bps): Clamped to 1.00% SL floor, 2.50% TP target (2.5:1 ratio)");
 
   // 2. Medium Volatility Regime (sigma = 0.0050 / 50 bps) -> 3.50 * 0.50% = 1.75% SL
   const medVol = calculateDynamicSlTp(0.0050);
-  assert(Math.abs(medVol.dynamicSlPercent - 1.75) < 1e-6, `Med vol SL should be 1.75%, got ${medVol.dynamicSlPercent}%`);
-  assert(Math.abs(medVol.dynamicTpPercent - 4.375) < 1e-6, `Med vol TP should be 4.375%, got ${medVol.dynamicTpPercent}%`);
+  assert(Math.abs(medVol.dynamicSlPercent - 1.75) < 1e-6, `Med vol SL should be 1.75%, got ${String(medVol.dynamicSlPercent)}%`);
+  assert(Math.abs(medVol.dynamicTpPercent - 4.375) < 1e-6, `Med vol TP should be 4.375%, got ${String(medVol.dynamicTpPercent)}%`);
   console.log("  ✓ Medium Volatility (50 bps): Dynamically expanded to 1.75% SL, 4.375% TP target (2.5:1 ratio)");
 
   // 3. High Volatility Regime (sigma = 0.0100 / 100 bps) -> 3.50 * 1.00% = 3.50% SL
   const highVol = calculateDynamicSlTp(0.0100);
-  assert(Math.abs(highVol.dynamicSlPercent - 3.50) < 1e-6, `High vol SL should be 3.50%, got ${highVol.dynamicSlPercent}%`);
-  assert(Math.abs(highVol.dynamicTpPercent - 8.75) < 1e-6, `High vol TP should be 8.75%, got ${highVol.dynamicTpPercent}%`);
+  assert(Math.abs(highVol.dynamicSlPercent - 3.50) < 1e-6, `High vol SL should be 3.50%, got ${String(highVol.dynamicSlPercent)}%`);
+  assert(Math.abs(highVol.dynamicTpPercent - 8.75) < 1e-6, `High vol TP should be 8.75%, got ${String(highVol.dynamicTpPercent)}%`);
   console.log("  ✓ High Volatility (100 bps): Dynamically expanded to 3.50% SL, 8.75% TP target (2.5:1 ratio)\n");
 
   // -----------------------------------------------------------------------------------------
@@ -60,8 +60,8 @@ async function runVolatilityAdjustedStopsTestSuite() {
   const longSlot = ledger.getCoreLong();
   // Expected SL: 60,000 * (1 - 0.0175) = 58,950
   const expectedLongSl = 60000.0 * (1.0 - medVol.dynamicSlPercent / 100.0);
-  assert(Math.abs(longSlot.stopLossPrice - expectedLongSl) < 1.0, `Long SL must match expected $58,950, got $${longSlot.stopLossPrice}`);
-  console.log(`  ✓ CORE_LONG occupied @ $${entryPrice}: SL set to $${longSlot.stopLossPrice} (-${medVol.dynamicSlPercent}%)`);
+  assert(Math.abs(longSlot.stopLossPrice - expectedLongSl) < 1.0, `Long SL must match expected $58,950, got $${String(longSlot.stopLossPrice)}`);
+  console.log(`  ✓ CORE_LONG occupied @ $${String(entryPrice)}: SL set to $${String(longSlot.stopLossPrice)} (-${String(medVol.dynamicSlPercent)}%)`);
   ledger.releaseCoreLong();
 
   // Occupy SHORT_SLOT_0 with high volatility parameters (SL: 3.50%, TP: 8.75%)
@@ -69,8 +69,8 @@ async function runVolatilityAdjustedStopsTestSuite() {
   const shortSlot = ledger.getShortSlots()[0];
   // Expected SL: 60,000 * (1 + 0.0350) = 62,100
   const expectedShortSl = 60000.0 * (1.0 + highVol.dynamicSlPercent / 100.0);
-  assert(Math.abs(shortSlot.stopLossPrice - expectedShortSl) < 1.0, `Short SL must match expected $62,100, got $${shortSlot.stopLossPrice}`);
-  console.log(`  ✓ SHORT_SLOT_0 occupied @ $${entryPrice}: SL set to $${shortSlot.stopLossPrice} (+${highVol.dynamicSlPercent}%)\n`);
+  assert(Math.abs(shortSlot.stopLossPrice - expectedShortSl) < 1.0, `Short SL must match expected $62,100, got $${String(shortSlot.stopLossPrice)}`);
+  console.log(`  ✓ SHORT_SLOT_0 occupied @ $${String(entryPrice)}: SL set to $${String(shortSlot.stopLossPrice)} (+${String(highVol.dynamicSlPercent)}%)\n`);
   ledger.releaseShortSlot(0);
 
   // -----------------------------------------------------------------------------------------
@@ -91,9 +91,9 @@ async function runVolatilityAdjustedStopsTestSuite() {
     isSweepDetected: false,
   };
   const chopProfile = riskEngine.evaluateDynamicRisk(60000.0, "LONG", chopMetrics);
-  assert(chopProfile.isTrapDetected === true, "Chop regime must trigger isTrapDetected = true");
+  assert(chopProfile.isTrapDetected, "Chop regime must trigger isTrapDetected = true");
   assert(chopProfile.regimeState === "TOXIC_CHOP_TRAP", `Regime should be TOXIC_CHOP_TRAP, got ${chopProfile.regimeState}`);
-  assert(chopProfile.trapReason !== null && chopProfile.trapReason.includes("CHOP"), `Trap reason should specify NOISY_CHOP_REGIME, got ${chopProfile.trapReason}`);
+  assert(chopProfile.trapReason !== null && chopProfile.trapReason.includes("CHOP"), `Trap reason should specify NOISY_CHOP_REGIME, got ${String(chopProfile.trapReason)}`);
   console.log("  ✓ Mean-Reverting Noise Chop (H: 0.38, S_LOB: 0.92): Correctly rejected as TOXIC_CHOP_TRAP");
 
   // Case B: High Hawkes Panic / Microburst (Hawkes > 2.0 or VPIN > 0.85)
@@ -108,7 +108,7 @@ async function runVolatilityAdjustedStopsTestSuite() {
     isSweepDetected: false,
   };
   const toxicProfile = riskEngine.evaluateDynamicRisk(60000.0, "LONG", toxicMetrics);
-  assert(toxicProfile.isTrapDetected === true, "Toxic flow (VPIN > 0.85) must trigger trap detection");
+  assert(toxicProfile.isTrapDetected, "Toxic flow (VPIN > 0.85) must trigger trap detection");
   console.log("  ✓ Toxic Order Flow (VPIN: 0.91 > 0.85): Correctly rejected as HIGH_VPIN_TOXIC_FLOW");
 
   // Case C: Verified Trend Regime (H = 0.62 >= 0.55, S_LOB = 0.65 <= 0.75, VPIN = 0.30 <= 0.85)
@@ -123,7 +123,7 @@ async function runVolatilityAdjustedStopsTestSuite() {
     isSweepDetected: false,
   };
   const trendProfile = riskEngine.evaluateDynamicRisk(60000.0, "LONG", trendMetrics);
-  assert(trendProfile.isTrapDetected === false, "Trend regime must NOT trigger trap detection");
+  assert(!trendProfile.isTrapDetected, "Trend regime must NOT trigger trap detection");
   assert(trendProfile.regimeState === "DIRECTIONAL_TREND", `Regime should be DIRECTIONAL_TREND, got ${trendProfile.regimeState}`);
   console.log("  ✓ Verified Trend Regime (H: 0.62, S_LOB: 0.65, VPIN: 0.30): Approved as DIRECTIONAL_TREND\n");
 
@@ -154,7 +154,9 @@ async function runVolatilityAdjustedStopsTestSuite() {
   console.log("================================================================================");
 }
 
-runVolatilityAdjustedStopsTestSuite().catch((err) => {
+try {
+  runVolatilityAdjustedStopsTestSuite();
+} catch (err: unknown) {
   console.error("FATAL TEST FAILURE:", err);
   process.exit(1);
-});
+}

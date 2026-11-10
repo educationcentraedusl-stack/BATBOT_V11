@@ -1,7 +1,7 @@
 import { HJBReservationEngine } from "../strategy/hjbReservationEngine";
 import { MicrostructureHazardEngine } from "../strategy/microstructureHazardEngine";
 
-async function runHJBReservationTestSuite() {
+function runHJBReservationTestSuite(): void {
   console.log("=========================================================================");
   console.log("  BATBOT_V11 SOTA PHASE 2: HJB RESERVATION & HAZARD EXIT TEST SUITE     ");
   console.log("=========================================================================\n");
@@ -25,13 +25,13 @@ async function runHJBReservationTestSuite() {
   // Evaluate at t = 55s
   const r55 = hjbEngine.calculateReservationPrice(midPrice, inventoryLong, 55000, garmanKlassVol);
 
-  console.log(`  - Mid Price: $${midPrice.toFixed(2)}, Inventory: +${inventoryLong} BTC`);
+  console.log(`  - Mid Price: $${midPrice.toFixed(2)}, Inventory: +${String(inventoryLong)} BTC`);
   console.log(`  - R(s, q, t=0s):  $${r0.toFixed(2)} (Penalty: $${(midPrice - r0).toFixed(2)})`);
   console.log(`  - R(s, q, t=30s): $${r30.toFixed(2)} (Penalty: $${(midPrice - r30).toFixed(2)})`);
   console.log(`  - R(s, q, t=55s): $${r55.toFixed(2)} (Penalty: $${(midPrice - r55).toFixed(2)})`);
 
   if (r0 >= midPrice) {
-    throw new Error(`❌ Test 1 Failed! Long inventory must pull reservation price below mid price. Got R0=$${r0}`);
+    throw new Error(`❌ Test 1 Failed! Long inventory must pull reservation price below mid price. Got R0=$${String(r0)}`);
   }
   if (r55 <= r30 || r30 <= r0) {
     throw new Error(`❌ Test 1 Failed! As holding time approaches horizon T, remaining penalty must decay. Expected R55 > R30 > R0`);
@@ -47,10 +47,10 @@ async function runHJBReservationTestSuite() {
   const currentPxAdverse = 56000.0; // Severe drop breaching $56,765 HJB liquidation boundary
 
   const evalNormal = hjbEngine.getOptimalExitBoundary("LONG", entryPx, currentPxNormal, 1.5, 10000, 0.03);
-  console.log(`  - Normal Price ($${currentPxNormal}): LiqBoundary=$${evalNormal.liquidationBoundary.toFixed(2)}, Triggered=${evalNormal.isLiquidationTriggered}`);
+  console.log(`  - Normal Price ($${String(currentPxNormal)}): LiqBoundary=$${evalNormal.liquidationBoundary.toFixed(2)}, Triggered=${String(evalNormal.isLiquidationTriggered)}`);
 
   const evalAdverse = hjbEngine.getOptimalExitBoundary("LONG", entryPx, currentPxAdverse, 1.5, 10000, 0.03);
-  console.log(`  - Adverse Price ($${currentPxAdverse}): LiqBoundary=$${evalAdverse.liquidationBoundary.toFixed(2)}, Triggered=${evalAdverse.isLiquidationTriggered}, Reason=${evalAdverse.exitReason}`);
+  console.log(`  - Adverse Price ($${String(currentPxAdverse)}): LiqBoundary=$${evalAdverse.liquidationBoundary.toFixed(2)}, Triggered=${String(evalAdverse.isLiquidationTriggered)}, Reason=${evalAdverse.exitReason}`);
 
   if (evalNormal.isLiquidationTriggered) {
     throw new Error(`❌ Test 2 Failed! Normal price drop should not trigger HJB liquidation.`);
@@ -80,7 +80,7 @@ async function runHJBReservationTestSuite() {
   }
 
   const toxicMetrics = hazardEngine.getHazardMetrics("LONG", 0.35, 10000);
-  console.log(`  - Toxic Market: Cox Hazard Rate h(t)=${toxicMetrics.coxHazardRate.toFixed(4)}, Survival S(t)=${toxicMetrics.survivalProbability.toFixed(4)}, ExitTriggered=${toxicMetrics.isHazardExitTriggered}`);
+  console.log(`  - Toxic Market: Cox Hazard Rate h(t)=${toxicMetrics.coxHazardRate.toFixed(4)}, Survival S(t)=${toxicMetrics.survivalProbability.toFixed(4)}, ExitTriggered=${String(toxicMetrics.isHazardExitTriggered)}`);
 
   if (toxicMetrics.coxHazardRate <= quietMetrics.coxHazardRate) {
     throw new Error(`❌ Test 3 Failed! Toxic market flow must increase Cox Hazard Rate h(t).`);
@@ -131,7 +131,9 @@ async function runHJBReservationTestSuite() {
   console.log("=========================================================================");
 }
 
-runHJBReservationTestSuite().catch((err) => {
+try {
+  runHJBReservationTestSuite();
+} catch (err: unknown) {
   console.error("❌ FATAL TEST ERROR:", err);
   process.exit(1);
-});
+}

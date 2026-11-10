@@ -52,7 +52,8 @@ function assert(condition, message) {
 // STAGE 1: SAB Slot 168 Schema & Bitcast Telemetry Correctness
 // =========================================================================================
 console.log("\n--- STAGE 1: SAB Slot 168 Schema & Bitcast Telemetry Correctness ---");
-assert(sabSchema_1.SAB_SLOTS.FUNDING_RATE === 168, "SAB_SLOTS.FUNDING_RATE must be exactly slot 168");
+const fundingRateSlot = sabSchema_1.SAB_SLOTS.FUNDING_RATE;
+assert(fundingRateSlot === 168, "SAB_SLOTS.FUNDING_RATE must be exactly slot 168");
 const slotsPerAsset = 256;
 const maxAssets = 10;
 const sab = new SharedArrayBuffer(maxAssets * slotsPerAsset * 8);
@@ -103,56 +104,56 @@ const engine = new engine_1.StrategyEngine(client, riskGuard, executionClient, {
 });
 // Case A: Rate > MAX_PERMITTED_FUNDING_RATE (+0.0002 > 0.0001) -> Long pays Short exceeding tolerance
 client.setFundingRate(0.0002, 0);
-assert(engine.isFundingRatePermitted("LONG") === false, "Rate > tolerance: LONG entry strictly BLOCKED (Long pays Short)");
-assert(engine.isFundingRatePermitted("SHORT") === true, "Rate > tolerance: SHORT entry strictly ALLOWED (Short receives from Long)");
+assert(!engine.isFundingRatePermitted("LONG"), "Rate > tolerance: LONG entry strictly BLOCKED (Long pays Short)");
+assert(engine.isFundingRatePermitted("SHORT"), "Rate > tolerance: SHORT entry strictly ALLOWED (Short receives from Long)");
 // Case B: Rate < -MAX_PERMITTED_FUNDING_RATE (-0.0002 < -0.0001) -> Short pays Long exceeding tolerance
 client.setFundingRate(-0.0002, 0);
-assert(engine.isFundingRatePermitted("LONG") === true, "Rate < -tolerance: LONG entry strictly ALLOWED (Long receives from Short)");
-assert(engine.isFundingRatePermitted("SHORT") === false, "Rate < -tolerance: SHORT entry strictly BLOCKED (Short pays Long)");
+assert(engine.isFundingRatePermitted("LONG"), "Rate < -tolerance: LONG entry strictly ALLOWED (Long receives from Short)");
+assert(!engine.isFundingRatePermitted("SHORT"), "Rate < -tolerance: SHORT entry strictly BLOCKED (Short pays Long)");
 // Case C: Rate == 0.0 (Neutral) -> Neither pays
 client.setFundingRate(0.0, 0);
-assert(engine.isFundingRatePermitted("LONG") === true, "Rate == 0: LONG entry strictly ALLOWED (Neutral)");
-assert(engine.isFundingRatePermitted("SHORT") === true, "Rate == 0: SHORT entry strictly ALLOWED (Neutral)");
+assert(engine.isFundingRatePermitted("LONG"), "Rate == 0: LONG entry strictly ALLOWED (Neutral)");
+assert(engine.isFundingRatePermitted("SHORT"), "Rate == 0: SHORT entry strictly ALLOWED (Neutral)");
 // Case D: Extreme positive rate (+0.0050 = 50 bps / 8h)
 client.setFundingRate(0.0050, 0);
-assert(engine.isFundingRatePermitted("LONG") === false, "Extreme Rate +50 bps: LONG strictly BLOCKED");
-assert(engine.isFundingRatePermitted("SHORT") === true, "Extreme Rate +50 bps: SHORT strictly ALLOWED");
+assert(!engine.isFundingRatePermitted("LONG"), "Extreme Rate +50 bps: LONG strictly BLOCKED");
+assert(engine.isFundingRatePermitted("SHORT"), "Extreme Rate +50 bps: SHORT strictly ALLOWED");
 // Case E: Extreme negative rate (-0.0050 = -50 bps / 8h)
 client.setFundingRate(-0.0050, 0);
-assert(engine.isFundingRatePermitted("LONG") === true, "Extreme Rate -50 bps: LONG strictly ALLOWED");
-assert(engine.isFundingRatePermitted("SHORT") === false, "Extreme Rate -50 bps: SHORT strictly BLOCKED");
+assert(engine.isFundingRatePermitted("LONG"), "Extreme Rate -50 bps: LONG strictly ALLOWED");
+assert(!engine.isFundingRatePermitted("SHORT"), "Extreme Rate -50 bps: SHORT strictly BLOCKED");
 // Case F: Normal baseline positive rate within tolerance (+0.00008 <= 0.0001) -> Tolerated, not blocked!
 client.setFundingRate(0.00008, 0);
-assert(engine.isFundingRatePermitted("LONG") === true, "Normal positive rate within tolerance: LONG entry ALLOWED");
-assert(engine.isFundingRatePermitted("SHORT") === true, "Normal positive rate within tolerance: SHORT entry ALLOWED");
+assert(engine.isFundingRatePermitted("LONG"), "Normal positive rate within tolerance: LONG entry ALLOWED");
+assert(engine.isFundingRatePermitted("SHORT"), "Normal positive rate within tolerance: SHORT entry ALLOWED");
 // Case G: Normal baseline negative rate within tolerance (-0.00008 >= -0.0001) -> Tolerated, not blocked!
 client.setFundingRate(-0.00008, 0);
-assert(engine.isFundingRatePermitted("LONG") === true, "Normal negative rate within tolerance: LONG entry ALLOWED");
-assert(engine.isFundingRatePermitted("SHORT") === true, "Normal negative rate within tolerance: SHORT entry ALLOWED");
+assert(engine.isFundingRatePermitted("LONG"), "Normal negative rate within tolerance: LONG entry ALLOWED");
+assert(engine.isFundingRatePermitted("SHORT"), "Normal negative rate within tolerance: SHORT entry ALLOWED");
 // Case H: Microscopic positive rate (+1e-8 <= 0.0001)
 client.setFundingRate(1e-8, 0);
-assert(engine.isFundingRatePermitted("LONG") === true, "Microscopic positive (+1e-8) within tolerance: LONG entry ALLOWED");
-assert(engine.isFundingRatePermitted("SHORT") === true, "Microscopic positive (+1e-8) within tolerance: SHORT entry ALLOWED");
+assert(engine.isFundingRatePermitted("LONG"), "Microscopic positive (+1e-8) within tolerance: LONG entry ALLOWED");
+assert(engine.isFundingRatePermitted("SHORT"), "Microscopic positive (+1e-8) within tolerance: SHORT entry ALLOWED");
 // Case I: Microscopic negative rate (-1e-8 >= -0.0001)
 client.setFundingRate(-1e-8, 0);
-assert(engine.isFundingRatePermitted("LONG") === true, "Microscopic negative (-1e-8) within tolerance: LONG entry ALLOWED");
-assert(engine.isFundingRatePermitted("SHORT") === true, "Microscopic negative (-1e-8) within tolerance: SHORT entry ALLOWED");
+assert(engine.isFundingRatePermitted("LONG"), "Microscopic negative (-1e-8) within tolerance: LONG entry ALLOWED");
+assert(engine.isFundingRatePermitted("SHORT"), "Microscopic negative (-1e-8) within tolerance: SHORT entry ALLOWED");
 // Case J: Engine public getter parity
 client.setFundingRate(0.00025, 0);
 assert(engine.getFundingRate() === 0.00025, "engine.getFundingRate() accurately reflects SAB Slot 168");
 // Case K: Safe fallback for uninitialized / non-finite values (defensive runtime robustness)
 client.setFundingRate(NaN, 0);
-assert(engine.isFundingRatePermitted("LONG") === true, "NaN funding rate safely falls back to neutral (LONG allowed, no crash)");
-assert(engine.isFundingRatePermitted("SHORT") === true, "NaN funding rate safely falls back to neutral (SHORT allowed, no crash)");
+assert(engine.isFundingRatePermitted("LONG"), "NaN funding rate safely falls back to neutral (LONG allowed, no crash)");
+assert(engine.isFundingRatePermitted("SHORT"), "NaN funding rate safely falls back to neutral (SHORT allowed, no crash)");
 // =========================================================================================
 // STAGE 3: End-to-End Interception & Execution Client Immunity (evaluateTick)
 // =========================================================================================
 console.log("\n--- STAGE 3: End-to-End Interception & Execution Client Immunity ---");
 // Setup spy on executionClient.placeOrder to track all attempted dispatches
 const dispatchedOrders = [];
-executionClient.placeOrder = async (params) => {
+executionClient.placeOrder = (params) => {
     dispatchedOrders.push({ ...params });
-    return {
+    return Promise.resolve({
         orderId: 987654321,
         clientOrderId: params.clientOrderId || "CID_MOCK",
         symbol: params.symbol,
@@ -163,14 +164,14 @@ executionClient.placeOrder = async (params) => {
         price: params.price ? String(params.price) : "60000.00",
         cumQuote: "0.0",
         timeInForce: params.timeInForce || "GTX",
-        type: params.type || "LIMIT",
+        type: params.type,
         reduceOnly: false,
         side: params.side,
         positionSide: params.positionSide || "BOTH",
         stopPrice: params.stopPrice ? String(params.stopPrice) : "0",
         workingType: "CONTRACT_PRICE",
         updateTime: Date.now(),
-    };
+    });
 };
 const bigIntView = new BigInt64Array(sab);
 function setupBullishTick(seq) {
@@ -277,7 +278,7 @@ async function runStage3AndBeyond() {
     assert(tickRes1.riskResult?.reasonCode === "FUNDING_RATE_FILTER_BLOCKED", "Test 3A: riskResult.reasonCode is strictly 'FUNDING_RATE_FILTER_BLOCKED'");
     assert(tickRes1.riskResult?.passed === false, "Test 3A: riskResult.passed is false");
     assert(dispatchedOrders.length === 0, "Test 3A (CRITICAL): Blocked trade NEVER reached BinanceExecutionClient (0 dispatches)");
-    assert(engine.getHedgeLedger().getCoreLong().isOccupied === false, "Test 3A: Core Long slot was NOT occupied");
+    assert(!engine.getHedgeLedger().getCoreLong().isOccupied, "Test 3A: Core Long slot was NOT occupied");
     // -----------------------------------------------------------------------------------------
     // Test 3B: Bullish Signal + Neutral Funding Rate (0.0) -> LONG MUST BE PERMITTED
     // -----------------------------------------------------------------------------------------
@@ -320,7 +321,7 @@ async function runStage3AndBeyond() {
     assert(tickRes4.signalType === "NONE", "Test 3D: evaluateTick returned signalType 'NONE' for blocked SHORT entry");
     assert(tickRes4.riskResult?.reasonCode === "FUNDING_RATE_FILTER_BLOCKED", "Test 3D: riskResult.reasonCode is strictly 'FUNDING_RATE_FILTER_BLOCKED'");
     assert(dispatchedOrders.length === 0, "Test 3D (CRITICAL): Blocked SHORT trade NEVER reached BinanceExecutionClient");
-    assert(engine.getHedgeLedger().getShortSlots()[0].isOccupied === false, "Test 3D: Short slot was NOT occupied");
+    assert(!engine.getHedgeLedger().getShortSlots()[0].isOccupied, "Test 3D: Short slot was NOT occupied");
     // -----------------------------------------------------------------------------------------
     // Test 3E: Bearish Signal + Positive Funding Rate (+0.0002) -> SHORT MUST BE PERMITTED
     // -----------------------------------------------------------------------------------------
@@ -361,7 +362,7 @@ async function runStage3AndBeyond() {
     1.5, // tpPercent (1.5%)
     1.5 // slPercent (1.5% -> SL at 59,100)
     );
-    assert(ledger.getCoreLong().isOccupied === true, "Core Long position successfully occupied for exit immunity test");
+    assert(ledger.getCoreLong().isOccupied, "Core Long position successfully occupied for exit immunity test");
     // Set funding rate to highly unfavorable positive funding (+0.0010 = 10 bps)
     client.setFundingRate(0.0010, 0);
     // Market drops sharply to $58,500.00 (below Hard Stop-Loss of $59,100)
@@ -430,7 +431,7 @@ async function runStage3AndBeyond() {
     // SUMMARY
     // =========================================================================================
     console.log("\n================================================================================");
-    console.log(`   PHASE 5 PERPETUAL FUNDING RATE FILTER MATRIX: ${totalPassed} PASSED / ${totalFailed} FAILED`);
+    console.log(`   PHASE 5 PERPETUAL FUNDING RATE FILTER MATRIX: ${String(totalPassed)} PASSED / ${String(totalFailed)} FAILED`);
     console.log("================================================================================");
     if (totalFailed === 0) {
         console.log("✅ ALL PHASE 5 PERPETUAL FUNDING RATE FILTER TESTS PASSED (100% SUCCESS)!\n");

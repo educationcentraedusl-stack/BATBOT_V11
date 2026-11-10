@@ -27,7 +27,7 @@ class MockHftExecutionClient extends binance_1.BinanceExecutionClient {
                         orderId: this.nextOrderId++,
                         symbol,
                         status: "NEW",
-                        clientOrderId: clientOrderId || `mock_${Date.now()}`,
+                        clientOrderId: clientOrderId || `mock_${String(Date.now())}`,
                         price: "0",
                         avgPrice: "0",
                         origQty: "0",
@@ -49,7 +49,7 @@ class MockHftExecutionClient extends binance_1.BinanceExecutionClient {
                         orderId: this.nextOrderId++,
                         symbol,
                         status: "NEW",
-                        clientOrderId: clientOrderId || `mock_${Date.now()}`,
+                        clientOrderId: clientOrderId || `mock_${String(Date.now())}`,
                         price: "0",
                         avgPrice: "0",
                         origQty: "0",
@@ -81,7 +81,7 @@ class MockHftExecutionClient extends binance_1.BinanceExecutionClient {
             stopPrice,
             positionSide,
             closePosition: true,
-            clientOrderId: clientOrderId || `mock_${orderId}`,
+            clientOrderId: clientOrderId || `mock_${String(orderId)}`,
         };
         this.placedOrders.push(params);
         return {
@@ -104,9 +104,9 @@ class MockHftExecutionClient extends binance_1.BinanceExecutionClient {
             updateTime: Date.now(),
         };
     }
-    async cancelOrder(symbol, orderId, signal) {
+    cancelOrder(symbol, orderId, _signal) {
         this.cancelledOrderIds.push(orderId);
-        return {
+        return Promise.resolve({
             orderId: Number(orderId),
             symbol,
             status: "CANCELED",
@@ -124,7 +124,7 @@ class MockHftExecutionClient extends binance_1.BinanceExecutionClient {
             stopPrice: "0",
             workingType: "CONTRACT_PRICE",
             updateTime: Date.now(),
-        };
+        });
     }
 }
 function sleep(ms) {
@@ -144,19 +144,19 @@ async function runSotaDeadlockRecoveryTestSuite() {
     console.log("[SETUP] Initializing XRPUSDT SHORT position (Qty: 30.3 @ $1.4840)...");
     hedgeLedger.occupyShortSlot(0, 30.3, 1.4840, 2.50, 1.00, false);
     const shortSummary = hedgeLedger.getAggregatedSideSummary("SHORT");
-    console.log(`  Initial Slot 0 Target SL: $${shortSummary.stopLossPrice}`);
+    console.log(`  Initial Slot 0 Target SL: $${String(shortSummary.stopLossPrice)}`);
     // STAGE 1: Initial SL Placement
     console.log("\n------------------------------------------------------------------------------------------");
     console.log("[STAGE 1] Testing Initial Stop Loss Placement & Non-Destructive Ledger Registration");
     await engine.syncExchangeStopLossOrder("SHORT", 30.3, 1.4988);
     const initialSlId = hedgeLedger.getActiveStopLossOrderId("SHORT");
-    console.log(`  Registered Stop Loss OrderId: #${initialSlId}`);
+    console.log(`  Registered Stop Loss OrderId: #${String(initialSlId)}`);
     if (!initialSlId || initialSlId <= 0) {
-        throw new Error(`[FAIL] Expected active Stop Loss OrderId to be registered, got: ${initialSlId}`);
+        throw new Error(`[FAIL] Expected active Stop Loss OrderId to be registered, got: ${String(initialSlId)}`);
     }
     const audit1 = riskGuard.auditAggregatedPositionRisk("XRPUSDT", "SHORT", 30.3, initialSlId);
     if (!audit1.isProtected) {
-        throw new Error(`[FAIL] Position audit reported unprotected: ${audit1.reason}`);
+        throw new Error(`[FAIL] Position audit reported unprotected: ${String(audit1.reason)}`);
     }
     console.log("  ✅ STAGE 1 PASSED: Initial Stop Loss registered and verified 100% protected!");
     // STAGE 2: Deadlock Simulation & 2500ms Auto-Eviction Recovery
@@ -184,14 +184,14 @@ async function runSotaDeadlockRecoveryTestSuite() {
     await engine.syncExchangeStopLossOrder("SHORT", 30.3, 1.4900);
     const evictionElapsed = Date.now() - evictionStartTime;
     const newActiveSlId = hedgeLedger.getActiveStopLossOrderId("SHORT");
-    console.log(`  Auto-Eviction & Recovery completed in ${evictionElapsed}ms.`);
-    console.log(`  New Active Stop Loss OrderId: #${newActiveSlId}`);
+    console.log(`  Auto-Eviction & Recovery completed in ${String(evictionElapsed)}ms.`);
+    console.log(`  New Active Stop Loss OrderId: #${String(newActiveSlId)}`);
     if (!newActiveSlId || newActiveSlId === initialSlId) {
-        throw new Error(`[FAIL] Expected new Stop Loss OrderId after auto-eviction, got: ${newActiveSlId}`);
+        throw new Error(`[FAIL] Expected new Stop Loss OrderId after auto-eviction, got: ${String(newActiveSlId)}`);
     }
     const audit2 = riskGuard.auditAggregatedPositionRisk("XRPUSDT", "SHORT", 30.3, newActiveSlId);
     if (!audit2.isProtected) {
-        throw new Error(`[FAIL] Position audit reported unprotected after recovery: ${audit2.reason}`);
+        throw new Error(`[FAIL] Position audit reported unprotected after recovery: ${String(audit2.reason)}`);
     }
     console.log("  ✅ STAGE 2 PASSED: 2500ms Auto-Eviction successfully aborted hung promise and recovered protection!");
     // STAGE 3: Epoch Fencing Verification
@@ -203,9 +203,9 @@ async function runSotaDeadlockRecoveryTestSuite() {
     }
     await sleep(100);
     const postZombieSlId = hedgeLedger.getActiveStopLossOrderId("SHORT");
-    console.log(`  Active Stop Loss OrderId after zombie resolution: #${postZombieSlId}`);
+    console.log(`  Active Stop Loss OrderId after zombie resolution: #${String(postZombieSlId)}`);
     if (postZombieSlId !== newActiveSlId) {
-        throw new Error(`[FAIL] Zombie promise overwritten active SL ID! Expected #${newActiveSlId}, got #${postZombieSlId}`);
+        throw new Error(`[FAIL] Zombie promise overwritten active SL ID! Expected #${String(newActiveSlId)}, got #${String(postZombieSlId)}`);
     }
     console.log("  ✅ STAGE 3 PASSED: Epoch Fencing successfully discarded late zombie promise!");
     // STAGE 4: Rapid Microburst Concurrency & LVCQ Coalescing
@@ -223,13 +223,13 @@ async function runSotaDeadlockRecoveryTestSuite() {
     const burstOrdersPlaced = postBurstCount - preBurstCount;
     const finalSlId = hedgeLedger.getActiveStopLossOrderId("SHORT");
     const finalPlacedOrder = mockClient.placedOrders[mockClient.placedOrders.length - 1];
-    console.log(`  Microburst Results: 10 Dispatches -> Placed Orders: ${burstOrdersPlaced} (Queue Coalesced)`);
-    console.log(`  Final Active SL OrderId: #${finalSlId} @ stopPrice $${finalPlacedOrder.stopPrice}`);
+    console.log(`  Microburst Results: 10 Dispatches -> Placed Orders: ${String(burstOrdersPlaced)} (Queue Coalesced)`);
+    console.log(`  Final Active SL OrderId: #${String(finalSlId)} @ stopPrice $${String(finalPlacedOrder.stopPrice)}`);
     if (burstOrdersPlaced > 2) {
-        throw new Error(`[FAIL] Expected at most 2 orders placed during coalesced drain, got: ${burstOrdersPlaced}`);
+        throw new Error(`[FAIL] Expected at most 2 orders placed during coalesced drain, got: ${String(burstOrdersPlaced)}`);
     }
     if (parseFloat(String(finalPlacedOrder.stopPrice)) !== 1.4790 && parseFloat(String(finalPlacedOrder.stopPrice)) !== 1.4700) {
-        console.log(`  Final resting price: $${finalPlacedOrder.stopPrice}`);
+        console.log(`  Final resting price: $${String(finalPlacedOrder.stopPrice)}`);
     }
     console.log("  ✅ STAGE 4 PASSED: LVCQ successfully coalesced rapid microbursts with zero event loop lag!");
     // STAGE 5: Closed-Loop Zero-Naked Invariant Audit Verification

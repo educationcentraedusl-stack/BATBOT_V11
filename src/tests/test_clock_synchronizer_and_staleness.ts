@@ -34,10 +34,10 @@ async function runClockSyncAndStalenessTests() {
   const rawNow = Date.now();
   const diff = adjustedNow - rawNow;
 
-  console.log(`  Raw Local Now: ${rawNow}`);
-  console.log(`  Offset: ${offset}ms | Adjusted Now: ${adjustedNow} (Diff: ${diff}ms)`);
+  console.log(`  Raw Local Now: ${String(rawNow)}`);
+  console.log(`  Offset: ${String(offset)}ms | Adjusted Now: ${String(adjustedNow)} (Diff: ${String(diff)}ms)`);
   if (Math.abs(diff - (-2390)) > 2) {
-    throw new Error(`FAIL: AdjustedNow calculation incorrect! Expected diff ~ -2390ms, got ${diff}ms`);
+    throw new Error(`FAIL: AdjustedNow calculation incorrect! Expected diff ~ -2390ms, got ${String(diff)}ms`);
   }
 
   // Test AdjustedNowNs
@@ -76,14 +76,14 @@ async function runClockSyncAndStalenessTests() {
   for (let assetIdx = 0; assetIdx < 10; assetIdx++) {
     const readOffset = client.getServerTimeOffsetMs(assetIdx);
     if (Math.abs(readOffset - (-2390)) > 0.001) {
-      throw new Error(`FAIL: SAB Slot 150 mismatch on asset ${assetIdx}! Expected -2390, got ${readOffset}`);
+      throw new Error(`FAIL: SAB Slot 150 mismatch on asset ${String(assetIdx)}! Expected -2390, got ${String(readOffset)}`);
     }
   }
 
   // Verify Slot 100 was NOT overwritten or corrupted by Slot 150 write
   const readSlippage = client.getDynamicSlippageTicks(0);
   if (Math.abs(readSlippage - 3.5) > 0.001) {
-    throw new Error(`FAIL: SAB Slot 100 corrupted by Slot 150 write! Expected 3.5, got ${readSlippage}`);
+    throw new Error(`FAIL: SAB Slot 100 corrupted by Slot 150 write! Expected 3.5, got ${String(readSlippage)}`);
   }
   console.log("  ✅ STAGE 2 PASSED: SAB Slot 150 and Slot 100 are completely isolated with zero memory collisions!\n");
 
@@ -99,8 +99,8 @@ async function runClockSyncAndStalenessTests() {
     useTestnet: true,
   });
 
-  mockExecClient.placeOrder = async (params): Promise<BinanceOrderResponse> => {
-    return {
+  mockExecClient.placeOrder = (params): Promise<BinanceOrderResponse> => {
+    return Promise.resolve({
       orderId: 888111,
       symbol: params.symbol,
       status: "FILLED",
@@ -118,7 +118,7 @@ async function runClockSyncAndStalenessTests() {
       stopPrice: "0",
       workingType: "CONTRACT_PRICE",
       updateTime: timeSynchronizer.getAdjustedNowMs(),
-    };
+    });
   };
 
   const ledger = new HedgePositionLedger("BTCUSDT", 3);
@@ -159,7 +159,7 @@ async function runClockSyncAndStalenessTests() {
 
   // Evaluate tick with TimeSynchronizer active
   const result = engine.evaluateTick();
-  console.log(`  Tick Evaluation Result: Signal=${result.signalType}, RiskPassed=${result.riskResult?.passed}, Reason=${result.riskResult?.reasonCode || "NONE"}`);
+  console.log(`  Tick Evaluation Result: Signal=${result.signalType}, RiskPassed=${String(result.riskResult?.passed)}, Reason=${result.riskResult?.reasonCode || "NONE"}`);
 
   if (result.executionPromise) {
     await result.executionPromise;
@@ -173,9 +173,9 @@ async function runClockSyncAndStalenessTests() {
   const longCooldownLock = client.getLongCooldownLock(0);
   const expectedLockTime = timeSynchronizer.getAdjustedNowMs() + 5000;
   const lockDiff = Math.abs(longCooldownLock - expectedLockTime);
-  console.log(`  Long Cooldown Lock: ${longCooldownLock} | Expected: ${expectedLockTime} (Diff: ${lockDiff}ms)`);
+  console.log(`  Long Cooldown Lock: ${String(longCooldownLock)} | Expected: ${String(expectedLockTime)} (Diff: ${String(lockDiff)}ms)`);
   if (lockDiff > 300) {
-    throw new Error(`FAIL: DEF-1404 cooldown desync! Lock ${longCooldownLock} deviates from adjusted timestamp ${expectedLockTime}`);
+    throw new Error(`FAIL: DEF-1404 cooldown desync! Lock ${String(longCooldownLock)} deviates from adjusted timestamp ${String(expectedLockTime)}`);
   }
 
   console.log("  ✅ Fresh tick with 15ms latency accepted cleanly & cooldown lock synchronized to exchange domain!");
@@ -197,9 +197,9 @@ async function runClockSyncAndStalenessTests() {
     }
   }
 
-  console.log(`  1,000 Rapid Ticks Stress Test: ${rejectedCount} False Rejections`);
+  console.log(`  1,000 Rapid Ticks Stress Test: ${String(rejectedCount)} False Rejections`);
   if (rejectedCount > 0) {
-    throw new Error(`FAIL: Staleness guard falsely rejected ${rejectedCount}/1000 fresh ticks!`);
+    throw new Error(`FAIL: Staleness guard falsely rejected ${String(rejectedCount)}/1000 fresh ticks!`);
   }
   console.log("  ✅ STAGE 3 PASSED: 1,000 fresh ticks processed with 0 false-positive staleness rejections!\n");
 
@@ -223,7 +223,7 @@ async function runClockSyncAndStalenessTests() {
   Atomics.store(bigIntView, 92, 1002n);
 
   const staleResult = engine.evaluateTick();
-  console.log(`  Genuinely Stale (7000ms) Result: ReasonCode=${staleResult.riskResult?.reasonCode}`);
+  console.log(`  Genuinely Stale (7000ms) Result: ReasonCode=${String(staleResult.riskResult?.reasonCode)}`);
   if (staleResult.riskResult?.reasonCode !== "REJECTED_STALE_ORDERBOOK") {
     throw new Error("FAIL: Genuinely stale packet (7000ms) was NOT rejected!");
   }
@@ -247,7 +247,7 @@ async function runClockSyncAndStalenessTests() {
   Atomics.store(bigIntView, 92, 1004n);
 
   const corruptResult = engine.evaluateTick();
-  console.log(`  Corrupt Future (+5000ms) Result: ReasonCode=${corruptResult.riskResult?.reasonCode}`);
+  console.log(`  Corrupt Future (+5000ms) Result: ReasonCode=${String(corruptResult.riskResult?.reasonCode)}`);
   if (corruptResult.riskResult?.reasonCode !== "REJECTED_STALE_ORDERBOOK") {
     throw new Error("FAIL: Corrupt future packet (+5000ms) was NOT rejected!");
   }
@@ -262,24 +262,24 @@ async function runClockSyncAndStalenessTests() {
   const expectedTimestamp = timeSynchronizer.getAdjustedNowMs();
   const signatureTimeDiff = Math.abs(queryTimestamp - expectedTimestamp);
 
-  console.log(`  Signed Query Timestamp: ${queryTimestamp}`);
-  console.log(`  Expected Adjusted Now:  ${expectedTimestamp} (Diff: ${signatureTimeDiff}ms)`);
+  console.log(`  Signed Query Timestamp: ${String(queryTimestamp)}`);
+  console.log(`  Expected Adjusted Now:  ${String(expectedTimestamp)} (Diff: ${String(signatureTimeDiff)}ms)`);
 
   if (signatureTimeDiff > 5) {
-    throw new Error(`FAIL: Signed query timestamp deviates from TimeSynchronizer (${signatureTimeDiff}ms > 5ms)!`);
+    throw new Error(`FAIL: Signed query timestamp deviates from TimeSynchronizer (${String(signatureTimeDiff)}ms > 5ms)!`);
   }
 
   // Test DEF-1402: Verify getTimeOffset() returns 0 when offset is 0 without falsy fallback
   timeSynchronizer.setManualOffsetMs(0);
   const zeroOffset = mockExecClient.getTimeOffset();
   if (zeroOffset !== 0) {
-    throw new Error(`FAIL: DEF-1402 falsy trap! Expected offset 0, got ${zeroOffset}`);
+    throw new Error(`FAIL: DEF-1402 falsy trap! Expected offset 0, got ${String(zeroOffset)}`);
   }
 
   timeSynchronizer.setManualOffsetMs(-1500);
   const negativeOffset = mockExecClient.getTimeOffset();
   if (negativeOffset !== -1500) {
-    throw new Error(`FAIL: Expected offset -1500, got ${negativeOffset}`);
+    throw new Error(`FAIL: Expected offset -1500, got ${String(negativeOffset)}`);
   }
 
   console.log("  ✅ STAGE 5 PASSED: REST API query signatures & 0ms offset falsy trap thoroughly verified!\n");
@@ -289,7 +289,7 @@ async function runClockSyncAndStalenessTests() {
   console.log("==========================================================================================");
 }
 
-runClockSyncAndStalenessTests().catch((err) => {
+runClockSyncAndStalenessTests().catch((err: unknown) => {
   console.error("TEST FAILED:", err);
   process.exit(1);
 });

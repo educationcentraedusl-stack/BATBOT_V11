@@ -5,6 +5,72 @@ const marketDataClient_1 = require("../marketDataClient");
 const risk_1 = require("../strategy/risk");
 const binance_1 = require("../execution/binance");
 const multiEngine_1 = require("../strategy/multiEngine");
+function requireEngine(multiEngine, symbol) {
+    const eng = multiEngine.getEngineForSymbol(symbol);
+    if (!eng) {
+        throw new Error(`Missing engine for symbol ${symbol}`);
+    }
+    return eng;
+}
+function makeAccountInfo(positions) {
+    return {
+        totalInitialMargin: "0",
+        totalMaintMargin: "0",
+        totalWalletBalance: "4856.52",
+        totalUnrealizedProfit: "0.46",
+        totalMarginBalance: "4856.98",
+        totalPositionInitialMargin: "0",
+        totalOpenOrderInitialMargin: "0",
+        maxWithdrawAmount: "4855.89",
+        availableBalance: "4855.89",
+        updateTime: Date.now(),
+        assets: [],
+        positions,
+    };
+}
+function makeDualPosRisk(overrides) {
+    return {
+        ...overrides,
+        liquidationPrice: "0",
+        maxNotionalValue: "20000000",
+        marginType: "cross",
+        isolatedMargin: "0",
+        isAutoAddMargin: "false",
+        notional: "0",
+        isolatedWallet: "0",
+        updateTime: Date.now(),
+    };
+}
+class MockConsensusExecutionClient extends binance_1.BinanceExecutionClient {
+    positionRiskHandler = null;
+    accountInfoHandler = null;
+    userTradesHandler = null;
+    dualPositionRiskHandler = null;
+    getPositionRisk(symbol) {
+        if (this.positionRiskHandler) {
+            return this.positionRiskHandler(symbol);
+        }
+        return super.getPositionRisk(symbol);
+    }
+    getAccountInfo() {
+        if (this.accountInfoHandler) {
+            return this.accountInfoHandler();
+        }
+        return super.getAccountInfo();
+    }
+    getUserTrades(symbol, limit = 100, startTime) {
+        if (this.userTradesHandler) {
+            return this.userTradesHandler(symbol, limit, startTime);
+        }
+        return super.getUserTrades(symbol, limit, startTime);
+    }
+    getDualPositionRisk(symbol) {
+        if (this.dualPositionRiskHandler) {
+            return this.dualPositionRiskHandler(symbol);
+        }
+        return super.getDualPositionRisk(symbol);
+    }
+}
 async function runStateReconciliationConsensusTest() {
     console.log("=========================================================================");
     console.log("  TEST: SOTA TRI-VECTOR CONSENSUS & TWO-PHASE FLATTENING BARRIER         ");
@@ -26,7 +92,7 @@ async function runStateReconciliationConsensusTest() {
     const sab = new SharedArrayBuffer(maxAssets * slotsPerAsset * 8);
     const client = new marketDataClient_1.MarketDataClient(sab, maxAssets, slotsPerAsset);
     const riskGuard = new risk_1.MultiAssetRiskGuard();
-    const executionClient = new binance_1.BinanceExecutionClient();
+    const executionClient = new MockConsensusExecutionClient();
     const multiEngine = new multiEngine_1.MultiAssetStrategyEngine(client, riskGuard, executionClient, symbols);
     // --------------------------------------------------------------------------------------
     // TEST 1: Dual-Source Consensus Merge Logic (V3 positionRisk + V3 account)
@@ -106,16 +172,10 @@ async function runStateReconciliationConsensusTest() {
         },
     ];
     // Intercept executionClient methods to simulate dual-source consensus
-    executionClient.getPositionRisk = async () => mockPositionRisk;
-    executionClient.getAccountInfo = async () => ({
-        totalWalletBalance: "4856.52",
-        availableBalance: "4855.89",
-        totalUnrealizedProfit: "0.46",
-        positions: mockAccountPositions,
-        assets: [],
-    });
+    executionClient.positionRiskHandler = () => Promise.resolve(mockPositionRisk);
+    executionClient.accountInfoHandler = () => Promise.resolve(makeAccountInfo(mockAccountPositions));
     const mergedConsensus = await executionClient.getDualPositionRisk();
-    console.log(`  - Total Merged Consensus Positions: ${mergedConsensus.length}`);
+    console.log(`  - Total Merged Consensus Positions: ${String(mergedConsensus.length)}`);
     const btcPos = mergedConsensus.find((p) => p.symbol === "BTCUSDT");
     const adaPos = mergedConsensus.find((p) => p.symbol === "ADAUSDT");
     const dogePos = mergedConsensus.find((p) => p.symbol === "DOGEUSDT");
@@ -138,17 +198,17 @@ async function runStateReconciliationConsensusTest() {
     console.log("[Test 2/4] Verifying Multi-Asset State Hydration & SAB OMS Synchronizations...");
     multiEngine.reconcileStartupPositions(mergedConsensus);
     // Verify BTCUSDT (#0)
-    const btcEngine = multiEngine.getEngineForSymbol("BTCUSDT");
+    const btcEngine = requireEngine(multiEngine, "BTCUSDT");
     const btcSummary = btcEngine.getHedgeLedger().getSummary(64216.60);
-    console.log(`  - BTCUSDT (#0) Ledger: Qty=${btcSummary.longQuantity}, AvgPx=$${btcSummary.averageEntryPrice}`);
+    console.log(`  - BTCUSDT (#0) Ledger: Qty=${String(btcSummary.longQuantity)}, AvgPx=$${String(btcSummary.averageEntryPrice)}`);
     // Verify ADAUSDT (#4)
-    const adaEngine = multiEngine.getEngineForSymbol("ADAUSDT");
+    const adaEngine = requireEngine(multiEngine, "ADAUSDT");
     const adaSummary = adaEngine.getHedgeLedger().getSummary(0.1729);
-    console.log(`  - ADAUSDT (#4) Ledger: Qty=${adaSummary.longQuantity}, AvgPx=$${adaSummary.averageEntryPrice}`);
+    console.log(`  - ADAUSDT (#4) Ledger: Qty=${String(adaSummary.longQuantity)}, AvgPx=$${String(adaSummary.averageEntryPrice)}`);
     // Verify DOGEUSDT (#6)
-    const dogeEngine = multiEngine.getEngineForSymbol("DOGEUSDT");
+    const dogeEngine = requireEngine(multiEngine, "DOGEUSDT");
     const dogeSummary = dogeEngine.getHedgeLedger().getSummary(0.06987);
-    console.log(`  - DOGEUSDT (#6) Ledger: Qty=${dogeSummary.longQuantity}, AvgPx=$${dogeSummary.averageEntryPrice}`);
+    console.log(`  - DOGEUSDT (#6) Ledger: Qty=${String(dogeSummary.longQuantity)}, AvgPx=$${String(dogeSummary.averageEntryPrice)}`);
     if (Math.abs(btcSummary.longQuantity - 0.0008) > 1e-6 || Math.abs(adaSummary.longQuantity - 570.0) > 1e-4 || Math.abs(dogeSummary.longQuantity - 644.0) > 1e-4) {
         throw new Error("Test 2 Failed: Multi-Asset hedge ledger positions not correctly hydrated!");
     }
@@ -156,9 +216,9 @@ async function runStateReconciliationConsensusTest() {
     const btcSabQty = client.getOmsLongPositionQty(0);
     const adaSabQty = client.getOmsLongPositionQty(4);
     const dogeSabQty = client.getOmsLongPositionQty(6);
-    console.log(`  - SAB Slot #0 (BTC): ${btcSabQty} (Expected: 0.0008)`);
-    console.log(`  - SAB Slot #4 (ADA): ${adaSabQty} (Expected: 570)`);
-    console.log(`  - SAB Slot #6 (DOGE): ${dogeSabQty} (Expected: 644)`);
+    console.log(`  - SAB Slot #0 (BTC): ${String(btcSabQty)} (Expected: 0.0008)`);
+    console.log(`  - SAB Slot #4 (ADA): ${String(adaSabQty)} (Expected: 570)`);
+    console.log(`  - SAB Slot #6 (DOGE): ${String(dogeSabQty)} (Expected: 644)`);
     if (Math.abs(btcSabQty - 0.0008) > 1e-6 || Math.abs(adaSabQty - 570.0) > 1e-4 || Math.abs(dogeSabQty - 644.0) > 1e-4) {
         throw new Error("Test 2 Failed: SharedArrayBuffer OMS slots not synchronized with active multi-asset positions!");
     }
@@ -168,9 +228,9 @@ async function runStateReconciliationConsensusTest() {
     // --------------------------------------------------------------------------------------
     console.log("[Test 3/7] Verifying Non-Destructive Two-Phase Flattening Barrier under Snapshot Gap...");
     // Simulate a flawed heartbeat call with empty positions for DOGEUSDT
-    executionClient.getUserTrades = async () => []; // No closing trades exist on Binance!
-    executionClient.getDualPositionRisk = async () => [
-        {
+    executionClient.userTradesHandler = () => Promise.resolve([]); // No closing trades exist on Binance!
+    executionClient.dualPositionRiskHandler = () => Promise.resolve([
+        makeDualPosRisk({
             symbol: "DOGEUSDT",
             positionAmt: "644.0",
             entryPrice: "0.06950",
@@ -178,13 +238,13 @@ async function runStateReconciliationConsensusTest() {
             unRealizedProfit: "0.2382",
             leverage: "20",
             positionSide: "BOTH",
-        },
-    ];
+        }),
+    ]);
     // Try to trigger a blind wipe on DOGEUSDT with empty positions array
     console.log("  - Simulating heartbeat snapshot with empty activePositions for DOGEUSDT...");
     await dogeEngine.syncExchangeStateWithData([], []);
     const dogeSummaryAfterSnapshot = dogeEngine.getHedgeLedger().getSummary(0.06987);
-    console.log(`  - DOGEUSDT Ledger Qty After Blind Attempt: ${dogeSummaryAfterSnapshot.longQuantity} (Expected: 644)`);
+    console.log(`  - DOGEUSDT Ledger Qty After Blind Attempt: ${String(dogeSummaryAfterSnapshot.longQuantity)} (Expected: 644)`);
     if (Math.abs(dogeSummaryAfterSnapshot.longQuantity - 644.0) > 1e-4) {
         throw new Error("Test 3 Failed: Two-Phase Barrier failed to protect DOGEUSDT position against blind wipe!");
     }
@@ -192,7 +252,7 @@ async function runStateReconciliationConsensusTest() {
     console.log("  - Simulating direct reconcileFlatPositionWithUserTrades('LONG', 0)...");
     await dogeEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
     const dogeSummaryAfterDirectSettle = dogeEngine.getHedgeLedger().getSummary(0.06987);
-    console.log(`  - DOGEUSDT Ledger Qty After Direct Settle Attempt: ${dogeSummaryAfterDirectSettle.longQuantity} (Expected: 644)`);
+    console.log(`  - DOGEUSDT Ledger Qty After Direct Settle Attempt: ${String(dogeSummaryAfterDirectSettle.longQuantity)} (Expected: 644)`);
     if (Math.abs(dogeSummaryAfterDirectSettle.longQuantity - 644.0) > 1e-4) {
         throw new Error("Test 3 Failed: Two-Phase Barrier permitted blind settlement without trade confirmation!");
     }
@@ -202,16 +262,12 @@ async function runStateReconciliationConsensusTest() {
     // --------------------------------------------------------------------------------------
     console.log("[Test 4/7] Verifying Network Outage Invariant: Barrier Aborts Flattening on Network Error...");
     // Simulate network timeout/error when fetching userTrades AND getDualPositionRisk
-    executionClient.getUserTrades = async () => {
-        throw new Error("ETIMEDOUT: Connection reset by peer (simulated network outage)");
-    };
-    executionClient.getDualPositionRisk = async () => {
-        throw new Error("ECONNREFUSED: Binance REST gateway unreachable (simulated network outage)");
-    };
+    executionClient.userTradesHandler = () => Promise.reject(new Error("ETIMEDOUT: Connection reset by peer (simulated network outage)"));
+    executionClient.dualPositionRiskHandler = () => Promise.reject(new Error("ECONNREFUSED: Binance REST gateway unreachable (simulated network outage)"));
     console.log("  - Simulating network outage during reconcileFlatPositionWithUserTrades('LONG', 0)...");
     await dogeEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
     const dogeSummaryAfterNetworkErr = dogeEngine.getHedgeLedger().getSummary(0.06987);
-    console.log(`  - DOGEUSDT Ledger Qty After Network Error: ${dogeSummaryAfterNetworkErr.longQuantity} (Expected: 644)`);
+    console.log(`  - DOGEUSDT Ledger Qty After Network Error: ${String(dogeSummaryAfterNetworkErr.longQuantity)} (Expected: 644)`);
     if (Math.abs(dogeSummaryAfterNetworkErr.longQuantity - 644.0) > 1e-4) {
         throw new Error("Test 4 Failed: Network failure induced a false-positive position wipe! Barrier invariant violated.");
     }
@@ -221,9 +277,9 @@ async function runStateReconciliationConsensusTest() {
     // --------------------------------------------------------------------------------------
     console.log("[Test 5/7] Verifying ONE-WAY Mode ('BOTH') Polarity Guard against Sign Confusion...");
     // In One-Way mode, positionSide is 'BOTH'. A short position has negative positionAmt (-644.0).
-    executionClient.getUserTrades = async () => [];
-    executionClient.getDualPositionRisk = async () => [
-        {
+    executionClient.userTradesHandler = () => Promise.resolve([]);
+    executionClient.dualPositionRiskHandler = () => Promise.resolve([
+        makeDualPosRisk({
             symbol: "DOGEUSDT",
             positionAmt: "-644.0", // SHORT position in One-Way mode
             entryPrice: "0.06950",
@@ -231,13 +287,13 @@ async function runStateReconciliationConsensusTest() {
             unRealizedProfit: "-0.2382",
             leverage: "20",
             positionSide: "BOTH",
-        },
-    ];
+        }),
+    ]);
     // Reconcile LONG settlement: since the exchange position is SHORT (-644.0), LONG is verified flat
     console.log("  - Simulating LONG settlement check against active SHORT (-644.0) position on exchange...");
     await dogeEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
     const dogeSummaryAfterPolarityCheck = dogeEngine.getHedgeLedger().getSummary(0.06987);
-    console.log(`  - DOGEUSDT LONG Qty After Polarity Settle: ${dogeSummaryAfterPolarityCheck.longQuantity} (Expected: 0)`);
+    console.log(`  - DOGEUSDT LONG Qty After Polarity Settle: ${String(dogeSummaryAfterPolarityCheck.longQuantity)} (Expected: 0)`);
     if (dogeSummaryAfterPolarityCheck.longQuantity !== 0) {
         throw new Error("Test 5 Failed: One-Way Mode polarity check failed to identify opposing side sign!");
     }
@@ -246,21 +302,18 @@ async function runStateReconciliationConsensusTest() {
     // TEST 6: Dual-Consensus Failure Error Propagation (Defect 1.1)
     // --------------------------------------------------------------------------------------
     console.log("[Test 6/7] Verifying Dual-Consensus Failure Error Propagation...");
-    const testExecClient = new binance_1.BinanceExecutionClient({ apiKey: "test_key", apiSecret: "test_secret" });
-    testExecClient.getPositionRisk = async () => {
-        throw new Error("HTTP 500: Binance Internal Server Error");
-    };
-    testExecClient.getAccountInfo = async () => {
-        throw new Error("HTTP 503: Service Temporarily Unavailable");
-    };
+    const testExecClient = new MockConsensusExecutionClient({ apiKey: "test_key", apiSecret: "test_secret" });
+    testExecClient.positionRiskHandler = () => Promise.reject(new Error("HTTP 500: Binance Internal Server Error"));
+    testExecClient.accountInfoHandler = () => Promise.reject(new Error("HTTP 503: Service Temporarily Unavailable"));
     let consensusErrorCaught = false;
     try {
         await testExecClient.getDualPositionRisk("BTCUSDT");
     }
     catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
         consensusErrorCaught = true;
-        console.log(`  - Caught Expected Consensus Failure Error: ${err.message}`);
-        if (!err.message.includes("[CONSENSUS_FAILURE]")) {
+        console.log(`  - Caught Expected Consensus Failure Error: ${msg}`);
+        if (!msg.includes("[CONSENSUS_FAILURE]")) {
             throw new Error("Test 6 Failed: Thrown error does not contain [CONSENSUS_FAILURE] tag!");
         }
     }
@@ -275,7 +328,7 @@ async function runStateReconciliationConsensusTest() {
     // Re-occupy doge long position for final settlement test
     dogeEngine.getHedgeLedger().occupyCoreLong(644.0, 0.06950, 2.5, 1.5);
     // Mock a real closing fill on exchange
-    executionClient.getUserTrades = async () => [
+    executionClient.userTradesHandler = () => Promise.resolve([
         {
             id: 123456,
             symbol: "DOGEUSDT",
@@ -293,8 +346,8 @@ async function runStateReconciliationConsensusTest() {
             buyer: false,
             maker: true,
         },
-    ];
-    executionClient.getDualPositionRisk = async () => []; // Position is now truly flat on exchange
+    ]);
+    executionClient.dualPositionRiskHandler = () => Promise.resolve([]); // Position is now truly flat on exchange
     await dogeEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
     const dogeSummaryAfterRealClose = dogeEngine.getHedgeLedger().getSummary(0.07100);
     console.log(`  - DOGEUSDT Side After Verified Close: ${dogeSummaryAfterRealClose.side} (Expected: FLAT)`);
@@ -303,7 +356,7 @@ async function runStateReconciliationConsensusTest() {
         throw new Error("Test 7 Failed: Legitimate closing trade did not settle position to FLAT!");
     }
     const dogeSabQtyAfterClose = client.getOmsLongPositionQty(6);
-    console.log(`  - SAB Slot #6 (DOGE) After Verified Close: ${dogeSabQtyAfterClose} (Expected: 0)`);
+    console.log(`  - SAB Slot #6 (DOGE) After Verified Close: ${String(dogeSabQtyAfterClose)} (Expected: 0)`);
     if (dogeSabQtyAfterClose !== 0) {
         throw new Error("Test 7 Failed: SAB OMS Slot not zeroed upon verified trade closure!");
     }
@@ -315,7 +368,7 @@ async function runStateReconciliationConsensusTest() {
     // Re-occupy doge long position in Hedge Mode
     dogeEngine.getHedgeLedger().occupyCoreLong(644.0, 0.06950, 2.5, 1.5);
     // Simulate a Hedge Mode ENTRY fill in userTrades: positionSide === "LONG", side === "BUY", buyer === true
-    executionClient.getUserTrades = async () => [
+    executionClient.userTradesHandler = () => Promise.resolve([
         {
             id: 999111,
             symbol: "DOGEUSDT",
@@ -333,10 +386,10 @@ async function runStateReconciliationConsensusTest() {
             buyer: true,
             maker: true,
         },
-    ];
+    ]);
     // Exchange dual position check shows position is STILL OPEN (since it's an entry!)
-    executionClient.getDualPositionRisk = async () => [
-        {
+    executionClient.dualPositionRiskHandler = () => Promise.resolve([
+        makeDualPosRisk({
             symbol: "DOGEUSDT",
             positionAmt: "644.0",
             entryPrice: "0.06950",
@@ -344,11 +397,11 @@ async function runStateReconciliationConsensusTest() {
             unRealizedProfit: "0.2382",
             leverage: "20",
             positionSide: "LONG",
-        },
-    ];
+        }),
+    ]);
     await dogeEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
     const dogeSummaryAfterEntryCheck = dogeEngine.getHedgeLedger().getSummary(0.06987);
-    console.log(`  - DOGEUSDT Long Qty After Entry Fill Check: ${dogeSummaryAfterEntryCheck.longQuantity} (Expected: 644)`);
+    console.log(`  - DOGEUSDT Long Qty After Entry Fill Check: ${String(dogeSummaryAfterEntryCheck.longQuantity)} (Expected: 644)`);
     if (dogeSummaryAfterEntryCheck.longQuantity === 0) {
         throw new Error("Test 8 Failed: Hedge Mode Entry fill (BUY) was misclassified as an EXIT fill and wiped the active position!");
     }
@@ -359,7 +412,7 @@ async function runStateReconciliationConsensusTest() {
     console.log("[Test 9/9] Verifying Open-Time Timestamp Barrier (Stale historical trades must NOT settle current position)...");
     const currentSlotOpenTime = dogeEngine.getHedgeLedger().getCoreLong().openTime;
     // Mock historical trade from 2 hours prior to position openTime
-    executionClient.getUserTrades = async () => [
+    executionClient.userTradesHandler = () => Promise.resolve([
         {
             id: 888111,
             symbol: "DOGEUSDT",
@@ -377,10 +430,10 @@ async function runStateReconciliationConsensusTest() {
             buyer: false,
             maker: true,
         },
-    ];
+    ]);
     await dogeEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
     const dogeSummaryAfterStaleTrade = dogeEngine.getHedgeLedger().getSummary(0.06987);
-    console.log(`  - DOGEUSDT Long Qty After Stale Historical Trade Check: ${dogeSummaryAfterStaleTrade.longQuantity} (Expected: 644)`);
+    console.log(`  - DOGEUSDT Long Qty After Stale Historical Trade Check: ${String(dogeSummaryAfterStaleTrade.longQuantity)} (Expected: 644)`);
     if (dogeSummaryAfterStaleTrade.longQuantity === 0) {
         throw new Error("Test 9 Failed: Stale historical trade prior to slot openTime induced a false settlement!");
     }
@@ -392,7 +445,7 @@ async function runStateReconciliationConsensusTest() {
     // Re-occupy doge long position
     dogeEngine.getHedgeLedger().occupyCoreLong(644.0, 0.06950, 2.5, 1.5);
     // Simulate a trade payload where buyer is undefined, but side is "BUY"
-    executionClient.getUserTrades = async () => [
+    executionClient.userTradesHandler = () => Promise.resolve([
         {
             id: 999333,
             symbol: "DOGEUSDT",
@@ -407,13 +460,13 @@ async function runStateReconciliationConsensusTest() {
             commissionAsset: "USDT",
             time: Date.now(),
             positionSide: "LONG",
-            buyer: undefined, // Buyer property omitted / undefined!
+            buyer: undefined, // Buyer property omitted / undefined in malformed payload
             maker: true,
         },
-    ];
+    ]);
     await dogeEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
     const dogeSummaryAfterUndefBuyer = dogeEngine.getHedgeLedger().getSummary(0.06987);
-    console.log(`  - DOGEUSDT Long Qty After Undefined Buyer Check: ${dogeSummaryAfterUndefBuyer.longQuantity} (Expected: 644)`);
+    console.log(`  - DOGEUSDT Long Qty After Undefined Buyer Check: ${String(dogeSummaryAfterUndefBuyer.longQuantity)} (Expected: 644)`);
     if (dogeSummaryAfterUndefBuyer.longQuantity === 0) {
         throw new Error("Test 10 Failed: Undefined buyer on BUY trade caused truthiness leak and settled LONG position!");
     }
@@ -423,9 +476,11 @@ async function runStateReconciliationConsensusTest() {
     // --------------------------------------------------------------------------------------
     console.log("[Test 11/12] Verifying Audit 3.0 Loophole 2 (1-Hour Bounded Fallback Window on openTime === 0)...");
     // Force slot openTime to 0 to simulate unrecorded/adopted slot
-    dogeEngine.getHedgeLedger().getCoreLong().openTime = 0;
+    if (!Reflect.set(dogeEngine.getHedgeLedger().getCoreLong(), "openTime", 0)) {
+        throw new Error("Test 11 Setup Failed: Unable to update coreLong openTime");
+    }
     // Mock a historical trade from 5 hours ago (older than 1-hour fallback window)
-    executionClient.getUserTrades = async () => [
+    executionClient.userTradesHandler = () => Promise.resolve([
         {
             id: 777222,
             symbol: "DOGEUSDT",
@@ -443,10 +498,10 @@ async function runStateReconciliationConsensusTest() {
             buyer: false,
             maker: true,
         },
-    ];
+    ]);
     await dogeEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
     const dogeSummaryAfterAdoptedCheck = dogeEngine.getHedgeLedger().getSummary(0.06987);
-    console.log(`  - DOGEUSDT Long Qty After 5-Hour Trade on openTime=0: ${dogeSummaryAfterAdoptedCheck.longQuantity} (Expected: 644)`);
+    console.log(`  - DOGEUSDT Long Qty After 5-Hour Trade on openTime=0: ${String(dogeSummaryAfterAdoptedCheck.longQuantity)} (Expected: 644)`);
     if (dogeSummaryAfterAdoptedCheck.longQuantity === 0) {
         throw new Error("Test 11 Failed: 5-hour old trade was accepted for openTime === 0 slot!");
     }
@@ -455,20 +510,23 @@ async function runStateReconciliationConsensusTest() {
     // TEST 12: Audit 3.0 Loophole 3 - BOTH Mode Query Min-Timestamp Selection
     // --------------------------------------------------------------------------------------
     console.log("[Test 12/12] Verifying Audit 3.0 Loophole 3 (BOTH Mode Query uses Earliest Open Timestamp)...");
-    let requestedStartTime = undefined;
-    executionClient.getUserTrades = async (symbol, limit, startTime) => {
-        requestedStartTime = startTime;
-        return [];
+    const startTimeBox = { value: undefined };
+    executionClient.userTradesHandler = (_symbol, _limit, startTime) => {
+        startTimeBox.value = startTime;
+        return Promise.resolve([]);
     };
     const now = Date.now();
-    dogeEngine.getHedgeLedger().getCoreLong().openTime = now - 60000; // Long opened 1 min ago
+    if (!Reflect.set(dogeEngine.getHedgeLedger().getCoreLong(), "openTime", now - 60000)) {
+        throw new Error("Test 12 Setup Failed: Unable to update coreLong openTime");
+    } // Long opened 1 min ago
     dogeEngine.getHedgeLedger().occupyShortSlot(0, 500, 0.0700, 2.5, 1.5);
     dogeEngine.getHedgeLedger().getShortSlots()[0].openTime = now - 600000; // Short opened 10 min ago
     await dogeEngine.reconcileFlatPositionWithUserTrades("BOTH", 0);
     const expectedMinTime = now - 600000;
-    console.log(`  - BOTH Mode Requested startTime: ${requestedStartTime} (Expected <= ${expectedMinTime})`);
+    const requestedStartTime = startTimeBox.value;
+    console.log(`  - BOTH Mode Requested startTime: ${String(requestedStartTime)} (Expected <= ${String(expectedMinTime)})`);
     if (!requestedStartTime || requestedStartTime > expectedMinTime) {
-        throw new Error(`Test 12 Failed: BOTH mode passed ${requestedStartTime}, which is later than shortOpenTime ${expectedMinTime}!`);
+        throw new Error(`Test 12 Failed: BOTH mode passed ${String(requestedStartTime)}, which is later than shortOpenTime ${String(expectedMinTime)}!`);
     }
     console.log("  ✅ Test 12 Passed: BOTH mode query strictly selects earliest open position timestamp.\n");
     console.log("=========================================================================");
@@ -476,6 +534,7 @@ async function runStateReconciliationConsensusTest() {
     console.log("=========================================================================\n");
 }
 runStateReconciliationConsensusTest().catch((err) => {
-    console.error(`[FATAL TEST ERROR] ${err.message}\n${err.stack}`);
+    const msg = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
+    console.error(`[FATAL TEST ERROR] ${msg}`);
     process.exit(1);
 });

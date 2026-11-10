@@ -14,37 +14,37 @@ class AuditedBinanceClient extends BinanceExecutionClient {
     return true;
   }
 
-  public override async placeOrder(params: BinanceOrderParams): Promise<BinanceOrderResponse> {
+  public override placeOrder(params: BinanceOrderParams): Promise<BinanceOrderResponse> {
     this.placedOrders.push(params);
     const orderId = this.orderIdCounter++;
-    return {
+    return Promise.resolve({
       symbol: params.symbol,
       orderId,
-      clientOrderId: `test_${orderId}`,
-      price: String(params.price || 0),
+      clientOrderId: `test_${String(orderId)}`,
+      price: params.price !== undefined ? String(params.price) : "0",
       origQty: String(params.quantity),
       executedQty: "0",
       status: "NEW",
-      timeInForce: params.timeInForce || "GTC",
+      timeInForce: params.timeInForce ?? "GTC",
       type: params.type,
       side: params.side,
       reduceOnly: false,
-      positionSide: params.positionSide || "BOTH",
-      stopPrice: String(params.stopPrice || 0),
+      positionSide: params.positionSide ?? "BOTH",
+      stopPrice: params.stopPrice !== undefined ? String(params.stopPrice) : "0",
       workingType: "CONTRACT_PRICE",
       cumQuote: "0",
       avgPrice: "0",
       updateTime: Date.now(),
-    };
+    });
   }
 
-  public override async cancelOrder(symbol: string, orderId: string | number): Promise<BinanceOrderResponse> {
+  public override cancelOrder(symbol: string, orderId: string | number): Promise<BinanceOrderResponse> {
     const numId = typeof orderId === "number" ? orderId : parseInt(orderId, 10);
     this.cancelledOrderIds.push(numId);
-    return {
+    return Promise.resolve({
       symbol,
       orderId: numId,
-      clientOrderId: `cancel_${numId}`,
+      clientOrderId: `cancel_${String(numId)}`,
       price: "0",
       origQty: "0",
       executedQty: "0",
@@ -59,7 +59,7 @@ class AuditedBinanceClient extends BinanceExecutionClient {
       cumQuote: "0",
       avgPrice: "0",
       updateTime: Date.now(),
-    };
+    });
   }
 }
 
@@ -88,7 +88,7 @@ async function runPhase3Proof() {
   );
 
   ledger.occupyCoreLong(qty, entryPrice, 0.40, 0.20);
-  console.log(`[Position Entry] Long 0.005 BTC @ $${entryPrice} | Target SL: $${initialSl}`);
+  console.log(`[Position Entry] Long 0.005 BTC @ $${String(entryPrice)} | Target SL: $${String(initialSl)}`);
 
   // 1. Dispatch Initial Exchange STOP_MARKET Order via StrategyEngine
   console.log("\n------------------------------------------------------------------------------------------");
@@ -97,10 +97,10 @@ async function runPhase3Proof() {
   await engine.syncExchangeStopLossOrder("LONG", qty, initialSl);
   const trackedSlId = ledger.getActiveStopLossOrderId("CORE_LONG");
 
-  console.log(`  PositionLedger Registered activeStopLossOrderId: #${trackedSlId}`);
+  console.log(`  PositionLedger Registered activeStopLossOrderId: #${String(trackedSlId)}`);
 
   if (!trackedSlId || trackedSlId <= 0) {
-    throw new Error(`❌ PROOF FAILED: activeStopLossOrderId #${trackedSlId} was not registered`);
+    throw new Error(`❌ PROOF FAILED: activeStopLossOrderId #${String(trackedSlId)} was not registered`);
   }
   const orderId = trackedSlId;
   console.log("  ✅ TEST 1 PASSED: Exchange-Native STOP_MARKET Order placed & ID tracked!");
@@ -113,14 +113,14 @@ async function runPhase3Proof() {
   await engine.syncExchangeStopLossOrder("LONG", qty, newSlPrice);
 
   const updatedSlId = ledger.getActiveStopLossOrderId("CORE_LONG");
-  console.log(`  PositionLedger Active SL ID Updated: #${updatedSlId}`);
+  console.log(`  PositionLedger Active SL ID Updated: #${String(updatedSlId)}`);
 
   if (mockClient.cancelledOrderIds[0] !== orderId) {
-    throw new Error(`❌ PROOF FAILED: Previous SL OrderId #${orderId} was not cancelled during ratchet!`);
+    throw new Error(`❌ PROOF FAILED: Previous SL OrderId #${String(orderId)} was not cancelled during ratchet!`);
   }
 
   if (updatedSlId === orderId || !updatedSlId) {
-    throw new Error(`❌ PROOF FAILED: Updated activeStopLossOrderId #${updatedSlId} was not assigned new ID!`);
+    throw new Error(`❌ PROOF FAILED: Updated activeStopLossOrderId #${String(updatedSlId)} was not assigned new ID!`);
   }
   console.log("  ✅ TEST 2 PASSED: Cancel-Replace Ratchet correctly cancelled old SL and activated new SL!");
 
@@ -142,25 +142,25 @@ async function runPhase3Proof() {
   const finalActiveSlId = ledger.getActiveStopLossOrderId("CORE_LONG");
   const finalPlacedOrder = mockClient.placedOrders[mockClient.placedOrders.length - 1];
 
-  console.log(`  Concurrent Dispatches: 4 | New Orders Placed: ${newOrdersPlaced} (Sequential Queue Drained)`);
-  console.log(`  Final Active SL OrderId: #${finalActiveSlId} @ stopPrice $${finalPlacedOrder.stopPrice}`);
+  console.log(`  Concurrent Dispatches: 4 | New Orders Placed: ${String(newOrdersPlaced)} (Sequential Queue Drained)`);
+  console.log(`  Final Active SL OrderId: #${String(finalActiveSlId)} @ stopPrice $${String(finalPlacedOrder.stopPrice)}`);
 
   if (newOrdersPlaced > 2) {
-    throw new Error(`❌ PROOF FAILED: Overlapping orders placed! Expected at most 2 orders placed during queue drain, got ${newOrdersPlaced}`);
+    throw new Error(`❌ PROOF FAILED: Overlapping orders placed! Expected at most 2 orders placed during queue drain, got ${String(newOrdersPlaced)}`);
   }
   if (parseFloat(String(finalPlacedOrder.stopPrice)) !== 60145.0) {
-    throw new Error(`❌ PROOF FAILED: Final resting SL price ($${finalPlacedOrder.stopPrice}) did not match latest queued target ($60145.0)!`);
+    throw new Error(`❌ PROOF FAILED: Final resting SL price ($${String(finalPlacedOrder.stopPrice)}) did not match latest queued target ($60145.0)!`);
   }
   console.log("  ✅ TEST 3 PASSED: Concurrency mutex & sequential queue successfully synchronized final SL to $60145 with zero orphan orders!");
 
   // 4. Test Order Summary Audit
   console.log("\n------------------------------------------------------------------------------------------");
   console.log("[TEST 4] Exchange Client Order History Audit");
-  console.log(`  Total Orders Placed: ${mockClient.placedOrders.length}`);
-  console.log(`  Total Orders Cancelled: ${mockClient.cancelledOrderIds.length}`);
+  console.log(`  Total Orders Placed: ${String(mockClient.placedOrders.length)}`);
+  console.log(`  Total Orders Cancelled: ${String(mockClient.cancelledOrderIds.length)}`);
 
   mockClient.placedOrders.forEach((ord, idx) => {
-    console.log(`  Order #${idx + 1} -> Type: ${ord.type} | Side: ${ord.side} | Qty: ${ord.quantity} | StopPrice: $${ord.stopPrice}`);
+    console.log(`  Order #${String(idx + 1)} -> Type: ${ord.type} | Side: ${ord.side} | Qty: ${String(ord.quantity)} | StopPrice: $${String(ord.stopPrice)}`);
   });
 
   console.log("\n==========================================================================================");
@@ -168,7 +168,7 @@ async function runPhase3Proof() {
   console.log("==========================================================================================\n");
 }
 
-runPhase3Proof().catch((err) => {
+runPhase3Proof().catch((err: unknown) => {
   console.error("❌ Phase 3 Proof Execution Error:", err);
   process.exit(1);
 });

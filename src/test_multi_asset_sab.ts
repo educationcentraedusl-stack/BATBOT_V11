@@ -8,7 +8,7 @@ function assert(condition: boolean, message: string): void {
   }
 }
 
-async function runMultiAssetSabTests(): Promise<void> {
+function runMultiAssetSabTests(): void {
   console.log("=========================================================================");
   console.log("  BATBOT_V11 PHASE 1: MULTI-ASSET SAB & RUST DATA LAYER QA VERIFICATION  ");
   console.log("=========================================================================\n");
@@ -19,9 +19,9 @@ async function runMultiAssetSabTests(): Promise<void> {
   const expectedBytes = envMaxAssets * envSlotsPerAsset * 8;
 
   console.log(`[QA Test 1] Dynamic Environment Configuration:`);
-  console.log(`  - MAX_CONCURRENT_ASSETS : ${envMaxAssets}`);
-  console.log(`  - SAB_SLOTS_PER_ASSET   : ${envSlotsPerAsset}`);
-  console.log(`  - Calculated SAB Bytes  : ${expectedBytes} bytes (${expectedBytes / 1024} KB)\n`);
+  console.log(`  - MAX_CONCURRENT_ASSETS : ${String(envMaxAssets)}`);
+  console.log(`  - SAB_SLOTS_PER_ASSET   : ${String(envSlotsPerAsset)}`);
+  console.log(`  - Calculated SAB Bytes  : ${String(expectedBytes)} bytes (${String(expectedBytes / 1024)} KB)\n`);
 
   assert(envMaxAssets >= 10, "MAX_CONCURRENT_ASSETS must be >= 10");
   assert(envSlotsPerAsset === 256, "SAB_SLOTS_PER_ASSET must be 256");
@@ -32,8 +32,9 @@ async function runMultiAssetSabTests(): Promise<void> {
     const smallSab = new SharedArrayBuffer(1024);
     new MarketDataClient(smallSab, envMaxAssets, envSlotsPerAsset);
     assert(false, "MarketDataClient should have thrown an error for undersized buffer");
-  } catch (err: any) {
-    console.log(`  ✅ Correctly caught undersized buffer exception: "${err.message}"\n`);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(`  ✅ Correctly caught undersized buffer exception: "${msg}"\n`);
   }
 
   console.log(`[QA Test 2B] Testing Fail-Fast RangeError Safeguard on Out-of-Bounds Index Access...`);
@@ -42,20 +43,21 @@ async function runMultiAssetSabTests(): Promise<void> {
   try {
     testClient.getOBI(9999);
     assert(false, "MarketDataClient should have thrown RangeError for out-of-bounds assetIdx=9999");
-  } catch (err: any) {
+  } catch (err: unknown) {
     assert(err instanceof RangeError, "Error must be an instance of RangeError");
-    console.log(`  ✅ Correctly caught RangeError on out-of-bounds asset access: "${err.message}"\n`);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(`  ✅ Correctly caught RangeError on out-of-bounds asset access: "${msg}"\n`);
   }
 
   // 3. Multi-Asset Atomic SharedArrayBuffer Read/Write Isolation
-  console.log(`[QA Test 3] Validating Cross-Asset Memory Isolation across ${envMaxAssets} Assets...`);
+  console.log(`[QA Test 3] Validating Cross-Asset Memory Isolation across ${String(envMaxAssets)} Assets...`);
   const sab = new SharedArrayBuffer(expectedBytes);
   const client = new MarketDataClient(sab, envMaxAssets, envSlotsPerAsset);
 
   // Write distinct test vectors into each asset slot
   const sampleData = Array.from({ length: envMaxAssets }, (_, i) => ({
     assetIdx: i,
-    symbol: `ALT_ASSET_${i + 1}`,
+    symbol: `ALT_ASSET_${String(i + 1)}`,
     bidPrice: 100.5 + i * 12.34,
     askPrice: 100.8 + i * 12.34,
     obi: 0.15 * (i % 2 === 0 ? 1 : -1) * (i + 1),
@@ -117,24 +119,24 @@ async function runMultiAssetSabTests(): Promise<void> {
     const readRv = client.getGarmanKlassRV(idx);
     const readHurst = client.getHurstExponent(idx);
 
-    assert(Math.abs(readBid - item.bidPrice) < 1e-6, `Asset ${idx} bid mismatch: expected ${item.bidPrice}, got ${readBid}`);
-    assert(Math.abs(readAsk - item.askPrice) < 1e-6, `Asset ${idx} ask mismatch: expected ${item.askPrice}, got ${readAsk}`);
-    assert(Math.abs(readObi - item.obi) < 1e-6, `Asset ${idx} OBI mismatch: expected ${item.obi}, got ${readObi}`);
-    assert(Math.abs(readCvd - item.cvd) < 1e-6, `Asset ${idx} CVD mismatch: expected ${item.cvd}, got ${readCvd}`);
-    assert(Math.abs(readHawkes - item.hawkesIntensity) < 1e-6, `Asset ${idx} Hawkes mismatch: expected ${item.hawkesIntensity}, got ${readHawkes}`);
-    assert(Math.abs(readRv - item.garmanKlassRv) < 1e-6, `Asset ${idx} RV mismatch: expected ${item.garmanKlassRv}, got ${readRv}`);
-    assert(Math.abs(readHurst - item.hurstExponent) < 1e-6, `Asset ${idx} Hurst mismatch: expected ${item.hurstExponent}, got ${readHurst}`);
+    assert(Math.abs(readBid - item.bidPrice) < 1e-6, `Asset ${String(idx)} bid mismatch: expected ${String(item.bidPrice)}, got ${String(readBid)}`);
+    assert(Math.abs(readAsk - item.askPrice) < 1e-6, `Asset ${String(idx)} ask mismatch: expected ${String(item.askPrice)}, got ${String(readAsk)}`);
+    assert(Math.abs(readObi - item.obi) < 1e-6, `Asset ${String(idx)} OBI mismatch: expected ${String(item.obi)}, got ${String(readObi)}`);
+    assert(Math.abs(readCvd - item.cvd) < 1e-6, `Asset ${String(idx)} CVD mismatch: expected ${String(item.cvd)}, got ${String(readCvd)}`);
+    assert(Math.abs(readHawkes - item.hawkesIntensity) < 1e-6, `Asset ${String(idx)} Hawkes mismatch: expected ${String(item.hawkesIntensity)}, got ${String(readHawkes)}`);
+    assert(Math.abs(readRv - item.garmanKlassRv) < 1e-6, `Asset ${String(idx)} RV mismatch: expected ${String(item.garmanKlassRv)}, got ${String(readRv)}`);
+    assert(Math.abs(readHurst - item.hurstExponent) < 1e-6, `Asset ${String(idx)} Hurst mismatch: expected ${String(item.hurstExponent)}, got ${String(readHurst)}`);
 
     // Verify top bids buffer filler
     const topBidsBuf = new Float64Array(40);
     client.fillTopBids(topBidsBuf, 20, idx);
-    assert(Math.abs(topBidsBuf[0] - item.bidPrice) < 1e-6, `Asset ${idx} fillTopBids level 0 price mismatch`);
-    assert(Math.abs(topBidsBuf[1] - (10.0 + idx)) < 1e-6, `Asset ${idx} fillTopBids level 0 qty mismatch`);
+    assert(Math.abs(topBidsBuf[0] - item.bidPrice) < 1e-6, `Asset ${String(idx)} fillTopBids level 0 price mismatch`);
+    assert(Math.abs(topBidsBuf[1] - (10.0 + idx)) < 1e-6, `Asset ${String(idx)} fillTopBids level 0 qty mismatch`);
   }
-  console.log(`  ✅ All ${envMaxAssets} assets verified with 100% memory isolation & zero cross-talk!\n`);
+  console.log(`  ✅ All ${String(envMaxAssets)} assets verified with 100% memory isolation & zero cross-talk!\n`);
 
   // 4. Sub-Microsecond Multi-Asset Scalar Getter Benchmark
-  console.log(`[QA Test 4A] Multi-Asset Scalar Getter Benchmark (100,000 Ticks across ${envMaxAssets} assets)...`);
+  console.log(`[QA Test 4A] Multi-Asset Scalar Getter Benchmark (100,000 Ticks across ${String(envMaxAssets)} assets)...`);
   // Warm up V8 JIT optimization pipeline
   for (let w = 0; w < 5000; w++) {
     client.getOBI(w % envMaxAssets);
@@ -210,7 +212,7 @@ async function runMultiAssetSabTests(): Promise<void> {
   Atomics.store(scaledBigIntView, targetSlot20, floatBigInt[0]);
 
   const readScaledBid = scaledClient.getBestBidPrice(19);
-  assert(Math.abs(readScaledBid - 5432.10) < 1e-6, `Scaled asset 19 bid mismatch: expected 5432.10, got ${readScaledBid}`);
+  assert(Math.abs(readScaledBid - 5432.10) < 1e-6, `Scaled asset 19 bid mismatch: expected 5432.10, got ${String(readScaledBid)}`);
   console.log(`  ✅ Successfully scaled to 20 assets (40,960 bytes) dynamically without code changes!\n`);
 
   console.log("=========================================================================");
@@ -218,7 +220,9 @@ async function runMultiAssetSabTests(): Promise<void> {
   console.log("=========================================================================");
 }
 
-runMultiAssetSabTests().catch((err) => {
+try {
+  runMultiAssetSabTests();
+} catch (err: unknown) {
   console.error("❌ Fatal error in Phase 1 QA Harness:", err);
   process.exit(1);
-});
+}

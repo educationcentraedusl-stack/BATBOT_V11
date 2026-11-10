@@ -8,7 +8,7 @@ function assert(condition: boolean, message: string): void {
   }
 }
 
-async function runMonotonicZeroRetreatHardLockTests(): Promise<void> {
+function runMonotonicZeroRetreatHardLockTests(): void {
   console.log("================================================================================");
   console.log("  BATBOT_V11 SOTA: ZERO-RETREAT MONOTONIC STOP LOSS HARD LOCK TEST SUITE");
   console.log("  - Exact BTCUSDT Short Live Incident Regression Verification ($79,696.5)");
@@ -32,44 +32,44 @@ async function runMonotonicZeroRetreatHardLockTests(): Promise<void> {
   // 1. Initial short entry
   btcLedger.occupyShortSlot(0, qty, entryPrice, initialTpPct, initialSlPct);
   let shortSlot = btcLedger.getShortSlots()[0];
-  console.log(`  ✓ Short Occupied @ $${entryPrice}: Initial SL set to $${shortSlot.stopLossPrice}`);
-  assert(shortSlot.stopLossPrice === 80493.5, `Initial SL must be $80493.5, got $${shortSlot.stopLossPrice}`);
+  console.log(`  ✓ Short Occupied @ $${String(entryPrice)}: Initial SL set to $${String(shortSlot.stopLossPrice)}`);
+  assert(shortSlot.stopLossPrice === 80493.5, `Initial SL must be $80493.5, got $${String(shortSlot.stopLossPrice)}`);
 
   // 2. Price falls to $79,377.0 (+8.03% ROE). Tier 1 Step-Collar triggers and ratchets SL below entry
   btcLedger.evaluateHedgeDynamicTpSl(79377.0, 0, 0, 0, 0, 0.00028, 0, Date.now());
   shortSlot = btcLedger.getShortSlots()[0];
   const ratchetedSl = shortSlot.stopLossPrice;
-  console.log(`  ✓ In-Profit Ratchet: SL successfully tightened to $${ratchetedSl} (locking in profit below entry)`);
-  assert(shortSlot.stepCollarTier === 1, `Step-Collar Tier 1 must be active, got ${shortSlot.stepCollarTier}`);
-  assert(ratchetedSl < entryPrice, `Ratcheted SL must be below entry price $${entryPrice}, got $${ratchetedSl}`);
+  console.log(`  ✓ In-Profit Ratchet: SL successfully tightened to $${String(ratchetedSl)} (locking in profit below entry)`);
+  assert(shortSlot.stepCollarTier === 1, `Step-Collar Tier 1 must be active, got ${String(shortSlot.stepCollarTier)}`);
+  assert(ratchetedSl < entryPrice, `Ratcheted SL must be below entry price $${String(entryPrice)}, got $${String(ratchetedSl)}`);
 
   // 3. ATTEMPT 1: Price bounces back up toward entry ($79,600.0) with wider volatility recalculation
   btcLedger.evaluateHedgeDynamicTpSl(79600.0, 0, 0, 0, 0, 0.00050, 0, Date.now());
   shortSlot = btcLedger.getShortSlots()[0];
   assert(shortSlot.stopLossPrice === ratchetedSl,
-    `FATAL: Price pullback caused SL retreat! Expected $${ratchetedSl}, got $${shortSlot.stopLossPrice}`);
-  console.log(`  ✓ ATTEMPT 1 BLOCKED: Price bounce rejected wider SL! Maintained ratcheted SL @ $${shortSlot.stopLossPrice}`);
+    `FATAL: Price pullback caused SL retreat! Expected $${String(ratchetedSl)}, got $${String(shortSlot.stopLossPrice)}`);
+  console.log(`  ✓ ATTEMPT 1 BLOCKED: Price bounce rejected wider SL! Maintained ratcheted SL @ $${String(shortSlot.stopLossPrice)}`);
 
   // 4. ATTEMPT 2: Authoritative Snapshot reconciliation re-occupying slot
   btcLedger.occupyShortSlot(0, qty, entryPrice, initialTpPct, initialSlPct, true);
   shortSlot = btcLedger.getShortSlots()[0];
   assert(shortSlot.stopLossPrice === ratchetedSl,
-    `FATAL: Snapshot reconciliation caused SL retreat! Expected $${ratchetedSl}, got $${shortSlot.stopLossPrice}`);
-  console.log(`  ✓ ATTEMPT 2 BLOCKED: Snapshot reconciliation rejected wider baseline SL! Maintained ratcheted SL @ $${shortSlot.stopLossPrice}`);
+    `FATAL: Snapshot reconciliation caused SL retreat! Expected $${String(ratchetedSl)}, got $${String(shortSlot.stopLossPrice)}`);
+  console.log(`  ✓ ATTEMPT 2 BLOCKED: Snapshot reconciliation rejected wider baseline SL! Maintained ratcheted SL @ $${String(shortSlot.stopLossPrice)}`);
 
   // 5. ATTEMPT 3: Multi-lot accumulation re-evaluating slot
   btcLedger.occupyShortSlot(0, qty, entryPrice, initialTpPct, initialSlPct, false);
   shortSlot = btcLedger.getShortSlots()[0];
   assert(shortSlot.stopLossPrice === ratchetedSl,
-    `FATAL: Position accumulation caused SL retreat! Expected $${ratchetedSl}, got $${shortSlot.stopLossPrice}`);
-  console.log(`  ✓ ATTEMPT 3 BLOCKED: Position accumulation preserved ratcheted SL @ $${shortSlot.stopLossPrice}`);
+    `FATAL: Position accumulation caused SL retreat! Expected $${String(ratchetedSl)}, got $${String(shortSlot.stopLossPrice)}`);
+  console.log(`  ✓ ATTEMPT 3 BLOCKED: Position accumulation preserved ratcheted SL @ $${String(shortSlot.stopLossPrice)}`);
 
   // 6. ATTEMPT 4: Break-Even fill via processTpLimitFill
   btcLedger.processTpLimitFill("SHORT_SLOT_0", 12345, 0.0001, 78000.0, true);
   shortSlot = btcLedger.getShortSlots()[0];
   assert(shortSlot.stopLossPrice <= ratchetedSl,
-    `FATAL: processTpLimitFill caused SL retreat! Expected <= $${ratchetedSl}, got $${shortSlot.stopLossPrice}`);
-  console.log(`  ✓ ATTEMPT 4 BLOCKED: TP limit fill preserved tight SL ($${shortSlot.stopLossPrice}) without retreat\n`);
+    `FATAL: processTpLimitFill caused SL retreat! Expected <= $${String(ratchetedSl)}, got $${String(shortSlot.stopLossPrice)}`);
+  console.log(`  ✓ ATTEMPT 4 BLOCKED: TP limit fill preserved tight SL ($${String(shortSlot.stopLossPrice)}) without retreat\n`);
 
   btcLedger.releaseShortSlot(0);
 
@@ -84,41 +84,41 @@ async function runMonotonicZeroRetreatHardLockTests(): Promise<void> {
   const longQty = 0.1;
   ethLedger.occupyCoreLong(longQty, longEntry, 2.5, 1.0);
   let coreLong = ethLedger.getCoreLong();
-  console.log(`  ✓ Long Occupied @ $${longEntry}: Initial SL set to $${coreLong.stopLossPrice}`);
-  assert(coreLong.stopLossPrice === 59400.0, `Initial Long SL must be $59400, got $${coreLong.stopLossPrice}`);
+  console.log(`  ✓ Long Occupied @ $${String(longEntry)}: Initial SL set to $${String(coreLong.stopLossPrice)}`);
+  assert(coreLong.stopLossPrice === 59400.0, `Initial Long SL must be $59400, got $${String(coreLong.stopLossPrice)}`);
 
   // Tighten Long SL via Tier 1 ROE Ratchet ($60,250 -> +8.33% ROE)
   ethLedger.evaluateHedgeDynamicTpSl(60250.0, 0, 0, 0, 0, 0.00028, 0, Date.now());
   coreLong = ethLedger.getCoreLong();
   const ratchetedLongSl = coreLong.stopLossPrice;
-  assert(coreLong.stepCollarTier === 1, `Long Step-Collar Tier 1 must be active, got ${coreLong.stepCollarTier}`);
-  assert(ratchetedLongSl > longEntry, `Long SL must be ratcheted above entry $${longEntry}, got $${ratchetedLongSl}`);
-  console.log(`  ✓ Long SL Ratcheted to $${ratchetedLongSl} (Locking profit above entry)`);
+  assert(coreLong.stepCollarTier === 1, `Long Step-Collar Tier 1 must be active, got ${String(coreLong.stepCollarTier)}`);
+  assert(ratchetedLongSl > longEntry, `Long SL must be ratcheted above entry $${String(longEntry)}, got $${String(ratchetedLongSl)}`);
+  console.log(`  ✓ Long SL Ratcheted to $${String(ratchetedLongSl)} (Locking profit above entry)`);
 
   // Attempt backward retreat via pullback tick to $60,100
   ethLedger.evaluateHedgeDynamicTpSl(60100.0, 0, 0, 0, 0, 0.00050, 0, Date.now());
   coreLong = ethLedger.getCoreLong();
   assert(coreLong.stopLossPrice === ratchetedLongSl, `Long SL must not retreat to wider level on pullback`);
-  console.log(`  ✓ Pullback Retreat Attempt Blocked! SL firmly locked at $${coreLong.stopLossPrice}`);
+  console.log(`  ✓ Pullback Retreat Attempt Blocked! SL firmly locked at $${String(coreLong.stopLossPrice)}`);
 
   // Attempt backward retreat via Snapshot Reconciliation
   ethLedger.occupyCoreLong(longQty, longEntry, 2.5, 1.0, true);
   coreLong = ethLedger.getCoreLong();
   assert(coreLong.stopLossPrice === ratchetedLongSl, `Long SL must not retreat on snapshot reconciliation`);
-  console.log(`  ✓ Snapshot Reconciliation Retreat Blocked! SL firmly locked at $${coreLong.stopLossPrice}`);
+  console.log(`  ✓ Snapshot Reconciliation Retreat Blocked! SL firmly locked at $${String(coreLong.stopLossPrice)}`);
 
   // Attempt backward retreat via Position Accumulation
   ethLedger.occupyCoreLong(longQty, longEntry, 2.5, 1.0, false);
   coreLong = ethLedger.getCoreLong();
   assert(coreLong.stopLossPrice === ratchetedLongSl, `Long SL must not retreat on accumulation`);
-  console.log(`  ✓ Accumulation Retreat Blocked! SL firmly locked at $${coreLong.stopLossPrice}`);
+  console.log(`  ✓ Accumulation Retreat Blocked! SL firmly locked at $${String(coreLong.stopLossPrice)}`);
 
   // Legitimate tightening to Tier 2 ($60,500 -> +16.67% ROE) must advance SL
   ethLedger.evaluateHedgeDynamicTpSl(60500.0, 0, 0, 0, 0, 0.00028, 0, Date.now());
   coreLong = ethLedger.getCoreLong();
-  assert(coreLong.stepCollarTier === 2, `Long Step-Collar Tier 2 must be active, got ${coreLong.stepCollarTier}`);
-  assert(coreLong.stopLossPrice > ratchetedLongSl, `Legitimate tightening must advance SL beyond $${ratchetedLongSl}, got $${coreLong.stopLossPrice}`);
-  console.log(`  ✓ Legitimate Tightening Succeeded: SL advanced to $${coreLong.stopLossPrice}\n`);
+  assert(coreLong.stepCollarTier === 2, `Long Step-Collar Tier 2 must be active, got ${String(coreLong.stepCollarTier)}`);
+  assert(coreLong.stopLossPrice > ratchetedLongSl, `Legitimate tightening must advance SL beyond $${String(ratchetedLongSl)}, got $${String(coreLong.stopLossPrice)}`);
+  console.log(`  ✓ Legitimate Tightening Succeeded: SL advanced to $${String(coreLong.stopLossPrice)}\n`);
 
   ethLedger.releaseCoreLong();
 
@@ -156,14 +156,16 @@ async function runMonotonicZeroRetreatHardLockTests(): Promise<void> {
 
   console.log(`  ✓ Executed ${iterations.toLocaleString()} monotonic evaluations in ${totalMs.toFixed(2)} ms`);
   console.log(`  ✓ Average Latency: ${perCallUs.toFixed(3)} µs / call (< 1.500 µs HFT threshold)`);
-  assert(perCallUs < 1.5, `Monotonic Stop Loss latency must be < 1.5µs, got ${perCallUs}µs`);
+  assert(perCallUs < 1.5, `Monotonic Stop Loss latency must be < 1.5µs, got ${String(perCallUs)}µs`);
 
   console.log("\n================================================================================");
   console.log("  ALL ZERO-RETREAT MONOTONIC HARD LOCK TESTS PASSED! (100% MATHEMATICALLY PROVEN)");
   console.log("================================================================================");
 }
 
-runMonotonicZeroRetreatHardLockTests().catch((err) => {
+try {
+  runMonotonicZeroRetreatHardLockTests();
+} catch (err: unknown) {
   console.error("Test execution failed:", err);
   process.exit(1);
-});
+}

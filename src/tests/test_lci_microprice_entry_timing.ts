@@ -6,9 +6,7 @@ import { BinanceExecutionClient } from "../execution/binance";
 import { StrategyEngine } from "../strategy/engine";
 import { SAB_SLOTS } from "../ipc/sabSchema";
 import { timeSynchronizer } from "../utils/timeSynchronizer";
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const nativeAddon = require("../../index.js");
+import * as nativeAddon from "../../index";
 
 function assert(condition: boolean, message: string): void {
   if (!condition) {
@@ -20,67 +18,70 @@ function assert(condition: boolean, message: string): void {
 function createMockExecutionClient(): BinanceExecutionClient {
   const client = new BinanceExecutionClient();
   client.isConfigured = () => true;
-  client.placeOrder = async () => ({
-    orderId: 0,
-    symbol: "BTCUSDT",
-    status: "NEW",
-    clientOrderId: "MOCK",
-    price: "0",
-    avgPrice: "0",
-    origQty: "0",
-    executedQty: "0",
-    cumQuote: "0",
-    timeInForce: "GTC",
-    type: "LIMIT",
-    side: "BUY",
-    reduceOnly: false,
-    positionSide: "SHORT",
-    stopPrice: "0",
-    workingType: "CONTRACT_PRICE",
-    updateTime: Date.now(),
-  });
-  client.cancelOrder = async () => ({
-    orderId: 0,
-    symbol: "BTCUSDT",
-    status: "CANCELED",
-    clientOrderId: "MOCK",
-    price: "0",
-    avgPrice: "0",
-    origQty: "0",
-    executedQty: "0",
-    cumQuote: "0",
-    timeInForce: "GTC",
-    type: "LIMIT",
-    side: "BUY",
-    reduceOnly: false,
-    positionSide: "SHORT",
-    stopPrice: "0",
-    workingType: "CONTRACT_PRICE",
-    updateTime: Date.now(),
-  });
-  client.cancelBatchOrders = async () => [];
-  client.placePositionStopLoss = async () => ({
-    orderId: 0,
-    symbol: "BTCUSDT",
-    status: "NEW",
-    clientOrderId: "MOCK",
-    price: "0",
-    avgPrice: "0",
-    origQty: "0",
-    executedQty: "0",
-    cumQuote: "0",
-    timeInForce: "GTC",
-    type: "STOP_MARKET",
-    side: "BUY",
-    reduceOnly: false,
-    positionSide: "SHORT",
-    stopPrice: "0",
-    workingType: "CONTRACT_PRICE",
-    updateTime: Date.now(),
-  });
-  client.getDualPositionRisk = async () => [];
-  client.getOpenOrders = async () => [];
-  client.getUserTrades = async () => [];
+  client.placeOrder = () =>
+    Promise.resolve({
+      orderId: 0,
+      symbol: "BTCUSDT",
+      status: "NEW",
+      clientOrderId: "MOCK",
+      price: "0",
+      avgPrice: "0",
+      origQty: "0",
+      executedQty: "0",
+      cumQuote: "0",
+      timeInForce: "GTC",
+      type: "LIMIT",
+      side: "BUY",
+      reduceOnly: false,
+      positionSide: "SHORT",
+      stopPrice: "0",
+      workingType: "CONTRACT_PRICE",
+      updateTime: Date.now(),
+    });
+  client.cancelOrder = () =>
+    Promise.resolve({
+      orderId: 0,
+      symbol: "BTCUSDT",
+      status: "CANCELED",
+      clientOrderId: "MOCK",
+      price: "0",
+      avgPrice: "0",
+      origQty: "0",
+      executedQty: "0",
+      cumQuote: "0",
+      timeInForce: "GTC",
+      type: "LIMIT",
+      side: "BUY",
+      reduceOnly: false,
+      positionSide: "SHORT",
+      stopPrice: "0",
+      workingType: "CONTRACT_PRICE",
+      updateTime: Date.now(),
+    });
+  client.cancelBatchOrders = () => Promise.resolve([]);
+  client.placePositionStopLoss = () =>
+    Promise.resolve({
+      orderId: 0,
+      symbol: "BTCUSDT",
+      status: "NEW",
+      clientOrderId: "MOCK",
+      price: "0",
+      avgPrice: "0",
+      origQty: "0",
+      executedQty: "0",
+      cumQuote: "0",
+      timeInForce: "GTC",
+      type: "STOP_MARKET",
+      side: "BUY",
+      reduceOnly: false,
+      positionSide: "SHORT",
+      stopPrice: "0",
+      workingType: "CONTRACT_PRICE",
+      updateTime: Date.now(),
+    });
+  client.getDualPositionRisk = () => Promise.resolve([]);
+  client.getOpenOrders = () => Promise.resolve([]);
+  client.getUserTrades = () => Promise.resolve([]);
   client.subscribeIncomeUpdates = () => () => {};
   client.subscribeUserTradeUpdates = () => () => {};
   return client;
@@ -126,7 +127,7 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   // --------------------------------------------------------------------------
   // Pipeline Warmup (Welford & Mamba SSM state conditioning)
   // --------------------------------------------------------------------------
-  let price = 60000.0;
+  const price = 60000.0;
   for (let i = 0; i < 15; i++) {
     const nowMs = timeSynchronizer.getAdjustedNowMs();
     Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
@@ -206,8 +207,8 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   const aiDir1 = client.getAIPredictionDirection(0);
   const aiConf1 = client.getAIPredictionConfidence(0);
   console.log(`  Stage 1 Physical AI: Direction=${aiDir1.toFixed(4)}, Confidence=${(aiConf1 * 100).toFixed(2)}%`);
-  assert(aiDir1 > 0.0, `Stage 1 expected bullish AI direction, got ${aiDir1}`);
-  assert(aiConf1 >= 0.495, `Stage 1 expected AI confidence >= 0.495, got ${aiConf1}`);
+  assert(aiDir1 > 0.0, `Stage 1 expected bullish AI direction, got ${String(aiDir1)}`);
+  assert(aiConf1 >= 0.495, `Stage 1 expected AI confidence >= 0.495, got ${String(aiConf1)}`);
 
   const initiationSignal = engine.evaluateTick();
   if (initiationSignal.executionPromise) {
@@ -308,8 +309,8 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   const aiDir3 = client.getAIPredictionDirection(0);
   const aiConf3 = client.getAIPredictionConfidence(0);
   console.log(`  Stage 3 Physical AI: Direction=${aiDir3.toFixed(4)}, Confidence=${(aiConf3 * 100).toFixed(2)}%`);
-  assert(aiDir3 < 0.0, `Stage 3 expected bearish AI direction, got ${aiDir3}`);
-  assert(aiConf3 >= 0.495, `Stage 3 expected AI confidence >= 0.495, got ${aiConf3}`);
+  assert(aiDir3 < 0.0, `Stage 3 expected bearish AI direction, got ${String(aiDir3)}`);
+  assert(aiConf3 >= 0.495, `Stage 3 expected AI confidence >= 0.495, got ${String(aiConf3)}`);
 
   const breakdownSignal = engine.evaluateTick();
   if (breakdownSignal.executionPromise) {
@@ -326,7 +327,8 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   process.exit(0);
 }
 
-runLCIMicropriceTimingTestSuite().catch((err) => {
-  console.error(`\n❌ TEST SUITE FAILED: ${err?.stack || err?.message || String(err)}\n`);
+runLCIMicropriceTimingTestSuite().catch((err: unknown) => {
+  const errDetail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  console.error(`\n❌ TEST SUITE FAILED: ${errDetail}\n`);
   process.exit(1);
 });

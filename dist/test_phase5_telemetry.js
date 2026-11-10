@@ -55,7 +55,6 @@ async function runPhase5Tests() {
     for (let i = 0; i < tickCount; i++) {
         const isSignal = i % 250 === 0;
         const signalType = isSignal ? (i % 500 === 0 ? "BUY" : "SELL") : "NONE";
-        const tickStart = process.hrtime.bigint();
         logger.logSignal(BigInt(i + 1), signalType, 0.35, 120.5, 0.02, 95000.0, 95001.0, 0.45 // 0.45 microsecond overhead
         );
         if (isSignal && (signalType === "BUY" || signalType === "SELL")) {
@@ -68,13 +67,13 @@ async function runPhase5Tests() {
     console.log(`[TEST 1 PASSED] Completed 100,000 logger writes in ${(totalDurationNs / 1e6).toFixed(2)} ms.`);
     console.log(`  Average Logger Overhead per Tick: ${avgLoggerLatencyUs.toFixed(3)} µs (Sub-microsecond constraint verified!)`);
     const stats = logger.getStats();
-    console.log(`  Logged Signals: ${stats.totalSignalsLogged}, Logged Executions: ${stats.totalExecutionsLogged}`);
-    console.log(`  Realized PnL: $${stats.realizedPnl}, Win Rate: ${stats.winRatePercent}%`);
+    console.log(`  Logged Signals: ${String(stats.totalSignalsLogged)}, Logged Executions: ${String(stats.totalExecutionsLogged)}`);
+    console.log(`  Realized PnL: $${String(stats.realizedPnl)}, Win Rate: ${String(stats.winRatePercent)}%`);
     // Force asynchronous flush to disk
     await logger.flushAsync();
     const signalsExist = fs.existsSync(path.join(dataDir, "signals.jsonl"));
     const execsExist = fs.existsSync(path.join(dataDir, "executions.jsonl"));
-    console.log(`  File Persistence Check: signals.jsonl (${signalsExist}), executions.jsonl (${execsExist})`);
+    console.log(`  File Persistence Check: signals.jsonl (${String(signalsExist)}), executions.jsonl (${String(execsExist)})`);
     if (!signalsExist || !execsExist) {
         throw new Error("File persistence verification failed!");
     }
@@ -169,15 +168,15 @@ async function runPhase5Tests() {
     });
     const backtestResult = backtester.run(syntheticTicks);
     console.log("[TEST 4 RESULT] Backtest Completed Successfully:");
-    console.log(`  Initial Capital: $${backtestResult.initialCapital}`);
-    console.log(`  Final Capital:   $${backtestResult.finalCapital}`);
-    console.log(`  Net PnL:         $${backtestResult.netPnl} (${backtestResult.totalReturnPercent}%)`);
-    console.log(`  Total Trades:    ${backtestResult.totalTradesExecuted} (W: ${backtestResult.winningTrades} / L: ${backtestResult.losingTrades})`);
-    console.log(`  Win Rate:        ${backtestResult.winRatePercent}%`);
-    console.log(`  Profit Factor:   ${backtestResult.profitFactor}`);
-    console.log(`  Max Drawdown:    ${backtestResult.maxDrawdownPercent}%`);
-    console.log(`  Sharpe Ratio:    ${backtestResult.sharpeRatio}`);
-    console.log(`  Avg Tick Time:   ${backtestResult.avgTickProcessingTimeUs} µs`);
+    console.log(`  Initial Capital: $${String(backtestResult.initialCapital)}`);
+    console.log(`  Final Capital:   $${String(backtestResult.finalCapital)}`);
+    console.log(`  Net PnL:         $${String(backtestResult.netPnl)} (${String(backtestResult.totalReturnPercent)}%)`);
+    console.log(`  Total Trades:    ${String(backtestResult.totalTradesExecuted)} (W: ${String(backtestResult.winningTrades)} / L: ${String(backtestResult.losingTrades)})`);
+    console.log(`  Win Rate:        ${String(backtestResult.winRatePercent)}%`);
+    console.log(`  Profit Factor:   ${String(backtestResult.profitFactor)}`);
+    console.log(`  Max Drawdown:    ${String(backtestResult.maxDrawdownPercent)}%`);
+    console.log(`  Sharpe Ratio:    ${String(backtestResult.sharpeRatio)}`);
+    console.log(`  Avg Tick Time:   ${String(backtestResult.avgTickProcessingTimeUs)} µs`);
     console.log(`  Throughput:      ${backtestResult.throughputTicksPerSec.toLocaleString()} ticks/sec`);
     if (backtestResult.totalTicksEvaluated !== 1000) {
         throw new Error("Backtest engine did not evaluate all ticks!");

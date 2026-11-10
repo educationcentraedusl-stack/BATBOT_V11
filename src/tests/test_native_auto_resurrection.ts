@@ -21,7 +21,7 @@ import {
   UserShutdownPayload
 } from "../supervisor/types";
 
-async function runStage1HygieneAndSanitization(): Promise<void> {
+function runStage1HygieneAndSanitization(): void {
   process.stdout.write("\n\x1b[1m=== STAGE 1: WORKSPACE HYGIENE & TERMINAL SANITIZER VALIDATION ===\x1b[0m\n");
 
   const hygiene = new WorkspaceHygiene();
@@ -54,7 +54,7 @@ async function runStage1HygieneAndSanitization(): Promise<void> {
   if (fs.existsSync(testProgressPath)) {
     throw new Error("Stage 1 Failure: testProgressPath was not unlinked!");
   }
-  process.stdout.write(`  [OK] Decontamination verified: ${purged.length} stale artifact(s) successfully unlinked.\n`);
+  process.stdout.write(`  [OK] Decontamination verified: ${String(purged.length)} stale artifact(s) successfully unlinked.\n`);
 
   // Execute terminal sanitizer
   TerminalSanitizer.performFullSanitization(false);
@@ -95,16 +95,40 @@ function runStage2IpcContractValidation(): void {
     timestamp: Date.now()
   };
 
-  if (handshake.type !== "HANDSHAKE_INIT" || handshake.workerPid !== 12345) {
+  const parsedHandshake: unknown = JSON.parse(JSON.stringify(handshake));
+  const parsedPing: unknown = JSON.parse(JSON.stringify(ping));
+  const parsedResurrect: unknown = JSON.parse(JSON.stringify(resurrect));
+  const parsedShutdown: unknown = JSON.parse(JSON.stringify(shutdown));
+
+  const isPlainRecord = (val: unknown): val is Record<string, unknown> =>
+    typeof val === "object" && val !== null && !Array.isArray(val);
+
+  if (
+    !isPlainRecord(parsedHandshake) ||
+    parsedHandshake["type"] !== "HANDSHAKE_INIT" ||
+    parsedHandshake["workerPid"] !== 12345
+  ) {
     throw new Error("Stage 2 Failure: Invalid HandshakeInitPayload structure.");
   }
-  if (ping.type !== "HEARTBEAT_PING" || ping.seq !== 1) {
+  if (
+    !isPlainRecord(parsedPing) ||
+    parsedPing["type"] !== "HEARTBEAT_PING" ||
+    parsedPing["seq"] !== 1
+  ) {
     throw new Error("Stage 2 Failure: Invalid HeartbeatPingPayload structure.");
   }
-  if (resurrect.type !== "INTENTIONAL_RESURRECT" || resurrect.consecutiveFailures !== 3) {
+  if (
+    !isPlainRecord(parsedResurrect) ||
+    parsedResurrect["type"] !== "INTENTIONAL_RESURRECT" ||
+    parsedResurrect["consecutiveFailures"] !== 3
+  ) {
     throw new Error("Stage 2 Failure: Invalid IntentionalResurrectPayload structure.");
   }
-  if (shutdown.type !== "USER_SHUTDOWN" || shutdown.exitCode !== 0) {
+  if (
+    !isPlainRecord(parsedShutdown) ||
+    parsedShutdown["type"] !== "USER_SHUTDOWN" ||
+    parsedShutdown["exitCode"] !== 0
+  ) {
     throw new Error("Stage 2 Failure: Invalid UserShutdownPayload structure.");
   }
 
@@ -205,14 +229,17 @@ if (generation === 1) {
         if (fs.existsSync(mockWorkerPath)) {
           fs.unlinkSync(mockWorkerPath);
         }
-      } catch {
-        // Ignore
+      } catch (unlinkErr: unknown) {
+        process.stderr.write(
+          `[warn] Failed to unlink mock worker: ${unlinkErr instanceof Error ? unlinkErr.message : String(unlinkErr)}\n`
+        );
       }
 
       if (code !== 0) {
-        return reject(
-          new Error(`Stage 3/4 Failure: Guardian exited with non-zero code: ${code}\nStderr: ${stderrBuffer}`)
+        reject(
+          new Error(`Stage 3/4 Failure: Guardian exited with non-zero code: ${String(code)}\nStderr: ${stderrBuffer}`)
         );
+        return;
       }
 
       // Verify stdout contained generation 1 AND generation 2
@@ -221,13 +248,16 @@ if (generation === 1) {
       const sawCleanExit = stdoutBuffer.includes("Shutting down Guardian Kernel");
 
       if (!sawGen1) {
-        return reject(new Error("Stage 3/4 Failure: Guardian did not launch Generation #1!"));
+        reject(new Error("Stage 3/4 Failure: Guardian did not launch Generation #1!"));
+        return;
       }
       if (!sawResurrect) {
-        return reject(new Error("Stage 3/4 Failure: Guardian did not resurrect Generation #2!"));
+        reject(new Error("Stage 3/4 Failure: Guardian did not resurrect Generation #2!"));
+        return;
       }
       if (!sawCleanExit) {
-        return reject(new Error("Stage 3/4 Failure: Guardian did not detect clean shutdown on Generation #2!"));
+        reject(new Error("Stage 3/4 Failure: Guardian did not detect clean shutdown on Generation #2!"));
+        return;
       }
 
       process.stdout.write("\n  [OK] Stages 3 & 4 Verified: Generation #1 hard crash (code 1) autonomously resurrected Generation #2, which then exited cleanly with code 0!\n");
@@ -242,13 +272,13 @@ async function runMasterVerification(): Promise<void> {
   process.stdout.write("=========================================================================\n");
 
   const startTime = Date.now();
-  await runStage1HygieneAndSanitization();
+  runStage1HygieneAndSanitization();
   runStage2IpcContractValidation();
   await runStage3And4LiveAutoResurrection();
 
   const elapsed = Date.now() - startTime;
   process.stdout.write("\n=========================================================================\n");
-  process.stdout.write(`  ✅ ALL 4 STAGES PASSED 100% CLEANLY (Elapsed: ${elapsed}ms)              \n`);
+  process.stdout.write(`  ✅ ALL 4 STAGES PASSED 100% CLEANLY (Elapsed: ${String(elapsed)}ms)              \n`);
   process.stdout.write("  Zero-Touch Autonomous Native Terminal Resurrection Verified.           \n");
   process.stdout.write("=========================================================================\n\n");
   process.exit(0);

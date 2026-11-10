@@ -2,7 +2,7 @@ import assert from "node:assert";
 import { MarketDataClient } from "../marketDataClient";
 import { RiskGuard } from "../strategy/risk";
 import { StrategyEngine } from "../strategy/engine";
-import { BinanceExecutionClient, BinanceOrderResponse, BinanceOrderParams } from "../execution/binance";
+import { BinanceExecutionClient, BinanceOrderResponse } from "../execution/binance";
 import { HedgePositionLedger } from "../strategy/positionLedger";
 
 /**
@@ -26,17 +26,17 @@ class FaultInjectionExecutionClient extends BinanceExecutionClient {
     super({ apiKey: "MOCK_KEY", apiSecret: "MOCK_SECRET", useTestnet: true });
   }
 
-  public override async placeQuantityStopLoss(
+  public override placeQuantityStopLoss(
     symbol: string,
     side: "BUY" | "SELL",
     positionSide: "LONG" | "SHORT" | "BOTH",
     stopPrice: number,
     quantity: number,
     clientOrderId?: string,
-    signal?: AbortSignal
+    _signal?: AbortSignal
   ): Promise<BinanceOrderResponse> {
     if (this.shouldFailNewSl) {
-      throw new Error(this.simulatedFailureError);
+      return Promise.reject(new Error(this.simulatedFailureError));
     }
 
     const orderId = this.nextOrderId++;
@@ -49,11 +49,11 @@ class FaultInjectionExecutionClient extends BinanceExecutionClient {
       timestamp: Date.now(),
     });
 
-    return {
+    return Promise.resolve({
       orderId,
       symbol,
       status: "NEW",
-      clientOrderId: clientOrderId || `mock_sl_${orderId}`,
+      clientOrderId: clientOrderId || `mock_sl_${String(orderId)}`,
       price: "0",
       avgPrice: "0",
       origQty: String(quantity),
@@ -67,13 +67,13 @@ class FaultInjectionExecutionClient extends BinanceExecutionClient {
       stopPrice: String(stopPrice),
       workingType: "CONTRACT_PRICE",
       updateTime: Date.now(),
-    };
+    });
   }
 
-  public override async cancelOrder(
+  public override cancelOrder(
     symbol: string,
     orderId: number | string,
-    signal?: AbortSignal
+    _signal?: AbortSignal
   ): Promise<BinanceOrderResponse> {
     this.outboundDispatches.push({
       type: "CANCEL",
@@ -81,11 +81,11 @@ class FaultInjectionExecutionClient extends BinanceExecutionClient {
       timestamp: Date.now(),
     });
 
-    return {
+    return Promise.resolve({
       orderId: Number(orderId),
       symbol,
       status: "CANCELED",
-      clientOrderId: `cancel_${orderId}`,
+      clientOrderId: `cancel_${String(orderId)}`,
       price: "0",
       avgPrice: "0",
       origQty: "0",
@@ -99,7 +99,7 @@ class FaultInjectionExecutionClient extends BinanceExecutionClient {
       stopPrice: "0",
       workingType: "CONTRACT_PRICE",
       updateTime: Date.now(),
-    };
+    });
   }
 }
 
@@ -137,7 +137,7 @@ async function runPhase2AtomicStopLossTests(): Promise<void> {
   assert.strictEqual(initialSlId, 880001, "Initial SL OrderId must be registered as #880001");
   assert.strictEqual(execClient.outboundDispatches.length, 1, "Exactly 1 placement dispatch must have occurred");
   assert.strictEqual(execClient.outboundDispatches[0].type, "PLACE_QUANTITY_SL", "First dispatch must be PLACE_QUANTITY_SL");
-  console.log(`  ✅ Stage 1 Passed: Initial SL OrderId #${initialSlId} placed and registered in ledger.\n`);
+  console.log(`  ✅ Stage 1 Passed: Initial SL OrderId #${String(initialSlId)} placed and registered in ledger.\n`);
 
   // =========================================================================
   // STAGE 2: Place-Before-Cancel Succession Sequence Verification
@@ -235,34 +235,41 @@ async function runPhase2AtomicStopLossTests(): Promise<void> {
   // STAGE 5: Exact-Quantity Conditional Order Payload Verification
   // =========================================================================
   console.log("[STAGE 5] Testing Exact-Quantity Conditional Order Precision & Bypass of -4130/-4509...");
-  const realClient = new BinanceExecutionClient();
-  let interceptedPayload: Record<string, string | number | boolean> | undefined;
+  type InterceptedPayload = Record<string, string | number | boolean | undefined | null>;
+  class InterceptingExecutionClient extends BinanceExecutionClient {
+    public interceptedPayload: InterceptedPayload | undefined;
 
-  // Intercept the low-level request payload
-  (realClient as any).request = async (_method: string, _endpoint: string, payload?: Record<string, string | number | boolean>) => {
-    interceptedPayload = payload;
-    return {
-      orderId: 999888,
-      symbol: "ETHUSDT",
-      status: "NEW",
-      clientOrderId: payload?.newClientOrderId || "",
-      price: "0",
-      avgPrice: "0",
-      origQty: String(payload?.quantity || "0"),
-      executedQty: "0",
-      cumQuote: "0",
-      timeInForce: "GTC",
-      type: "STOP_MARKET",
-      reduceOnly: false,
-      side: payload?.side,
-      positionSide: payload?.positionSide,
-      stopPrice: String(payload?.stopPrice || "0"),
-      workingType: "CONTRACT_PRICE",
-      updateTime: Date.now(),
-    };
-  };
+    protected override request<T>(
+      _method: "GET" | "POST" | "DELETE" | "PUT",
+      _endpoint: string,
+      payload: InterceptedPayload = {}
+    ): Promise<T> {
+      this.interceptedPayload = payload;
+      return Promise.resolve({
+        orderId: 999888,
+        symbol: "ETHUSDT",
+        status: "NEW",
+        clientOrderId: typeof payload.newClientOrderId === "string" ? payload.newClientOrderId : "",
+        price: "0",
+        avgPrice: "0",
+        origQty: String(payload.quantity ?? "0"),
+        executedQty: "0",
+        cumQuote: "0",
+        timeInForce: "GTC",
+        type: "STOP_MARKET",
+        reduceOnly: false,
+        side: typeof payload.side === "string" ? payload.side : "SELL",
+        positionSide: typeof payload.positionSide === "string" ? payload.positionSide : "LONG",
+        stopPrice: String(payload.stopPrice ?? "0"),
+        workingType: "CONTRACT_PRICE",
+        updateTime: Date.now(),
+      } as unknown as T);
+    }
+  }
+  const realClient = new InterceptingExecutionClient();
 
   await realClient.placeQuantityStopLoss("ETHUSDT", "SELL", "LONG", 2500.5, 1.25);
+  const interceptedPayload = realClient.interceptedPayload;
   assert.ok(interceptedPayload !== undefined, "Payload must be captured");
   assert.strictEqual(interceptedPayload.symbol, "ETHUSDT");
   assert.strictEqual(interceptedPayload.side, "SELL");
@@ -278,7 +285,7 @@ async function runPhase2AtomicStopLossTests(): Promise<void> {
   console.log("==========================================================================================\n");
 }
 
-runPhase2AtomicStopLossTests().catch((err) => {
+runPhase2AtomicStopLossTests().catch((err: unknown) => {
   console.error("❌ PHASE 2 VERIFICATION FAILED:", err);
   process.exit(1);
 });

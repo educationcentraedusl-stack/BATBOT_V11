@@ -1,14 +1,14 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const index_1 = require("../index");
-async function main() {
+function main() {
     console.log("=== BATBOT_V11 Rust OMS N-API Integration Verification ===");
     // 1. Initialize Core Engine
     const coreInit = (0, index_1.initCore)();
     console.log(`Core Initialization: ${coreInit}`);
     // 2. Initialize OMS Engine
     const omsStarted = (0, index_1.startOmsEngine)("BTCUSDT", 100000.0, "", "", true);
-    console.log(`OMS Engine Started: ${omsStarted}`);
+    console.log(`OMS Engine Started: ${String(omsStarted)}`);
     // 3. Allocate SharedArrayBuffer (2048 bytes)
     const sab = new SharedArrayBuffer(2048);
     const f64View = new Float64Array(sab);
@@ -39,7 +39,10 @@ async function main() {
         process.exit(1);
     }
 }
-main().catch((err) => {
+try {
+    main();
+}
+catch (err) {
     console.error("Fatal test error:", err);
     process.exit(1);
-});
+}

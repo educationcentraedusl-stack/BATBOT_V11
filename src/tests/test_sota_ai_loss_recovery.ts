@@ -21,8 +21,9 @@ function runTest(name: string, fn: () => void) {
   try {
     fn();
     console.log(`  ✓ [PASS] ${name}`);
-  } catch (err: any) {
-    console.error(`  ✗ [FAIL] ${name}: ${err.message}`);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`  ✗ [FAIL] ${name}: ${msg}`);
     process.exit(1);
   }
 }
@@ -41,16 +42,16 @@ const sizingCalc = new DynamicSizingCalculator();
 runTest(".env MIN_NET_ALPHA dynamically parsed", () => {
   const minNetAlpha = sizingCalc.getMinNetAlpha();
   if (minNetAlpha <= 0 || !Number.isFinite(minNetAlpha)) {
-    throw new Error(`Invalid MIN_NET_ALPHA: ${minNetAlpha}`);
+    throw new Error(`Invalid MIN_NET_ALPHA: ${String(minNetAlpha)}`);
   }
-  console.log(`    -> Configured MIN_NET_ALPHA: ${(minNetAlpha * 10000).toFixed(1)} bps (${minNetAlpha})`);
+  console.log(`    -> Configured MIN_NET_ALPHA: ${(minNetAlpha * 10000).toFixed(1)} bps (${String(minNetAlpha)})`);
 });
 
 runTest(".env Maker & Taker fee rates verified", () => {
   const makerFee = sizingCalc.getMakerFeeRate();
   const takerFee = sizingCalc.getTakerFeeRate();
   if (makerFee <= 0 || takerFee <= 0 || makerFee >= takerFee) {
-    throw new Error(`Invalid fee structure: Maker=${makerFee}, Taker=${takerFee}`);
+    throw new Error(`Invalid fee structure: Maker=${String(makerFee)}, Taker=${String(takerFee)}`);
   }
   console.log(`    -> Configured Maker Fee: ${(makerFee * 10000).toFixed(1)} bps, Taker Fee: ${(takerFee * 10000).toFixed(1)} bps`);
 });
@@ -76,7 +77,7 @@ runTest("Rejects sub-friction micro-magnitude signal (Leak 1 Remediation)", () =
 
   const isAlphaFrictionPassed = expectedNetAlpha >= minNetAlpha;
   if (isAlphaFrictionPassed) {
-    throw new Error(`Micro-signal should have failed friction hurdle! NetAlpha=${expectedNetAlpha}`);
+    throw new Error(`Micro-signal should have failed friction hurdle! NetAlpha=${String(expectedNetAlpha)}`);
   }
   console.log(`    -> Micro-signal NetAlpha: ${(expectedNetAlpha * 10000).toFixed(2)} bps < Hurdle: ${(minNetAlpha * 10000).toFixed(2)} bps -> CORRECTLY FILTERED`);
 });
@@ -97,7 +98,7 @@ runTest("Approves genuine institutional alpha signal exceeding friction barrier"
 
   const isAlphaFrictionPassed = expectedNetAlpha >= minNetAlpha;
   if (!isAlphaFrictionPassed) {
-    throw new Error(`High alpha signal failed friction hurdle! NetAlpha=${expectedNetAlpha}`);
+    throw new Error(`High alpha signal failed friction hurdle! NetAlpha=${String(expectedNetAlpha)}`);
   }
   console.log(`    -> High-alpha NetAlpha: ${(expectedNetAlpha * 10000).toFixed(2)} bps >= Hurdle: ${(minNetAlpha * 10000).toFixed(2)} bps -> APPROVED`);
 });
@@ -142,7 +143,7 @@ runTest("Mathematical Floor: Enforces 2.0:1 R:R (M_TP=3.5 / M_SL=1.75) and Rejec
 
   const rejectResult = riskGuard.validateOrder(intentSubFloor, true, "FLAT");
   if (rejectResult.passed || rejectResult.reasonCode !== "INVALID_RISK_REWARD") {
-    throw new Error(`Expected RiskGuard to reject sub-2.0 R:R! Passed: ${rejectResult.passed}`);
+    throw new Error(`Expected RiskGuard to reject sub-2.0 R:R! Passed: ${String(rejectResult.passed)}`);
   }
   console.log(`    -> Sub-Floor R:R (1.50) Correctly Rejected (${rejectResult.message})`);
 
@@ -173,9 +174,9 @@ runTest("Drawdown Regime: Reduces sizing for marginal setups (Capital Preservati
   const marginalRes = sizingCalc.calculateAlphaGatedRecoverySize(baseSize, sessionPnl, 500.0, 0.65, 1.2, 0.45);
 
   if (marginalRes.sizingMultiplier >= 1.0 || marginalRes.targetNotionalUsdt >= baseSize) {
-    throw new Error(`Expected defensive sizing reduction! Got multiplier=${marginalRes.sizingMultiplier}`);
+    throw new Error(`Expected defensive sizing reduction! Got multiplier=${String(marginalRes.sizingMultiplier)}`);
   }
-  console.log(`    -> Marginal Setup ($60 base): Multiplier = ${marginalRes.sizingMultiplier}x -> Target Notional = $${marginalRes.targetNotionalUsdt} (${marginalRes.reason})`);
+  console.log(`    -> Marginal Setup ($60 base): Multiplier = ${String(marginalRes.sizingMultiplier)}x -> Target Notional = $${String(marginalRes.targetNotionalUsdt)} (${marginalRes.reason})`);
 });
 
 runTest("Drawdown Regime: Boosts sizing ONLY for Alpha Regime 1 setups (High Conviction)", () => {
@@ -184,9 +185,9 @@ runTest("Drawdown Regime: Boosts sizing ONLY for Alpha Regime 1 setups (High Con
   const alphaRes = sizingCalc.calculateAlphaGatedRecoverySize(baseSize, sessionPnl, 500.0, 0.90, 2.5, 0.60);
 
   if (alphaRes.sizingMultiplier <= 1.0 || alphaRes.targetNotionalUsdt <= baseSize) {
-    throw new Error(`Expected recovery boost! Got multiplier=${alphaRes.sizingMultiplier}`);
+    throw new Error(`Expected recovery boost! Got multiplier=${String(alphaRes.sizingMultiplier)}`);
   }
-  console.log(`    -> Alpha Regime 1 Setup ($60 base): Multiplier = ${alphaRes.sizingMultiplier}x -> Target Notional = $${alphaRes.targetNotionalUsdt} (${alphaRes.reason})`);
+  console.log(`    -> Alpha Regime 1 Setup ($60 base): Multiplier = ${String(alphaRes.sizingMultiplier)}x -> Target Notional = $${String(alphaRes.targetNotionalUsdt)} (${alphaRes.reason})`);
 });
 
 runTest("Zero-Martingale Cap: Recovery boost is strictly clamped <= 1.50x", () => {
@@ -195,9 +196,9 @@ runTest("Zero-Martingale Cap: Recovery boost is strictly clamped <= 1.50x", () =
   const extremeRes = sizingCalc.calculateAlphaGatedRecoverySize(baseSize, deepDrawdown, 500.0, 0.99, 5.0, 0.80);
 
   if (extremeRes.sizingMultiplier > 1.50) {
-    throw new Error(`Strict 1.50x cap violated! Multiplier=${extremeRes.sizingMultiplier}`);
+    throw new Error(`Strict 1.50x cap violated! Multiplier=${String(extremeRes.sizingMultiplier)}`);
   }
-  console.log(`    -> Deep Drawdown Test: Multiplier = ${extremeRes.sizingMultiplier}x (Strictly clamped <= 1.50x) -> SAFE`);
+  console.log(`    -> Deep Drawdown Test: Multiplier = ${String(extremeRes.sizingMultiplier)}x (Strictly clamped <= 1.50x) -> SAFE`);
 });
 
 // ----------------------------------------------------------------------------
@@ -213,7 +214,7 @@ runTest("Stage 1 TP dynamically clears round-trip fees + MIN_NET_ALPHA", () => {
   const tpOrders = hedgeLedger.generateBatchTpOrderIntents("CORE_LONG", entryPrice, quantity, "LONG", 0.00906);
 
   if (tpOrders.length < 2) {
-    throw new Error(`Expected at least 2 TP stage orders! Got ${tpOrders.length}`);
+    throw new Error(`Expected at least 2 TP stage orders! Got ${String(tpOrders.length)}`);
   }
 
   const stage1Price = tpOrders[0].price;
@@ -226,7 +227,7 @@ runTest("Stage 1 TP dynamically clears round-trip fees + MIN_NET_ALPHA", () => {
     throw new Error(`Stage 1 TP gain (${stage1GainBps.toFixed(1)} bps) is below mandatory threshold (${minRequiredBps.toFixed(1)} bps)`);
   }
 
-  console.log(`    -> Stage 1 TP Price: $${stage1Price} (+${stage1GainBps.toFixed(1)} bps) >= Required Hurdle: ${minRequiredBps.toFixed(1)} bps -> GUARANTEED NET PROFIT`);
+  console.log(`    -> Stage 1 TP Price: $${String(stage1Price)} (+${stage1GainBps.toFixed(1)} bps) >= Required Hurdle: ${minRequiredBps.toFixed(1)} bps -> GUARANTEED NET PROFIT`);
 });
 
 runTest("High-Water Mark & Session Drawdown Tracking in HedgePositionLedger", () => {
@@ -236,7 +237,7 @@ runTest("High-Water Mark & Session Drawdown Tracking in HedgePositionLedger", ()
   const ddAfterWin = hedgeLedger.getSessionDrawdown();
 
   if (hwmAfterWin <= 0 || ddAfterWin !== 0) {
-    throw new Error(`HWM tracking invalid after win: HWM=${hwmAfterWin}, DD=${ddAfterWin}`);
+    throw new Error(`HWM tracking invalid after win: HWM=${String(hwmAfterWin)}, DD=${String(ddAfterWin)}`);
   }
 
   // Simulate 1 losing exit
@@ -245,7 +246,7 @@ runTest("High-Water Mark & Session Drawdown Tracking in HedgePositionLedger", ()
   const ddAfterLoss = hedgeLedger.getSessionDrawdown();
 
   if (ddAfterLoss <= 0 || hwmAfterLoss !== hwmAfterWin) {
-    throw new Error(`Drawdown tracking invalid after loss: HWM=${hwmAfterLoss}, DD=${ddAfterLoss}`);
+    throw new Error(`Drawdown tracking invalid after loss: HWM=${String(hwmAfterLoss)}, DD=${String(ddAfterLoss)}`);
   }
 
   console.log(`    -> HWM: $${hwmAfterLoss.toFixed(4)}, Session Drawdown: $${ddAfterLoss.toFixed(4)} -> ACCURATELY TRACKED`);

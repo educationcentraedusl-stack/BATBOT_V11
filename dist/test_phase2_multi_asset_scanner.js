@@ -37,8 +37,27 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 require("dotenv/config");
-const path = __importStar(require("path"));
 const https_1 = __importDefault(require("https"));
+function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isBinance24hTicker(value) {
+    return (isRecord(value) &&
+        typeof value["symbol"] === "string" &&
+        typeof value["highPrice"] === "string" &&
+        typeof value["lowPrice"] === "string" &&
+        typeof value["openPrice"] === "string" &&
+        typeof value["lastPrice"] === "string" &&
+        typeof value["volume"] === "string" &&
+        typeof value["quoteVolume"] === "string" &&
+        typeof value["priceChange"] === "string" &&
+        typeof value["bidPrice"] === "string" &&
+        typeof value["askPrice"] === "string");
+}
+function parseFiniteOrFallback(raw, fallback) {
+    const num = parseFloat(raw);
+    return Number.isFinite(num) ? num : fallback;
+}
 function assert(condition, message) {
     if (!condition) {
         console.error(`❌ ASSERTION FAILED: ${message}`);
@@ -54,23 +73,28 @@ function fetchBinance24hTickers() {
         const req = https_1.default.get(url, { timeout: 5000 }, (res) => {
             let data = "";
             if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
-                console.warn(`[QA Harness Warning] Public Binance REST API responded with HTTP status ${res.statusCode}. Using synthetic ticker pool.`);
+                console.warn(`[QA Harness Warning] Public Binance REST API responded with HTTP status ${String(res.statusCode)}. Using synthetic ticker pool.`);
             }
-            res.on("data", (chunk) => (data += chunk));
+            res.on("data", (chunk) => {
+                data += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+            });
             res.on("end", () => {
                 try {
                     const parsed = JSON.parse(data);
-                    if (Array.isArray(parsed) && parsed.length > 0) {
-                        console.log(`  ✅ Successfully fetched ${parsed.length} Binance Futures tickers!\n`);
-                        resolve(parsed);
+                    if (Array.isArray(parsed)) {
+                        const validTickers = parsed.filter(isBinance24hTicker);
+                        if (validTickers.length > 0) {
+                            console.log(`  ✅ Successfully fetched ${String(validTickers.length)} Binance Futures tickers!\n`);
+                            resolve(validTickers);
+                            return;
+                        }
                     }
-                    else {
-                        console.warn(`[QA Harness Warning] Binance API returned non-array or empty ticker payload. Using synthetic ticker pool.`);
-                        resolve([]);
-                    }
+                    console.warn(`[QA Harness Warning] Binance API returned non-array or empty ticker payload. Using synthetic ticker pool.`);
+                    resolve([]);
                 }
                 catch (err) {
-                    console.warn(`[QA Harness Error] Failed to parse JSON response from Binance REST API: ${err.message}. Raw snippet: "${data.slice(0, 100)}". Using synthetic ticker pool.`);
+                    const msg = err instanceof Error ? err.message : String(err);
+                    console.warn(`[QA Harness Error] Failed to parse JSON response from Binance REST API: ${msg}. Raw snippet: "${data.slice(0, 100)}". Using synthetic ticker pool.`);
                     resolve([]);
                 }
             });
@@ -98,16 +122,16 @@ function computeGarmanKlassVol(high, low, open, close) {
     return Math.sqrt(Math.max(0.0, variance));
 }
 function computeCsLvrScore(t, nativeLib) {
-    const high = parseFloat(t.highPrice) || 0;
-    const low = parseFloat(t.lowPrice) || 0;
-    const open = parseFloat(t.openPrice) || 0;
-    const close = parseFloat(t.lastPrice) || 0;
-    const volUsd = parseFloat(t.quoteVolume) || 0;
-    const bid = parseFloat(t.bidPrice) || close * 0.9995;
-    const ask = parseFloat(t.askPrice) || close * 1.0005;
-    const priceChange = parseFloat(t.priceChange) || 0;
-    const vol = parseFloat(t.volume) || 0;
-    if (nativeLib && typeof nativeLib.calculateCsLvrScoreNapi === "function") {
+    const high = parseFiniteOrFallback(t.highPrice, 0);
+    const low = parseFiniteOrFallback(t.lowPrice, 0);
+    const open = parseFiniteOrFallback(t.openPrice, 0);
+    const close = parseFiniteOrFallback(t.lastPrice, 0);
+    const volUsd = parseFiniteOrFallback(t.quoteVolume, 0);
+    const bid = parseFiniteOrFallback(t.bidPrice, close * 0.9995);
+    const ask = parseFiniteOrFallback(t.askPrice, close * 1.0005);
+    const priceChange = parseFiniteOrFallback(t.priceChange, 0);
+    const vol = parseFiniteOrFallback(t.volume, 0);
+    if (nativeLib) {
         const score = nativeLib.calculateCsLvrScoreNapi(t.symbol, high, low, open, close, volUsd, bid, ask, priceChange, vol);
         const gkVol = computeGarmanKlassVol(high, low, open, close);
         const mid = (bid + ask) * 0.5;
@@ -145,16 +169,16 @@ async function runPhase2ScannerTests() {
     console.log("=========================================================================\n");
     const envMaxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || "10", 10);
     console.log(`[QA Test 1] Reading Environment Parameters:`);
-    console.log(`  - MAX_CONCURRENT_ASSETS : ${envMaxAssets}`);
+    console.log(`  - MAX_CONCURRENT_ASSETS : ${String(envMaxAssets)}`);
     assert(envMaxAssets >= 1, "MAX_CONCURRENT_ASSETS must be >= 1");
     let nativeLib = null;
     try {
-        const nativePath = path.resolve(__dirname, "../index.js");
-        nativeLib = require(nativePath);
+        nativeLib = await Promise.resolve().then(() => __importStar(require("../index")));
         console.log(`  ✅ Native Rust N-API binary loaded successfully!\n`);
     }
     catch (err) {
-        console.log(`  ⚠️ Notice: Native binary load warning: ${err.message}. Using TS CS-LVR engine.\n`);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.log(`  ⚠️ Notice: Native binary load warning: ${errMsg}. Using TS CS-LVR engine.\n`);
     }
     let tickers = await fetchBinance24hTickers();
     if (tickers.length === 0) {
@@ -175,11 +199,11 @@ async function runPhase2ScannerTests() {
     }
     // Filter USDT perpetual symbols
     const usdtTickers = tickers.filter((t) => t.symbol.endsWith("USDT") && !t.symbol.includes("_"));
-    console.log(`[QA Test 2] Scoring ${usdtTickers.length} USDT Perpetual Symbols via CS-LVR Engine...`);
+    console.log(`[QA Test 2] Scoring ${String(usdtTickers.length)} USDT Perpetual Symbols via CS-LVR Engine...`);
     const scored = usdtTickers.map((t) => computeCsLvrScore(t, nativeLib));
     scored.sort((a, b) => b.score - a.score);
     console.log(`\n=========================================================================`);
-    console.log(`  TOP ${envMaxAssets} ALTCOIN UNIVERSE RANKING (CS-LVR S_{i,t} SCORES)  `);
+    console.log(`  TOP ${String(envMaxAssets)} ALTCOIN UNIVERSE RANKING (CS-LVR S_{i,t} SCORES)  `);
     console.log(`=========================================================================`);
     console.log(` RANK | SYMBOL    | CS-LVR SCORE | GK VOL (σ) | 5M VOL (USD)  | SPREAD (BP)`);
     console.log(`-------------------------------------------------------------------------`);
@@ -188,7 +212,7 @@ async function runPhase2ScannerTests() {
         console.log(`  #${(idx + 1).toString().padEnd(2)} | ${item.symbol.padEnd(9)} | ${item.score.toFixed(6).padEnd(12)} | ${item.garmanKlassVol.toFixed(4).padEnd(10)} | $${(item.volumeUsd / 1e6).toFixed(2).padStart(6)}M | ${item.spreadBp.toFixed(2)} bp`);
     });
     console.log(`-------------------------------------------------------------------------\n`);
-    assert(topK.length === envMaxAssets, `Top K count must equal MAX_CONCURRENT_ASSETS (${envMaxAssets})`);
+    assert(topK.length === envMaxAssets, `Top K count must equal MAX_CONCURRENT_ASSETS (${String(envMaxAssets)})`);
     assert(topK[0].score >= topK[topK.length - 1].score, "Top K scores must be sorted in descending order");
     assert(topK[0].score > 0, "Top ranked asset score must be > 0");
     console.log(`[QA Test 3] Validating Zero-Downtime Hot-Swapping & Rate-Limit Backoff...`);

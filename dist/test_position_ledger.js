@@ -28,7 +28,7 @@ function runPositionLedgerTests() {
     // Profit = (61000 - 60000) * 0.001 - 0.0244 = 1.0 - 0.0244 = 0.9756
     const expectedPnl1 = (61000 - 60000) * 0.001 - 0.0244;
     if (fill2.positionSideAfterFill !== "FLAT" || Math.abs(fill2.realizedPnl - expectedPnl1) > 1e-5) {
-        throw new Error(`Test 1 Sell Fill Failed. Expected PnL ${expectedPnl1}, got ${fill2.realizedPnl}`);
+        throw new Error(`Test 1 Sell Fill Failed. Expected PnL ${String(expectedPnl1)}, got ${String(fill2.realizedPnl)}`);
     }
     console.log("  ✅ TEST 1 PASSED!");
     // Test 2: Partial Fill Closure
@@ -45,7 +45,7 @@ function runPositionLedgerTests() {
     // Profit = (62000 - 60000) * 0.001 - 0.0248 = 2.0 - 0.0248 = 1.9752
     const expectedPnl2 = (62000 - 60000) * 0.001 - 0.0248;
     if (partialFill.positionSideAfterFill !== "LONG" || Math.abs(partialFill.netQuantityAfterFill - 0.001) > 1e-6 || Math.abs(partialFill.realizedPnl - expectedPnl2) > 1e-5) {
-        throw new Error(`Test 2 Partial Fill Failed. Expected PnL ${expectedPnl2}, got ${partialFill.realizedPnl}`);
+        throw new Error(`Test 2 Partial Fill Failed. Expected PnL ${String(expectedPnl2)}, got ${String(partialFill.realizedPnl)}`);
     }
     console.log("  ✅ TEST 2 PASSED!");
     // Test 3: Loss Trade (BUY @ 60000, SELL @ 59000)
@@ -60,7 +60,7 @@ function runPositionLedgerTests() {
         realizedPnl: lossFill.realizedPnl,
     });
     if (Math.abs(lossFill.realizedPnl - expectedPnl3) > 1e-5) {
-        throw new Error(`Test 3 Loss Fill Failed. Expected PnL ${expectedPnl3}, got ${lossFill.realizedPnl}`);
+        throw new Error(`Test 3 Loss Fill Failed. Expected PnL ${String(expectedPnl3)}, got ${String(lossFill.realizedPnl)}`);
     }
     console.log("  ✅ TEST 3 PASSED!");
     // Test 4: Performance Benchmark (100,000 fills)

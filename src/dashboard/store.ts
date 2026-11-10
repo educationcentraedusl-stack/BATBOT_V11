@@ -130,12 +130,12 @@ export function initTelemetryWorker(wsUrl: string = "ws://localhost:8080"): void
         const frame = msg.frame;
         latestFrameSnapshot = frame;
 
-        const nowSec = (frame.timestamp || Date.now()) / 1000;
-        const price = frame.bidPrice || frame.askPrice || 0;
-        const obi = frame.obi || 0;
-        const cvd = frame.cvd || 0;
-        const pnl = frame.stats.realizedPnl || 0;
-        const stateNorm = Math.abs(frame.aiDirection || 0) * 1.5 + (frame.aiConfidence || 0) * 0.5;
+        const nowSec = (frame.timestamp > 0 ? frame.timestamp : Date.now()) / 1000;
+        const price = frame.bidPrice > 0 ? frame.bidPrice : frame.askPrice;
+        const obi = frame.obi;
+        const cvd = frame.cvd;
+        const pnl = frame.stats.realizedPnl;
+        const stateNorm = Math.abs(frame.aiDirection) * 1.5 + frame.aiConfidence * 0.5;
 
         pushHistoryPoint(nowSec, price, obi, cvd, pnl, stateNorm);
 
@@ -143,7 +143,7 @@ export function initTelemetryWorker(wsUrl: string = "ws://localhost:8080"): void
         const isEngineActiveChanged = newActive !== currentState.isEngineActive;
 
         const prevExecCount = currentState.totalExecutionsCount;
-        const newExecCount = frame.stats.totalExecutionsLogged || 0;
+        const newExecCount = frame.stats.totalExecutionsLogged;
         const hasNewExecution = newExecCount > prevExecCount;
 
         let newExecutions = currentState.executions;
@@ -159,10 +159,17 @@ export function initTelemetryWorker(wsUrl: string = "ws://localhost:8080"): void
 
           const newExec: SystemExecution = {
             id: `EXEC-${frame.sequenceNum}-${Date.now().toString().slice(-4)}`,
-            timestamp: frame.timestamp || Date.now(),
-            symbol: frame.symbol || "BTCUSDT",
+            timestamp: frame.timestamp > 0 ? frame.timestamp : Date.now(),
+            symbol: frame.symbol.length > 0 ? frame.symbol : "BTCUSDT",
             side: execSide,
-            price: execSide === "BUY" ? (frame.askPrice || frame.bidPrice) : (frame.bidPrice || frame.askPrice),
+            price:
+              execSide === "BUY"
+                ? frame.askPrice > 0
+                  ? frame.askPrice
+                  : frame.bidPrice
+                : frame.bidPrice > 0
+                  ? frame.bidPrice
+                  : frame.askPrice,
             qty: execQty,
             realizedPnl: frame.stats.realizedPnl,
             fee: frame.stats.totalFees,

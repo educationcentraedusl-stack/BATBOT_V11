@@ -15,6 +15,14 @@ function assert(condition: boolean, message: string): void {
   }
 }
 
+function requireEngine(multiEngine: MultiAssetStrategyEngine, symbol: string): StrategyEngine {
+  const eng = multiEngine.getEngineForSymbol(symbol);
+  if (!eng) {
+    throw new Error(`Missing engine for ${symbol}`);
+  }
+  return eng;
+}
+
 async function runOmsCapacityAndMutexProof(): Promise<void> {
   console.log("=========================================================================");
   console.log("  TEST: OMS CAPACITY (10-SLOT HARD CAP) & UNIDIRECTIONAL ASSET MUTEX     ");
@@ -37,10 +45,10 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
     positionLedger
   );
 
-  const btcEngine = multiEngine.getEngineForSymbol("BTCUSDT")!;
-  const avaxEngine = multiEngine.getEngineForSymbol("AVAXUSDT")!;
-  const solEngine = multiEngine.getEngineForSymbol("SOLUSDT")!;
-  const bnbEngine = multiEngine.getEngineForSymbol("BNBUSDT")!;
+  const btcEngine = requireEngine(multiEngine, "BTCUSDT");
+  const avaxEngine = requireEngine(multiEngine, "AVAXUSDT");
+  const solEngine = requireEngine(multiEngine, "SOLUSDT");
+  const bnbEngine = requireEngine(multiEngine, "BNBUSDT");
 
   assert(!!btcEngine, "BTCUSDT engine must be initialized");
   assert(!!avaxEngine, "AVAXUSDT engine must be initialized");
@@ -86,7 +94,7 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
 
   // Occupy Core Long on BTCUSDT
   btcHedge.occupyCoreLong(0.005, 78120.0, 1.5, 0.8, false);
-  assert(btcHedge.getCoreLong().isOccupied === true, "BTC Core Long must be occupied");
+  assert(btcHedge.getCoreLong().isOccupied, "BTC Core Long must be occupied");
   btcEngine.syncSabPositionState(78120.0);
 
   // Attempt to allocate short slot via evaluateDispersedShortSlotAllocation
@@ -95,12 +103,12 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
 
   // Attempt to reserve short slot
   const reserveShortSuccess = btcHedge.reserveShortSlotPending(0, "TEST_CLID", 78120.0, 0.005);
-  assert(reserveShortSuccess === false, "reserveShortSlotPending must return false when Core Long is active");
+  assert(!reserveShortSuccess, "reserveShortSlotPending must return false when Core Long is active");
 
   // Attempt to directly occupy short slot
   const occupyShortSuccess = btcHedge.occupyShortSlot(0, 0.005, 78120.0, 1.5, 0.8, false);
-  assert(occupyShortSuccess === false, "occupyShortSlot must return false when Core Long is active");
-  assert(btcHedge.getShortSlots()[0].isOccupied === false, "Short slot #0 must remain FLAT");
+  assert(!occupyShortSuccess, "occupyShortSlot must return false when Core Long is active");
+  assert(!btcHedge.getShortSlots()[0].isOccupied, "Short slot #0 must remain FLAT");
 
   // Feed strong SELL signal into BTC StrategyEngine
   client.writeAtomicFloat64Asset(btcIdx, 1, -0.80); // OBI -0.80
@@ -123,16 +131,16 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
 
   // Occupy Short Slot on AVAXUSDT
   avaxHedge.occupyShortSlot(0, 10.0, 7.295, 1.5, 0.8, false);
-  assert(avaxHedge.getShortSlots()[0].isOccupied === true, "AVAX Short Slot #0 must be occupied");
+  assert(avaxHedge.getShortSlots()[0].isOccupied, "AVAX Short Slot #0 must be occupied");
   avaxEngine.syncSabPositionState(7.295);
 
   // Attempt to reserve Core Long
   const reserveLongSuccess = avaxHedge.reserveCoreLongPending("TEST_CLID_AVAX", 7.295, 10.0);
-  assert(reserveLongSuccess === false, "reserveCoreLongPending must return false when Short Slot is active");
+  assert(!reserveLongSuccess, "reserveCoreLongPending must return false when Short Slot is active");
 
   // Attempt to directly occupy Core Long
   avaxHedge.occupyCoreLong(10.0, 7.295, 1.5, 0.8, false);
-  assert(avaxHedge.getCoreLong().isOccupied === false, "AVAX Core Long must remain FLAT");
+  assert(!avaxHedge.getCoreLong().isOccupied, "AVAX Core Long must remain FLAT");
 
   // Feed strong BUY signal into AVAX StrategyEngine
   client.writeAtomicFloat64Asset(avaxIdx, 1, 0.80); // OBI +0.80
@@ -155,7 +163,7 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
 
   // Reserve SOLUSDT Core Long in PENDING_ENTRY
   const solReserveRes = solHedge.reserveCoreLongPending("SOL_PENDING_CID", 105.0, 1.0);
-  assert(solReserveRes === true, "SOL reserveCoreLongPending must succeed on flat slot");
+  assert(solReserveRes, "SOL reserveCoreLongPending must succeed on flat slot");
   assert(solHedge.getCoreLong().lifecycleState === "PENDING_ENTRY", "SOL Core Long must be PENDING_ENTRY");
 
   // Feed SELL signal to SOL
@@ -174,8 +182,8 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
 
   // Reserve BNBUSDT Short Slot in PENDING_ENTRY
   const bnbHedge = bnbEngine.getHedgeLedger();
-  const bnbReserveRes = bnbHedge.reserveShortSlotPending(0, "BNB_PENDING_CID", 695.0, 0.1);
-  assert(bnbReserveRes === true, "BNB reserveShortSlotPending must succeed on flat slot");
+  const bnbReserveRes = bnbEngine.getHedgeLedger().reserveShortSlotPending(0, "BNB_PENDING_CID", 695.0, 0.1);
+  assert(bnbReserveRes, "BNB reserveShortSlotPending must succeed on flat slot");
   assert(bnbHedge.getShortSlots()[0].lifecycleState === "PENDING_ENTRY", "BNB Short Slot #0 must be PENDING_ENTRY");
 
   // Feed BUY signal to BNB
@@ -210,29 +218,29 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   // Populate exactly 9 distinct asset slots with confirmed positions via real hot-path execution success
   for (let i = 0; i < 9; i++) {
     const sym = symbols[i];
-    const eng = multiEngine.getEngineForSymbol(sym)!;
+    const eng = requireEngine(multiEngine, sym);
     eng.getHedgeLedger().occupyCoreLong(1.0, 100.0, 1.5, 0.8, false);
     eng.syncSabPositionState(100.0);
     riskGuard.recordExecutionSuccess(100.0, "BUY", sym, false, 100.0);
   }
 
-  assert(riskGuard.getActiveSymbolCount() === 9, `RiskGuard active symbols must equal 9 (got: ${riskGuard.getActiveSymbolCount()})`);
+  assert(riskGuard.getActiveSymbolCount() === 9, `RiskGuard active symbols must equal 9 (got: ${String(riskGuard.getActiveSymbolCount())})`);
   assert(btcEngine.getGlobalActivePositionCount() === 9, `Global active positions must equal 9 before in-flight entry`);
 
   // CONCURRENCY LEAK (DEF-2101) VERIFICATION:
   // Asset #9 (the 10th symbol) enters PENDING_ENTRY (in-flight dispatch awaiting Binance execution).
   // Its SAB position quantity is still 0.0 during the await window!
   const sym9 = symbols[9];
-  const eng9 = multiEngine.getEngineForSymbol(sym9)!;
+  const eng9 = requireEngine(multiEngine, sym9);
   const reservePendingRes = eng9.getHedgeLedger().reserveCoreLongPending("PENDING_CID_ASSET_9", 100.0, 1.0);
-  assert(reservePendingRes === true, "Asset #9 reserveCoreLongPending must succeed on flat slot");
+  assert(reservePendingRes, "Asset #9 reserveCoreLongPending must succeed on flat slot");
   assert(eng9.getHedgeLedger().getCoreLong().lifecycleState === "PENDING_ENTRY", "Asset #9 must be PENDING_ENTRY");
 
   // Global active position count MUST now equal 10 (9 SAB confirmed + 1 in-flight PENDING_ENTRY)
   const globalPosCountWithPending = btcEngine.getGlobalActivePositionCount();
   assert(
     globalPosCountWithPending === 10,
-    `Global active positions with in-flight pending must equal 10 (got: ${globalPosCountWithPending})`
+    `Global active positions with in-flight pending must equal 10 (got: ${String(globalPosCountWithPending)})`
   );
 
   // Verify RiskGuard registers 10th symbol execution success with $100.0 notional
@@ -247,7 +255,7 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
     price: 100.0,
   };
   const riskRes11 = riskGuard.validateMultiAssetOrder(order11Intent, true);
-  assert(riskRes11.passed === false, "RiskGuard must reject 11th position entry");
+  assert(!riskRes11.passed, "RiskGuard must reject 11th position entry");
   assert(riskRes11.reasonCode === "EXCEEDS_MAX_POSITION", `Expected EXCEEDS_MAX_POSITION, got: ${riskRes11.reasonCode}`);
 
   // PARTIAL TAKE-PROFIT (TP) SYNCHRONICITY (DEF-2102 REMEDIATION PROOF):
@@ -258,7 +266,7 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
 
   // 11th symbol must STILL be blocked because 10 symbols remain active
   const riskRes11DuringPartial = riskGuard.validateMultiAssetOrder(order11Intent, true);
-  assert(riskRes11DuringPartial.passed === false, "RiskGuard must continue to reject 11th position while 10 assets have open notional");
+  assert(!riskRes11DuringPartial.passed, "RiskGuard must continue to reject 11th position while 10 assets have open notional");
 
   // Final exit fill of remaining 70% ($70 notional executed, $0 remaining)
   eng9.getHedgeLedger().rollbackPendingSlot("CORE_LONG", "TEST_CLEANUP");
@@ -266,12 +274,12 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   eng9.syncSabPositionState(0);
 
   const updatedCount = btcEngine.getGlobalActivePositionCount();
-  assert(updatedCount === 9, `Global active positions after full close must equal 9 (got: ${updatedCount})`);
-  assert(riskGuard.getActiveSymbolCount() === 9, `RiskGuard active symbols after full close must equal 9 (got: ${riskGuard.getActiveSymbolCount()})`);
+  assert(updatedCount === 9, `Global active positions after full close must equal 9 (got: ${String(updatedCount)})`);
+  assert(riskGuard.getActiveSymbolCount() === 9, `RiskGuard active symbols after full close must equal 9 (got: ${String(riskGuard.getActiveSymbolCount())})`);
   assert(riskGuard.getSymbolNotional(sym9) === 0.0, "RiskGuard symbol notional must be 0 after full close");
 
   const riskResAfterClose = riskGuard.validateMultiAssetOrder(order11Intent, true);
-  assert(riskResAfterClose.passed === true, "RiskGuard must approve new position when active count < 10");
+  assert(riskResAfterClose.passed, "RiskGuard must approve new position when active count < 10");
   console.log("  ✅ STAGE 4 PASSED: 10-slot hard ceiling & partial TP notional synchronicity strictly verified.\n");
 
   // ============================================================================
@@ -282,7 +290,7 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   // Setup 9 active confirmed positions on Symbols 0..8 (2 LONGs, 7 SHORTs to respect DEF-3101 directional limits)
   for (let i = 0; i < 9; i++) {
     const sym = symbols[i];
-    const eng = multiEngine.getEngineForSymbol(sym)!;
+    const eng = requireEngine(multiEngine, sym);
     eng.getHedgeLedger().clearSlots();
     if (i < 2) {
       eng.reconcileStartupPositions([
@@ -331,8 +339,8 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   assert(btcEngine.getGlobalActivePositionCount() === 9, "9 active positions must be active before concurrent race");
 
   // Release LINKUSDT & DOTUSDT to FLAT so exactly 8 are occupied, 2 are FLAT
-  const linkEng = multiEngine.getEngineForSymbol("LINKUSDT")!;
-  const dotEng = multiEngine.getEngineForSymbol("DOTUSDT")!;
+  const linkEng = requireEngine(multiEngine, "LINKUSDT");
+  const dotEng = requireEngine(multiEngine, "DOTUSDT");
   linkEng.getHedgeLedger().clearSlots();
   linkEng.syncSabPositionState(0);
   riskGuard.recordExecutionSuccess(100.0, "SELL", "LINKUSDT", true, 0.0);
@@ -418,7 +426,7 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   const finalGlobalCount = btcEngine.getGlobalActivePositionCount();
   assert(
     finalGlobalCount === 10,
-    `Global active position count must remain capped at exactly 10 (got: ${finalGlobalCount})`
+    `Global active position count must remain capped at exactly 10 (got: ${String(finalGlobalCount)})`
   );
 
   // Clean up candidate reservations & restore registered engines
@@ -445,8 +453,8 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   riskGuard.resetSymbolNotionals();
   btcHedge.clearSlots();
   btcEngine.syncSabPositionState(0);
-  assert(btcHedge.getCoreLong().isOccupied === false, "BTC Core Long must be FLAT");
-  assert(btcHedge.getShortSlots()[0].isOccupied === false, "BTC Short Slot must be FLAT");
+  assert(!btcHedge.getCoreLong().isOccupied, "BTC Core Long must be FLAT");
+  assert(!btcHedge.getShortSlots()[0].isOccupied, "BTC Short Slot must be FLAT");
 
   // Feed strong SELL signal to BTC
   client.setBestBidQuantity(2.0, btcIdx);
@@ -464,7 +472,7 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
     await btcFlipSellEval.executionPromise;
   }
   assert(btcFlipSellEval.signalType === "SELL", `BTC must approve SELL signal when FLAT (got: ${btcFlipSellEval.signalType})`);
-  assert(btcFlipSellEval.slotId === "SHORT_SLOT_0", `Target slot must be SHORT_SLOT_0 (got: ${btcFlipSellEval.slotId})`);
+  assert(btcFlipSellEval.slotId === "SHORT_SLOT_0", `Target slot must be SHORT_SLOT_0 (got: ${String(btcFlipSellEval.slotId)})`);
 
   // Clear in-flight mock dispatch via organic AROS-CA
   btcEngine.annihilateRestingEntryOrders("TEST_CLEANUP");
@@ -472,7 +480,7 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   // Occupy Short Slot on BTC
   btcHedge.occupyShortSlot(0, 0.005, 78120.0, 1.5, 0.8, false);
   btcEngine.syncSabPositionState(78120.0);
-  assert(btcHedge.getShortSlots()[0].isOccupied === true, "BTC Short Slot must be occupied");
+  assert(btcHedge.getShortSlots()[0].isOccupied, "BTC Short Slot must be occupied");
 
   // Release Short Slot
   btcHedge.releaseShortSlot(0, 78100.0, 0.0004, "SIGNAL_EXIT", 78100.0);
@@ -480,7 +488,7 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   btcEngine.annihilateRestingEntryOrders("TEST_CLEANUP");
   client.setShortCooldownLock(0, btcIdx);
   client.setLongCooldownLock(0, btcIdx);
-  assert(btcHedge.getShortSlots()[0].isOccupied === false, "BTC Short Slot must be released to FLAT");
+  assert(!btcHedge.getShortSlots()[0].isOccupied, "BTC Short Slot must be released to FLAT");
 
   // Feed strong BUY signal to BTC
   client.setBestBidQuantity(25.0, btcIdx);
@@ -493,7 +501,7 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
 
   const btcFlipBuyEval = btcEngine.evaluateTick();
   assert(btcFlipBuyEval.signalType === "BUY", `BTC must approve BUY signal when FLAT after Short release (got: ${btcFlipBuyEval.signalType})`);
-  assert(btcFlipBuyEval.slotId === "CORE_LONG", `Target slot must be CORE_LONG (got: ${btcFlipBuyEval.slotId})`);
+  assert(btcFlipBuyEval.slotId === "CORE_LONG", `Target slot must be CORE_LONG (got: ${String(btcFlipBuyEval.slotId)})`);
   console.log("  ✅ STAGE 6 PASSED: Releasing position immediately restores flip authorization.\n");
 
   // ============================================================================
@@ -535,7 +543,7 @@ async function runOmsCapacityAndMutexProof(): Promise<void> {
   console.log("=========================================================================");
 }
 
-runOmsCapacityAndMutexProof().catch((err) => {
+runOmsCapacityAndMutexProof().catch((err: unknown) => {
   console.error("FATAL TEST FAILURE:", err);
   process.exit(1);
 });

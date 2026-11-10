@@ -163,29 +163,29 @@ async function runLeverageStateSyncTest() {
     console.log(`  - Slot #2 (SOLUSDT) SAB Leverage: ${solSabLev.toFixed(0)}x (Expected: 50x)`);
     console.log(`  - Slot #3 (BNBUSDT) SAB Leverage: ${bnbSabLev.toFixed(0)}x (Expected: 20x)`);
     console.log(`  - Slot #5 (XRPUSDT) SAB Leverage: ${xrpSabLev.toFixed(0)}x (Expected: 25x)`);
-    assert(btcSabLev === 10, `BTCUSDT SAB leverage mismatch: got ${btcSabLev}, expected 10`);
-    assert(ethSabLev === 15, `ETHUSDT SAB leverage mismatch: got ${ethSabLev}, expected 15`);
-    assert(solSabLev === 50, `SOLUSDT SAB leverage mismatch: got ${solSabLev}, expected 50`);
-    assert(bnbSabLev === 20, `BNBUSDT SAB leverage mismatch: got ${bnbSabLev}, expected 20 (FATAL FLAW REMEDIATED)`);
-    assert(xrpSabLev === 25, `XRPUSDT SAB leverage mismatch: got ${xrpSabLev}, expected 25`);
+    assert(btcSabLev === 10, `BTCUSDT SAB leverage mismatch: got ${String(btcSabLev)}, expected 10`);
+    assert(ethSabLev === 15, `ETHUSDT SAB leverage mismatch: got ${String(ethSabLev)}, expected 15`);
+    assert(solSabLev === 50, `SOLUSDT SAB leverage mismatch: got ${String(solSabLev)}, expected 50`);
+    assert(bnbSabLev === 20, `BNBUSDT SAB leverage mismatch: got ${String(bnbSabLev)}, expected 20 (FATAL FLAW REMEDIATED)`);
+    assert(xrpSabLev === 25, `XRPUSDT SAB leverage mismatch: got ${String(xrpSabLev)}, expected 25`);
     console.log("  ✅ SharedArrayBuffer Slot 109 correctly bitcasted and verified per asset.\n");
     console.log("[TEST PHASE 3] Verifying StrategyEngine & PositionLedger Live Dynamic Leverage Synchronization...");
     const bnbEngine = multiEngine.getEngineForSymbol("BNBUSDT");
     if (!bnbEngine)
         throw new Error("BNBUSDT engine must exist");
-    assert(bnbEngine.getLeverageMultiplier() === 20, `BNBUSDT engine leverage multiplier should be 20, got ${bnbEngine.getLeverageMultiplier()}`);
+    assert(bnbEngine.getLeverageMultiplier() === 20, `BNBUSDT engine leverage multiplier should be 20, got ${String(bnbEngine.getLeverageMultiplier())}`);
     const bnbTrades = bnbEngine.getActiveTrades(606.83);
-    assert(bnbTrades.length === 1, `Expected 1 active BNB trade, got ${bnbTrades.length}`);
-    console.log(`  - BNB Active Trade Slot Leverage: ${bnbTrades[0].leverage}x (Expected: 20x)`);
-    assert(bnbTrades[0].leverage === 20, `BNBUSDT active trade slot leverage should be 20x, got ${bnbTrades[0].leverage}x`);
+    assert(bnbTrades.length === 1, `Expected 1 active BNB trade, got ${String(bnbTrades.length)}`);
+    console.log(`  - BNB Active Trade Slot Leverage: ${String(bnbTrades[0].leverage)}x (Expected: 20x)`);
+    assert(bnbTrades[0].leverage === 20, `BNBUSDT active trade slot leverage should be 20x, got ${String(bnbTrades[0].leverage)}x`);
     const bnbSummary = bnbEngine.getHedgeLedger().getSummary(606.83);
-    console.log(`  - BNB PositionSummary Leverage: ${bnbSummary.leverage}x (Expected: 20x)`);
-    assert(bnbSummary.leverage === 20, `BNB PositionSummary leverage must be 20, got ${bnbSummary.leverage}`);
+    console.log(`  - BNB PositionSummary Leverage: ${String(bnbSummary.leverage)}x (Expected: 20x)`);
+    assert(bnbSummary.leverage === 20, `BNB PositionSummary leverage must be 20, got ${String(bnbSummary.leverage)}`);
     const solEngine = multiEngine.getEngineForSymbol("SOLUSDT");
     if (!solEngine)
         throw new Error("SOLUSDT engine must exist");
-    console.log(`  - SOL FLAT Engine Leverage: ${solEngine.getLeverageMultiplier()}x (Expected: 50x)`);
-    assert(solEngine.getLeverageMultiplier() === 50, `SOL FLAT engine leverage should be 50, got ${solEngine.getLeverageMultiplier()}`);
+    console.log(`  - SOL FLAT Engine Leverage: ${String(solEngine.getLeverageMultiplier())}x (Expected: 50x)`);
+    assert(solEngine.getLeverageMultiplier() === 50, `SOL FLAT engine leverage should be 50, got ${String(solEngine.getLeverageMultiplier())}`);
     console.log("  ✅ StrategyEngine & PositionLedgers 100% synchronized with live exchange leverage.\n");
     console.log("[TEST PHASE 4] Verifying Dynamic Leverage Update via setLeverageMultiplier()...");
     // Simulate user changing BNB leverage on Binance to 50x or .env update
@@ -193,9 +193,9 @@ async function runLeverageStateSyncTest() {
     const updatedBnbSabLev = client.getOmsLeverage(3);
     const updatedBnbTrades = bnbEngine.getActiveTrades(606.83);
     console.log(`  - Updated BNB SAB Leverage: ${updatedBnbSabLev.toFixed(0)}x (Expected: 50x)`);
-    console.log(`  - Updated BNB Active Trade Slot Leverage: ${updatedBnbTrades[0].leverage}x (Expected: 50x)`);
-    assert(updatedBnbSabLev === 50, `Updated BNB SAB leverage should be 50, got ${updatedBnbSabLev}`);
-    assert(updatedBnbTrades[0].leverage === 50, `Updated BNB active trade leverage should be 50, got ${updatedBnbTrades[0].leverage}`);
+    console.log(`  - Updated BNB Active Trade Slot Leverage: ${String(updatedBnbTrades[0].leverage)}x (Expected: 50x)`);
+    assert(updatedBnbSabLev === 50, `Updated BNB SAB leverage should be 50, got ${String(updatedBnbSabLev)}`);
+    assert(updatedBnbTrades[0].leverage === 50, `Updated BNB active trade leverage should be 50, got ${String(updatedBnbTrades[0].leverage)}`);
     console.log("  ✅ Dynamic runtime leverage updates propagate instantly to SAB and Ledgers.\n");
     console.log("[TEST PHASE 5] Verifying MultiAssetCLIDashboard Telemetry Rendering...");
     // Restore BNB to 20x for exact telemetry matching

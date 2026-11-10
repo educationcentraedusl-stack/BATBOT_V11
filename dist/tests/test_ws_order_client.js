@@ -71,6 +71,8 @@ const node_assert_1 = require("node:assert");
 const node_test_1 = require("node:test");
 const crypto = __importStar(require("node:crypto"));
 const wsOrderClient_1 = require("../execution/wsOrderClient");
+const symbolPrecision_1 = require("../config/symbolPrecision");
+const binance_1 = require("../execution/binance");
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 /**
  * Minimal EventEmitter-compatible WebSocket mock.
@@ -115,9 +117,9 @@ class MockWebSocket {
     }
 }
 // ─── Test Suite ───────────────────────────────────────────────────────────────
-(0, node_test_1.describe)("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verification)", () => {
+void (0, node_test_1.describe)("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verification)", () => {
     // ── T01: Testnet endpoint ──────────────────────────────────────────────────
-    (0, node_test_1.it)("T01: constructor resolves testnet endpoint", () => {
+    void (0, node_test_1.it)("T01: constructor resolves testnet endpoint", () => {
         process.env["USE_TESTNET"] = "true";
         const client = new wsOrderClient_1.WsOrderClient({ useTestnet: true, apiKey: "k", apiSecret: "s" });
         // Access private field for white-box verification
@@ -126,13 +128,13 @@ class MockWebSocket {
         process.env["USE_TESTNET"] = "false";
     });
     // ── T02: Mainnet endpoint ──────────────────────────────────────────────────
-    (0, node_test_1.it)("T02: constructor resolves mainnet endpoint", () => {
+    void (0, node_test_1.it)("T02: constructor resolves mainnet endpoint", () => {
         const client = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
         const ep = client.wsEndpoint;
         node_assert_1.strict.ok(ep.includes("ws-fapi.binance.com"), `Expected mainnet endpoint, got: ${ep}`);
     });
     // ── T03: connect() resolves when socket opens ──────────────────────────────
-    (0, node_test_1.it)("T03: connect() is idempotent and respects connection state", async () => {
+    void (0, node_test_1.it)("T03: connect() is idempotent and respects connection state", async () => {
         const client = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
         const mockSocket = new MockWebSocket();
         client.isConnected = true;
@@ -142,7 +144,7 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(client.isReady(), true, "Should be ready");
     });
     // ── T04: placeOrder() rejects when not connected ───────────────────────────
-    (0, node_test_1.it)("T04: placeOrder() rejects when WebSocket is not ready", async () => {
+    void (0, node_test_1.it)("T04: placeOrder() rejects when WebSocket is not ready", async () => {
         const client = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
         // isConnected defaults to false — socket null
         await node_assert_1.strict.rejects(() => client.placeOrder({
@@ -153,12 +155,12 @@ class MockWebSocket {
         }), /not ready/, "Should reject with 'not ready' when WS is disconnected");
     });
     // ── T05: cancelOrder() rejects when not connected ─────────────────────────
-    (0, node_test_1.it)("T05: cancelOrder() rejects when WebSocket is not ready", async () => {
+    void (0, node_test_1.it)("T05: cancelOrder() rejects when WebSocket is not ready", async () => {
         const client = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
         await node_assert_1.strict.rejects(() => client.cancelOrder({ symbol: "BTCUSDT", orderId: 12345 }), /not ready/);
     });
     // ── T06: cancelReplaceOrder() rejects when not connected ──────────────────
-    (0, node_test_1.it)("T06: cancelReplaceOrder() rejects when WebSocket is not ready", async () => {
+    void (0, node_test_1.it)("T06: cancelReplaceOrder() rejects when WebSocket is not ready", async () => {
         const client = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
         await node_assert_1.strict.rejects(() => client.cancelReplaceOrder({
             symbol: "BTCUSDT",
@@ -168,7 +170,7 @@ class MockWebSocket {
         }), /not ready/);
     });
     // ── T07: MARKET order excludes timeInForce ─────────────────────────────────
-    (0, node_test_1.it)("T07: MARKET order payload excludes timeInForce", () => {
+    void (0, node_test_1.it)("T07: MARKET order payload excludes timeInForce", () => {
         const client = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
         const payloadStr = client._buildPlaceOrderPayload({
             symbol: "BTCUSDT",
@@ -184,7 +186,7 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(payload.params.timeInForce, undefined, "MARKET order must NOT have timeInForce in params");
     });
     // ── T08: STOP_MARKET order excludes timeInForce ───────────────────────────
-    (0, node_test_1.it)("T08: STOP_MARKET order payload excludes timeInForce", () => {
+    void (0, node_test_1.it)("T08: STOP_MARKET order payload excludes timeInForce", () => {
         const client = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
         const payloadStr = client._buildPlaceOrderPayload({
             symbol: "BTCUSDT",
@@ -199,7 +201,7 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(payload.params.timeInForce, undefined, "STOP_MARKET order must NOT have timeInForce in params");
     });
     // ── T09: TAKE_PROFIT_MARKET order excludes timeInForce ────────────────────
-    (0, node_test_1.it)("T09: TAKE_PROFIT_MARKET order payload excludes timeInForce", () => {
+    void (0, node_test_1.it)("T09: TAKE_PROFIT_MARKET order payload excludes timeInForce", () => {
         const client = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
         const payloadStr = client._buildPlaceOrderPayload({
             symbol: "BTCUSDT",
@@ -214,7 +216,7 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(payload.params.timeInForce, undefined, "TAKE_PROFIT_MARKET order must NOT have timeInForce in params");
     });
     // ── T10: LIMIT order includes timeInForce ─────────────────────────────────
-    (0, node_test_1.it)("T10: LIMIT order payload includes timeInForce", () => {
+    void (0, node_test_1.it)("T10: LIMIT order payload includes timeInForce", () => {
         const client = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
         const payloadStr = client._buildPlaceOrderPayload({
             symbol: "BTCUSDT",
@@ -229,7 +231,7 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(payload.params.timeInForce, "GTX", "LIMIT order MUST include timeInForce");
     });
     // ── T11: closePosition=true excludes reduceOnly and quantity ──────────────
-    (0, node_test_1.it)("T11: closePosition=true payload correctly sets closePosition string and excludes reduceOnly/quantity", () => {
+    void (0, node_test_1.it)("T11: closePosition=true payload correctly sets closePosition string and excludes reduceOnly/quantity", () => {
         const client = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
         const payloadStr = client._buildPlaceOrderPayload({
             symbol: "BTCUSDT",
@@ -245,22 +247,20 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(payload.params.quantity, undefined, "quantity must NOT be present when closePosition=true");
     });
     // ── T12: quantity formatting via SymbolPrecisionRegistry ──────────────────
-    (0, node_test_1.it)("T12: quantity formatted via SymbolPrecisionRegistry (3 decimal places for BTCUSDT)", () => {
-        const { SymbolPrecisionRegistry } = require("../config/symbolPrecision");
-        const formatted = SymbolPrecisionRegistry.formatQuantity("BTCUSDT", 0.00123456);
+    void (0, node_test_1.it)("T12: quantity formatted via SymbolPrecisionRegistry (3 decimal places for BTCUSDT)", () => {
+        const formatted = symbolPrecision_1.SymbolPrecisionRegistry.formatQuantity("BTCUSDT", 0.00123456);
         // SymbolPrecisionRegistry should truncate to exchange precision
         node_assert_1.strict.ok(typeof formatted === "number", "Formatted quantity must be a number");
         node_assert_1.strict.ok(formatted >= 0, "Formatted quantity must be non-negative");
     });
     // ── T13: price formatting via SymbolPrecisionRegistry ─────────────────────
-    (0, node_test_1.it)("T13: price formatted via SymbolPrecisionRegistry for BTCUSDT", () => {
-        const { SymbolPrecisionRegistry } = require("../config/symbolPrecision");
-        const formatted = SymbolPrecisionRegistry.formatPrice("BTCUSDT", 59999.567);
+    void (0, node_test_1.it)("T13: price formatted via SymbolPrecisionRegistry for BTCUSDT", () => {
+        const formatted = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice("BTCUSDT", 59999.567);
         node_assert_1.strict.ok(typeof formatted === "number", "Formatted price must be a number");
         node_assert_1.strict.ok(formatted > 0, "Formatted price must be positive");
     });
     // ── T14: _signParams() injects required fields ────────────────────────────
-    (0, node_test_1.it)("T14: _signParams() injects timestamp, recvWindow, apiKey, and signature", () => {
+    void (0, node_test_1.it)("T14: _signParams() injects timestamp, recvWindow, apiKey, and signature", () => {
         const client = new wsOrderClient_1.WsOrderClient({
             useTestnet: false,
             apiKey: "test_api_key",
@@ -279,7 +279,7 @@ class MockWebSocket {
         node_assert_1.strict.ok(typeof p["signature"] === "string" && p["signature"].length === 64, "signature must be 64-char hex");
     });
     // ── T15: HMAC-SHA256 signature correctness (including apiKey and strict alphabetical sort) ─
-    (0, node_test_1.it)("T15: HMAC-SHA256 signature includes apiKey and enforces strict alphabetical parameter order", () => {
+    void (0, node_test_1.it)("T15: HMAC-SHA256 signature includes apiKey and enforces strict alphabetical parameter order", () => {
         const apiSecret = "super_secret_key";
         const apiKey = "my_api_key_institutional";
         const client = new wsOrderClient_1.WsOrderClient({
@@ -317,7 +317,7 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(p["signature"], expectedSignature, "Injected signature must match independently computed HMAC-SHA256 over sorted query string including apiKey");
     });
     // ── T15B: Consecutive order signing without parameter pollution (Fix DEF-01) ─
-    (0, node_test_1.it)("T15B: consecutive order signing does not leak residual parameters across ticks", () => {
+    void (0, node_test_1.it)("T15B: consecutive order signing does not leak residual parameters across ticks", () => {
         const apiSecret = "consecutive_test_secret";
         const apiKey = "consecutive_test_key";
         const client = new wsOrderClient_1.WsOrderClient({
@@ -359,7 +359,7 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(p2["signature"], expectedSig2, "Order 2 signature must be unpolluted by Order 1");
     });
     // ── T15C: HMAC-SHA256 signing with custom keys strictly enforces ASCII order (Fix DEF-06) ─
-    (0, node_test_1.it)("T15C: HMAC-SHA256 signing with custom keys strictly enforces ASCII lexicographical order", () => {
+    void (0, node_test_1.it)("T15C: HMAC-SHA256 signing with custom keys strictly enforces ASCII lexicographical order", () => {
         const apiSecret = "custom_key_secret";
         const apiKey = "custom_key_id";
         const client = new wsOrderClient_1.WsOrderClient({
@@ -392,7 +392,7 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(p["signature"], expectedSig, "Signature with custom unmapped keys must match unified strictly sorted query string");
     });
     // ── T16: _dispatch() registers pending request ────────────────────────────
-    (0, node_test_1.it)("T16: _dispatch() registers a pending request in the internal map", async () => {
+    void (0, node_test_1.it)("T16: _dispatch() registers a pending request in the internal map", async () => {
         const client = new wsOrderClient_1.WsOrderClient({
             useTestnet: false,
             apiKey: "k",
@@ -405,16 +405,20 @@ class MockWebSocket {
         client.isConnected = true;
         const pendingMap = client.pendingRequests;
         // Dispatch an order that will time out (we won't send a response)
+        const timeoutState = { caught: false };
         const p = client
             .placeOrder({ symbol: "BTCUSDT", side: "BUY", type: "MARKET", quantity: 0.001 })
-            .catch(() => { }); // Expected to timeout
+            .catch((_err) => {
+            timeoutState.caught = true; // Expected timeout in test assertion
+        });
         // Immediately after dispatch: map must have 1 pending entry
         node_assert_1.strict.strictEqual(pendingMap.size, 1, "Pending map must have exactly 1 entry after dispatch");
         await p; // Wait for timeout
+        node_assert_1.strict.strictEqual(timeoutState.caught, true, "Pending request must reject on timeout");
         node_assert_1.strict.strictEqual(pendingMap.size, 0, "Pending map must be empty after timeout resolution");
     });
     // ── T17: _onMessage() resolves on status 200 ──────────────────────────────
-    (0, node_test_1.it)("T17: _onMessage() resolves the promise on Binance status 200", async () => {
+    void (0, node_test_1.it)("T17: _onMessage() resolves the promise on Binance status 200", async () => {
         const client = new wsOrderClient_1.WsOrderClient({
             useTestnet: false,
             apiKey: "k",
@@ -464,11 +468,12 @@ class MockWebSocket {
         client._onMessage(Buffer.from(JSON.stringify(mockResponse)));
         const response = await dispatchPromise;
         node_assert_1.strict.strictEqual(response.status, 200);
-        node_assert_1.strict.strictEqual(response.result?.orderId, 999001);
+        const resultObj = response.result;
+        node_assert_1.strict.strictEqual(resultObj?.orderId, 999001);
         node_assert_1.strict.ok(response.rttMs >= 0, "rttMs must be non-negative");
     });
     // ── T18: _onMessage() rejects on non-200 ──────────────────────────────────
-    (0, node_test_1.it)("T18: _onMessage() rejects the promise on Binance error status", async () => {
+    void (0, node_test_1.it)("T18: _onMessage() rejects the promise on Binance error status", async () => {
         const client = new wsOrderClient_1.WsOrderClient({
             useTestnet: false,
             apiKey: "k",
@@ -501,7 +506,7 @@ class MockWebSocket {
             err.message.includes("Illegal characters"), "Should reject with Binance error code and message");
     });
     // ── T19: _onMessage() ignores unknown ids ─────────────────────────────────
-    (0, node_test_1.it)("T19: _onMessage() silently ignores messages with unknown correlation IDs", () => {
+    void (0, node_test_1.it)("T19: _onMessage() silently ignores messages with unknown correlation IDs", () => {
         const client = new wsOrderClient_1.WsOrderClient({
             useTestnet: false,
             apiKey: "k",
@@ -520,7 +525,7 @@ class MockWebSocket {
         });
     });
     // ── T20: Timeout — pending request rejected after requestTimeoutMs ─────────
-    (0, node_test_1.it)("T20: pending request is rejected after requestTimeoutMs with timeout error", async () => {
+    void (0, node_test_1.it)("T20: pending request is rejected after requestTimeoutMs with timeout error", async () => {
         const client = new wsOrderClient_1.WsOrderClient({
             useTestnet: false,
             apiKey: "k",
@@ -533,7 +538,7 @@ class MockWebSocket {
         await node_assert_1.strict.rejects(() => client.placeOrder({ symbol: "BTCUSDT", side: "BUY", type: "MARKET", quantity: 0.001 }), (err) => err.message.includes("timed out after 50ms"), "Should reject with timeout error after requestTimeoutMs");
     });
     // ── T21: destroy() rejects all pending requests ────────────────────────────
-    (0, node_test_1.it)("T21: destroy() rejects all pending requests with shutdown error", async () => {
+    void (0, node_test_1.it)("T21: destroy() rejects all pending requests with shutdown error", async () => {
         const client = new wsOrderClient_1.WsOrderClient({
             useTestnet: false,
             apiKey: "k",
@@ -545,18 +550,20 @@ class MockWebSocket {
         client.isConnected = true;
         const p1 = client
             .placeOrder({ symbol: "BTCUSDT", side: "BUY", type: "MARKET", quantity: 0.001 })
-            .catch((e) => e.message);
+            .then(() => node_assert_1.strict.fail("Expected placeOrder to reject on destroy"))
+            .catch((e) => (e instanceof Error ? e.message : String(e)));
         const p2 = client
             .cancelOrder({ symbol: "BTCUSDT", orderId: 123 })
-            .catch((e) => e.message);
+            .then(() => node_assert_1.strict.fail("Expected cancelOrder to reject on destroy"))
+            .catch((e) => (e instanceof Error ? e.message : String(e)));
         // Both pending: now destroy
         client.destroy();
-        const [msg1, msg2] = (await Promise.all([p1, p2]));
+        const [msg1, msg2] = await Promise.all([p1, p2]);
         node_assert_1.strict.ok(msg1.includes("destroyed"), `p1 error: ${msg1}`);
         node_assert_1.strict.ok(msg2.includes("destroyed"), `p2 error: ${msg2}`);
     });
     // ── T22: destroy() closes the WebSocket ───────────────────────────────────
-    (0, node_test_1.it)("T22: destroy() closes the WebSocket and sets isConnected=false", () => {
+    void (0, node_test_1.it)("T22: destroy() closes the WebSocket and sets isConnected=false", () => {
         const client = new wsOrderClient_1.WsOrderClient({
             useTestnet: false,
             apiKey: "k",
@@ -569,7 +576,7 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(client.isConnected, false, "isConnected must be false after destroy");
     });
     // ── T23: _onClose() schedules reconnect on non-shutdown close ─────────────
-    (0, node_test_1.it)("T23: _onClose() schedules a reconnect timer when not shutting down", () => {
+    void (0, node_test_1.it)("T23: _onClose() schedules a reconnect timer when not shutting down", () => {
         const client = new wsOrderClient_1.WsOrderClient({
             useTestnet: false,
             apiKey: "k",
@@ -589,7 +596,7 @@ class MockWebSocket {
             clearTimeout(timer);
     });
     // ── T24: _onClose() does NOT reconnect when shutting down ─────────────────
-    (0, node_test_1.it)("T24: _onClose() does NOT schedule reconnect when isShuttingDown=true", () => {
+    void (0, node_test_1.it)("T24: _onClose() does NOT schedule reconnect when isShuttingDown=true", () => {
         const client = new wsOrderClient_1.WsOrderClient({
             useTestnet: false,
             apiKey: "k",
@@ -604,7 +611,7 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(timer, null, "reconnectTimer must remain null during shutdown");
     });
     // ── T25: rttMs is correctly computed ──────────────────────────────────────
-    (0, node_test_1.it)("T25: rttMs in WsOrderResponse reflects wall-clock dispatch-to-ack latency", async () => {
+    void (0, node_test_1.it)("T25: rttMs in WsOrderResponse reflects wall-clock dispatch-to-ack latency", async () => {
         const client = new wsOrderClient_1.WsOrderClient({
             useTestnet: false,
             apiKey: "k",
@@ -653,17 +660,15 @@ class MockWebSocket {
         client
             ._onMessage(Buffer.from(JSON.stringify(mockResponse)));
         const response = await dispatchPromise;
-        node_assert_1.strict.ok(response.rttMs >= 10, `rttMs (${response.rttMs}ms) must be >= 10ms (simulated delay)`);
-        node_assert_1.strict.ok(response.rttMs < 2000, `rttMs (${response.rttMs}ms) must be < timeout`);
+        node_assert_1.strict.ok(response.rttMs >= 10, `rttMs (${String(response.rttMs)}ms) must be >= 10ms (simulated delay)`);
+        node_assert_1.strict.ok(response.rttMs < 2000, `rttMs (${String(response.rttMs)}ms) must be < timeout`);
     });
     // ── T26: inFlightClientOrderIds memory leak eradication (Fix DEF-03) ───────
-    (0, node_test_1.it)("T26: inFlightClientOrderIds is unconditionally cleared on successful WS order execution", async () => {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { BinanceExecutionClient } = require("../execution/binance");
-        const execClient = new BinanceExecutionClient();
+    void (0, node_test_1.it)("T26: inFlightClientOrderIds is unconditionally cleared on successful WS order execution", async () => {
+        const execClient = new binance_1.BinanceExecutionClient();
         const mockWs = {
             isReady: () => true,
-            placeOrder: async (params) => ({
+            placeOrder: (params) => Promise.resolve({
                 id: "req-001",
                 status: 200,
                 result: {
@@ -689,8 +694,8 @@ class MockWebSocket {
                 rateLimits: [],
                 rttMs: 14.2,
             }),
-            cancelOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-            cancelReplaceOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelReplaceOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
         };
         const mockSab = { writeAtomicFloat64Asset: () => { } };
         execClient.attachWsOrderClient(mockWs, mockSab, 0);
@@ -708,10 +713,8 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(inFlightMap.size, 0, "inFlightClientOrderIds size must be 0 (zero leak)");
     });
     // ── T27: Multi-asset telemetry routing & singleton attachment (Fix DEF-04) ─
-    (0, node_test_1.it)("T27: attachWsOrderClient is idempotent and routes telemetry to the exact assetIndex per symbol", async () => {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { BinanceExecutionClient } = require("../execution/binance");
-        const execClient = new BinanceExecutionClient();
+    void (0, node_test_1.it)("T27: attachWsOrderClient is idempotent and routes telemetry to the exact assetIndex per symbol", async () => {
+        const execClient = new binance_1.BinanceExecutionClient();
         const sabTelemetryWrites = [];
         const mockSab = {
             writeAtomicFloat64Asset: (assetIdx, slot, val) => {
@@ -720,7 +723,7 @@ class MockWebSocket {
         };
         const mockWs = {
             isReady: () => true,
-            placeOrder: async (params) => ({
+            placeOrder: (params) => Promise.resolve({
                 id: "req-multi",
                 status: 200,
                 result: {
@@ -728,16 +731,26 @@ class MockWebSocket {
                     symbol: params.symbol,
                     status: "NEW",
                     clientOrderId: params.newClientOrderId || "MULTI_CID",
-                    price: "100", avgPrice: "0", origQty: "1", executedQty: "0", cumQuote: "0",
-                    timeInForce: "GTC", type: params.type, reduceOnly: false, side: params.side,
-                    positionSide: "BOTH", stopPrice: "0", workingType: "CONTRACT_PRICE", updateTime: Date.now(),
+                    price: "100",
+                    avgPrice: "0",
+                    origQty: "1",
+                    executedQty: "0",
+                    cumQuote: "0",
+                    timeInForce: "GTC",
+                    type: params.type,
+                    reduceOnly: false,
+                    side: params.side,
+                    positionSide: "BOTH",
+                    stopPrice: "0",
+                    workingType: "CONTRACT_PRICE",
+                    updateTime: Date.now(),
                 },
                 error: null,
                 rateLimits: [],
                 rttMs: 16.5,
             }),
-            cancelOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-            cancelReplaceOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelReplaceOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
         };
         // Attach for Asset 0 (BTC)
         execClient.attachWsOrderClient(mockWs, mockSab, 0);
@@ -755,7 +768,7 @@ class MockWebSocket {
         });
         const btcRttWrite = sabTelemetryWrites.find((w) => w.assetIdx === 0 && w.slot === 159);
         node_assert_1.strict.ok(btcRttWrite !== undefined, "BTCUSDT order must write RTT to assetIndex 0 slot 159");
-        node_assert_1.strict.strictEqual(btcRttWrite?.val, 16.5);
+        node_assert_1.strict.strictEqual(btcRttWrite.val, 16.5);
         // Place order for ETH (Asset 1) with explicit assetIndex
         sabTelemetryWrites.length = 0;
         await execClient.placeOrder({
@@ -768,18 +781,16 @@ class MockWebSocket {
         });
         const ethRttWrite = sabTelemetryWrites.find((w) => w.assetIdx === 1 && w.slot === 159);
         node_assert_1.strict.ok(ethRttWrite !== undefined, "ETHUSDT order must write RTT to assetIndex 1 slot 159");
-        node_assert_1.strict.strictEqual(ethRttWrite?.val, 16.5);
+        node_assert_1.strict.strictEqual(ethRttWrite.val, 16.5);
     });
     // ── T28: REST Fallback routing on -1022 signature error (Fix DEF-05) ───────
-    (0, node_test_1.it)("T28: placeOrder cleanly falls back to REST HTTPS on -1022 signature error without crashing", async () => {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { BinanceExecutionClient } = require("../execution/binance");
-        const execClient = new BinanceExecutionClient();
+    void (0, node_test_1.it)("T28: placeOrder cleanly falls back to REST HTTPS on -1022 signature error without crashing", async () => {
+        const execClient = new binance_1.BinanceExecutionClient();
         let restCalled = false;
         // Monkey-patch request() to simulate successful REST fallback
-        execClient.request = async () => {
+        execClient.request = () => {
             restCalled = true;
-            return {
+            return Promise.resolve({
                 orderId: 555001,
                 symbol: "BTCUSDT",
                 status: "NEW",
@@ -797,15 +808,13 @@ class MockWebSocket {
                 stopPrice: "0",
                 workingType: "CONTRACT_PRICE",
                 updateTime: Date.now(),
-            };
+            });
         };
         const mockFailingWs = {
             isReady: () => true,
-            placeOrder: async () => {
-                throw new Error("[WsOrderClient] Binance WS Order API Error [-1022]: Signature for this request is not valid.");
-            },
-            cancelOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-            cancelReplaceOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            placeOrder: () => Promise.reject(new Error("[WsOrderClient] Binance WS Order API Error [-1022]: Signature for this request is not valid.")),
+            cancelOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelReplaceOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
         };
         const mockSab = { writeAtomicFloat64Asset: () => { } };
         execClient.attachWsOrderClient(mockFailingWs, mockSab, 0);
@@ -821,17 +830,15 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(res.orderId, 555001, "Returned orderId must be from REST fallback response");
     });
     // ── T29: WS-First cancelOrder execution & fallback (Fix DEF-06) ────────────
-    (0, node_test_1.it)("T29: cancelOrder uses WebSocket client when ready and falls back to REST on error", async () => {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { BinanceExecutionClient } = require("../execution/binance");
-        const execClient = new BinanceExecutionClient();
+    void (0, node_test_1.it)("T29: cancelOrder uses WebSocket client when ready and falls back to REST on error", async () => {
+        const execClient = new binance_1.BinanceExecutionClient();
         let wsCancelCalled = false;
         const mockWs = {
             isReady: () => true,
-            placeOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-            cancelOrder: async (params) => {
+            placeOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelOrder: (params) => {
                 wsCancelCalled = true;
-                return {
+                return Promise.resolve({
                     id: "cancel-req-1",
                     status: 200,
                     result: {
@@ -839,16 +846,26 @@ class MockWebSocket {
                         symbol: params.symbol,
                         status: "CANCELED",
                         clientOrderId: "CANCEL_CID",
-                        price: "0", avgPrice: "0", origQty: "1", executedQty: "0", cumQuote: "0",
-                        timeInForce: "GTC", type: "LIMIT", reduceOnly: false, side: "BUY",
-                        positionSide: "BOTH", stopPrice: "0", workingType: "CONTRACT_PRICE", updateTime: Date.now(),
+                        price: "0",
+                        avgPrice: "0",
+                        origQty: "1",
+                        executedQty: "0",
+                        cumQuote: "0",
+                        timeInForce: "GTC",
+                        type: "LIMIT",
+                        reduceOnly: false,
+                        side: "BUY",
+                        positionSide: "BOTH",
+                        stopPrice: "0",
+                        workingType: "CONTRACT_PRICE",
+                        updateTime: Date.now(),
                     },
                     error: null,
                     rateLimits: [],
                     rttMs: 11.8,
-                };
+                });
             },
-            cancelReplaceOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelReplaceOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
         };
         const mockSab = { writeAtomicFloat64Asset: () => { } };
         execClient.attachWsOrderClient(mockWs, mockSab, 0);
@@ -858,17 +875,17 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(cancelRes.orderId, 12345);
     });
     // ── T29B: cancelOrder with alphanumeric ID preserves full origClientOrderId (Fix DEF-07) ──
-    (0, node_test_1.it)("T29B: cancelOrder with alphanumeric string ID preserves origClientOrderId without numeric truncation", async () => {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { BinanceExecutionClient } = require("../execution/binance");
-        const execClient = new BinanceExecutionClient();
-        let capturedParams = null;
+    void (0, node_test_1.it)("T29B: cancelOrder with alphanumeric string ID preserves origClientOrderId without numeric truncation", async () => {
+        const execClient = new binance_1.BinanceExecutionClient();
+        const capturedBox = {
+            params: null,
+        };
         const mockWs = {
             isReady: () => true,
-            placeOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-            cancelOrder: async (params) => {
-                capturedParams = params;
-                return {
+            placeOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelOrder: (params) => {
+                capturedBox.params = params;
+                return Promise.resolve({
                     id: "cancel-req-2",
                     status: 200,
                     result: {
@@ -876,43 +893,51 @@ class MockWebSocket {
                         symbol: params.symbol,
                         status: "CANCELED",
                         clientOrderId: params.origClientOrderId || "",
-                        price: "0", avgPrice: "0", origQty: "1", executedQty: "0", cumQuote: "0",
-                        timeInForce: "GTC", type: "LIMIT", reduceOnly: false, side: "BUY",
-                        positionSide: "BOTH", stopPrice: "0", workingType: "CONTRACT_PRICE", updateTime: Date.now(),
+                        price: "0",
+                        avgPrice: "0",
+                        origQty: "1",
+                        executedQty: "0",
+                        cumQuote: "0",
+                        timeInForce: "GTC",
+                        type: "LIMIT",
+                        reduceOnly: false,
+                        side: "BUY",
+                        positionSide: "BOTH",
+                        stopPrice: "0",
+                        workingType: "CONTRACT_PRICE",
+                        updateTime: Date.now(),
                     },
                     error: null,
                     rateLimits: [],
                     rttMs: 8.5,
-                };
+                });
             },
-            cancelReplaceOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelReplaceOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
         };
         const mockSab = { writeAtomicFloat64Asset: () => { } };
         execClient.attachWsOrderClient(mockWs, mockSab, 0);
         // Call with clientOrderId that starts with digits: "12345_BATBOT_SL"
         await execClient.cancelOrder("BTCUSDT", "12345_BATBOT_SL");
-        const resultParams = capturedParams;
+        const resultParams = capturedBox.params;
         node_assert_1.strict.ok(resultParams !== null, "cancelOrder must be called");
-        node_assert_1.strict.strictEqual(resultParams?.orderId, undefined, "orderId must be undefined for alphanumeric clientOrderId");
-        node_assert_1.strict.strictEqual(resultParams?.origClientOrderId, "12345_BATBOT_SL", "origClientOrderId must match full string without truncation");
+        node_assert_1.strict.strictEqual(resultParams.orderId, undefined, "orderId must be undefined for alphanumeric clientOrderId");
+        node_assert_1.strict.strictEqual(resultParams.origClientOrderId, "12345_BATBOT_SL", "origClientOrderId must match full string without truncation");
     });
     // ── T30: -5022 POST_ONLY spread crossing on WS triggers 1-tick shift retry (Fix DEF-03) ──
-    (0, node_test_1.it)("T30: placeOrder recovers from -5022 WS rejection by shifting 1 tick away and retrying", async () => {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { BinanceExecutionClient } = require("../execution/binance");
-        const execClient = new BinanceExecutionClient();
+    void (0, node_test_1.it)("T30: placeOrder recovers from -5022 WS rejection by shifting 1 tick away and retrying", async () => {
+        const execClient = new binance_1.BinanceExecutionClient();
         let attempt = 0;
         const dispatchedPrices = [];
         const mockWs = {
             isReady: () => true,
-            placeOrder: async (params) => {
+            placeOrder: (params) => {
                 attempt++;
                 if (params.price !== undefined)
                     dispatchedPrices.push(params.price);
                 if (attempt === 1) {
-                    throw new Error("[WsOrderClient] Binance WS Order API Error [-5022]: Post Only order would immediately trigger.");
+                    return Promise.reject(new Error("[WsOrderClient] Binance WS Order API Error [-5022]: Post Only order would immediately trigger."));
                 }
-                return {
+                return Promise.resolve({
                     id: "req-retry",
                     status: 200,
                     result: {
@@ -937,10 +962,10 @@ class MockWebSocket {
                     error: null,
                     rateLimits: [],
                     rttMs: 12.0,
-                };
+                });
             },
-            cancelOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-            cancelReplaceOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelReplaceOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
         };
         const mockSab = { writeAtomicFloat64Asset: () => { } };
         execClient.attachWsOrderClient(mockWs, mockSab, 0);
@@ -959,10 +984,8 @@ class MockWebSocket {
         node_assert_1.strict.ok(dispatchedPrices[1] < dispatchedPrices[0], "BUY retry price must be shifted 1 tick lower to clear spread");
     });
     // ── T31: Singleton ensureWsOrderClient eliminates startup race condition (Fix DEF-02) ──
-    (0, node_test_1.it)("T31: ensureWsOrderClient returns exact same singleton across 10 concurrent asset calls", async () => {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { BinanceExecutionClient } = require("../execution/binance");
-        const execClient = new BinanceExecutionClient();
+    void (0, node_test_1.it)("T31: ensureWsOrderClient returns exact same singleton across 10 concurrent asset calls", async () => {
+        const execClient = new binance_1.BinanceExecutionClient();
         const mockSab = { writeAtomicFloat64Asset: () => { } };
         const mockWs = new wsOrderClient_1.WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
         const mockSocket = new MockWebSocket();
@@ -971,27 +994,25 @@ class MockWebSocket {
         // Attach singleton
         execClient.attachWsOrderClient(mockWs, mockSab, 0);
         // Call ensureWsOrderClient concurrently for 10 assets
-        const promises = Array.from({ length: 10 }, (_, i) => execClient.ensureWsOrderClient(mockSab, i, `ASSET_${i}`));
+        const promises = Array.from({ length: 10 }, (_, i) => execClient.ensureWsOrderClient(mockSab, i, `ASSET_${String(i)}`));
         const clients = await Promise.all(promises);
         for (let i = 0; i < clients.length; i++) {
-            node_assert_1.strict.strictEqual(clients[i], mockWs, `Client ${i} must be identical to singleton instance`);
+            node_assert_1.strict.strictEqual(clients[i], mockWs, `Client ${String(i)} must be identical to singleton instance`);
         }
     });
     // ── T32: cancelReplaceOrder partial failure does NOT issue redundant REST cancel (Fix DEF-08) ──
-    (0, node_test_1.it)("T32: cancelReplaceOrder throws WS_CANCEL_REPLACE_PARTIAL and halts when cancel succeeded but new order failed", async () => {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { BinanceExecutionClient } = require("../execution/binance");
-        const execClient = new BinanceExecutionClient();
+    void (0, node_test_1.it)("T32: cancelReplaceOrder throws WS_CANCEL_REPLACE_PARTIAL and halts when cancel succeeded but new order failed", async () => {
+        const execClient = new binance_1.BinanceExecutionClient();
         let restPutCalled = false;
-        execClient.request = async () => {
+        execClient.request = () => {
             restPutCalled = true;
-            return { orderId: 999 };
+            return Promise.resolve({ orderId: 999 });
         };
         const mockWs = {
             isReady: () => true,
-            placeOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-            cancelOrder: async () => ({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-            cancelReplaceOrder: async () => ({
+            placeOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+            cancelReplaceOrder: () => Promise.resolve({
                 id: "cr-part-1",
                 status: 200,
                 result: {
@@ -1019,10 +1040,8 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(restPutCalled, false, "REST PUT must NEVER be called when order was already canceled");
     });
     // ── T33: inFlightClientOrderIds is cleaned up even if pre-flight throws (Fix DEF-05) ──
-    (0, node_test_1.it)("T33: inFlightClientOrderIds is cleaned up in finally block even if pre-flight checks throw", async () => {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { BinanceExecutionClient } = require("../execution/binance");
-        const execClient = new BinanceExecutionClient();
+    void (0, node_test_1.it)("T33: inFlightClientOrderIds is cleaned up in finally block even if pre-flight checks throw", async () => {
+        const execClient = new binance_1.BinanceExecutionClient();
         // Make resolveAssetIndex throw intentionally
         execClient.resolveAssetIndex = () => {
             throw new Error("Simulated pre-flight validation failure");
@@ -1039,7 +1058,7 @@ class MockWebSocket {
         node_assert_1.strict.strictEqual(inFlightMap.has(testCid), false, "inFlightClientOrderIds must be cleared in finally block after pre-flight exception");
     });
     // ── T34: _dispatch() handles cb(null) as successful transmission without throwing TypeError ──
-    (0, node_test_1.it)("T34: _dispatch() handles cb(null) as successful transmission without throwing TypeError", async () => {
+    void (0, node_test_1.it)("T34: _dispatch() handles cb(null) as successful transmission without throwing TypeError", async () => {
         const client = new wsOrderClient_1.WsOrderClient({
             useTestnet: false,
             apiKey: "test_key",
@@ -1098,7 +1117,7 @@ class MockWebSocket {
         node_assert_1.strict.ok(response.result);
     });
     // ── T35: _dispatch() intercepts synchronous ws.send exception and rejects promise cleanly ──
-    (0, node_test_1.it)("T35: _dispatch() intercepts synchronous ws.send exception and rejects promise cleanly", async () => {
+    void (0, node_test_1.it)("T35: _dispatch() intercepts synchronous ws.send exception and rejects promise cleanly", async () => {
         const client = new wsOrderClient_1.WsOrderClient({
             useTestnet: false,
             apiKey: "test_key",

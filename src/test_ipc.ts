@@ -18,8 +18,8 @@ async function runTest() {
   const client = system.client;
 
   console.log("[TEST] Checking initial memory layout...");
-  console.log(`[TEST] Initial TimestampNs: ${client.getTimestampNs()}`);
-  console.log(`[TEST] Initial OBI: ${client.getOBI()}`);
+  console.log(`[TEST] Initial TimestampNs: ${String(client.getTimestampNs())}`);
+  console.log(`[TEST] Initial OBI: ${String(client.getOBI())}`);
 
   console.log("[TEST] Simulating atomic shared memory write from V8 typed view...");
   const bigIntView = new BigInt64Array(sab);
@@ -44,18 +44,18 @@ async function runTest() {
   storeAtomicFloat64(bigIntView, 12, 4.5);
 
   console.log("[TEST] Verifying zero-copy MarketDataClient accessors...");
-  console.log(`[TEST] OBI: ${client.getOBI()} (Expected: 0.45)`);
-  console.log(`[TEST] CVD: ${client.getCVD()} (Expected: 2500.5)`);
-  console.log(`[TEST] Spread Velocity: ${client.getSpreadVelocity()} (Expected: 1.2)`);
-  console.log(`[TEST] Best Bid Price: ${client.getBestBidPrice()} (Expected: 65000.0)`);
-  console.log(`[TEST] Best Bid Quantity: ${client.getBestBidQuantity()} (Expected: 4.5)`);
-  console.log(`[TEST] Best Ask Price: ${client.getBestAskPrice()} (Expected: 65001.0)`);
-  console.log(`[TEST] Best Ask Quantity: ${client.getBestAskQuantity()} (Expected: 3.2)`);
+  console.log(`[TEST] OBI: ${String(client.getOBI())} (Expected: 0.45)`);
+  console.log(`[TEST] CVD: ${String(client.getCVD())} (Expected: 2500.5)`);
+  console.log(`[TEST] Spread Velocity: ${String(client.getSpreadVelocity())} (Expected: 1.2)`);
+  console.log(`[TEST] Best Bid Price: ${String(client.getBestBidPrice())} (Expected: 65000.0)`);
+  console.log(`[TEST] Best Bid Quantity: ${String(client.getBestBidQuantity())} (Expected: 4.5)`);
+  console.log(`[TEST] Best Ask Price: ${String(client.getBestAskPrice())} (Expected: 65001.0)`);
+  console.log(`[TEST] Best Ask Quantity: ${String(client.getBestAskQuantity())} (Expected: 3.2)`);
 
   const topBidsBuffer = new Float64Array(40);
   client.fillTopBids(topBidsBuffer, 1);
-  console.log(`[TEST] Top Bid 0 Price via fillTopBids: ${topBidsBuffer[0]} (Expected: 65000.0)`);
-  console.log(`[TEST] Top Bid 0 Quantity via fillTopBids: ${topBidsBuffer[1]} (Expected: 4.5)`);
+  console.log(`[TEST] Top Bid 0 Price via fillTopBids: ${String(topBidsBuffer[0])} (Expected: 65000.0)`);
+  console.log(`[TEST] Top Bid 0 Quantity via fillTopBids: ${String(topBidsBuffer[1])} (Expected: 4.5)`);
 
   if (
     client.getOBI() === 0.45 &&
@@ -78,4 +78,4 @@ async function runTest() {
   }
 }
 
-runTest();
+void runTest();

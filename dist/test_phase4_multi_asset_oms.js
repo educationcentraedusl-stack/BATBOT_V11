@@ -4,11 +4,11 @@ const multi_asset_executor_1 = require("./execution/multi_asset_executor");
 const perf_hooks_1 = require("perf_hooks");
 function assert(condition, message) {
     if (!condition) {
-        console.error("❌ ASSERTION FAILED: " + message);
+        console.error(`❌ ASSERTION FAILED: ${message}`);
         process.exit(1);
     }
 }
-async function runPhase4MultiAssetOmsTest() {
+function runPhase4MultiAssetOmsTest() {
     console.log("================================================================================");
     console.log("⚡ BATBOT_V11 PHASE 4: MULTI-ASSET OMS & EXECUTION ENGINE BENCHMARK HARNESS");
     console.log("================================================================================");
@@ -40,8 +40,8 @@ async function runPhase4MultiAssetOmsTest() {
         const symbol = activeSymbols[idx];
         const midPrice = 100.0 + idx * 50.0;
         const res = executor.submitIntent(symbol, "BUY", "LIMIT", 1.0, midPrice * 0.999, midPrice, 50000.0, 0.001, 0.01, 1.0, 0.20);
-        assert(res.status === "SUBMITTED", "Symbol " + symbol + " intent should be SUBMITTED but got " + res.status + " (" + res.reason + ")");
-        assert(Array.isArray(res.slices) && res.slices.length > 0, "Symbol " + symbol + " should return slices array");
+        assert(res.status === "SUBMITTED", `Symbol ${symbol} intent should be SUBMITTED but got ${res.status} (${res.reason ?? "unknown"})`);
+        assert(Array.isArray(res.slices) && res.slices.length > 0, `Symbol ${symbol} should return slices array`);
     }
     console.log("  ✅ Basic intent submission verified across all 10 assets.");
     // 2. Pre-Trade Risk Collar Rejection Verification
@@ -49,24 +49,25 @@ async function runPhase4MultiAssetOmsTest() {
     // 2A: Price Collar Violation (> 1.0% deviation)
     const priceCollarRes = executor.submitIntent("ETHUSDT", "BUY", "LIMIT", 1.0, 3500.0, 3000.0, 50000.0, 0.001, 0.01, 1.0, 0.20, { postOnly: false });
     assert(priceCollarRes.status === "REJECTED", "Price collar violation should be REJECTED");
-    assert(priceCollarRes.reason === "REJECTED_PRICE_COLLAR", "Expected REJECTED_PRICE_COLLAR got " + priceCollarRes.reason);
+    assert(priceCollarRes.reason === "REJECTED_PRICE_COLLAR", `Expected REJECTED_PRICE_COLLAR got ${priceCollarRes.reason ?? "unknown"}`);
     console.log("  ✅ Price Collar Guard rejection verified.");
     // 2B: Gross Leverage Cap Violation (> 3.0x cap)
     const leverageCapRes = executor.submitIntent("SOLUSDT", "BUY", "LIMIT", 1.0, 150.0, 150.0, 50000.0, 0.001, 0.01, 3.5, 0.20);
     assert(leverageCapRes.status === "REJECTED", "Gross leverage cap violation should be REJECTED");
-    assert(leverageCapRes.reason === "REJECTED_LEVERAGE_CAP", "Expected REJECTED_LEVERAGE_CAP got " + leverageCapRes.reason);
+    assert(leverageCapRes.reason === "REJECTED_LEVERAGE_CAP", `Expected REJECTED_LEVERAGE_CAP got ${leverageCapRes.reason ?? "unknown"}`);
     console.log("  ✅ Gross Leverage Cap Guard rejection verified.");
     // 2C: Correlation Emergency Brake (> 0.85 threshold)
     const correlationRes = executor.submitIntent("BNBUSDT", "BUY", "LIMIT", 1.0, 500.0, 500.0, 50000.0, 0.001, 0.01, 1.0, 0.92);
     assert(correlationRes.status === "REJECTED", "Correlation emergency brake should be REJECTED");
-    assert(correlationRes.reason === "REJECTED_CORRELATION_SPIKE", "Expected REJECTED_CORRELATION_SPIKE got " + correlationRes.reason);
+    assert(correlationRes.reason === "REJECTED_CORRELATION_SPIKE", `Expected REJECTED_CORRELATION_SPIKE got ${correlationRes.reason ?? "unknown"}`);
     console.log("  ✅ Correlation Emergency Brake rejection verified.");
     // 3. Execution Slicing Verification (Order > 2% top-5 depth)
     console.log("\n[Test 3] Testing sub-second micro-slice TWAP / Iceberg execution slicer...");
     const largeOrderRes = executor.submitIntent("XRPUSDT", "BUY", "LIMIT", 50000.0, 0.50, 0.50, 10000.0, 0.1, 0.0001, 1.0, 0.20);
     assert(largeOrderRes.status === "SUBMITTED", "Large sliced order should be SUBMITTED");
-    assert(largeOrderRes.slices.length > 1, "Large order should be sliced into multiple packets");
-    console.log("  ✅ Large intent sliced into " + largeOrderRes.slices.length + " micro-packets successfully.");
+    const largeSliceCount = largeOrderRes.slices ? largeOrderRes.slices.length : 0;
+    assert(largeSliceCount > 1, "Large order should be sliced into multiple packets");
+    console.log(`  ✅ Large intent sliced into ${String(largeSliceCount)} micro-packets successfully.`);
     // 4. Lock-Free MPSC Ring Buffer Queue Verification
     console.log("\n[Test 4] Testing MPSC Lock-Free Ring Buffer Intent Packet Popping...");
     let poppedCount = 0;
@@ -77,7 +78,7 @@ async function runPhase4MultiAssetOmsTest() {
         assert(pkt.quantity > 0, "Popped packet must have valid quantity");
     }
     assert(poppedCount > 0, "Ring buffer should have popped queued packets");
-    console.log("  ✅ Popped " + poppedCount + " intent packets from lock-free ring buffer queue cleanly.");
+    console.log(`  ✅ Popped ${String(poppedCount)} intent packets from lock-free ring buffer queue cleanly.`);
     // 5. Zero-Copy SAB Slot Synchronization Verification
     console.log("\n[Test 5] Testing SAB Slot Synchronization for Slots 181..200...");
     const syncSuccess = executor.syncSab(sabBuffer);
@@ -86,13 +87,13 @@ async function runPhase4MultiAssetOmsTest() {
     const asset0Submitted = floatsView[186];
     const asset0Health = floatsView[199];
     const asset0EngineActive = floatsView[200];
-    assert(asset0Submitted > 0, "SAB Slot 186 (Submitted Orders) for Asset 0 should be > 0, got " + asset0Submitted);
-    assert(asset0Pending >= 0, "SAB Slot 181 (Pending Orders) for Asset 0 should be >= 0, got " + asset0Pending);
-    assert(asset0Health === 1.0, "SAB Slot 199 (Health Indicator) for Asset 0 should be 1.0, got " + asset0Health);
-    assert(asset0EngineActive === 1.0, "SAB Slot 200 (Engine Active) for Asset 0 should be 1.0, got " + asset0EngineActive);
-    console.log("  ✅ SAB Slot 181 (Pending Orders) verified: " + asset0Pending);
-    console.log("  ✅ SAB Slot 186 (Submitted Orders) verified: " + asset0Submitted);
-    console.log("  ✅ SAB Slot 199 & 200 (Engine Health & Active Status) verified: " + asset0Health + ", " + asset0EngineActive);
+    assert(asset0Submitted > 0, `SAB Slot 186 (Submitted Orders) for Asset 0 should be > 0, got ${String(asset0Submitted)}`);
+    assert(asset0Pending >= 0, `SAB Slot 181 (Pending Orders) for Asset 0 should be >= 0, got ${String(asset0Pending)}`);
+    assert(asset0Health === 1.0, `SAB Slot 199 (Health Indicator) for Asset 0 should be 1.0, got ${String(asset0Health)}`);
+    assert(asset0EngineActive === 1.0, `SAB Slot 200 (Engine Active) for Asset 0 should be 1.0, got ${String(asset0EngineActive)}`);
+    console.log(`  ✅ SAB Slot 181 (Pending Orders) verified: ${String(asset0Pending)}`);
+    console.log(`  ✅ SAB Slot 186 (Submitted Orders) verified: ${String(asset0Submitted)}`);
+    console.log(`  ✅ SAB Slot 199 & 200 (Engine Health & Active Status) verified: ${String(asset0Health)}, ${String(asset0EngineActive)}`);
     // 6. High-Frequency Latency & Throughput Benchmark Harness (100,000 intents)
     console.log("\n[Test 6] Executing 100,000 synthetic multi-asset order intents stress benchmark...");
     const ITERATIONS = 100000;
@@ -111,15 +112,18 @@ async function runPhase4MultiAssetOmsTest() {
     const throughput = Math.round((ITERATIONS / elapsedMs) * 1000);
     console.log("\n================================================================================");
     console.log("📊 BENCHMARK RESULTS (100,000 MULTI-ASSET OMS INTENTS):");
-    console.log("   - Total Execution Time : " + elapsedMs.toFixed(2) + " ms");
-    console.log("   - Average Latency      : " + latencyPerTickUs.toFixed(3) + " us per intent");
-    console.log("   - Engine Throughput    : " + throughput.toLocaleString() + " intents / sec");
+    console.log(`   - Total Execution Time : ${elapsedMs.toFixed(2)} ms`);
+    console.log(`   - Average Latency      : ${latencyPerTickUs.toFixed(3)} us per intent`);
+    console.log(`   - Engine Throughput    : ${throughput.toLocaleString()} intents / sec`);
     console.log("================================================================================");
-    assert(latencyPerTickUs < 30.0, "Latency target < 30.0 us violated: " + latencyPerTickUs.toFixed(3) + " us");
-    assert(throughput > 30000, "Throughput target > 30,000 intents/sec violated: " + throughput.toLocaleString() + " intents/sec");
+    assert(latencyPerTickUs < 30.0, `Latency target < 30.0 us violated: ${latencyPerTickUs.toFixed(3)} us`);
+    assert(throughput > 30000, `Throughput target > 30,000 intents/sec violated: ${throughput.toLocaleString()} intents/sec`);
     console.log("\n🎉 ALL PHASE 4 MULTI-ASSET OMS QA VERIFICATION TESTS PASSED SUCCESSFULLY!");
 }
-runPhase4MultiAssetOmsTest().catch((err) => {
+try {
+    runPhase4MultiAssetOmsTest();
+}
+catch (err) {
     console.error("❌ Test Harness Error:", err);
     process.exit(1);
-});
+}

@@ -22,7 +22,7 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
     let orderIdCounter = 100000;
     // Intercept and record placed orders
     const mockExecutionClient = new binance_1.BinanceExecutionClient();
-    mockExecutionClient.placeOrder = async (params) => {
+    mockExecutionClient.placeOrder = (params) => {
         orderIdCounter++;
         const orderId = orderIdCounter;
         const isClosePos = params.closePosition === true || String(params.closePosition).toLowerCase() === "true";
@@ -42,14 +42,14 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
             record.quantity = params.quantity;
         }
         exchangeOrders.set(orderId, record);
-        return {
+        return Promise.resolve({
             orderId,
             symbol: params.symbol,
             status: "NEW",
             clientOrderId: record.clientOrderId,
             price: record.price,
             avgPrice: "0",
-            origQty: record.quantity ? String(record.quantity) : "0",
+            origQty: record.quantity !== undefined ? String(record.quantity) : "0",
             executedQty: "0",
             cumQuote: "0",
             timeInForce: params.timeInForce || "GTC",
@@ -60,7 +60,7 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
             stopPrice: record.stopPrice,
             workingType: "CONTRACT_PRICE",
             updateTime: Date.now(),
-        };
+        });
     };
     mockExecutionClient.placeBatchOrders = async (orders) => {
         const results = [];
@@ -70,13 +70,31 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
         }
         return results;
     };
-    mockExecutionClient.cancelOrder = async (sym, orderId) => {
-        if (exchangeOrders.has(orderId)) {
-            const ord = exchangeOrders.get(orderId);
+    mockExecutionClient.cancelOrder = (sym, orderId) => {
+        const numId = Number(orderId);
+        const ord = exchangeOrders.get(numId);
+        if (ord) {
             ord.status = "CANCELED";
-            return { symbol: sym, orderId, status: "CANCELED" };
         }
-        return { symbol: sym, orderId, status: "CANCELED" };
+        return Promise.resolve({
+            orderId: numId,
+            symbol: sym,
+            status: "CANCELED",
+            clientOrderId: "",
+            price: "0",
+            avgPrice: "0",
+            origQty: "0",
+            executedQty: "0",
+            cumQuote: "0",
+            timeInForce: "GTC",
+            type: "STOP_MARKET",
+            reduceOnly: false,
+            side: "BUY",
+            positionSide: "SHORT",
+            stopPrice: "0",
+            workingType: "CONTRACT_PRICE",
+            updateTime: Date.now(),
+        });
     };
     // -----------------------------------------------------------------------------------------
     // STAGE 1: Single Entry Fill & Exchange-Native `closePosition: true` Verification
@@ -89,9 +107,9 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
     // Occupy Short Slot 0
     ledger.occupyShortSlot(0, fill1Qty, fill1Px, tpPercent, slPercent, false);
     const agg1 = ledger.getAggregatedSideSummary("SHORT");
-    assert(agg1.isOccupied === true, "SHORT position must be occupied");
-    assert(Math.abs(agg1.totalQuantity - 0.0008) < 1e-6, `Aggregated quantity must be 0.0008, got ${agg1.totalQuantity}`);
-    assert(Math.abs(agg1.vwapEntryPrice - 64250.0) < 1e-2, `VWAP must be 64250.0, got ${agg1.vwapEntryPrice}`);
+    assert(agg1.isOccupied, "SHORT position must be occupied");
+    assert(Math.abs(agg1.totalQuantity - 0.0008) < 1e-6, `Aggregated quantity must be 0.0008, got ${String(agg1.totalQuantity)}`);
+    assert(Math.abs(agg1.vwapEntryPrice - 64250.0) < 1e-2, `VWAP must be 64250.0, got ${String(agg1.vwapEntryPrice)}`);
     // Dispatch Position Stop Loss with closePosition: true
     const sl1Res = await mockExecutionClient.placePositionStopLoss(symbol, "BUY", "SHORT", agg1.stopLossPrice);
     ledger.registerActiveStopLossOrderId("SHORT_SLOT_0", sl1Res.orderId);
@@ -101,7 +119,7 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
     assert(placedSl1?.closePosition === true, "closePosition MUST be strictly true");
     assert(placedSl1?.quantity === undefined, "Quantity MUST be omitted when closePosition=true");
     assert(placedSl1?.positionSide === "SHORT", "positionSide must be SHORT");
-    console.log(`  ✓ Stage 1 Passed: Single fill 0.0008 BTC verified with closePosition=true SL OrderId #${sl1Res.orderId}`);
+    console.log(`  ✓ Stage 1 Passed: Single fill 0.0008 BTC verified with closePosition=true SL OrderId #${String(sl1Res.orderId)}`);
     // -----------------------------------------------------------------------------------------
     // STAGE 2: Pyramiding Fill (0.0008 -> 0.0016) & Atomic TP Cancel-Replace Verification
     // -----------------------------------------------------------------------------------------
@@ -118,12 +136,12 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
     ledger.occupyShortSlot(0, fill2Qty, fill2Px, tpPercent, slPercent, false);
     const agg2 = ledger.getAggregatedSideSummary("SHORT");
     const expectedVwap2 = (fill1Qty * fill1Px + fill2Qty * fill2Px) / (fill1Qty + fill2Qty); // 64275.0
-    assert(Math.abs(agg2.totalQuantity - 0.0016) < 1e-6, `Aggregated quantity must be 0.0016, got ${agg2.totalQuantity}`);
-    assert(Math.abs(agg2.vwapEntryPrice - expectedVwap2) < 1e-2, `VWAP must be exactly ${expectedVwap2}, got ${agg2.vwapEntryPrice}`);
+    assert(Math.abs(agg2.totalQuantity - 0.0016) < 1e-6, `Aggregated quantity must be 0.0016, got ${String(agg2.totalQuantity)}`);
+    assert(Math.abs(agg2.vwapEntryPrice - expectedVwap2) < 1e-2, `VWAP must be exactly ${String(expectedVwap2)}, got ${String(agg2.vwapEntryPrice)}`);
     // Atomic TP Cancel: Cancel old TP orders
     for (const oldTpId of initialTpOrderIds) {
         await mockExecutionClient.cancelOrder(symbol, oldTpId);
-        assert(exchangeOrders.get(oldTpId)?.status === "CANCELED", `Old TP order #${oldTpId} must be CANCELED`);
+        assert(exchangeOrders.get(oldTpId)?.status === "CANCELED", `Old TP order #${String(oldTpId)} must be CANCELED`);
     }
     console.log("  ✓ Old resting TP orders successfully cancelled");
     // Atomic TP Replace: Dispatch new TP ladder sized to 100% of aggregated 0.0016
@@ -132,7 +150,7 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
     const newTpOrderIds = newTpResponses.map((r) => r.orderId);
     ledger.registerActiveTpOrderIds("SHORT_SLOT_0", newTpOrderIds);
     const sumNewTpQty = newTpIntents.reduce((acc, c) => acc + (c.quantity || 0), 0);
-    assert(Math.abs(sumNewTpQty - 0.0016) < 1e-6, `Total new TP ladder quantity must equal 0.0016, got ${sumNewTpQty}`);
+    assert(Math.abs(sumNewTpQty - 0.0016) < 1e-6, `Total new TP ladder quantity must equal 0.0016, got ${String(sumNewTpQty)}`);
     // Re-sync Position SL anchored to new VWAP (64275.0)
     await mockExecutionClient.cancelOrder(symbol, sl1Res.orderId);
     const sl2Res = await mockExecutionClient.placePositionStopLoss(symbol, "BUY", "SHORT", agg2.stopLossPrice);
@@ -140,7 +158,7 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
     const placedSl2 = exchangeOrders.get(sl2Res.orderId);
     assert(placedSl2?.closePosition === true, "SL order must maintain closePosition=true");
     assert(placedSl2?.quantity === undefined, "Quantity must be omitted for closePosition=true");
-    console.log(`  ✓ Stage 2 Passed: Pyramiding fill aggregated to 0.0016 BTC. TP ladder recalculated for 0.0016 BTC. SL updated to OrderId #${sl2Res.orderId}`);
+    console.log(`  ✓ Stage 2 Passed: Pyramiding fill aggregated to 0.0016 BTC. TP ladder recalculated for 0.0016 BTC. SL updated to OrderId #${String(sl2Res.orderId)}`);
     // -----------------------------------------------------------------------------------------
     // STAGE 3: Third Fill (0.0016 -> 0.0032) & 100% Aggregated Protection
     // -----------------------------------------------------------------------------------------
@@ -150,12 +168,12 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
     ledger.occupyShortSlot(1, fill3Qty, fill3Px, tpPercent, slPercent, false);
     const agg3 = ledger.getAggregatedSideSummary("SHORT");
     const expectedVwap3 = (0.0016 * expectedVwap2 + fill3Qty * fill3Px) / 0.0032; // 64312.50
-    assert(Math.abs(agg3.totalQuantity - 0.0032) < 1e-6, `Aggregated quantity must be 0.0032, got ${agg3.totalQuantity}`);
-    assert(Math.abs(agg3.vwapEntryPrice - expectedVwap3) < 1e-2, `VWAP must be exactly ${expectedVwap3}, got ${agg3.vwapEntryPrice}`);
+    assert(Math.abs(agg3.totalQuantity - 0.0032) < 1e-6, `Aggregated quantity must be 0.0032, got ${String(agg3.totalQuantity)}`);
+    assert(Math.abs(agg3.vwapEntryPrice - expectedVwap3) < 1e-2, `VWAP must be exactly ${String(expectedVwap3)}, got ${String(agg3.vwapEntryPrice)}`);
     // Generate and verify TP intents for full 0.0032
     const tpIntents3 = ledger.generateAggregatedBatchTpIntents("SHORT", agg3.totalQuantity, agg3.vwapEntryPrice, "SHORT_SLOT_0", 0.00906);
     const sumTp3Qty = tpIntents3.reduce((acc, c) => acc + (c.quantity || 0), 0);
-    assert(Math.abs(sumTp3Qty - 0.0032) < 1e-6, `Aggregated TP ladder quantity must equal 0.0032, got ${sumTp3Qty}`);
+    assert(Math.abs(sumTp3Qty - 0.0032) < 1e-6, `Aggregated TP ladder quantity must equal 0.0032, got ${String(sumTp3Qty)}`);
     console.log(`  ✓ Stage 3 Passed: 0.0032 BTC fully aggregated across short slots with exact VWAP $${agg3.vwapEntryPrice.toFixed(2)}`);
     // -----------------------------------------------------------------------------------------
     // STAGE 4: WebSocket `ACCOUNT_UPDATE` True Snapshot Handling (Zero Additive Mutation)
@@ -167,8 +185,8 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
     // With isAuthoritativeSnapshot = true, it must REPLACE, NOT ADD
     ledger.occupyShortSlot(0, wsPositionAmt, wsEntryPrice, tpPercent, slPercent, true);
     const postWsSlot = ledger.getShortSlots()[0];
-    assert(Math.abs(postWsSlot.quantity - 0.0032) < 1e-6, `Slot quantity must strictly equal 0.0032 (NOT 0.0048 or 0.0064), got ${postWsSlot.quantity}`);
-    console.log(`  ✓ Stage 4 Passed: Authoritative snapshot preserved exact position size ${postWsSlot.quantity} without phantom additive doubling`);
+    assert(Math.abs(postWsSlot.quantity - 0.0032) < 1e-6, `Slot quantity must strictly equal 0.0032 (NOT 0.0048 or 0.0064), got ${String(postWsSlot.quantity)}`);
+    console.log(`  ✓ Stage 4 Passed: Authoritative snapshot preserved exact position size ${String(postWsSlot.quantity)} without phantom additive doubling`);
     // -----------------------------------------------------------------------------------------
     // STAGE 5: Partial TP Limit Fill Scale-Out & Residual Invariant
     // -----------------------------------------------------------------------------------------
@@ -176,8 +194,8 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
     const partialFillQty = 0.0010;
     const partialFillPx = 63800.0;
     const tpFillRes = ledger.processTpLimitFill("SHORT_SLOT_0", newTpOrderIds[0] || 100001, partialFillQty, partialFillPx, true);
-    assert(tpFillRes.isPositionClosed === false, "Position must not be closed on partial TP fill");
-    assert(Math.abs(tpFillRes.remainingQuantity - 0.0022) < 1e-6, `Remaining quantity must be 0.0022, got ${tpFillRes.remainingQuantity}`);
+    assert(!tpFillRes.isPositionClosed, "Position must not be closed on partial TP fill");
+    assert(Math.abs(tpFillRes.remainingQuantity - 0.0022) < 1e-6, `Remaining quantity must be 0.0022, got ${String(tpFillRes.remainingQuantity)}`);
     console.log(`  ✓ Stage 5 Passed: Scaled out 0.0010 BTC, remaining 0.0022 BTC continues to be shielded`);
     // -----------------------------------------------------------------------------------------
     // STAGE 6: Closed-Loop Zero-Naked Invariant Guard & Sub-1.5 µs Latency Benchmark
@@ -185,12 +203,12 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
     console.log("\n[STAGE 6] Testing Closed-Loop Zero-Naked Invariant Guard & Latency Benchmark...");
     // Test 6A: Invariant check detects unprotected active position
     const auditUnprotected = riskGuard.auditAggregatedPositionRisk(symbol, "SHORT", 0.0022, 0);
-    assert(auditUnprotected.isProtected === false, "Audit must fail when activeStopLossOrderId is 0");
+    assert(!auditUnprotected.isProtected, "Audit must fail when activeStopLossOrderId is 0");
     assert(auditUnprotected.reason?.includes("UNPROTECTED_EXPOSURE") === true, "Reason must report UNPROTECTED_EXPOSURE");
-    console.log(`  ✓ Invariant correctly caught unprotected exposure: ${auditUnprotected.reason}`);
+    console.log(`  ✓ Invariant correctly caught unprotected exposure: ${String(auditUnprotected.reason)}`);
     // Test 6B: Invariant check passes when activeStopLossOrderId is valid
     const auditProtected = riskGuard.auditAggregatedPositionRisk(symbol, "SHORT", 0.0022, 100050);
-    assert(auditProtected.isProtected === true, "Audit must pass when activeStopLossOrderId > 0");
+    assert(auditProtected.isProtected, "Audit must pass when activeStopLossOrderId > 0");
     console.log("  ✓ Invariant correctly validates protected position");
     // Test 6C: Sub-1.5 µs Invariant & VWAP Evaluation Latency Benchmark
     // JIT Warm-up: 5,000 iterations to allow V8 TurboFan to optimize the hot loop
@@ -217,7 +235,10 @@ async function runAggregatedRiskAndSlTpSyncTestSuite() {
     console.log("================================================================================\n");
 }
 runAggregatedRiskAndSlTpSyncTestSuite().catch((err) => {
-    console.error(`[TEST_SUITE_ERROR] ${err.message}`);
-    console.error(err.stack);
+    const msg = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : "";
+    console.error(`[TEST_SUITE_ERROR] ${msg}`);
+    if (stack)
+        console.error(stack);
     process.exit(1);
 });

@@ -10,7 +10,7 @@ function assert(condition: boolean, message: string): void {
   }
 }
 
-async function runPhase6TuiCommandCenterTests(): Promise<void> {
+function runPhase6TuiCommandCenterTests(): void {
   console.log("=========================================================================");
   console.log("  BATBOT_V11 PHASE 6: MULTI-ASSET TUI COMMAND CENTER & SAB QA VERIFY   ");
   console.log("=========================================================================\n");
@@ -19,7 +19,7 @@ async function runPhase6TuiCommandCenterTests(): Promise<void> {
   const slotsPerAsset = parseInt(process.env.SAB_SLOTS_PER_ASSET || "256", 10);
   const requiredBytes = maxAssets * slotsPerAsset * 8;
 
-  console.log(`[QA Test 1] Allocating 10-Asset SharedArrayBuffer (${requiredBytes} bytes)...`);
+  console.log(`[QA Test 1] Allocating 10-Asset SharedArrayBuffer (${String(requiredBytes)} bytes)...`);
   const sab = new SharedArrayBuffer(requiredBytes);
   const client = new MarketDataClient(sab, maxAssets, slotsPerAsset);
   assert(client.maxAssets === 10, "maxAssets must equal 10");
@@ -125,38 +125,38 @@ async function runPhase6TuiCommandCenterTests(): Promise<void> {
   });
 
   // Verify default control states (all false / 0.0)
-  assert(client.getKillSwitchFlag(0) === false, "Kill switch should initially be false");
-  assert(client.getCloseAllPositionsFlag(0) === false, "Close all flag should initially be false");
-  assert(client.getEnginePausedFlag(0) === false, "Engine pause flag should initially be false");
-  assert(client.getTriggerRecalibrationFlag(0) === false, "Recalibration flag should initially be false");
+  assert(!client.getKillSwitchFlag(0), "Kill switch should initially be false");
+  assert(!client.getCloseAllPositionsFlag(0), "Close all flag should initially be false");
+  assert(!client.getEnginePausedFlag(0), "Engine pause flag should initially be false");
+  assert(!client.getTriggerRecalibrationFlag(0), "Recalibration flag should initially be false");
 
   // Trigger atomic global control updates
   console.log("  Testing Atomic Global Kill-Switch Broadcast across all 10 assets...");
   client.setGlobalKillSwitch(true);
   for (let i = 0; i < maxAssets; i++) {
-    assert(client.getKillSwitchFlag(i) === true, `Asset ${i} kill switch must be true`);
+    assert(client.getKillSwitchFlag(i), `Asset ${String(i)} kill switch must be true`);
   }
   console.log("  ✅ Global Kill-Switch verified active across all 10 asset slots.");
 
   console.log("  Testing Atomic Clear Kill-Switch Broadcast...");
   client.setGlobalKillSwitch(false);
   for (let i = 0; i < maxAssets; i++) {
-    assert(client.getKillSwitchFlag(i) === false, `Asset ${i} kill switch must be false`);
+    assert(!client.getKillSwitchFlag(i), `Asset ${String(i)} kill switch must be false`);
   }
   console.log("  ✅ Global Kill-Switch cleared across all 10 asset slots.");
 
   console.log("  Testing Panic Close-All-Positions Atomic Trigger...");
   client.setGlobalCloseAll(true);
   for (let i = 0; i < maxAssets; i++) {
-    assert(client.getCloseAllPositionsFlag(i) === true, `Asset ${i} close-all flag must be true`);
+    assert(client.getCloseAllPositionsFlag(i), `Asset ${String(i)} close-all flag must be true`);
   }
   console.log("  ✅ Panic Close-All verified active across all 10 asset slots.");
 
   console.log("  Testing Engine Pause & Model Recalibration Atomic Triggers...");
   client.setGlobalPause(true);
   client.setGlobalRecalibration(true);
-  assert(client.getEnginePausedFlag(0) === true, "Engine pause flag must be true");
-  assert(client.getTriggerRecalibrationFlag(0) === true, "Recalibration flag must be true");
+  assert(client.getEnginePausedFlag(0), "Engine pause flag must be true");
+  assert(client.getTriggerRecalibrationFlag(0), "Recalibration flag must be true");
   console.log("  ✅ Atomic Pause and Recalibration flags verified in SAB.\n");
 
   console.log("=========================================================================");
@@ -164,7 +164,10 @@ async function runPhase6TuiCommandCenterTests(): Promise<void> {
   console.log("=========================================================================\n");
 }
 
-runPhase6TuiCommandCenterTests().catch((err) => {
-  console.error("❌ Test failed with unhandled error:", err?.stack || err);
+try {
+  runPhase6TuiCommandCenterTests();
+} catch (err: unknown) {
+  const errDetail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  console.error("❌ Test failed with unhandled error:", errDetail);
   process.exit(1);
-});
+}

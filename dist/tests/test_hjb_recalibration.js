@@ -36,11 +36,11 @@ function assert(condition, message) {
 // =========================================================================================
 console.log("\n--- STAGE 1: Default Recalibration Invariants ---");
 const defaultHjb = new hjbReservationEngine_1.HJBReservationEngine("LINKUSDT");
-assert(defaultHjb.getRiskAversionGamma() === 4.20, `Default riskAversionGamma is 4.20: got ${defaultHjb.getRiskAversionGamma()}`);
-assert(defaultHjb.getTargetHorizonSeconds() === 120.0, `Default targetHorizonSeconds is 120.0s: got ${defaultHjb.getTargetHorizonSeconds()}`);
-assert(defaultHjb.getLiquidityKappa() === 1.5, `Default liquidityKappa is 1.5: got ${defaultHjb.getLiquidityKappa()}`);
-assert(vegamTpLadderEngine_1.DEFAULT_VEGAM_CONFIG.hjbRiskAversionGamma === 4.20, `DEFAULT_VEGAM_CONFIG.hjbRiskAversionGamma is 4.20: got ${vegamTpLadderEngine_1.DEFAULT_VEGAM_CONFIG.hjbRiskAversionGamma}`);
-assert(vegamTpLadderEngine_1.DEFAULT_VEGAM_CONFIG.hjbTargetHorizonSeconds === 120.0, `DEFAULT_VEGAM_CONFIG.hjbTargetHorizonSeconds is 120.0: got ${vegamTpLadderEngine_1.DEFAULT_VEGAM_CONFIG.hjbTargetHorizonSeconds}`);
+assert(defaultHjb.getRiskAversionGamma() === 4.20, `Default riskAversionGamma is 4.20: got ${String(defaultHjb.getRiskAversionGamma())}`);
+assert(defaultHjb.getTargetHorizonSeconds() === 120.0, `Default targetHorizonSeconds is 120.0s: got ${String(defaultHjb.getTargetHorizonSeconds())}`);
+assert(defaultHjb.getLiquidityKappa() === 1.5, `Default liquidityKappa is 1.5: got ${String(defaultHjb.getLiquidityKappa())}`);
+assert(vegamTpLadderEngine_1.DEFAULT_VEGAM_CONFIG.hjbRiskAversionGamma === 4.20, `DEFAULT_VEGAM_CONFIG.hjbRiskAversionGamma is 4.20: got ${String(vegamTpLadderEngine_1.DEFAULT_VEGAM_CONFIG.hjbRiskAversionGamma)}`);
+assert(vegamTpLadderEngine_1.DEFAULT_VEGAM_CONFIG.hjbTargetHorizonSeconds === 120.0, `DEFAULT_VEGAM_CONFIG.hjbTargetHorizonSeconds is 120.0: got ${String(vegamTpLadderEngine_1.DEFAULT_VEGAM_CONFIG.hjbTargetHorizonSeconds)}`);
 // =========================================================================================
 // STAGE 2: Dynamic Per-Asset and Global Environment Variable Overrides
 // =========================================================================================
@@ -49,22 +49,22 @@ console.log("\n--- STAGE 2: Dynamic Environment Variable Overrides ---");
 process.env.HJB_GAMMA_BTCUSDT = "6.50";
 process.env.HJB_HORIZON_BTCUSDT = "180.0";
 const btcHjb = new hjbReservationEngine_1.HJBReservationEngine("BTCUSDT");
-assert(btcHjb.getRiskAversionGamma() === 6.50, `Per-asset HJB_GAMMA_BTCUSDT override parsed: got ${btcHjb.getRiskAversionGamma()}`);
-assert(btcHjb.getTargetHorizonSeconds() === 180.0, `Per-asset HJB_HORIZON_BTCUSDT override parsed: got ${btcHjb.getTargetHorizonSeconds()}`);
+assert(btcHjb.getRiskAversionGamma() === 6.50, `Per-asset HJB_GAMMA_BTCUSDT override parsed: got ${String(btcHjb.getRiskAversionGamma())}`);
+assert(btcHjb.getTargetHorizonSeconds() === 180.0, `Per-asset HJB_HORIZON_BTCUSDT override parsed: got ${String(btcHjb.getTargetHorizonSeconds())}`);
 delete process.env.HJB_GAMMA_BTCUSDT;
 delete process.env.HJB_HORIZON_BTCUSDT;
 // Test 2B: Global Gamma and Horizon override
 process.env.HJB_RISK_AVERSION_GAMMA = "3.75";
 process.env.HJB_TARGET_HORIZON_SECONDS = "90.0";
 const globalHjb = new hjbReservationEngine_1.HJBReservationEngine("ETHUSDT");
-assert(globalHjb.getRiskAversionGamma() === 3.75, `Global HJB_RISK_AVERSION_GAMMA override parsed: got ${globalHjb.getRiskAversionGamma()}`);
-assert(globalHjb.getTargetHorizonSeconds() === 90.0, `Global HJB_TARGET_HORIZON_SECONDS override parsed: got ${globalHjb.getTargetHorizonSeconds()}`);
+assert(globalHjb.getRiskAversionGamma() === 3.75, `Global HJB_RISK_AVERSION_GAMMA override parsed: got ${String(globalHjb.getRiskAversionGamma())}`);
+assert(globalHjb.getTargetHorizonSeconds() === 90.0, `Global HJB_TARGET_HORIZON_SECONDS override parsed: got ${String(globalHjb.getTargetHorizonSeconds())}`);
 delete process.env.HJB_RISK_AVERSION_GAMMA;
 delete process.env.HJB_TARGET_HORIZON_SECONDS;
 // Test 2C: Explicit caller parameters take highest precedence
 const explicitHjb = new hjbReservationEngine_1.HJBReservationEngine("SOLUSDT", 5.00, 150.0, 2.0);
-assert(explicitHjb.getRiskAversionGamma() === 5.00, `Explicit gamma argument takes precedence: got ${explicitHjb.getRiskAversionGamma()}`);
-assert(explicitHjb.getTargetHorizonSeconds() === 150.0, `Explicit horizon argument takes precedence: got ${explicitHjb.getTargetHorizonSeconds()}`);
+assert(explicitHjb.getRiskAversionGamma() === 5.00, `Explicit gamma argument takes precedence: got ${String(explicitHjb.getRiskAversionGamma())}`);
+assert(explicitHjb.getTargetHorizonSeconds() === 150.0, `Explicit horizon argument takes precedence: got ${String(explicitHjb.getTargetHorizonSeconds())}`);
 // =========================================================================================
 // STAGE 3: Mathematical Actionability at 50% Horizon & Genuine Position Sizing
 // =========================================================================================
@@ -118,15 +118,15 @@ assert(!recalEvalShort.isLiquidationTriggered, "Entry price does not prematurely
 // Adverse price breaching boundary triggers liquidation
 const adverseLongPrice = recalEvalLong.liquidationBoundary - 0.01;
 const adverseEvalLong = recalEngine.getOptimalExitBoundary("LONG", entryPrice, adverseLongPrice, slotQty200, holdingMs, gkVol, 200.0);
-assert(adverseEvalLong.isLiquidationTriggered === true, "Adverse price below boundary triggers LONG liquidation");
+assert(adverseEvalLong.isLiquidationTriggered, "Adverse price below boundary triggers LONG liquidation");
 assert(adverseEvalLong.exitReason === "HJB_RESERVATION_LIQUIDATE_LONG", `Exact exitReason emitted: got ${adverseEvalLong.exitReason}`);
 // =========================================================================================
 // STAGE 4: HedgePositionLedger Integration & Dynamic Overload Wiring
 // =========================================================================================
 console.log("\n--- STAGE 4: HedgePositionLedger Integration & Wiring ---");
 const ledger = new positionLedger_1.HedgePositionLedger("BTCUSDT", 3);
-assert(ledger.getHjbReservationEngine().getRiskAversionGamma() === 4.20, `Ledger internal HJB engine initialized with recalibrated gamma (4.20): got ${ledger.getHjbReservationEngine().getRiskAversionGamma()}`);
-assert(ledger.getHjbReservationEngine().getTargetHorizonSeconds() === 120.0, `Ledger internal HJB engine initialized with recalibrated horizon (120.0s): got ${ledger.getHjbReservationEngine().getTargetHorizonSeconds()}`);
+assert(ledger.getHjbReservationEngine().getRiskAversionGamma() === 4.20, `Ledger internal HJB engine initialized with recalibrated gamma (4.20): got ${String(ledger.getHjbReservationEngine().getRiskAversionGamma())}`);
+assert(ledger.getHjbReservationEngine().getTargetHorizonSeconds() === 120.0, `Ledger internal HJB engine initialized with recalibrated horizon (120.0s): got ${String(ledger.getHjbReservationEngine().getTargetHorizonSeconds())}`);
 // Test 4A: Normal price tick (-10 bps dip) does NOT trigger HJB liquidation
 ledger.occupyCoreLong(0.001, 60000.0, 1.5, 5.0);
 const normalVolMetrics = {
@@ -149,7 +149,7 @@ const quietHazardMetrics = {
 const quietTriggers = ledger.evaluateSotaDynamicExits(59940.0, // -10 bps dip
 quietHazardMetrics, undefined, // Omitted hjbEngine -> tests fallback to ledger.hjbEngine
 normalVolMetrics, Date.now());
-assert(quietTriggers.length === 0, `Normal -10 bps dip does not trigger false HJB liquidation (triggers: ${quietTriggers.length})`);
+assert(quietTriggers.length === 0, `Normal -10 bps dip does not trigger false HJB liquidation (triggers: ${String(quietTriggers.length)})`);
 // Test 4B: Adverse drop beyond HJB liquidation boundary triggers PASSIVE_MAKER liquidation
 // With entry = $60,000, 0.001 BTC ($60 USDT notional), safeVol = 0.0080 (GK_ATR = $480):
 // In evaluateSotaDynamicExits, halfLifeSec = 90.0s (H=0.50), targetHorizon = 180s.
@@ -161,9 +161,9 @@ const hjbBreachTriggers = ledger.evaluateSotaDynamicExits(59400.0, quietHazardMe
 );
 const hjbLongTrigger = hjbBreachTriggers.find((t) => t.reason === "HJB_RESERVATION_LIQUIDATE_LONG");
 assert(hjbLongTrigger !== undefined, "Ledger emitted HJB_RESERVATION_LIQUIDATE_LONG trigger upon boundary breach");
-assert(hjbLongTrigger?.slotId === "CORE_LONG", `Target slot is CORE_LONG: got ${hjbLongTrigger?.slotId}`);
-assert(hjbLongTrigger?.executionStyle === "PASSIVE_MAKER", `HJB liquidation executionStyle is PASSIVE_MAKER: got ${hjbLongTrigger?.executionStyle}`);
-assert(hjbLongTrigger?.quantity === 0.001, `Exit quantity equals full slot quantity: got ${hjbLongTrigger?.quantity}`);
+assert(hjbLongTrigger?.slotId === "CORE_LONG", `Target slot is CORE_LONG: got ${String(hjbLongTrigger?.slotId)}`);
+assert(hjbLongTrigger?.executionStyle === "PASSIVE_MAKER", `HJB liquidation executionStyle is PASSIVE_MAKER: got ${String(hjbLongTrigger?.executionStyle)}`);
+assert(hjbLongTrigger?.quantity === 0.001, `Exit quantity equals full slot quantity: got ${String(hjbLongTrigger?.quantity)}`);
 // Test 4C: Symmetrical SHORT HJB liquidation
 // For SHORT 0.001 @ $60,000, short boundary sits at $60,580.608 (1.2096x GK_ATR, strictly <= 3.00x).
 // Price surge to $60,600 breaches the boundary.
@@ -173,9 +173,9 @@ const hjbShortBreachTriggers = ledger.evaluateSotaDynamicExits(60600.0, // Adver
 quietHazardMetrics, undefined, normalVolMetrics, nowMs + 60000);
 const hjbShortTrigger = hjbShortBreachTriggers.find((t) => t.reason === "HJB_RESERVATION_LIQUIDATE_SHORT");
 assert(hjbShortTrigger !== undefined, "Ledger emitted HJB_RESERVATION_LIQUIDATE_SHORT trigger upon boundary breach");
-assert(hjbShortTrigger?.slotId === "SHORT_SLOT_0", `Target slot is SHORT_SLOT_0: got ${hjbShortTrigger?.slotId}`);
-assert(hjbShortTrigger?.executionStyle === "PASSIVE_MAKER", `Short HJB liquidation executionStyle is PASSIVE_MAKER: got ${hjbShortTrigger?.executionStyle}`);
-assert(hjbShortTrigger?.quantity === 0.001, `Short exit quantity equals full slot quantity: got ${hjbShortTrigger?.quantity}`);
+assert(hjbShortTrigger?.slotId === "SHORT_SLOT_0", `Target slot is SHORT_SLOT_0: got ${String(hjbShortTrigger?.slotId)}`);
+assert(hjbShortTrigger?.executionStyle === "PASSIVE_MAKER", `Short HJB liquidation executionStyle is PASSIVE_MAKER: got ${String(hjbShortTrigger?.executionStyle)}`);
+assert(hjbShortTrigger?.quantity === 0.001, `Short exit quantity equals full slot quantity: got ${String(hjbShortTrigger?.quantity)}`);
 // Test 4D: Hard Stop-Loss Preemption over HJB Liquidation Boundary
 // With entry = $60,000 and slPercent = 5.0%, stopLossPrice sits at $57,000 (LONG) and $63,000 (SHORT).
 // Price drop to $56,500 breaches BOTH Stop-Loss ($57,000) and HJB boundary ($59,419.39).
@@ -187,17 +187,17 @@ quietHazardMetrics, undefined, normalVolMetrics, nowMs + 60000);
 const slTrigger = slPreemptTriggers.find((t) => t.reason.startsWith("MVA_TRAILING_STOP") || t.reason === "BREAK_EVEN_STOP_LOSS");
 const hjbPreemptedTrigger = slPreemptTriggers.find((t) => t.reason.startsWith("HJB_RESERVATION_LIQUIDATE"));
 assert(slTrigger !== undefined, "Hard Stop-Loss evaluates and triggers when markPrice <= stopLossPrice");
-assert(slTrigger?.executionStyle === "AGGRESSIVE_MARKET", `Stop-Loss emits AGGRESSIVE_MARKET: got ${slTrigger?.executionStyle}`);
+assert(slTrigger?.executionStyle === "AGGRESSIVE_MARKET", `Stop-Loss emits AGGRESSIVE_MARKET: got ${String(slTrigger?.executionStyle)}`);
 assert(hjbPreemptedTrigger === undefined, "HJB PASSIVE_MAKER liquidation is strictly suppressed/preempted by Hard Stop-Loss");
 // Test 4E: Volatility NaN, 0, and Negative Poisoning Protection
 const nanVolRes = defaultHjb.calculateReservationPrice(60000.0, 0.001, 30000, NaN, 200.0, 120.0);
 const zeroVolRes = defaultHjb.calculateReservationPrice(60000.0, 0.001, 30000, 0, 200.0, 120.0);
 const negVolRes = defaultHjb.calculateReservationPrice(60000.0, 0.001, 30000, -0.05, 200.0, 120.0);
 const nanBoundEval = defaultHjb.getOptimalExitBoundary("LONG", 60000.0, 59900.0, 0.001, 30000, NaN, 200.0, 120.0);
-assert(Number.isFinite(nanVolRes) && nanVolRes > 0, `calculateReservationPrice safe against NaN volatility: got ${nanVolRes}`);
-assert(Number.isFinite(zeroVolRes) && zeroVolRes > 0, `calculateReservationPrice safe against 0 volatility: got ${zeroVolRes}`);
-assert(Number.isFinite(negVolRes) && negVolRes > 0, `calculateReservationPrice safe against negative volatility: got ${negVolRes}`);
-assert(Number.isFinite(nanBoundEval.liquidationBoundary) && nanBoundEval.liquidationBoundary > 0, `getOptimalExitBoundary safe against NaN volatility: got ${nanBoundEval.liquidationBoundary}`);
+assert(Number.isFinite(nanVolRes) && nanVolRes > 0, `calculateReservationPrice safe against NaN volatility: got ${String(nanVolRes)}`);
+assert(Number.isFinite(zeroVolRes) && zeroVolRes > 0, `calculateReservationPrice safe against 0 volatility: got ${String(zeroVolRes)}`);
+assert(Number.isFinite(negVolRes) && negVolRes > 0, `calculateReservationPrice safe against negative volatility: got ${String(negVolRes)}`);
+assert(Number.isFinite(nanBoundEval.liquidationBoundary) && nanBoundEval.liquidationBoundary > 0, `getOptimalExitBoundary safe against NaN volatility: got ${String(nanBoundEval.liquidationBoundary)}`);
 // Test 4F: Compressed Volatility Noise Floor Non-Inversion
 // Under highly compressed volatility (e.g. gkVol = 0.0005 = 5 bps),
 // maxBoundDistUsdt (3.0 * ATR = 15 bps) < noiseFloorUsdt (50 bps).
@@ -242,7 +242,7 @@ assert(bytesPerCall < 50.0, `Zero-GC invariant verified: ${bytesPerCall.toFixed(
 // SUMMARY
 // =========================================================================================
 console.log("\n================================================================================");
-console.log(`   VEGAM PHASE 7 HJB RECALIBRATION QA MATRIX: ${totalPassed} PASSED / ${totalFailed} FAILED`);
+console.log(`   VEGAM PHASE 7 HJB RECALIBRATION QA MATRIX: ${String(totalPassed)} PASSED / ${String(totalFailed)} FAILED`);
 console.log("================================================================================");
 if (totalFailed > 0) {
     console.error("❌ VEGAM PHASE 7 QA TESTS FAILED!");

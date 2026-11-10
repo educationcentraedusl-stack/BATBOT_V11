@@ -66,7 +66,7 @@ false, // No sweep
 1.20, // Normal entropy
 Date.now());
 assert(!res1.isBreached, "Normal profitable tick does not trigger adversarial breach");
-assert(res1.activeSignalCount === 0, `Active signal count is 0 in healthy market: got ${res1.activeSignalCount}`);
+assert(res1.activeSignalCount === 0, `Active signal count is 0 in healthy market: got ${String(res1.activeSignalCount)}`);
 assert(!res1.signals.priceVelocityShock, "No price velocity shock during healthy tick");
 // Mild pullback within noise (e.g., $59,940 -> -10 bps, well below 1.25 * ATR = 125 bps)
 const res1B = gate.evaluate(longSlot, 59940.0, normalHazardMetrics, gkAtr, 1.0, false, 1.20, Date.now());
@@ -85,8 +85,8 @@ const toxicVpinOnlyMetrics = {
 };
 const res2A = gate.evaluate(longSlot, 60000.0, toxicVpinOnlyMetrics, gkAtr, 1.0, false, 1.20, Date.now());
 assert(!res2A.isBreached, "Isolated toxic VPIN without consensus or price shock does NOT trigger breach");
-assert(res2A.activeSignalCount === 1, `Exact 1 active anomaly signal (toxic VPIN): got ${res2A.activeSignalCount}`);
-assert(res2A.signals.toxicVpin === true, "toxicVpin signal is detected");
+assert(res2A.activeSignalCount === 1, `Exact 1 active anomaly signal (toxic VPIN): got ${String(res2A.activeSignalCount)}`);
+assert(res2A.signals.toxicVpin, "toxicVpin signal is detected");
 // Test 2B: Only OBI is adverse (-0.35), but VPIN is low (0.30) and no price shock
 const adverseObiOnlyMetrics = {
     ...normalHazardMetrics,
@@ -95,13 +95,13 @@ const adverseObiOnlyMetrics = {
 };
 const res2B = gate.evaluate(longSlot, 60000.0, adverseObiOnlyMetrics, gkAtr, 1.0, false, 1.20, Date.now());
 assert(!res2B.isBreached, "Isolated adverse OBI without consensus does NOT trigger breach");
-assert(res2B.activeSignalCount === 1, `Exact 1 active anomaly signal (adverse OBI): got ${res2B.activeSignalCount}`);
-assert(res2B.signals.obiReversal === true, "obiReversal signal is detected");
+assert(res2B.activeSignalCount === 1, `Exact 1 active anomaly signal (adverse OBI): got ${String(res2B.activeSignalCount)}`);
+assert(res2B.signals.obiReversal, "obiReversal signal is detected");
 // Test 2C: Price drops by 1.50% (exceeding 1.25x ATR = 1.25%), BUT microstructure is completely healthy (zero toxicity signals)
 const res2C = gate.evaluate(longSlot, 59100.0, // $900 drop = 1.50% drop
 normalHazardMetrics, gkAtr, 1.0, false, 1.20, Date.now());
 assert(!res2C.isBreached, "Price shock without microstructure toxicity consensus does NOT trigger breach (protected by SL instead)");
-assert(res2C.signals.priceVelocityShock === true, "priceVelocityShock is identified");
+assert(res2C.signals.priceVelocityShock, "priceVelocityShock is identified");
 assert(res2C.activeSignalCount === 0, "Zero microstructural consensus signals during clean non-toxic price move");
 // =========================================================================================
 // STAGE 3: Symmetrical LONG Flash Crash Multi-Signal Consensus Cascade
@@ -127,15 +127,15 @@ const flashCrashMetrics = {
 const res3 = gate.evaluate(longSlot, 59100.0, flashCrashMetrics, gkAtr, 2.30, true, // isSweepDetected
 3.10, // Entropy collapse
 Date.now());
-assert(res3.isBreached === true, "Adversarial breach successfully triggered on flash crash cascade");
-assert(res3.activeSignalCount >= 2, `Multi-signal consensus met: got ${res3.activeSignalCount} concurrent signals`);
-assert(res3.signals.obiReversal === true, "OBI reversal confirmed");
-assert(res3.signals.toxicVpin === true, "Toxic VPIN confirmed");
-assert(res3.signals.adverseFlow === true, "Adverse flow imbalance confirmed");
-assert(res3.signals.hawkesBurst === true, "Hawkes burst confirmed");
-assert(res3.signals.adverseSweep === true, "Adverse sweep confirmed");
-assert(res3.signals.entropyCollapse === true, "Entropy collapse confirmed");
-assert(res3.signals.priceVelocityShock === true, "Price velocity shock confirmed");
+assert(res3.isBreached, "Adversarial breach successfully triggered on flash crash cascade");
+assert(res3.activeSignalCount >= 2, `Multi-signal consensus met: got ${String(res3.activeSignalCount)} concurrent signals`);
+assert(res3.signals.obiReversal, "OBI reversal confirmed");
+assert(res3.signals.toxicVpin, "Toxic VPIN confirmed");
+assert(res3.signals.adverseFlow, "Adverse flow imbalance confirmed");
+assert(res3.signals.hawkesBurst, "Hawkes burst confirmed");
+assert(res3.signals.adverseSweep, "Adverse sweep confirmed");
+assert(res3.signals.entropyCollapse, "Entropy collapse confirmed");
+assert(res3.signals.priceVelocityShock, "Price velocity shock confirmed");
 assert(res3.reason === "ADVERSARIAL_CASCADE_EXIT_LONG", `Exact reason string matched: got ${res3.reason}`);
 // --- Live Ledger Integration Verification (HedgePositionLedger) ---
 const testSab = new SharedArrayBuffer(10 * 256 * 8);
@@ -154,14 +154,16 @@ ledger.registerActiveStopLossOrderId("LONG", 90001);
 const longTriggers = ledger.evaluateSotaDynamicExits(59100.0, 59100.0, flashCrashMetrics, undefined, undefined, Date.now(), 0.50);
 const advLongTrigger = longTriggers.find((t) => t.reason === "ADVERSARIAL_CASCADE_EXIT_LONG");
 assert(advLongTrigger !== undefined, "Ledger emitted ADVERSARIAL_CASCADE_EXIT_LONG trigger");
-assert(advLongTrigger?.slotId === "CORE_LONG", `Target slot is CORE_LONG: got ${advLongTrigger?.slotId}`);
-assert(advLongTrigger?.executionStyle === "AGGRESSIVE_MARKET", `executionStyle strictly AGGRESSIVE_MARKET: got ${advLongTrigger?.executionStyle}`);
-assert(advLongTrigger?.executionType === "AGGRESSIVE_MARKET", `executionType strictly AGGRESSIVE_MARKET: got ${advLongTrigger?.executionType}`);
-assert(advLongTrigger?.quantity === 0.10, `Exit quantity equals full position: got ${advLongTrigger?.quantity}`);
-assert(Boolean(advLongTrigger?.cancelOrderIds?.includes(10001) &&
-    advLongTrigger?.cancelOrderIds?.includes(10002) &&
-    advLongTrigger?.cancelOrderIds?.includes(10003) &&
-    advLongTrigger?.cancelOrderIds?.includes(90001)), "All resting TP limit orders and protective stop loss scheduled for cancellation");
+assert(advLongTrigger?.slotId === "CORE_LONG", `Target slot is CORE_LONG: got ${String(advLongTrigger?.slotId)}`);
+assert(advLongTrigger?.executionStyle === "AGGRESSIVE_MARKET", `executionStyle strictly AGGRESSIVE_MARKET: got ${String(advLongTrigger?.executionStyle)}`);
+assert(advLongTrigger?.executionType === "AGGRESSIVE_MARKET", `executionType strictly AGGRESSIVE_MARKET: got ${String(advLongTrigger?.executionType)}`);
+assert(advLongTrigger?.quantity === 0.10, `Exit quantity equals full position: got ${String(advLongTrigger?.quantity)}`);
+const longCancelIds = advLongTrigger?.cancelOrderIds;
+assert(Boolean(longCancelIds &&
+    longCancelIds.includes(10001) &&
+    longCancelIds.includes(10002) &&
+    longCancelIds.includes(10003) &&
+    longCancelIds.includes(90001)), "All resting TP limit orders and protective stop loss scheduled for cancellation");
 // =========================================================================================
 // STAGE 4: Symmetrical SHORT Squeeze Multi-Signal Consensus Cascade
 // =========================================================================================
@@ -196,12 +198,14 @@ mdClient.setOBI(0.55, 0);
 const shortTriggers = ledger.evaluateSotaDynamicExits(60900.0, 60900.0, shortSqueezeMetrics, undefined, undefined, Date.now(), 0.50);
 const advShortTrigger = shortTriggers.find((t) => t.reason === "ADVERSARIAL_CASCADE_EXIT_SHORT");
 assert(advShortTrigger !== undefined, "Ledger emitted ADVERSARIAL_CASCADE_EXIT_SHORT trigger");
-assert(advShortTrigger?.slotId === "SHORT_SLOT_0", `Target slot is SHORT_SLOT_0: got ${advShortTrigger?.slotId}`);
-assert(advShortTrigger?.executionStyle === "AGGRESSIVE_MARKET", `Short executionStyle strictly AGGRESSIVE_MARKET: got ${advShortTrigger?.executionStyle}`);
-assert(advShortTrigger?.quantity === 0.05, `Exit quantity equals full short position: got ${advShortTrigger?.quantity}`);
-assert(Boolean(advShortTrigger?.cancelOrderIds?.includes(20001) &&
-    advShortTrigger?.cancelOrderIds?.includes(20002) &&
-    advShortTrigger?.cancelOrderIds?.includes(90002)), "All short resting TP orders and stop loss order scheduled for cancellation");
+assert(advShortTrigger?.slotId === "SHORT_SLOT_0", `Target slot is SHORT_SLOT_0: got ${String(advShortTrigger?.slotId)}`);
+assert(advShortTrigger?.executionStyle === "AGGRESSIVE_MARKET", `Short executionStyle strictly AGGRESSIVE_MARKET: got ${String(advShortTrigger?.executionStyle)}`);
+assert(advShortTrigger?.quantity === 0.05, `Exit quantity equals full short position: got ${String(advShortTrigger?.quantity)}`);
+const shortCancelIds = advShortTrigger?.cancelOrderIds;
+assert(Boolean(shortCancelIds &&
+    shortCancelIds.includes(20001) &&
+    shortCancelIds.includes(20002) &&
+    shortCancelIds.includes(90002)), "All short resting TP orders and stop loss order scheduled for cancellation");
 // =========================================================================================
 // STAGE 5: Sub-Microsecond Execution Latency & Zero-GC Invariant Benchmark
 // =========================================================================================
@@ -248,7 +252,7 @@ assert(bytesPerCall < 50.0, `Zero-GC invariant verified: ${bytesPerCall.toFixed(
 // SUMMARY
 // =========================================================================================
 console.log("\n================================================================================");
-console.log(`   VEGAM PHASE 6 ADVERSARIAL EXIT GATE QA MATRIX: ${totalPassed} PASSED / ${totalFailed} FAILED`);
+console.log(`   VEGAM PHASE 6 ADVERSARIAL EXIT GATE QA MATRIX: ${String(totalPassed)} PASSED / ${String(totalFailed)} FAILED`);
 console.log("================================================================================");
 if (totalFailed > 0) {
     console.error("❌ VEGAM PHASE 6 QA TESTS FAILED!");

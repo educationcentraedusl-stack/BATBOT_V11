@@ -3,9 +3,7 @@ import { MarketDataClient } from "../marketDataClient";
 import { AutoRecalibrationManager } from "../ai/recalibrationWorker";
 import { RiskGuard } from "../strategy/risk";
 import { BinanceExecutionClient } from "../execution/binance";
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const nativeAddon = require("../../index.js");
+import * as nativeAddon from "../../index";
 
 async function runTests() {
   console.log("================================================================================");
@@ -41,12 +39,12 @@ async function runTests() {
   client.writeAtomicFloat64Asset(0, 6, 64382.3); // Best Ask (Slot 6)
 
   const tickBlowout = engineBtc.evaluateTick();
-  console.log(`  -> Result passed: ${tickBlowout.riskResult?.passed}`);
-  console.log(`  -> Reason code:   ${tickBlowout.riskResult?.reasonCode}`);
-  console.log(`  -> Message:       ${tickBlowout.riskResult?.message}`);
+  console.log(`  -> Result passed: ${String(tickBlowout.riskResult?.passed)}`);
+  console.log(`  -> Reason code:   ${String(tickBlowout.riskResult?.reasonCode)}`);
+  console.log(`  -> Message:       ${String(tickBlowout.riskResult?.message)}`);
 
-  if (tickBlowout.riskResult?.reasonCode !== "REJECTED_MAX_SPREAD_BLOWOUT" || tickBlowout.riskResult?.passed !== false) {
-    throw new Error(`STAGE 1 FAILED: Expected REJECTED_MAX_SPREAD_BLOWOUT, got ${tickBlowout.riskResult?.reasonCode}`);
+  if (tickBlowout.riskResult?.reasonCode !== "REJECTED_MAX_SPREAD_BLOWOUT" || tickBlowout.riskResult.passed) {
+    throw new Error(`STAGE 1 FAILED: Expected REJECTED_MAX_SPREAD_BLOWOUT, got ${String(tickBlowout.riskResult?.reasonCode)}`);
   }
   console.log("  ✅ STAGE 1 PASSED: BTCUSDT $14.50 Spread Blowout 100% Rejected.");
 
@@ -62,7 +60,7 @@ async function runTests() {
   client.writeAtomicFloat64Asset(0, 104, 0.85); // AI Conf
 
   const tickTight = engineBtc.evaluateTick();
-  console.log(`  -> Spread Guard Passed: ${tickTight.riskResult?.reasonCode !== "REJECTED_MAX_SPREAD_BLOWOUT"}`);
+  console.log(`  -> Spread Guard Passed: ${String(tickTight.riskResult?.reasonCode !== "REJECTED_MAX_SPREAD_BLOWOUT")}`);
   if (tickTight.riskResult?.reasonCode === "REJECTED_MAX_SPREAD_BLOWOUT") {
     throw new Error("STAGE 2 FAILED: Normal tight spread $0.20 was unexpectedly rejected!");
   }
@@ -77,12 +75,12 @@ async function runTests() {
   bigIntView[0] = staleNs;
 
   const tickStale = engineBtc.evaluateTick();
-  console.log(`  -> Result passed: ${tickStale.riskResult?.passed}`);
-  console.log(`  -> Reason code:   ${tickStale.riskResult?.reasonCode}`);
-  console.log(`  -> Message:       ${tickStale.riskResult?.message}`);
+  console.log(`  -> Result passed: ${String(tickStale.riskResult?.passed)}`);
+  console.log(`  -> Reason code:   ${String(tickStale.riskResult?.reasonCode)}`);
+  console.log(`  -> Message:       ${String(tickStale.riskResult?.message)}`);
 
-  if (tickStale.riskResult?.reasonCode !== "REJECTED_STALE_ORDERBOOK" || tickStale.riskResult?.passed !== false) {
-    throw new Error(`STAGE 3 FAILED: Expected REJECTED_STALE_ORDERBOOK, got ${tickStale.riskResult?.reasonCode}`);
+  if (tickStale.riskResult?.reasonCode !== "REJECTED_STALE_ORDERBOOK" || tickStale.riskResult.passed) {
+    throw new Error(`STAGE 3 FAILED: Expected REJECTED_STALE_ORDERBOOK, got ${String(tickStale.riskResult?.reasonCode)}`);
   }
   console.log("  ✅ STAGE 3 PASSED: Genuinely Stale WebSocket Packet (7000ms) 100% Rejected.");
 
@@ -99,9 +97,9 @@ async function runTests() {
   }
 
   const status = manager.getStatus();
-  console.log(`  -> High IC (+0.1387) Drift Ticks: ${status.driftTickCounter}/50`);
-  console.log(`  -> Recalibrating Active:          ${status.isRecalibrating}`);
-  console.log(`  -> Total Recalibrations:          ${status.totalRecalibrations}`);
+  console.log(`  -> High IC (+0.1387) Drift Ticks: ${String(status.driftTickCounter)}/50`);
+  console.log(`  -> Recalibrating Active:          ${String(status.isRecalibrating)}`);
+  console.log(`  -> Total Recalibrations:          ${String(status.totalRecalibrations)}`);
 
   if (status.driftTickCounter !== 0 || status.isRecalibrating) {
     throw new Error("STAGE 4 FAILED: High IC (+0.1387) triggered recalibration accumulator!");
@@ -109,7 +107,7 @@ async function runTests() {
 
   // Attempt direct call to runRecalibrationPipeline with high IC
   const pipelineTriggered = await manager.runRecalibrationPipeline(0.1387);
-  console.log(`  -> runRecalibrationPipeline(0.1387) Triggered: ${pipelineTriggered}`);
+  console.log(`  -> runRecalibrationPipeline(0.1387) Triggered: ${String(pipelineTriggered)}`);
   if (pipelineTriggered) {
     throw new Error("STAGE 4 FAILED: runRecalibrationPipeline allowed high IC (+0.1387) to recalibrate!");
   }
@@ -119,11 +117,17 @@ async function runTests() {
   // TEST 5: Native Rust N-API Status Verification
   // -------------------------------------------------------------------------
   console.log("\n[STAGE 5] Verifying Native Rust N-API getIcStatus()...");
-  if (nativeAddon && typeof nativeAddon.getIcStatus === "function") {
+  const nativeExports: Record<string, unknown> = nativeAddon;
+  if (typeof nativeExports["getIcStatus"] === "function") {
     const rawJson = nativeAddon.getIcStatus();
     console.log(`  -> Native getIcStatus payload: ${rawJson}`);
-    const parsed = JSON.parse(rawJson);
-    if (typeof parsed.ic !== "number" || typeof parsed.is_drifted !== "boolean") {
+    const parsed: unknown = JSON.parse(rawJson);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      typeof (parsed as { ic?: unknown }).ic !== "number" ||
+      typeof (parsed as { is_drifted?: unknown }).is_drifted !== "boolean"
+    ) {
       throw new Error("STAGE 5 FAILED: getIcStatus returned invalid JSON schema!");
     }
   }
@@ -134,7 +138,7 @@ async function runTests() {
   console.log("================================================================================\n");
 }
 
-runTests().catch((err) => {
+runTests().catch((err: unknown) => {
   console.error("❌ TEST RUNNER FAILED:", err);
   process.exit(1);
 });

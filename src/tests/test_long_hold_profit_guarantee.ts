@@ -1,7 +1,7 @@
 import { HedgePositionLedger } from "../strategy/positionLedger";
 import { RiskGuard, OrderIntent } from "../strategy/risk";
 
-async function testLongHoldProfitGuaranteeQA() {
+function testLongHoldProfitGuaranteeQA(): void {
   console.log("=========================================================================");
   console.log("   RUNNING QA HARNESS: LONG-HOLD PROFIT GUARANTEE & R:R RECALIBRATION    ");
   console.log("=========================================================================\n");
@@ -62,7 +62,7 @@ async function testLongHoldProfitGuaranteeQA() {
   // Evaluate at 35s when NOT in profit -> SL must remain initial SL (No 30s suicide stop)
   hedgeLedger.evaluateHedgeDynamicTpSl(entryPrice, initialOpenTime + 35000);
   if (coreLongSlot.stopLossPrice !== initialSl) {
-    throw new Error(`FAIL: SL prematurely changed at 35s while not in profit! Expected $${initialSl}, got $${coreLongSlot.stopLossPrice}`);
+    throw new Error(`FAIL: SL prematurely changed at 35s while not in profit! Expected $${String(initialSl)}, got $${String(coreLongSlot.stopLossPrice)}`);
   }
   console.log(`  - At 35s (Not In Profit): SL safely remained initial SL ($${coreLongSlot.stopLossPrice.toFixed(2)})`);
 
@@ -70,9 +70,9 @@ async function testLongHoldProfitGuaranteeQA() {
   const profitPrice = 1905.00;
   hedgeLedger.evaluateHedgeDynamicTpSl(profitPrice, initialOpenTime + 65000);
   const tier1Sl = coreLongSlot.stopLossPrice;
-  console.log(`  At 65s Elapsed (in profit $${profitPrice}): Breakeven Locked SL = $${tier1Sl.toFixed(2)}`);
+  console.log(`  At 65s Elapsed (in profit $${String(profitPrice)}): Breakeven Locked SL = $${tier1Sl.toFixed(2)}`);
   if (tier1Sl <= entryPrice || coreLongSlot.timeDecayTier !== 1) {
-    throw new Error(`FAIL: 60s Profit-gated Breakeven lock failed! Tier1 SL ($${tier1Sl}) must be > Entry ($${entryPrice})`);
+    throw new Error(`FAIL: 60s Profit-gated Breakeven lock failed! Tier1 SL ($${String(tier1Sl)}) must be > Entry ($${String(entryPrice)})`);
   }
 
   // Drop mark price below Breakeven SL -> must trigger BREAK_EVEN_STOP_LOSS exit with profit/zero loss
@@ -80,7 +80,7 @@ async function testLongHoldProfitGuaranteeQA() {
   if (triggersAfterLock.length === 0 || triggersAfterLock[0].reason !== "BREAK_EVEN_STOP_LOSS") {
     throw new Error(`FAIL: Expected BREAK_EVEN_STOP_LOSS trigger when price dropped below breakeven lock.`);
   }
-  console.log(`  Triggered Exit Reason: ${triggersAfterLock[0].reason} @ Mark: $${triggersAfterLock[0].markPrice}`);
+  console.log(`  Triggered Exit Reason: ${triggersAfterLock[0].reason} @ Mark: $${String(triggersAfterLock[0].markPrice)}`);
   console.log("  ✅ TEST 2 PASSED: Profit-Gated Breakeven Lock verified without premature 30s stop trap!\n");
 
   // -------------------------------------------------------------------------
@@ -95,7 +95,7 @@ async function testLongHoldProfitGuaranteeQA() {
   const tier2Sl = hedgeLedger.getCoreLong().stopLossPrice;
   console.log(`  At 200s (3.3 min) Elapsed: Micro-Profit Locked SL = $${tier2Sl.toFixed(2)}`);
   if (tier2Sl <= tier1Sl || hedgeLedger.getCoreLong().timeDecayTier !== 2) {
-    throw new Error(`FAIL: 180s Micro-Profit Guard failed! Tier2 SL ($${tier2Sl}) must be > Tier1 SL ($${tier1Sl})`);
+    throw new Error(`FAIL: 180s Micro-Profit Guard failed! Tier2 SL ($${String(tier2Sl)}) must be > Tier1 SL ($${String(tier1Sl)})`);
   }
   console.log("  ✅ TEST 3 PASSED: 180s Micro-Profit Guard escalated stop-loss into positive profit territory!\n");
 
@@ -108,7 +108,7 @@ async function testLongHoldProfitGuaranteeQA() {
   const tier3Sl = hedgeLedger.getCoreLong().stopLossPrice;
   console.log(`  At 650s (10.8 min) Elapsed: Guaranteed Profit Locked SL = $${tier3Sl.toFixed(2)}`);
   if (tier3Sl <= tier2Sl || hedgeLedger.getCoreLong().timeDecayTier !== 3) {
-    throw new Error(`FAIL: 600s Guaranteed Profit Lock failed! Tier3 SL ($${tier3Sl}) must be > Tier2 SL ($${tier2Sl})`);
+    throw new Error(`FAIL: 600s Guaranteed Profit Lock failed! Tier3 SL ($${String(tier3Sl)}) must be > Tier2 SL ($${String(tier2Sl)})`);
   }
 
   const pnlUsdt = (tier3Sl - entryPrice) * 0.05;
@@ -131,7 +131,9 @@ async function testLongHoldProfitGuaranteeQA() {
   console.log("=========================================================================");
 }
 
-testLongHoldProfitGuaranteeQA().catch((err) => {
+try {
+  testLongHoldProfitGuaranteeQA();
+} catch (err: unknown) {
   console.error("QA Harness Failed:", err);
   process.exit(1);
-});
+}

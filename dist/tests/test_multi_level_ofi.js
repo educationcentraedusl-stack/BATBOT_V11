@@ -49,21 +49,23 @@ function assert(condition, testName) {
 // STAGE 1: Schema Telemetry & Constructor Weight Calibration Proof
 // =========================================================================================
 console.log("\n--- STAGE 1: Schema Telemetry & Constructor Weight Calibration Proof ---");
-assert(sabSchema_1.SAB_SLOTS.MULTI_LEVEL_OFI === 166, `SAB_SLOTS.MULTI_LEVEL_OFI equals 166 (received ${sabSchema_1.SAB_SLOTS.MULTI_LEVEL_OFI})`);
-assert(sabSchema_1.MULTI_LEVEL_OFI === 166, `Named export MULTI_LEVEL_OFI equals 166`);
+const sabOfiSlot = sabSchema_1.SAB_SLOTS.MULTI_LEVEL_OFI;
+const multiLevelOfiSlot = sabSchema_1.MULTI_LEVEL_OFI;
+assert(sabOfiSlot === 166, `SAB_SLOTS.MULTI_LEVEL_OFI equals 166 (received ${String(sabOfiSlot)})`);
+assert(multiLevelOfiSlot === 166, `Named export MULTI_LEVEL_OFI equals 166`);
 const hazardEngine = new microstructureHazardEngine_1.MicrostructureHazardEngine("BTCUSDT");
 const weights = hazardEngine.getDepthWeights();
 assert(weights.length === 5, `Depth weights array has length 5`);
-assert(Math.abs(weights[0] - 1.0) < 1e-12, `Level 0 weight w_0 = e^0 = 1.0 (received ${weights[0]})`);
-assert(Math.abs(weights[1] - Math.exp(-0.5)) < 1e-12, `Level 1 weight w_1 = e^-0.5 ≈ 0.606531 (received ${weights[1]})`);
-assert(Math.abs(weights[2] - Math.exp(-1.0)) < 1e-12, `Level 2 weight w_2 = e^-1.0 ≈ 0.367879 (received ${weights[2]})`);
-assert(Math.abs(weights[3] - Math.exp(-1.5)) < 1e-12, `Level 3 weight w_3 = e^-1.5 ≈ 0.223130 (received ${weights[3]})`);
-assert(Math.abs(weights[4] - Math.exp(-2.0)) < 1e-12, `Level 4 weight w_4 = e^-2.0 ≈ 0.135335 (received ${weights[4]})`);
+assert(Math.abs(weights[0] - 1.0) < 1e-12, `Level 0 weight w_0 = e^0 = 1.0 (received ${String(weights[0])})`);
+assert(Math.abs(weights[1] - Math.exp(-0.5)) < 1e-12, `Level 1 weight w_1 = e^-0.5 ≈ 0.606531 (received ${String(weights[1])})`);
+assert(Math.abs(weights[2] - Math.exp(-1.0)) < 1e-12, `Level 2 weight w_2 = e^-1.0 ≈ 0.367879 (received ${String(weights[2])})`);
+assert(Math.abs(weights[3] - Math.exp(-1.5)) < 1e-12, `Level 3 weight w_3 = e^-1.5 ≈ 0.223130 (received ${String(weights[3])})`);
+assert(Math.abs(weights[4] - Math.exp(-2.0)) < 1e-12, `Level 4 weight w_4 = e^-2.0 ≈ 0.135335 (received ${String(weights[4])})`);
 let expectedWeightSum = 0;
 for (let l = 0; l < 5; l++) {
     expectedWeightSum += Math.exp(-0.5 * l);
 }
-assert(Math.abs(expectedWeightSum - 2.332875544269118) < 1e-10, `Sum of weights = 2.3328755... (verified: ${expectedWeightSum})`);
+assert(Math.abs(expectedWeightSum - 2.332875544269118) < 1e-10, `Sum of weights = 2.3328755... (verified: ${String(expectedWeightSum)})`);
 // =========================================================================================
 // STAGE 2: Independent Hand-Calculated Cont-2023 Mathematical Parity
 // =========================================================================================
@@ -97,7 +99,7 @@ askQty[3] = 40.0;
 askPx[4] = 60050.0;
 askQty[4] = 50.0;
 const tick0Ofi = hazardEngine.computeMultiLevelOfi(bidPx, bidQty, askPx, askQty);
-assert(tick0Ofi === 0.0, `Tick 0 (Cold start) returns neutral OFI 0.0 (received ${tick0Ofi})`);
+assert(tick0Ofi === 0.0, `Tick 0 (Cold start) returns neutral OFI 0.0 (received ${String(tick0Ofi)})`);
 assert(hazardEngine.hasMultiLevelHistory(), `Tick 0 sets hasMultiLevelHistory to true`);
 // Tick 1: Controlled Depth Mutation with Unchanged Prices
 // Level 0: bid qty: 10 -> 15 (dQ_bid = +5), ask qty: 10 -> 5 (dQ_ask = -5), meanDepth = 10.0 -> OFI_0 = +1.0
@@ -122,7 +124,7 @@ askQty[4] = 50.0;
 // expectedOfi = 1.0655235919054192 / 2.332875544269118 ≈ 0.4567425787127637
 const expectedOfiTick1 = 0.4567425787127637;
 const actualOfiTick1 = hazardEngine.computeMultiLevelOfi(bidPx, bidQty, askPx, askQty);
-assert(Math.abs(actualOfiTick1 - expectedOfiTick1) < 1e-12, `Tick 1 5-Level OFI matches independent hand calculation: expected ${expectedOfiTick1}, got ${actualOfiTick1}`);
+assert(Math.abs(actualOfiTick1 - expectedOfiTick1) < 1e-12, `Tick 1 5-Level OFI matches independent hand calculation: expected ${String(expectedOfiTick1)}, got ${String(actualOfiTick1)}`);
 assert(Math.abs(hazardEngine.getLastMultiLevelOfi() - expectedOfiTick1) < 1e-12, `getLastMultiLevelOfi() reflects current computed OFI`);
 // Verify with custom rollingMeanDepths
 const customDepths = new Float64Array([20.0, 20.0, 20.0, 20.0, 20.0]);
@@ -137,7 +139,7 @@ hazardEngine.reset();
 hazardEngine.computeMultiLevelOfi(bidPx, new Float64Array([10, 20, 30, 40, 50]), askPx, new Float64Array([10, 20, 30, 40, 50]), customDepths);
 const ofiWithCustomDepths = hazardEngine.computeMultiLevelOfi(bidPx, bidQty, askPx, askQty, customDepths);
 const expectedCustomDepthsOfi = 0.21850332012804047;
-assert(Math.abs(ofiWithCustomDepths - expectedCustomDepthsOfi) < 1e-12, `5-Level OFI with custom rollingMeanDepths matches hand calculation: expected ${expectedCustomDepthsOfi}, got ${ofiWithCustomDepths}`);
+assert(Math.abs(ofiWithCustomDepths - expectedCustomDepthsOfi) < 1e-12, `5-Level OFI with custom rollingMeanDepths matches hand calculation: expected ${String(expectedCustomDepthsOfi)}, got ${String(ofiWithCustomDepths)}`);
 // =========================================================================================
 // STAGE 3: Bid Price Improvement & Bullish Aggressive Flow
 // =========================================================================================
@@ -167,7 +169,7 @@ bidQty[0] = 8.0;
 const expectedBullishOfi = (8.0 / 9.0) / expectedWeightSum;
 const actualBullishOfi = hazardEngine.computeMultiLevelOfi(bidPx, bidQty, askPx, askQty);
 assert(Math.abs(actualBullishOfi - expectedBullishOfi) < 1e-12, `Bid price step-up creates positive bullish OFI: expected ${expectedBullishOfi.toFixed(6)}, got ${actualBullishOfi.toFixed(6)}`);
-assert(actualBullishOfi > 0, `Bullish OFI is strictly positive (${actualBullishOfi} > 0)`);
+assert(actualBullishOfi > 0, `Bullish OFI is strictly positive (${String(actualBullishOfi)} > 0)`);
 // =========================================================================================
 // STAGE 4: Ask Price Improvement & Bearish Aggressive Flow
 // =========================================================================================
@@ -197,7 +199,7 @@ askQty[0] = 12.0;
 const expectedBearishOfi = (-12.0 / 11.0) / expectedWeightSum;
 const actualBearishOfi = hazardEngine.computeMultiLevelOfi(bidPx, bidQty, askPx, askQty);
 assert(Math.abs(actualBearishOfi - expectedBearishOfi) < 1e-12, `Ask price step-down creates negative bearish OFI: expected ${expectedBearishOfi.toFixed(6)}, got ${actualBearishOfi.toFixed(6)}`);
-assert(actualBearishOfi < 0, `Bearish OFI is strictly negative (${actualBearishOfi} < 0)`);
+assert(actualBearishOfi < 0, `Bearish OFI is strictly negative (${String(actualBearishOfi)} < 0)`);
 // =========================================================================================
 // STAGE 5: Depth Collapse, Zero Denominators & Resilience Guards
 // =========================================================================================
@@ -214,7 +216,7 @@ askQty[0] = 0.0;
 // instantDepth = 0, falls back safely to prevDepth = 10.0
 // dQ_bid = -10, dQ_ask = -10 -> dQ_bid - dQ_ask = 0
 const collapseOfi = hazardEngine.computeMultiLevelOfi(bidPx, bidQty, askPx, askQty);
-assert(Number.isFinite(collapseOfi), `Depth collapse produces finite OFI (received ${collapseOfi})`);
+assert(Number.isFinite(collapseOfi), `Depth collapse produces finite OFI (received ${String(collapseOfi)})`);
 assert(!Number.isNaN(collapseOfi), `Depth collapse never produces NaN`);
 assert(collapseOfi === 0.0, `Symmetric depth liquidation produces neutral 0.0 OFI`);
 // Asymmetric depth collapse: bid vanished (cancelled), ask unchanged
@@ -230,7 +232,7 @@ bidPx[0] = 0.0; // bid level vanished
 // Level 0 OFI = -10 / 5.0 = -2.0
 // OFI is strictly negative and safely bounded
 const vanishedBidOfi = hazardEngine.computeMultiLevelOfi(bidPx, bidQty, askPx, askQty);
-assert(Number.isFinite(vanishedBidOfi) && vanishedBidOfi < 0, `Vanished bid level produces negative OFI (${vanishedBidOfi})`);
+assert(Number.isFinite(vanishedBidOfi) && vanishedBidOfi < 0, `Vanished bid level produces negative OFI (${String(vanishedBidOfi)})`);
 // Extreme Outlier / Saturation Clamping Test [-1.0, 1.0]
 hazardEngine.reset();
 bidPx[0] = 60000.0;
@@ -241,7 +243,7 @@ hazardEngine.computeMultiLevelOfi(bidPx, bidQty, askPx, askQty);
 // Massive bid surge
 bidQty[0] = 1000000.0;
 const clampedOfi = hazardEngine.computeMultiLevelOfi(bidPx, bidQty, askPx, askQty);
-assert(clampedOfi <= 1.0 && clampedOfi >= -1.0, `Extreme flow is strictly clamped within [-1.0, 1.0]: got ${clampedOfi}`);
+assert(clampedOfi <= 1.0 && clampedOfi >= -1.0, `Extreme flow is strictly clamped within [-1.0, 1.0]: got ${String(clampedOfi)}`);
 // NaN / Infinity Injection Test
 hazardEngine.reset();
 bidPx[0] = NaN;
@@ -249,7 +251,7 @@ bidQty[0] = Infinity;
 askPx[0] = -Infinity;
 askQty[0] = NaN;
 const nanGuardOfi = hazardEngine.computeMultiLevelOfi(bidPx, bidQty, askPx, askQty);
-assert(Number.isFinite(nanGuardOfi) && !Number.isNaN(nanGuardOfi), `NaN/Infinity inputs sanitized to finite number: got ${nanGuardOfi}`);
+assert(Number.isFinite(nanGuardOfi) && !Number.isNaN(nanGuardOfi), `NaN/Infinity inputs sanitized to finite number: got ${String(nanGuardOfi)}`);
 // =========================================================================================
 // STAGE 6: Missing Book Levels (Sparse Book Depth < 5) & Object Array Overload
 // =========================================================================================
@@ -301,10 +303,10 @@ const objAsks1 = [
     { price: 60050, qty: 50 },
 ];
 const obj1 = hazardEngine.computeMultiLevelOfi(objBids1, objAsks1);
-assert(Math.abs(obj1 - expectedOfiTick1) < 1e-12, `Object array overload produces identical mathematical result to Float64Array (${obj1} vs ${expectedOfiTick1})`);
+assert(Math.abs(obj1 - expectedOfiTick1) < 1e-12, `Object array overload produces identical mathematical result to Float64Array (${String(obj1)} vs ${String(expectedOfiTick1)})`);
 // Verify MicrostructureMetrics inclusion in getHazardMetrics
 const hazardMetrics = hazardEngine.getHazardMetrics("LONG", 0.50, 1000);
-assert(hazardMetrics.multiLevelOfi !== undefined && Math.abs(hazardMetrics.multiLevelOfi - expectedOfiTick1) < 1e-12, `hazardMetrics.multiLevelOfi correctly populated with latest 5-level OFI (${hazardMetrics.multiLevelOfi})`);
+assert(hazardMetrics.multiLevelOfi !== undefined && Math.abs(hazardMetrics.multiLevelOfi - expectedOfiTick1) < 1e-12, `hazardMetrics.multiLevelOfi correctly populated with latest 5-level OFI (${String(hazardMetrics.multiLevelOfi)})`);
 // =========================================================================================
 // STAGE 7: MarketDataClient L2 Depth Reader & SAB Telemetry Integration
 // =========================================================================================
@@ -342,16 +344,16 @@ const outBidPx = new Float64Array(5);
 const outBidQty = new Float64Array(5);
 mdClient.fillTop5Bids(outBidPx, outBidQty, testAssetIdx);
 for (let i = 0; i < 5; i++) {
-    assert(outBidPx[i] === sampleBids[i][0], `fillTop5Bids level ${i} price matches: ${outBidPx[i]} === ${sampleBids[i][0]}`);
-    assert(outBidQty[i] === sampleBids[i][1], `fillTop5Bids level ${i} qty matches: ${outBidQty[i]} === ${sampleBids[i][1]}`);
+    assert(outBidPx[i] === sampleBids[i][0], `fillTop5Bids level ${String(i)} price matches: ${String(outBidPx[i])} === ${String(sampleBids[i][0])}`);
+    assert(outBidQty[i] === sampleBids[i][1], `fillTop5Bids level ${String(i)} qty matches: ${String(outBidQty[i])} === ${String(sampleBids[i][1])}`);
 }
 // 2. Test fillTop5Asks
 const outAskPx = new Float64Array(5);
 const outAskQty = new Float64Array(5);
 mdClient.fillTop5Asks(outAskPx, outAskQty, testAssetIdx);
 for (let i = 0; i < 5; i++) {
-    assert(outAskPx[i] === sampleAsks[i][0], `fillTop5Asks level ${i} price matches: ${outAskPx[i]} === ${sampleAsks[i][0]}`);
-    assert(outAskQty[i] === sampleAsks[i][1], `fillTop5Asks level ${i} qty matches: ${outAskQty[i]} === ${sampleAsks[i][1]}`);
+    assert(outAskPx[i] === sampleAsks[i][0], `fillTop5Asks level ${String(i)} price matches: ${String(outAskPx[i])} === ${String(sampleAsks[i][0])}`);
+    assert(outAskQty[i] === sampleAsks[i][1], `fillTop5Asks level ${String(i)} qty matches: ${String(outAskQty[i])} === ${String(sampleAsks[i][1])}`);
 }
 // 3. Test fillTop5Levels (Consolidated read)
 const sweepBidPx = new Float64Array(5);
@@ -360,8 +362,8 @@ const sweepAskPx = new Float64Array(5);
 const sweepAskQty = new Float64Array(5);
 mdClient.fillTop5Levels(sweepBidPx, sweepBidQty, sweepAskPx, sweepAskQty, testAssetIdx);
 for (let i = 0; i < 5; i++) {
-    assert(sweepBidPx[i] === sampleBids[i][0] && sweepBidQty[i] === sampleBids[i][1], `fillTop5Levels bid level ${i} verified`);
-    assert(sweepAskPx[i] === sampleAsks[i][0] && sweepAskQty[i] === sampleAsks[i][1], `fillTop5Levels ask level ${i} verified`);
+    assert(sweepBidPx[i] === sampleBids[i][0] && sweepBidQty[i] === sampleBids[i][1], `fillTop5Levels bid level ${String(i)} verified`);
+    assert(sweepAskPx[i] === sampleAsks[i][0] && sweepAskQty[i] === sampleAsks[i][1], `fillTop5Levels ask level ${String(i)} verified`);
 }
 // 4. Test Single-Level Direct Accessors
 assert(mdClient.getBidPriceAtLevel(0, testAssetIdx) === 60100.5, `getBidPriceAtLevel(0) = 60100.5`);
@@ -372,7 +374,7 @@ assert(mdClient.getAskQtyAtLevel(4, testAssetIdx) === 22.0, `getAskQtyAtLevel(4)
 const testOfiValue = 0.4567425787127637;
 mdClient.setMultiLevelOfi(testOfiValue, testAssetIdx);
 const sabStoredOfi = mdClient.getMultiLevelOfi(testAssetIdx);
-assert(Math.abs(sabStoredOfi - testOfiValue) < 1e-12, `Slot 166 atomic round-trip bitcast accurate: expected ${testOfiValue}, got ${sabStoredOfi}`);
+assert(Math.abs(sabStoredOfi - testOfiValue) < 1e-12, `Slot 166 atomic round-trip bitcast accurate: expected ${String(testOfiValue)}, got ${String(sabStoredOfi)}`);
 // Verify asset isolation in SAB
 const asset0Ofi = mdClient.getMultiLevelOfi(0);
 assert(asset0Ofi === 0.0, `Asset isolation confirmed: asset 0 Slot 166 remains 0.0 when asset 2 is written`);
@@ -420,7 +422,7 @@ assert(bytesPerCall < 50.0, `Zero-GC Hot-Path Invariant Verified: ${bytesPerCall
 // SUMMARY
 // =========================================================================================
 console.log("\n================================================================================");
-console.log(`   PHASE 3 5-LEVEL OFI TEST MATRIX: ${totalPassed} PASSED / ${totalFailed} FAILED`);
+console.log(`   PHASE 3 5-LEVEL OFI TEST MATRIX: ${String(totalPassed)} PASSED / ${String(totalFailed)} FAILED`);
 console.log("================================================================================");
 if (totalFailed === 0) {
     console.log("✅ ALL PHASE 3 5-LEVEL OFI TESTS PASSED (100% SUCCESS)!\n");

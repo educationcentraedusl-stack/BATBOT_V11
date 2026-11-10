@@ -84,7 +84,7 @@ async function runCsvLoggerTests() {
         throw new Error(`FAIL: Invalid closed trade dimensions: ${JSON.stringify(closed)}`);
     }
     if (closed.entryPrice !== 65000.00 || closed.exitPrice !== 66000.00) {
-        throw new Error(`FAIL: Price mismatch in closed trade: Entry=${closed.entryPrice}, Exit=${closed.exitPrice}`);
+        throw new Error(`FAIL: Price mismatch in closed trade: Entry=${String(closed.entryPrice)}, Exit=${String(closed.exitPrice)}`);
     }
     if (closed.exitReason !== "TAKE_PROFIT") {
         throw new Error(`FAIL: Exit reason mismatch: Expected TAKE_PROFIT, got ${closed.exitReason}`);
@@ -92,14 +92,14 @@ async function runCsvLoggerTests() {
     // ROE % = ((66000 - 65000) / 65000) * 100 * 1 = 1.538% -> 1.54%
     const expectedRoe = ((66000 - 65000) / 65000) * 100;
     if (Math.abs(closed.roePercent - expectedRoe) > 0.01) {
-        throw new Error(`FAIL: ROE calculation mismatch: ${closed.roePercent}% vs expected ${expectedRoe}%`);
+        throw new Error(`FAIL: ROE calculation mismatch: ${String(closed.roePercent)}% vs expected ${String(expectedRoe)}%`);
     }
     // Realized PnL = (66000 - 65000) * 0.002 - fee (0.0528) = 2.00 - 0.0528 = 1.9472 USDT
     const expectedPnl = 2.0 - 0.0528;
     if (Math.abs(closed.pnlUsdt - expectedPnl) > 0.0001) {
-        throw new Error(`FAIL: PnL USDT mismatch: ${closed.pnlUsdt} vs expected ${expectedPnl}`);
+        throw new Error(`FAIL: PnL USDT mismatch: ${String(closed.pnlUsdt)} vs expected ${String(expectedPnl)}`);
     }
-    console.log(`  ✓ PositionLedger calculation verified: ROE=${closed.roePercent.toFixed(2)}%, PnL=$${closed.pnlUsdt.toFixed(4)} USDT, Duration=${closed.durationMs}ms`);
+    console.log(`  ✓ PositionLedger calculation verified: ROE=${closed.roePercent.toFixed(2)}%, PnL=$${closed.pnlUsdt.toFixed(4)} USDT, Duration=${String(closed.durationMs)}ms`);
     // Log to CSV
     logger.logClosedTrade(closed);
     // Wait for background non-blocking I/O write
@@ -107,11 +107,11 @@ async function runCsvLoggerTests() {
     const updatedContent = fs.readFileSync(testCsvFile, "utf8");
     const lines = updatedContent.trim().split("\n");
     if (lines.length !== 2) {
-        throw new Error(`FAIL: Expected 2 lines in CSV (header + 1 row), found ${lines.length}. Content:\n${updatedContent}`);
+        throw new Error(`FAIL: Expected 2 lines in CSV (header + 1 row), found ${String(lines.length)}. Content:\n${updatedContent}`);
     }
     const row = lines[1].split(",");
     if (row.length !== 11) {
-        throw new Error(`FAIL: CSV row column count mismatch. Expected 11 columns, got ${row.length}: ${lines[1]}`);
+        throw new Error(`FAIL: CSV row column count mismatch. Expected 11 columns, got ${String(row.length)}: ${lines[1]}`);
     }
     // Check columns: Time,Symbol,Side,Size,Entry Price,Exit Price,Exit Reason,Duration,ROE %,PnL USDT,Win/Loss
     if (row[1] !== "BTCUSDT" || row[2] !== "LONG" || row[3] !== "0.0020") {
@@ -143,7 +143,7 @@ async function runCsvLoggerTests() {
     const finalContent = fs.readFileSync(testCsvFile, "utf8");
     const finalLines = finalContent.trim().split("\n");
     if (finalLines.length !== 3) {
-        throw new Error(`FAIL: Expected 3 lines in CSV, found ${finalLines.length}`);
+        throw new Error(`FAIL: Expected 3 lines in CSV, found ${String(finalLines.length)}`);
     }
     const shortRow = finalLines[2].split(",");
     if (shortRow.length !== 11 || shortRow[10] !== "Loss") {
@@ -155,7 +155,10 @@ async function runCsvLoggerTests() {
         fs.unlinkSync(testCsvFile);
         fs.rmdirSync(testDir);
     }
-    catch (_) { }
+    catch (cleanupErr) {
+        const cleanupMsg = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+        console.warn(`[CSV_TEST_CLEANUP] Ignored cleanup error: ${cleanupMsg}`);
+    }
     console.log("\n=================================================");
     console.log("ALL CSV TRADE LOGGER VERIFICATION TESTS PASSED!");
     console.log("=================================================");

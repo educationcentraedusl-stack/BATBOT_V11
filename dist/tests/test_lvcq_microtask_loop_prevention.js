@@ -13,25 +13,22 @@ async function runLvcqMicrotaskLoopTest() {
     const client = new marketDataClient_1.MarketDataClient(sab);
     const riskGuard = new risk_1.RiskGuard();
     let placeOrderCount = 0;
-    let cancelOrderCount = 0;
-    let simulatedNetworkDelayMs = 40;
+    const simulatedNetworkDelayMs = 40;
     // Mock execution client to intercept REST dispatches and simulate network RTT
     const mockExecClient = new binance_1.BinanceExecutionClient({
         apiKey: "test_key",
         apiSecret: "test_secret",
         useTestnet: true,
     });
-    mockExecClient.placePositionStopLoss = async (symbol, side, positionSide, stopPrice, clientOrderId, signal) => {
+    mockExecClient.placePositionStopLoss = async (symbol, side, positionSide, stopPrice, clientOrderId, _signal) => {
         placeOrderCount++;
-        if (simulatedNetworkDelayMs > 0) {
-            await new Promise((resolve) => setTimeout(resolve, simulatedNetworkDelayMs));
-        }
+        await new Promise((resolve) => setTimeout(resolve, simulatedNetworkDelayMs));
         const orderId = 990000 + placeOrderCount;
         return {
             orderId,
             symbol,
             status: "NEW",
-            clientOrderId: clientOrderId || `mock_sl_${orderId}`,
+            clientOrderId: clientOrderId || `mock_sl_${String(orderId)}`,
             price: "0",
             avgPrice: "0",
             origQty: "0",
@@ -47,11 +44,8 @@ async function runLvcqMicrotaskLoopTest() {
             updateTime: Date.now(),
         };
     };
-    mockExecClient.cancelOrder = async (symbol, orderId, signal) => {
-        cancelOrderCount++;
-        if (simulatedNetworkDelayMs > 0) {
-            await new Promise((resolve) => setTimeout(resolve, simulatedNetworkDelayMs));
-        }
+    mockExecClient.cancelOrder = async (symbol, orderId, _signal) => {
+        await new Promise((resolve) => setTimeout(resolve, simulatedNetworkDelayMs));
         return {
             orderId: Number(orderId),
             symbol,
@@ -88,9 +82,9 @@ async function runLvcqMicrotaskLoopTest() {
         auditCallCount++;
     }
     await slPromise;
-    console.log(`  Ticks Processed: ${auditCallCount} | Outbound Order Dispatches: ${placeOrderCount}`);
+    console.log(`  Ticks Processed: ${String(auditCallCount)} | Outbound Order Dispatches: ${String(placeOrderCount)}`);
     if (placeOrderCount !== 1) {
-        throw new Error(`FAIL: In-flight grace failed! Expected exactly 1 order dispatch, got ${placeOrderCount}`);
+        throw new Error(`FAIL: In-flight grace failed! Expected exactly 1 order dispatch, got ${String(placeOrderCount)}`);
     }
     console.log("  ✅ STAGE 1 PASSED: 1,000 rapid ticks during in-flight await generated 0 duplicate dispatches!\n");
     // ------------------------------------------------------------------------------------------
@@ -101,10 +95,10 @@ async function runLvcqMicrotaskLoopTest() {
     const initialPlaceCount = placeOrderCount;
     // Set tiny change in target price and call sync
     await engine.syncExchangeStopLossOrder("LONG", initialLong.totalQuantity, currentSynced + 0.01);
-    console.log(`  Micro-Fluctuation ($0.01) Dispatches: ${placeOrderCount - initialPlaceCount}`);
+    console.log(`  Micro-Fluctuation ($0.01) Dispatches: ${String(placeOrderCount - initialPlaceCount)}`);
     // Test significant ratchet move ($60,000 -> $60,100)
     await engine.syncExchangeStopLossOrder("LONG", initialLong.totalQuantity, 60100);
-    console.log(`  Significant Ratchet ($60,100) Dispatches: ${placeOrderCount - initialPlaceCount}`);
+    console.log(`  Significant Ratchet ($60,100) Dispatches: ${String(placeOrderCount - initialPlaceCount)}`);
     if (placeOrderCount - initialPlaceCount < 1) {
         throw new Error("FAIL: Significant ratchet did not dispatch replacement SL!");
     }
@@ -118,29 +112,29 @@ async function runLvcqMicrotaskLoopTest() {
         "x-mbx-order-count-10s": "245",
     });
     const status = rateLimiter.getStatus();
-    console.log(`  Rate Limiter Status: UsedWeight1m: ${status.usedWeight1m}/2400, Orders10s: ${status.orderCount10s}/300, IsThrottled: ${status.isThrottled}`);
+    console.log(`  Rate Limiter Status: UsedWeight1m: ${String(status.usedWeight1m)}/2400, Orders10s: ${String(status.orderCount10s)}/300, IsThrottled: ${String(status.isThrottled)}`);
     if (!status.isThrottled) {
         throw new Error("FAIL: Rate limiter should be throttled at >80% threshold!");
     }
     const startPreFlight = Date.now();
     await rateLimiter.acquirePreFlightAllowance(true);
     const elapsedPreFlight = Date.now() - startPreFlight;
-    console.log(`  Pre-Flight Throttling Delay: ${elapsedPreFlight}ms`);
+    console.log(`  Pre-Flight Throttling Delay: ${String(elapsedPreFlight)}ms`);
     if (elapsedPreFlight < 150) {
-        throw new Error(`FAIL: Pre-flight throttling delay too short (${elapsedPreFlight}ms < 150ms)!`);
+        throw new Error(`FAIL: Pre-flight throttling delay too short (${String(elapsedPreFlight)}ms < 150ms)!`);
     }
     console.log("  ✅ STAGE 3 PASSED: Rate limiter dynamically throttled pre-flight request before hitting Binance limit!\n");
     // ------------------------------------------------------------------------------------------
     console.log("[STAGE 4] Testing 429/418 Circuit Breaker Backoff...");
     rateLimiter.register429Backoff(200);
     const status429 = rateLimiter.getStatus();
-    console.log(`  Circuit Breaker Active: ${status429.isThrottled}, Backoff Remaining: ${status429.backoffRemainingMs}ms`);
+    console.log(`  Circuit Breaker Active: ${String(status429.isThrottled)}, Backoff Remaining: ${String(status429.backoffRemainingMs)}ms`);
     const start429 = Date.now();
     await rateLimiter.acquirePreFlightAllowance(false);
     const elapsed429 = Date.now() - start429;
-    console.log(`  Circuit Breaker Actual Wait: ${elapsed429}ms`);
+    console.log(`  Circuit Breaker Actual Wait: ${String(elapsed429)}ms`);
     if (elapsed429 < 180) {
-        throw new Error(`FAIL: Circuit breaker did not enforce 429 backoff (${elapsed429}ms < 180ms)!`);
+        throw new Error(`FAIL: Circuit breaker did not enforce 429 backoff (${String(elapsed429)}ms < 180ms)!`);
     }
     console.log("  ✅ STAGE 4 PASSED: 429 Circuit Breaker enforced mandatory cooldown before proceeding!\n");
     console.log("==========================================================================================");

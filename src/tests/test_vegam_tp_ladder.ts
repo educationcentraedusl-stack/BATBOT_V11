@@ -53,7 +53,7 @@ const expectedRpmMin = makerFee + takerFee * 1.5; // 0.0002 + 0.00075 = 0.00095 
 const rpmMinCalc = computeRpmMin(2.0, makerFee, takerFee);
 assert(
   Math.abs(rpmMinCalc - expectedRpmMin) < 1e-12,
-  `computeRpmMin returns exact fee hurdle: expected ${expectedRpmMin}, got ${rpmMinCalc}`
+  `computeRpmMin returns exact fee hurdle: expected ${String(expectedRpmMin)}, got ${String(rpmMinCalc)}`
 );
 
 // Test 1A: Normal Volatility (GK_ATR = 0.00906)
@@ -81,7 +81,7 @@ const microAtr = 0.00003;
 const tpMicroLong = computeVegamTpLevels(entryPriceLong, microAtr, 2.0, "LONG");
 assert(
   Math.abs(tpMicroLong.tp1Offset - expectedRpmMin) < 1e-9,
-  `Compressed vol clamps tp1Offset to RPM_min: expected ${expectedRpmMin}, got ${tpMicroLong.tp1Offset}`
+  `Compressed vol clamps tp1Offset to RPM_min: expected ${String(expectedRpmMin)}, got ${String(tpMicroLong.tp1Offset)}`
 );
 assert(
   Math.abs(tpMicroLong.tp1Price - (entryPriceLong * (1.0 + expectedRpmMin))) < 1e-9,
@@ -184,8 +184,8 @@ assert(tick3Res.action === "TP1_RATCHET", "Engine emits exact TP1_RATCHET action
 assert(slotLong.tpStageReached === 1, "Slot state advances to tpStageReached = 1");
 assert(slotLong.breakEvenLocked === true, "breakEvenLocked is set to true");
 assert(
-  slotLong.stopLossPrice >= slotLong.breakEvenPrice!,
-  `Stop Loss ratcheted to Break-Even price: SL=$${slotLong.stopLossPrice.toFixed(4)} >= BE=$${slotLong.breakEvenPrice} (Round-Trip Fees covered)`
+  slotLong.breakEvenPrice !== undefined && slotLong.stopLossPrice >= slotLong.breakEvenPrice,
+  `Stop Loss ratcheted to Break-Even price: SL=$${slotLong.stopLossPrice.toFixed(4)} >= BE=$${String(slotLong.breakEvenPrice)} (Round-Trip Fees covered)`
 );
 
 // Tick 4: 2.5-ATR move hits TP2 ($11.86 >= $11.8527)
@@ -228,21 +228,21 @@ const slotLevTest: PositionSlot = {
 const res20x = engine.tick(slotLevTest, 101.0, 101.0, 0.0, 0.0, 1.0, 0.01, 20.0);
 assert(
   Math.abs(res20x.rawRoePct - 5.0) < 1e-9,
-  `Banned 20x leverage is hard-clamped to 5.0: ROE is +5.0% (got ${res20x.rawRoePct}%)`
+  `Banned 20x leverage is hard-clamped to 5.0: ROE is +5.0% (got ${String(res20x.rawRoePct)}%)`
 );
 
 // Omitting leverage (undefined) must default to 2.0 (baseline)
 const resDefLev = engine.tick(slotLevTest, 101.0, 101.0, 0.0, 0.0, 1.0, 0.01, undefined);
 assert(
   Math.abs(resDefLev.rawRoePct - 2.0) < 1e-9,
-  `Omitted leverage defaults safely to 2.0: ROE is +2.0% (got ${resDefLev.rawRoePct}%)`
+  `Omitted leverage defaults safely to 2.0: ROE is +2.0% (got ${String(resDefLev.rawRoePct)}%)`
 );
 
 // Passing leverage below 2.0 (e.g. 1.0) clamps to MIN_PERMITTED_LEVERAGE (2.0)
 const resLowLev = engine.tick(slotLevTest, 101.0, 101.0, 0.0, 0.0, 1.0, 0.01, 1.0);
 assert(
   Math.abs(resLowLev.rawRoePct - 2.0) < 1e-9,
-  `Sub-2.0 leverage is clamped to 2.0: ROE is +2.0% (got ${resLowLev.rawRoePct}%)`
+  `Sub-2.0 leverage is clamped to 2.0: ROE is +2.0% (got ${String(resLowLev.rawRoePct)}%)`
 );
 
 // Test 2B-2: Peak ROE Falsy Corruption Protection
@@ -265,11 +265,11 @@ const slotRoeTest: PositionSlot = {
 const resNegRoe = engine.tick(slotRoeTest, 99.50, 99.50, 0.0, 0.0, 1.0, 0.01, 2.0);
 assert(
   slotRoeTest.peakRoe === 0.0,
-  `Negative ROE tick does not corrupt peakRoe (remains 0.0): got ${slotRoeTest.peakRoe}`
+  `Negative ROE tick does not corrupt peakRoe (remains 0.0): got ${String(slotRoeTest.peakRoe)}`
 );
 assert(
   resNegRoe.peakRoe === 0.0,
-  `Result peakRoe accurately reflects 0.0 baseline: got ${resNegRoe.peakRoe}`
+  `Result peakRoe accurately reflects 0.0 baseline: got ${String(resNegRoe.peakRoe)}`
 );
 
 // Test 2B-3: Stoikov MicroPrice Leading Peak/Trough Tracking
@@ -292,7 +292,7 @@ const slotStoikovTest: PositionSlot = {
 engine.tick(slotStoikovTest, 100.5, 100.8, 0.30, 0.10, 1.0, 0.01, 2.0);
 assert(
   slotStoikovTest.peakPrice === 100.8,
-  `Stoikov microprice leading high updates peakPrice: expected 100.8, got ${slotStoikovTest.peakPrice}`
+  `Stoikov microprice leading high updates peakPrice: expected 100.8, got ${String(slotStoikovTest.peakPrice)}`
 );
 
 // Test 2B-4: TP2 Fallback Remediation & Same-Tick SL Whipsaw Immunity
@@ -316,15 +316,15 @@ const slotStandardTp1: PositionSlot = {
 
 const resStdTp1 = engine.tick(slotStandardTp1, 101.0, 101.0, 0.0, 0.0, 1.0, 0.01, 2.0);
 assert(
-  resStdTp1.tp1Hit === true,
+  resStdTp1.tp1Hit,
   "Standard slot hitting TP1 triggers tp1Hit = true"
 );
 assert(
-  resStdTp1.tp2Hit === false,
+  !resStdTp1.tp2Hit,
   "Standard slot without tpStagePrices does NOT falsely trigger TP2 (tp2Hit = false)"
 );
 assert(
-  resStdTp1.slHit === false,
+  !resStdTp1.slHit,
   "Standard slot hitting TP1 does NOT trigger stop loss (slHit = false)"
 );
 assert(
@@ -333,11 +333,11 @@ assert(
 );
 assert(
   slotStandardTp1.tpStageReached === 1,
-  `Slot state advances strictly to tpStageReached = 1 (got ${slotStandardTp1.tpStageReached})`
+  `Slot state advances strictly to tpStageReached = 1 (got ${String(slotStandardTp1.tpStageReached)})`
 );
 assert(
   slotStandardTp1.stopLossPrice === 100.10,
-  `Stop Loss ratchets strictly to break-even price ($100.10): got $${slotStandardTp1.stopLossPrice}`
+  `Stop Loss ratchets strictly to break-even price ($100.10): got $${String(slotStandardTp1.stopLossPrice)}`
 );
 
 // =========================================================================================
@@ -351,17 +351,17 @@ const refPrice = 100.0;
 // Condition 2: Neutral OBI (0.00)
 const kNeutral = computeKRegime(0.0, 0.30, 1.0, DEFAULT_VEGAM_CONFIG, "LONG");
 const neutralTrail = computeObiWeightedTrailDistance(testGkAtr, 0.0, 0.30, 1.0, DEFAULT_VEGAM_CONFIG, refPrice, "LONG");
-assert(kNeutral === 1.0, `Neutral OBI produces k_regime = 1.0: got ${kNeutral}`);
+assert(kNeutral === 1.0, `Neutral OBI produces k_regime = 1.0: got ${String(kNeutral)}`);
 
 // Condition 3: Supportive Book Depth (OBI = +0.35 > +0.20)
 const kSupportive = computeKRegime(0.35, 0.30, 1.0, DEFAULT_VEGAM_CONFIG, "LONG");
 const supportiveTrail = computeObiWeightedTrailDistance(testGkAtr, 0.35, 0.30, 1.0, DEFAULT_VEGAM_CONFIG, refPrice, "LONG");
-assert(kSupportive === 1.2, `Supportive OBI (+0.35) expands k_regime to 1.2: got ${kSupportive}`);
+assert(kSupportive === 1.2, `Supportive OBI (+0.35) expands k_regime to 1.2: got ${String(kSupportive)}`);
 
 // Condition 1: Book Pressure Reversal Against Trade (OBI = -0.35 < -0.20)
 const kReversed = computeKRegime(-0.35, 0.30, 1.0, DEFAULT_VEGAM_CONFIG, "LONG");
 const reversedTrail = computeObiWeightedTrailDistance(testGkAtr, -0.35, 0.30, 1.0, DEFAULT_VEGAM_CONFIG, refPrice, "LONG");
-assert(kReversed === 0.8, `Adverse OBI (-0.35) tightens k_regime to 0.8: got ${kReversed}`);
+assert(kReversed === 0.8, `Adverse OBI (-0.35) tightens k_regime to 0.8: got ${String(kReversed)}`);
 
 // Mathematical Ratio Verification:
 assert(
@@ -390,17 +390,17 @@ console.log("\n--- STAGE 4: VPIN Toxic Order Flow Override (k_regime = 0.5) ---"
 
 // Test 4A: Toxic VPIN (0.70 >= 0.65) with Neutral OBI and Baseline Hawkes
 const kToxic1 = computeKRegime(0.0, 0.70, 1.0, DEFAULT_VEGAM_CONFIG);
-assert(kToxic1 === 0.5, `VPIN = 0.70 clamps k_regime to exactly 0.5: got ${kToxic1}`);
+assert(kToxic1 === 0.5, `VPIN = 0.70 clamps k_regime to exactly 0.5: got ${String(kToxic1)}`);
 
 // Test 4B: Toxic VPIN (0.75 >= 0.65) with Highly Supportive OBI (+0.80)
 // Toxic flow MUST override supportive OBI!
 const kToxic2 = computeKRegime(0.80, 0.75, 1.0, DEFAULT_VEGAM_CONFIG);
-assert(kToxic2 === 0.5, `Toxic VPIN (0.75) strictly overrides supportive OBI (+0.80): got ${kToxic2}`);
+assert(kToxic2 === 0.5, `Toxic VPIN (0.75) strictly overrides supportive OBI (+0.80): got ${String(kToxic2)}`);
 
 // Test 4C: Toxic VPIN (0.80 >= 0.65) with High Hawkes Momentum (2.50)
 // Toxic flow MUST override Hawkes momentum expansion to prevent adverse selection!
 const kToxic3 = computeKRegime(0.0, 0.80, 2.50, DEFAULT_VEGAM_CONFIG);
-assert(kToxic3 === 0.5, `Toxic VPIN (0.80) strictly overrides Hawkes momentum (2.50): got ${kToxic3}`);
+assert(kToxic3 === 0.5, `Toxic VPIN (0.80) strictly overrides Hawkes momentum (2.50): got ${String(kToxic3)}`);
 
 // Test 4D: Trail distance under toxic flow is exactly half of neutral trail
 const toxicTrail = computeObiWeightedTrailDistance(testGkAtr, 0.0, 0.70, 1.0, DEFAULT_VEGAM_CONFIG, refPrice);
@@ -416,7 +416,7 @@ console.log("\n--- STAGE 5: Hawkes Intensity Expansion (k_regime = 2.0) ---");
 
 // Test 5A: Non-toxic VPIN (0.30) with Hawkes > 1.80 (2.20)
 const kHawkes1 = computeKRegime(0.0, 0.30, 2.20, DEFAULT_VEGAM_CONFIG);
-assert(kHawkes1 === 2.0, `Hawkes = 2.20 expands k_regime to exactly 2.0: got ${kHawkes1}`);
+assert(kHawkes1 === 2.0, `Hawkes = 2.20 expands k_regime to exactly 2.0: got ${String(kHawkes1)}`);
 
 // Test 5B: Hawkes = 1.95 with slightly negative OBI (-0.10)
 const kHawkes2 = computeKRegime(-0.10, 0.30, 1.95, DEFAULT_VEGAM_CONFIG);
@@ -443,12 +443,12 @@ const customConfig = {
 const customLevels = computeVegamTpLevels(100.0, 0.010, 2.0, "LONG", customConfig);
 assert(
   Math.abs((customLevels.tp3Offset ?? 0) - 0.055) < 1e-6,
-  `Custom tp3AtrMultiplier (5.50) scales TP3 offset to 0.055: got ${customLevels.tp3Offset}`
+  `Custom tp3AtrMultiplier (5.50) scales TP3 offset to 0.055: got ${String(customLevels.tp3Offset)}`
 );
 const defaultLevels = computeVegamTpLevels(100.0, 0.010, 2.0, "LONG");
 assert(
   Math.abs((defaultLevels.tp3Offset ?? 0) - 0.040) < 1e-6,
-  `Default tp3AtrMultiplier (4.00) scales TP3 offset to 0.040: got ${defaultLevels.tp3Offset}`
+  `Default tp3AtrMultiplier (4.00) scales TP3 offset to 0.040: got ${String(defaultLevels.tp3Offset)}`
 );
 
 // Test 6B: Live SAB Slot 156 fallback when gkAtrComposite is omitted (Defect 5)
@@ -464,7 +464,7 @@ assert(batchIntents.length > 0, "generateBatchTpOrderIntents generated intents w
 const tp1IntentPrice = Number(batchIntents[0].price);
 assert(
   Math.abs(tp1IntentPrice - 50000.0 * (1 + 0.0250)) < 1e-2,
-  `Omitting gkAtrComposite correctly falls through to reading live SAB Slot 156 (0.0250): expected $51250, got $${tp1IntentPrice}`
+  `Omitting gkAtrComposite correctly falls through to reading live SAB Slot 156 (0.0250): expected $51250, got $${String(tp1IntentPrice)}`
 );
 
 const aggIntents = auditLedger.generateAggregatedBatchTpIntents("LONG", 0.10, 50000.0); // omitted gkAtrComposite!
@@ -472,14 +472,14 @@ assert(aggIntents.length > 0, "generateAggregatedBatchTpIntents generated intent
 const aggTp1Price = Number(aggIntents[0].price);
 assert(
   Math.abs(aggTp1Price - 50000.0 * (1 + 0.0250)) < 1e-2,
-  `Omitting gkAtrComposite in aggregated intents reads live SAB Slot 156 (0.0250): expected $51250, got $${aggTp1Price}`
+  `Omitting gkAtrComposite in aggregated intents reads live SAB Slot 156 (0.0250): expected $51250, got $${String(aggTp1Price)}`
 );
 
 // Test 6C: 3-Element tpStagePrices Array Parity (Defect 6)
 const coreLongSlot = auditLedger.getCoreLong();
 assert(
   coreLongSlot.tpStagePrices?.length === 3,
-  `Core Long slot.tpStagePrices has exact 3-element parity: got length ${coreLongSlot.tpStagePrices?.length}`
+  `Core Long slot.tpStagePrices has exact 3-element parity: got length ${String(coreLongSlot.tpStagePrices?.length)}`
 );
 
 // Clear slots to satisfy unidirectional mutex before occupying short slot
@@ -488,7 +488,7 @@ auditLedger.occupyShortSlot(0, 0.05, 50000.0, 1.0, 1.0);
 const shortSlot0 = auditLedger.getShortSlots()[0];
 assert(
   shortSlot0.tpStagePrices?.length === 3,
-  `Short slot.tpStagePrices has exact 3-element parity: got length ${shortSlot0.tpStagePrices?.length}`
+  `Short slot.tpStagePrices has exact 3-element parity: got length ${String(shortSlot0.tpStagePrices?.length)}`
 );
 
 // Test 6D: Strict Lot Step Precision Quantization & Remainder Reconciliation (Defect 7)
@@ -504,7 +504,7 @@ if (quantizedQuantities) {
   const sumQty = Number((q1 + q2 + q3).toFixed(6));
   assert(
     Math.abs(sumQty - 0.123) < 1e-9,
-    `Quantized TP stage quantities reconcile exactly to total position size (0.123): got [${q1}, ${q2}, ${q3}] sum=${sumQty}`
+    `Quantized TP stage quantities reconcile exactly to total position size (0.123): got [${String(q1)}, ${String(q2)}, ${String(q3)}] sum=${String(sumQty)}`
   );
 }
 
@@ -580,7 +580,7 @@ phase8Ledger.setLeverage(2.0); // 2x leverage
 // Occupy CORE_LONG @ $60,000, initial SL = 1.50% ($59,100)
 phase8Ledger.occupyCoreLong(0.10, 60000.0, 3.0, 1.5);
 let p8CoreLong = phase8Ledger.getCoreLong();
-assert(p8CoreLong.stopLossPrice === 59100.0, `Initial Core Long SL set to $59,100: got $${p8CoreLong.stopLossPrice}`);
+assert(p8CoreLong.stopLossPrice === 59100.0, `Initial Core Long SL set to $59,100: got $${String(p8CoreLong.stopLossPrice)}`);
 
 const quietVolMetrics: VolatilitySurfaceMetrics = {
   garmanKlass1s: 0.00906 * 0.00906,
@@ -605,7 +605,7 @@ phase8Ledger.evaluateSotaDynamicExits(60050.0, subActivationHazard, undefined, q
 p8CoreLong = phase8Ledger.getCoreLong();
 assert(
   p8CoreLong.stopLossPrice === 59100.0,
-  `Dynamic trail does NOT activate below 0.50% ROE: SL remains $59,100 (got $${p8CoreLong.stopLossPrice})`
+  `Dynamic trail does NOT activate below 0.50% ROE: SL remains $59,100 (got $${String(p8CoreLong.stopLossPrice)})`
 );
 
 // Test 8B: Dynamic trail activates at ROE >= 0.50% (+0.333% move @ 2x = +0.667% ROE @ $60,200)
@@ -615,15 +615,15 @@ phase8Ledger.evaluateSotaDynamicExits(60200.0, subActivationHazard, undefined, q
 p8CoreLong = phase8Ledger.getCoreLong();
 assert(
   p8CoreLong.stopLossPrice > 59100.0,
-  `Dynamic trail activates at >= 0.50% ROE: SL ratcheted from $59,100 to $${p8CoreLong.stopLossPrice}`
+  `Dynamic trail activates at >= 0.50% ROE: SL ratcheted from $59,100 to $${String(p8CoreLong.stopLossPrice)}`
 );
 assert(
   Math.abs(p8CoreLong.stopLossPrice - 59656.4) < 1.0,
-  `Neutral OBI trailing stop matches exact formula (peak - 1.0*ATR): expected $59656.4, got $${p8CoreLong.stopLossPrice}`
+  `Neutral OBI trailing stop matches exact formula (peak - 1.0*ATR): expected $59656.4, got $${String(p8CoreLong.stopLossPrice)}`
 );
 assert(
   p8CoreLong.stepCollarTier === undefined || p8CoreLong.stepCollarTier === 0,
-  `Tier 1 Break-Even ratchet remains inactive below 5.0% ROE (stepCollarTier: ${p8CoreLong.stepCollarTier ?? 0})`
+  `Tier 1 Break-Even ratchet remains inactive below 5.0% ROE (stepCollarTier: ${String(p8CoreLong.stepCollarTier ?? 0)})`
 );
 
 // Test 8C: Trail distance dynamically tightens when OBI < -0.20 (Adverse Book Pressure)
@@ -637,18 +637,18 @@ phase8Ledger.evaluateSotaDynamicExits(60200.0, adverseObiHazard, undefined, quie
 p8CoreLong = phase8Ledger.getCoreLong();
 assert(
   p8CoreLong.stopLossPrice > 59656.4,
-  `Adverse OBI (-0.35 < -0.20) tightens trail distance: SL raised to $${p8CoreLong.stopLossPrice}`
+  `Adverse OBI (-0.35 < -0.20) tightens trail distance: SL raised to $${String(p8CoreLong.stopLossPrice)}`
 );
 assert(
   Math.abs(p8CoreLong.stopLossPrice - 59765.12) < 1.0,
-  `Tightened trailing stop matches exact 0.80x k_regime formula: expected $59765.12, got $${p8CoreLong.stopLossPrice}`
+  `Tightened trailing stop matches exact 0.80x k_regime formula: expected $59765.12, got $${String(p8CoreLong.stopLossPrice)}`
 );
 
 // Test 8D: Symmetrical SHORT position trail activation and OBI tightening
 phase8Ledger.clearSlots();
 phase8Ledger.occupyShortSlot(0, 0.10, 60000.0, 3.0, 1.5);
 let p8ShortSlot = phase8Ledger.getShortSlots()[0];
-assert(p8ShortSlot.stopLossPrice === 60900.0, `Initial Short SL set to $60,900: got $${p8ShortSlot.stopLossPrice}`);
+assert(p8ShortSlot.stopLossPrice === 60900.0, `Initial Short SL set to $60,900: got $${String(p8ShortSlot.stopLossPrice)}`);
 
 // Short price drop to $59,800 (+0.667% ROE >= 0.50%) with adverse OBI (+0.35 against short < -0.20 directional)
 // directional OBI = -0.35 -> k_regime = 0.80 -> trailDist = $434.88
@@ -661,11 +661,11 @@ phase8Ledger.evaluateSotaDynamicExits(59800.0, shortAdverseHazard, undefined, qu
 p8ShortSlot = phase8Ledger.getShortSlots()[0];
 assert(
   p8ShortSlot.stopLossPrice < 60900.0,
-  `Short dynamic trail activates at >= 0.50% ROE: SL tightened to $${p8ShortSlot.stopLossPrice}`
+  `Short dynamic trail activates at >= 0.50% ROE: SL tightened to $${String(p8ShortSlot.stopLossPrice)}`
 );
 assert(
   Math.abs(p8ShortSlot.stopLossPrice - 60234.88) < 1.0,
-  `Short tightened trailing stop matches exact 0.80x k_regime formula: expected $60234.88, got $${p8ShortSlot.stopLossPrice}`
+  `Short tightened trailing stop matches exact 0.80x k_regime formula: expected $60234.88, got $${String(p8ShortSlot.stopLossPrice)}`
 );
 
 // Test 8E: Monotonic Zero-Retreat Invariant on Pullback
@@ -674,14 +674,14 @@ phase8Ledger.evaluateSotaDynamicExits(59900.0, shortAdverseHazard, undefined, qu
 p8ShortSlot = phase8Ledger.getShortSlots()[0];
 assert(
   Math.abs(p8ShortSlot.stopLossPrice - 60234.88) < 1.0,
-  `Monotonic zero-retreat invariant: Short SL remains locked at $${p8ShortSlot.stopLossPrice} on pullback`
+  `Monotonic zero-retreat invariant: Short SL remains locked at $${String(p8ShortSlot.stopLossPrice)} on pullback`
 );
 
 // =========================================================================================
 // SUMMARY & EXIT CODE
 // =========================================================================================
 console.log("\n================================================================================");
-console.log(`   VEGAM PHASE 3 QA TEST MATRIX: ${totalPassed} PASSED / ${totalFailed} FAILED`);
+console.log(`   VEGAM PHASE 3 QA TEST MATRIX: ${String(totalPassed)} PASSED / ${String(totalFailed)} FAILED`);
 console.log("================================================================================");
 
 if (totalFailed > 0) {

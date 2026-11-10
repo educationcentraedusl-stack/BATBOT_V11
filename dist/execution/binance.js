@@ -1336,7 +1336,7 @@ class BinanceExecutionClient {
                         if ((wsErrMsg.includes("-5022") || wsErrMsg.includes("5022")) && retryCount < 2) {
                             this._writeWsTelemetry(targetAssetIndex, 0.0, true);
                             const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(params.symbol);
-                            const currentPrice = params.price || 0;
+                            const currentPrice = typeof params.price === "number" && Number.isFinite(params.price) ? params.price : 0;
                             const adjustedPrice = params.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
                             const newPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, adjustedPrice);
                             if (retryCount === 0 && params.timeInForce === "GTX") {
@@ -1526,7 +1526,7 @@ class BinanceExecutionClient {
                 }
                 if ((errMsg.includes("-5022") || errMsg.includes("5022")) && retryCount < 2) {
                     const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(params.symbol);
-                    const currentPrice = params.price || 0;
+                    const currentPrice = typeof params.price === "number" && Number.isFinite(params.price) ? params.price : 0;
                     // Shift 1 tick away from spread to guarantee Maker placement
                     const adjustedPrice = params.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
                     const newPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, adjustedPrice);
@@ -1848,7 +1848,9 @@ class BinanceExecutionClient {
                 }
                 else if (apQty > 0 && existingQty > 0) {
                     // Both non-zero, take latest updateTime
-                    if ((ap.updateTime || 0) >= (existing.updateTime || 0)) {
+                    const apUpdateTime = Number.isFinite(ap.updateTime) ? ap.updateTime : 0;
+                    const existingUpdateTime = Number.isFinite(existing.updateTime) ? existing.updateTime : 0;
+                    if (apUpdateTime >= existingUpdateTime) {
                         mergedMap.set(key, { ...existing, ...ap });
                     }
                 }
@@ -1869,25 +1871,34 @@ class BinanceExecutionClient {
             }
             throw err;
         });
-        const mappedAlgoOrders = (Array.isArray(algoOrders) ? algoOrders : []).map((ao) => ({
-            orderId: ao.algoId || ao.orderId || 0,
-            symbol: ao.symbol,
-            status: ao.algoStatus || ao.status || "NEW",
-            clientOrderId: ao.clientAlgoId || ao.clientOrderId || "",
-            price: ao.price || "0",
-            avgPrice: ao.avgPrice || "0",
-            origQty: ao.quantity || ao.origQty || "0",
-            executedQty: ao.executedQty || "0",
-            cumQuote: ao.cumQuote || "0",
-            timeInForce: ao.timeInForce || "GTC",
-            type: ao.orderType || ao.type || "STOP_MARKET",
-            reduceOnly: ao.reduceOnly || false,
-            side: ao.side,
-            positionSide: ao.positionSide || "BOTH",
-            stopPrice: ao.stopPrice || "0",
-            workingType: ao.workingType || "CONTRACT_PRICE",
-            updateTime: ao.updateTime || Date.now(),
-        }));
+        const mappedAlgoOrders = (Array.isArray(algoOrders) ? algoOrders : []).map((ao) => {
+            const resolvedOrderId = typeof ao.algoId === "number" && Number.isFinite(ao.algoId) && ao.algoId > 0
+                ? ao.algoId
+                : typeof ao.orderId === "number" && Number.isFinite(ao.orderId)
+                    ? ao.orderId
+                    : 0;
+            return {
+                orderId: resolvedOrderId,
+                symbol: ao.symbol,
+                status: ao.algoStatus || ao.status || "NEW",
+                clientOrderId: ao.clientAlgoId || ao.clientOrderId || "",
+                price: ao.price || "0",
+                avgPrice: ao.avgPrice || "0",
+                origQty: ao.quantity || ao.origQty || "0",
+                executedQty: ao.executedQty || "0",
+                cumQuote: ao.cumQuote || "0",
+                timeInForce: ao.timeInForce || "GTC",
+                type: ao.orderType || ao.type || "STOP_MARKET",
+                reduceOnly: ao.reduceOnly || false,
+                side: ao.side,
+                positionSide: ao.positionSide || "BOTH",
+                stopPrice: ao.stopPrice || "0",
+                workingType: ao.workingType || "CONTRACT_PRICE",
+                updateTime: typeof ao.updateTime === "number" && Number.isFinite(ao.updateTime) && ao.updateTime > 0
+                    ? ao.updateTime
+                    : Date.now(),
+            };
+        });
         return [...(Array.isArray(standardOrders) ? standardOrders : []), ...mappedAlgoOrders];
     }
     async getAccountBalance() {

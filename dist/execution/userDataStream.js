@@ -22,9 +22,12 @@ function readString(obj, key, fallback) {
     const value = obj[key];
     return typeof value === "string" ? value : fallback;
 }
-function readNumber(obj, key, fallback) {
+function requireFiniteNumber(obj, key, context) {
     const value = obj[key];
-    return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw new Error(`[BinanceUserDataStream] Missing or non-finite numeric field "${key}" in ${context}`);
+    }
+    return value;
 }
 function parseFloatField(obj, key) {
     const value = obj[key];
@@ -157,8 +160,8 @@ class BinanceUserDataStream {
                         const ord = payload["o"];
                         const parsedUpdate = {
                             eventType,
-                            eventTime: readNumber(payload, "E", 0),
-                            transactionTime: readNumber(payload, "T", 0),
+                            eventTime: requireFiniteNumber(payload, "E", "ORDER_TRADE_UPDATE"),
+                            transactionTime: requireFiniteNumber(payload, "T", "ORDER_TRADE_UPDATE"),
                             order: {
                                 symbol: readString(ord, "s", ""),
                                 clientOrderId: readString(ord, "c", ""),
@@ -171,14 +174,14 @@ class BinanceUserDataStream {
                                 stopPrice: parseFloatField(ord, "sp"),
                                 executionType: readString(ord, "x", ""),
                                 orderStatus: parseOrderStatus(ord["X"]),
-                                orderId: readNumber(ord, "i", 0),
+                                orderId: requireFiniteNumber(ord, "i", "ORDER_TRADE_UPDATE.o"),
                                 lastFilledQuantity: parseFloatField(ord, "l"),
                                 cumulativeFilledQuantity: parseFloatField(ord, "z"),
                                 lastFilledPrice: parseFloatField(ord, "L"),
                                 commissionAsset: readString(ord, "N", ""),
                                 commissionAmount: parseFloatField(ord, "n"),
-                                tradeTime: readNumber(ord, "T", 0),
-                                tradeId: readNumber(ord, "t", 0),
+                                tradeTime: requireFiniteNumber(ord, "T", "ORDER_TRADE_UPDATE.o"),
+                                tradeId: requireFiniteNumber(ord, "t", "ORDER_TRADE_UPDATE.o"),
                                 bidsNotional: parseFloatField(ord, "b"),
                                 isMaker: ord["m"] === true,
                                 positionSide: parsePositionSide(ord["ps"]),
@@ -249,8 +252,8 @@ class BinanceUserDataStream {
                         const rawReason = readString(acct, "m", "");
                         const accountUpdate = {
                             eventType,
-                            eventTime: readNumber(payload, "E", 0),
-                            transactionTime: readNumber(payload, "T", 0),
+                            eventTime: requireFiniteNumber(payload, "E", "ACCOUNT_UPDATE"),
+                            transactionTime: requireFiniteNumber(payload, "T", "ACCOUNT_UPDATE"),
                             reasonType: rawReason.length > 0 ? rawReason : "ORDER",
                             positions,
                             balances,

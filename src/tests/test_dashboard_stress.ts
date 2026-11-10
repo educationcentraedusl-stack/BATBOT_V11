@@ -10,10 +10,10 @@ async function runDashboardStressTest() {
   const server = new TelemetryWSServer(8089);
   let rpcReceived = 0;
 
-  server.setCommandHandler(async (cmd) => {
+  server.setCommandHandler((cmd) => {
     rpcReceived++;
     console.log(`[STRESS_TEST] Received Control RPC: ${cmd.action}`);
-    return { success: true, message: `RPC ${cmd.action} processed successfully` };
+    return Promise.resolve({ success: true, message: `RPC ${cmd.action} processed successfully` });
   });
 
   server.start();
@@ -31,8 +31,12 @@ async function runDashboardStressTest() {
     });
   });
 
-  clientWs.on("message", (data: any) => {
-    const str = data.toString();
+  clientWs.on("message", (data: WebSocket.RawData) => {
+    const str = Buffer.isBuffer(data)
+      ? data.toString("utf8")
+      : Array.isArray(data)
+        ? Buffer.concat(data).toString("utf8")
+        : Buffer.from(data).toString("utf8");
     if (str.includes("INIT")) {
       initReceived = true;
     } else {
@@ -45,7 +49,7 @@ async function runDashboardStressTest() {
   const durationSec = 3;
   const totalTicks = targetTicksPerSec * durationSec;
 
-  console.log(`[STRESS_TEST] Pumping ${totalTicks} ticks at ${targetTicksPerSec} ticks/sec...`);
+  console.log(`[STRESS_TEST] Pumping ${String(totalTicks)} ticks at ${String(targetTicksPerSec)} ticks/sec...`);
 
   const mockFrame: TelemetryFrame = {
     symbol: "BTCUSDT",
@@ -100,7 +104,7 @@ async function runDashboardStressTest() {
   }
 
   const elapsed = (Date.now() - startTime) / 1000;
-  console.log(`[STRESS_TEST] Streamed ${count} frames in ${elapsed.toFixed(3)}s (${(count / elapsed).toFixed(0)} ticks/sec).`);
+  console.log(`[STRESS_TEST] Streamed ${String(count)} frames in ${elapsed.toFixed(3)}s (${(count / elapsed).toFixed(0)} ticks/sec).`);
 
   // Send Control RPC command over WebSocket
   clientWs.send(JSON.stringify({ action: "EMERGENCY_KILL", timestamp: Date.now() }));
@@ -109,9 +113,10 @@ async function runDashboardStressTest() {
   clientWs.close();
   await server.stop();
 
-  console.log(`[STRESS_TEST] Frames Broadcasted: ${count}`);
-  console.log(`[STRESS_TEST] Client Received Batches: ${receivedCount}`);
-  console.log(`[STRESS_TEST] Control RPC Commands Handled: ${rpcReceived}`);
+  console.log(`[STRESS_TEST] Frames Broadcasted: ${String(count)}`);
+  console.log(`[STRESS_TEST] Init Packet Received: ${String(initReceived)}`);
+  console.log(`[STRESS_TEST] Client Received Batches: ${String(receivedCount)}`);
+  console.log(`[STRESS_TEST] Control RPC Commands Handled: ${String(rpcReceived)}`);
 
   if (count >= 15000 && rpcReceived >= 1) {
     console.log("==================================================================");
@@ -124,7 +129,7 @@ async function runDashboardStressTest() {
   }
 }
 
-runDashboardStressTest().catch((err) => {
+runDashboardStressTest().catch((err: unknown) => {
   console.error("Stress test failed with error:", err);
   process.exit(1);
 });

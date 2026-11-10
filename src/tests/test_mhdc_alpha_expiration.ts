@@ -22,7 +22,6 @@
 
 import { HedgePositionLedger } from "../strategy/positionLedger";
 import { MarketDataClient } from "../marketDataClient";
-import { SAB_SLOTS } from "../ipc/sabSchema";
 import { MicrostructureMetrics } from "../strategy/microstructureHazardEngine";
 import { VolatilitySurfaceMetrics } from "../strategy/volatilitySurfaceEngine";
 
@@ -106,8 +105,8 @@ assert(triggers30.length === 0, "No premature MHDC exit when positionAgeSec (30.
 const sabPosAge30 = mdClient.getPositionAgeSec(assetIndex);
 const sabMhdcSec30 = mdClient.getMaxHoldDurationSec(assetIndex);
 
-assert(Math.abs(sabPosAge30 - 30.0) < 1e-6, `SAB Slot 164 (POSITION_AGE_SEC) accurately updated: expected 30.0, got ${sabPosAge30}`);
-assert(Math.abs(sabMhdcSec30 - 360.0) < 1e-6, `SAB Slot 163 (MAX_HOLD_DURATION_SEC) accurately updated to default: expected 360.0, got ${sabMhdcSec30}`);
+assert(Math.abs(sabPosAge30 - 30.0) < 1e-6, `SAB Slot 164 (POSITION_AGE_SEC) accurately updated: expected 30.0, got ${String(sabPosAge30)}`);
+assert(Math.abs(sabMhdcSec30 - 360.0) < 1e-6, `SAB Slot 163 (MAX_HOLD_DURATION_SEC) accurately updated to default: expected 360.0, got ${String(sabMhdcSec30)}`);
 
 // =========================================================================================
 // STAGE 2: Exact MHDC Trigger Point Boundary Conditions
@@ -127,7 +126,7 @@ const triggers359_9 = ledger.evaluateSotaDynamicExits(
 );
 
 assert(triggers359_9.length === 0, "Zero premature trigger at sub-boundary: age 359.9s < 360.0s");
-assert(Math.abs(mdClient.getPositionAgeSec(assetIndex) - 359.9) < 1e-6, `SAB Slot 164 reflects sub-boundary age: got ${mdClient.getPositionAgeSec(assetIndex)}`);
+assert(Math.abs(mdClient.getPositionAgeSec(assetIndex) - 359.9) < 1e-6, `SAB Slot 164 reflects sub-boundary age: got ${String(mdClient.getPositionAgeSec(assetIndex))}`);
 
 // Exact boundary test: 360.0s (positionAgeSec >= mhdcSec)
 const t360 = baseOpenTime + 360_000;
@@ -141,14 +140,14 @@ const triggers360 = ledger.evaluateSotaDynamicExits(
   0.50
 );
 
-assert(triggers360.length === 1, `MHDC trigger fires exactly at boundary: expected 1 trigger, got ${triggers360.length}`);
+assert(triggers360.length === 1, `MHDC trigger fires exactly at boundary: expected 1 trigger, got ${String(triggers360.length)}`);
 const trgLong = triggers360[0];
 assert(trgLong.reason === "MHDC_ALPHA_EXPIRATION_LONG", `Exact reason string matched: got ${trgLong.reason}`);
 // Phase 4 Dynamic Urgency Routing: in neutral/calm market (U = 0.35 < 0.50), dynamically routes to PASSIVE_MAKER (fee drag eradicated)
-assert(trgLong.executionStyle === "PASSIVE_MAKER", `Execution style dynamically routed to PASSIVE_MAKER in calm market: got ${trgLong.executionStyle}`);
-assert(trgLong.executionType === "PASSIVE_MAKER", `Execution type dynamically routed to PASSIVE_MAKER in calm market: got ${trgLong.executionType}`);
-assert(trgLong.quantity === entryQty, `Full position quantity liquidated: expected ${entryQty}, got ${trgLong.quantity}`);
-assert(Math.abs(mdClient.getPositionAgeSec(assetIndex) - 360.0) < 1e-6, `SAB Slot 164 updated to boundary age: got ${mdClient.getPositionAgeSec(assetIndex)}`);
+assert(trgLong.executionStyle === "PASSIVE_MAKER", `Execution style dynamically routed to PASSIVE_MAKER in calm market: got ${String(trgLong.executionStyle)}`);
+assert(trgLong.executionType === "PASSIVE_MAKER", `Execution type dynamically routed to PASSIVE_MAKER in calm market: got ${String(trgLong.executionType)}`);
+assert(trgLong.quantity === entryQty, `Full position quantity liquidated: expected ${String(entryQty)}, got ${String(trgLong.quantity)}`);
+assert(Math.abs(mdClient.getPositionAgeSec(assetIndex) - 360.0) < 1e-6, `SAB Slot 164 updated to boundary age: got ${String(mdClient.getPositionAgeSec(assetIndex))}`);
 
 // Super-boundary test: 450.0s (> 360.0s)
 const t450 = baseOpenTime + 450_000;
@@ -173,7 +172,7 @@ console.log("\n--- STAGE 3: SHORT Position Symmetry ---");
 ledger.occupyShortSlot(0, 0.05, entryPrice, 1.0, 1.5);
 const shortSlots = ledger.getShortSlots();
 const shortSlot0 = shortSlots[0];
-assert(shortSlot0 !== undefined && shortSlot0.isOccupied === true, "Short slot #0 occupied successfully");
+assert(shortSlot0.isOccupied, "Short slot #0 occupied successfully");
 
 const shortOpenTime = shortSlot0.openTime;
 
@@ -202,12 +201,12 @@ const triggersShortBoundary = ledger.evaluateSotaDynamicExits(
   0.50
 );
 
-assert(triggersShortBoundary.length === 1, `Short MHDC fires at boundary: expected 1 trigger, got ${triggersShortBoundary.length}`);
+assert(triggersShortBoundary.length === 1, `Short MHDC fires at boundary: expected 1 trigger, got ${String(triggersShortBoundary.length)}`);
 const trgShort = triggersShortBoundary[0];
 assert(trgShort.reason === "MHDC_ALPHA_EXPIRATION_SHORT", `Short reason string matched: got ${trgShort.reason}`);
 // Phase 4 Dynamic Urgency Routing: calm market routes to PASSIVE_MAKER
-assert(trgShort.executionStyle === "PASSIVE_MAKER", `Short execution style dynamically routed to PASSIVE_MAKER: got ${trgShort.executionStyle}`);
-assert(trgShort.quantity === 0.05, `Short liquidated quantity matches: expected 0.05, got ${trgShort.quantity}`);
+assert(trgShort.executionStyle === "PASSIVE_MAKER", `Short execution style dynamically routed to PASSIVE_MAKER: got ${String(trgShort.executionStyle)}`);
+assert(trgShort.quantity === 0.05, `Short liquidated quantity matches: expected 0.05, got ${String(trgShort.quantity)}`);
 
 ledger.releaseShortSlot(0);
 
@@ -238,8 +237,8 @@ const triggersDynSub = ledger.evaluateSotaDynamicExits(
 );
 
 assert(triggersDynSub.length === 0, "No trigger at 130s (< dynamic MHDC 135s)");
-assert(Math.abs(mdClient.getMaxHoldDurationSec(assetIndex) - 135.0) < 1e-6, `SAB Slot 163 reflects dynamic MHDC (135.0s): got ${mdClient.getMaxHoldDurationSec(assetIndex)}`);
-assert(Math.abs(mdClient.getPositionAgeSec(assetIndex) - 130.0) < 1e-6, `SAB Slot 164 reflects position age (130.0s): got ${mdClient.getPositionAgeSec(assetIndex)}`);
+assert(Math.abs(mdClient.getMaxHoldDurationSec(assetIndex) - 135.0) < 1e-6, `SAB Slot 163 reflects dynamic MHDC (135.0s): got ${String(mdClient.getMaxHoldDurationSec(assetIndex))}`);
+assert(Math.abs(mdClient.getPositionAgeSec(assetIndex) - 130.0) < 1e-6, `SAB Slot 164 reflects position age (130.0s): got ${String(mdClient.getPositionAgeSec(assetIndex))}`);
 
 // At 135.0s (>= 135.0s) -> Fires MHDC
 const tDynExact = dynamicOpenTime + 135 * 1000;
@@ -290,7 +289,7 @@ try {
     0.50
   );
   assert(triggersEnvSub.length === 0, "No trigger at 119.0s (< custom env MHDC 120.0s)");
-  assert(Math.abs(mdClient.getMaxHoldDurationSec(assetIndex) - 120.0) < 1e-6, `SAB Slot 163 reflects custom env MHDC (120.0s): got ${mdClient.getMaxHoldDurationSec(assetIndex)}`);
+  assert(Math.abs(mdClient.getMaxHoldDurationSec(assetIndex) - 120.0) < 1e-6, `SAB Slot 163 reflects custom env MHDC (120.0s): got ${String(mdClient.getMaxHoldDurationSec(assetIndex))}`);
 
   // At 120.0s (>= 120.0s) -> Trigger
   const tEnvExact = envOpenTime + 120 * 1000;
@@ -411,7 +410,7 @@ const triggersContSub = ledger.evaluateSotaDynamicExits(
   0.50
 );
 assert(triggersContSub.length === 0, "Clock continuity respects originalOpenTime: age 355s < 360s (no trigger)");
-assert(Math.abs(mdClient.getPositionAgeSec(assetIndex) - 355.0) < 1e-6, `SAB Slot 164 reflects total lifespan age across restarts: got ${mdClient.getPositionAgeSec(assetIndex)}`);
+assert(Math.abs(mdClient.getPositionAgeSec(assetIndex) - 355.0) < 1e-6, `SAB Slot 164 reflects total lifespan age across restarts: got ${String(mdClient.getPositionAgeSec(assetIndex))}`);
 
 // At restart + 10s (total age = 350s + 10s = 360s >= 360s) -> Fires MHDC
 const tContExact = simulatedRestartTime + 10_000;
@@ -478,7 +477,7 @@ ledger.releaseCoreLong();
 // SUMMARY
 // =========================================================================================
 console.log("\n================================================================================");
-console.log(`   PHASE 2 MHDC TEST MATRIX: ${totalPassed} PASSED / ${totalFailed} FAILED`);
+console.log(`   PHASE 2 MHDC TEST MATRIX: ${String(totalPassed)} PASSED / ${String(totalFailed)} FAILED`);
 console.log("================================================================================");
 
 if (totalFailed === 0) {

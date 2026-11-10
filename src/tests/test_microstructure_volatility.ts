@@ -1,7 +1,7 @@
 import { MicrostructureHazardEngine } from "../strategy/microstructureHazardEngine";
 import { VolatilitySurfaceEngine } from "../strategy/volatilitySurfaceEngine";
 
-async function runMicrostructureVolatilityTestSuite() {
+function runMicrostructureVolatilityTestSuite(): void {
   console.log("=========================================================================");
   console.log("  BATBOT_V11 SOTA PHASE 1: MICROSTRUCTURE & VOLATILITY TEST SUITE       ");
   console.log("=========================================================================\n");
@@ -20,17 +20,17 @@ async function runMicrostructureVolatilityTestSuite() {
   // Update 1: Bid price increases to $60,000.50 (2.0 BTC), Ask stays $60,001 (1.0 BTC)
   // e_bid = +2.0 (price up), e_ask = 0 (price same, size same) -> instantOFI = +2.0
   const ofi1 = hazardEngine.updateOrderBook(60000.5, 2.0, 60001.0, 1.0);
-  console.log(`  - OFI Step 1 (Bid Up): instantOFI=${ofi1}, normOFI=${hazardEngine.getNormalizedOFI().toFixed(4)}`);
+  console.log(`  - OFI Step 1 (Bid Up): instantOFI=${String(ofi1)}, normOFI=${hazardEngine.getNormalizedOFI().toFixed(4)}`);
   if (ofi1 !== 2.0) {
-    throw new Error(`❌ Test 1 Failed! Expected instantOFI=2.0, got ${ofi1}`);
+    throw new Error(`❌ Test 1 Failed! Expected instantOFI=2.0, got ${String(ofi1)}`);
   }
 
   // Update 2: Bid stays $60,000.50 (size drops to 1.5 BTC), Ask drops to $60,000.80 (3.0 BTC)
   // e_bid = 1.5 - 2.0 = -0.5, e_ask = +3.0 (ask price down) -> instantOFI = -0.5 - 3.0 = -3.5
   const ofi2 = hazardEngine.updateOrderBook(60000.5, 1.5, 60000.8, 3.0);
-  console.log(`  - OFI Step 2 (Ask Drop): instantOFI=${ofi2}, normOFI=${hazardEngine.getNormalizedOFI().toFixed(4)}`);
+  console.log(`  - OFI Step 2 (Ask Drop): instantOFI=${String(ofi2)}, normOFI=${hazardEngine.getNormalizedOFI().toFixed(4)}`);
   if (Math.abs(ofi2 - (-3.5)) > 1e-6) {
-    throw new Error(`❌ Test 1 Failed! Expected instantOFI=-3.5, got ${ofi2}`);
+    throw new Error(`❌ Test 1 Failed! Expected instantOFI=-3.5, got ${String(ofi2)}`);
   }
   console.log("  ✅ Order Flow Imbalance (OFI) math mathematically verified.\n");
 
@@ -45,7 +45,7 @@ async function runMicrostructureVolatilityTestSuite() {
   const tfiBuyAggression = hazardEngine.getTFI();
   console.log(`  - TFI after 10 Taker Buys: ${tfiBuyAggression.toFixed(4)} (Expected ~ +1.0)`);
   if (tfiBuyAggression < 0.99) {
-    throw new Error(`❌ Test 2 Failed! Expected TFI ~ 1.0, got ${tfiBuyAggression}`);
+    throw new Error(`❌ Test 2 Failed! Expected TFI ~ 1.0, got ${String(tfiBuyAggression)}`);
   }
 
   // Feed 10 aggressive Taker Sell trades (isBuyerMaker = true)
@@ -55,7 +55,7 @@ async function runMicrostructureVolatilityTestSuite() {
   const tfiBalanced = hazardEngine.getTFI();
   console.log(`  - TFI after equal Buy/Sell flow: ${tfiBalanced.toFixed(4)} (Expected ~ 0.0)`);
   if (Math.abs(tfiBalanced) > 0.01) {
-    throw new Error(`❌ Test 2 Failed! Expected TFI ~ 0.0, got ${tfiBalanced}`);
+    throw new Error(`❌ Test 2 Failed! Expected TFI ~ 0.0, got ${String(tfiBalanced)}`);
   }
   console.log("  ✅ Trade Flow Imbalance (TFI) math mathematically verified.\n");
 
@@ -71,9 +71,9 @@ async function runMicrostructureVolatilityTestSuite() {
   console.log(`  - VPIN after toxic sell flow: ${vpinTox.toFixed(4)}`);
 
   const hazardMetrics = hazardEngine.getHazardMetrics("LONG", 0.40);
-  console.log(`  - Composite Hazard Score (LONG position): ${hazardMetrics.hazardScore.toFixed(4)}, ExitTriggered: ${hazardMetrics.isHazardExitTriggered}`);
+  console.log(`  - Composite Hazard Score (LONG position): ${hazardMetrics.hazardScore.toFixed(4)}, ExitTriggered: ${String(hazardMetrics.isHazardExitTriggered)}`);
   if (vpinTox <= 0) {
-    throw new Error(`❌ Test 3 Failed! Expected positive VPIN, got ${vpinTox}`);
+    throw new Error(`❌ Test 3 Failed! Expected positive VPIN, got ${String(vpinTox)}`);
   }
   console.log("  ✅ VPIN & Microstructure Hazard Rate mathematically verified.\n");
 
@@ -98,10 +98,10 @@ async function runMicrostructureVolatilityTestSuite() {
   console.log(`  - Volatility Multiplier:            ${volSurface.volatilityMultiplier.toFixed(4)}`);
 
   if (Math.abs(gkVol - 0.069691) > 0.005) {
-    throw new Error(`❌ Test 4 Failed! Garman-Klass vol mismatch. Expected ~0.069691, got ${gkVol}`);
+    throw new Error(`❌ Test 4 Failed! Garman-Klass vol mismatch. Expected ~0.069691, got ${String(gkVol)}`);
   }
   if (Math.abs(parkinsonVol - 0.060106) > 0.005) {
-    throw new Error(`❌ Test 4 Failed! Parkinson vol mismatch. Expected ~0.060106, got ${parkinsonVol}`);
+    throw new Error(`❌ Test 4 Failed! Parkinson vol mismatch. Expected ~0.060106, got ${String(parkinsonVol)}`);
   }
   console.log("  ✅ Garman-Klass & Parkinson realized volatility math mathematically verified.\n");
 
@@ -136,7 +136,9 @@ async function runMicrostructureVolatilityTestSuite() {
   console.log("=========================================================================");
 }
 
-runMicrostructureVolatilityTestSuite().catch((err) => {
+try {
+  runMicrostructureVolatilityTestSuite();
+} catch (err: unknown) {
   console.error("❌ FATAL TEST ERROR:", err);
   process.exit(1);
-});
+}

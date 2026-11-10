@@ -12,7 +12,7 @@ function assert(condition: boolean, message: string): void {
   }
 }
 
-async function runICKillSwitchHysteresisTestSuite(): Promise<void> {
+function runICKillSwitchHysteresisTestSuite(): void {
   console.log("================================================================================");
   console.log("  TEST: SOTA 3-STATE HYSTERESIS CUSUM-SPRT IC KILL SWITCH (DEF-R7)");
   console.log("================================================================================\n");
@@ -121,7 +121,7 @@ async function runICKillSwitchHysteresisTestSuite(): Promise<void> {
 
   const blockedTickSignal = engine.evaluateTick();
   assert(blockedTickSignal.signalType === "NONE", `Signal must be NONE in MODEL_BROKEN state, got ${blockedTickSignal.signalType}`);
-  assert(blockedTickSignal.riskResult?.reasonCode === "IC_MODEL_BROKEN", `Reason must be IC_MODEL_BROKEN, got ${blockedTickSignal.riskResult?.reasonCode}`);
+  assert(blockedTickSignal.riskResult?.reasonCode === "IC_MODEL_BROKEN", `Reason must be IC_MODEL_BROKEN, got ${String(blockedTickSignal.riskResult?.reasonCode)}`);
   assert(blockedTickSignal.executionPromise === undefined, "Execution promise must be undefined when kill switch trips");
   console.log("  ✓ Structural CUSUM drift immediately trips kill switch to MODEL_BROKEN & evaluateTick() strictly halts\n");
 
@@ -217,7 +217,7 @@ async function runICKillSwitchHysteresisTestSuite(): Promise<void> {
   client.setIsModelDrifted(false, 0);
   const catastrophicSignal = engine.evaluateTick();
   assert(catastrophicSignal.signalType === "NONE", `Signal must be NONE after catastrophic IC collapse, got ${catastrophicSignal.signalType}`);
-  assert(catastrophicSignal.riskResult?.reasonCode === "IC_MODEL_BROKEN", `Reason must be IC_MODEL_BROKEN, got ${catastrophicSignal.riskResult?.reasonCode}`);
+  assert(catastrophicSignal.riskResult?.reasonCode === "IC_MODEL_BROKEN", `Reason must be IC_MODEL_BROKEN, got ${String(catastrophicSignal.riskResult?.reasonCode)}`);
   assert(catastrophicSignal.executionPromise === undefined, "Execution promise must be undefined when collapsed");
   console.log("  ✓ Autopsy condition (IC = -0.11) instantly triggers MODEL_BROKEN & physically halts evaluateTick()\n");
 
@@ -226,7 +226,10 @@ async function runICKillSwitchHysteresisTestSuite(): Promise<void> {
   console.log("================================================================================\n");
 }
 
-runICKillSwitchHysteresisTestSuite().catch((err) => {
-  console.error(`\n❌ TEST SUITE FAILED: ${err?.stack || err?.message || String(err)}\n`);
+try {
+  runICKillSwitchHysteresisTestSuite();
+} catch (err: unknown) {
+  const errDetail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  console.error(`\n❌ TEST SUITE FAILED: ${errDetail}\n`);
   process.exit(1);
-});
+}

@@ -29,7 +29,7 @@ function runCvdZScoreTest() {
   console.log(`[TEST_2] Steady State Flow CVD Velocity: ${steadyVel.toFixed(4)} (Expected: < 0.95)`);
 
   if (Math.abs(steadyVel) >= 0.999) {
-    throw new Error(`FAIL: CVD Velocity hard-saturated to ${steadyVel}!`);
+    throw new Error(`FAIL: CVD Velocity hard-saturated to ${String(steadyVel)}!`);
   }
 
   // Simulate reverse sell pressure

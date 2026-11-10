@@ -6,6 +6,8 @@ import { RiskGuard } from "../strategy/risk";
 import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
 import { HedgePositionLedger } from "../strategy/positionLedger";
 
+type ReqPayload = Record<string, string | number | boolean | undefined | null>;
+
 async function runHotfixTests(): Promise<void> {
   console.log("=========================================================================");
   console.log("  TEST: ERROR -4130 SL DISPATCH DIRECTION & AUTO-RECOVERY VERIFICATION  ");
@@ -15,36 +17,41 @@ async function runHotfixTests(): Promise<void> {
 
   // Test 1: Direct placePositionStopLoss Payload & Direction Verification
   console.log("[TEST 1] Verifying placePositionStopLoss strict direction and payload sanitization...");
-  const capturedPayloads: Record<string, unknown>[] = [];
-  const mockClient = new BinanceExecutionClient();
-
-  (mockClient as any).request = async (_method: string, path: string, payload?: any): Promise<any> => {
-    if (path === "/fapi/v1/openOrders") {
-      return [];
+  const capturedPayloads: ReqPayload[] = [];
+  class HotfixMockClient extends BinanceExecutionClient {
+    protected override request<T>(
+      _method: "GET" | "POST" | "DELETE" | "PUT",
+      path: string,
+      payload: ReqPayload = {}
+    ): Promise<T> {
+      if (path === "/fapi/v1/openOrders") {
+        return Promise.resolve([] as unknown as T);
+      }
+      if (path === "/fapi/v1/order") {
+        capturedPayloads.push({ ...payload });
+      }
+      return Promise.resolve({
+        orderId: 987654321,
+        symbol: typeof payload.symbol === "string" ? payload.symbol : "XRPUSDT",
+        status: "NEW",
+        clientOrderId: typeof payload.newClientOrderId === "string" ? payload.newClientOrderId : "",
+        price: "0",
+        avgPrice: "0",
+        origQty: "0",
+        executedQty: "0",
+        cumQuote: "0",
+        timeInForce: "GTC",
+        type: typeof payload.type === "string" ? payload.type : "STOP_MARKET",
+        reduceOnly: false,
+        side: typeof payload.side === "string" ? payload.side : "BUY",
+        positionSide: typeof payload.positionSide === "string" ? payload.positionSide : "SHORT",
+        stopPrice: String(payload.stopPrice ?? "1.5164"),
+        workingType: typeof payload.workingType === "string" ? payload.workingType : "CONTRACT_PRICE",
+        updateTime: Date.now(),
+      } as unknown as T);
     }
-    if (path === "/fapi/v1/order" && payload) {
-      capturedPayloads.push({ ...payload });
-    }
-    return {
-      orderId: 987654321,
-      symbol: payload?.symbol || "XRPUSDT",
-      status: "NEW",
-      clientOrderId: payload?.newClientOrderId || "",
-      price: "0",
-      avgPrice: "0",
-      origQty: "0",
-      executedQty: "0",
-      cumQuote: "0",
-      timeInForce: "GTC",
-      type: payload?.type || "STOP_MARKET",
-      reduceOnly: false,
-      side: payload?.side || "BUY",
-      positionSide: payload?.positionSide || "SHORT",
-      stopPrice: payload?.stopPrice || "1.5164",
-      workingType: payload?.workingType || "CONTRACT_PRICE",
-      updateTime: Date.now(),
-    };
-  };
+  }
+  const mockClient = new HotfixMockClient();
 
   // 1a: SHORT Position SL -> MUST be BUY order
   const shortSlRes = await mockClient.placePositionStopLoss("XRPUSDT", "BUY", "SHORT", 1.5164);
@@ -63,6 +70,7 @@ async function runHotfixTests(): Promise<void> {
 
   // 1b: Misaligned SHORT Position SL (e.g. if caller passed SELL by mistake) -> Auto-Corrects to BUY
   const correctedSlRes = await mockClient.placePositionStopLoss("XRPUSDT", "SELL", "SHORT", 1.5164);
+  assert.strictEqual(correctedSlRes.orderId, 987654321);
   const correctedPayload = capturedPayloads[1];
   assert.strictEqual(correctedPayload.side, "BUY", "Misaligned side 'SELL' on SHORT position MUST be corrected to 'BUY'");
   assert.strictEqual(correctedPayload.positionSide, "SHORT", "PositionSide MUST be SHORT");
@@ -70,6 +78,7 @@ async function runHotfixTests(): Promise<void> {
 
   // 1c: LONG Position SL -> MUST be SELL order
   const longSlRes = await mockClient.placePositionStopLoss("ETHUSDT", "SELL", "LONG", 2423.83);
+  assert.strictEqual(longSlRes.orderId, 987654321);
   const longPayload = capturedPayloads[2];
   assert.strictEqual(longPayload.symbol, "ETHUSDT", "Symbol must match");
   assert.strictEqual(longPayload.side, "SELL", "Long position exit side MUST be SELL");
@@ -103,7 +112,6 @@ async function runHotfixTests(): Promise<void> {
   console.log("\n[TEST 3] Verifying -4130 Auto-Recovery Interceptor in placeOrder...");
   let attemptCount = 0;
   const cancelledOrderIds: (number | string)[] = [];
-  const recoveryClient = new BinanceExecutionClient();
   let recoveryOpenOrders: BinanceOrderResponse[] = [
     {
       orderId: 111222,
@@ -126,46 +134,18 @@ async function runHotfixTests(): Promise<void> {
     },
   ];
 
-  (recoveryClient as any).getOpenOrders = async (_sym: string): Promise<BinanceOrderResponse[]> => {
-    return [...recoveryOpenOrders];
-  };
-
-  (recoveryClient as any).cancelOrder = async (_sym: string, orderId: number | string): Promise<BinanceOrderResponse> => {
-    cancelledOrderIds.push(orderId);
-    recoveryOpenOrders = recoveryOpenOrders.filter((o) => o.orderId !== orderId);
-    return {
-      orderId: Number(orderId),
-      symbol: "XRPUSDT",
-      status: "CANCELED",
-      clientOrderId: "",
-      price: "0",
-      avgPrice: "0",
-      origQty: "0",
-      executedQty: "0",
-      cumQuote: "0",
-      timeInForce: "GTC",
-      type: "STOP_MARKET",
-      reduceOnly: false,
-      side: "BUY",
-      positionSide: "SHORT",
-      stopPrice: "0",
-      workingType: "CONTRACT_PRICE",
-      updateTime: Date.now(),
-    };
-  };
-
-  (recoveryClient as any).request = async (_method: string, path: string, payload?: any): Promise<any> => {
-    if (path === "/fapi/v1/order") {
-      attemptCount++;
-      if (attemptCount === 1) {
-        // Simulate Binance API Error -4130 on first attempt
-        throw new Error("Binance API Error [-4130]: An open stop or take profit order with GTE and closePosition in the direction is existing.");
-      }
-      return {
-        orderId: 999888777,
-        symbol: payload?.symbol || "XRPUSDT",
-        status: "NEW",
-        clientOrderId: payload?.newClientOrderId || "",
+  class RecoveryMockClient extends BinanceExecutionClient {
+    public override getOpenOrders(_sym?: string): Promise<BinanceOrderResponse[]> {
+      return Promise.resolve([...recoveryOpenOrders]);
+    }
+    public override cancelOrder(_sym: string, orderId: number | string): Promise<BinanceOrderResponse> {
+      cancelledOrderIds.push(orderId);
+      recoveryOpenOrders = recoveryOpenOrders.filter((o) => o.orderId !== orderId);
+      return Promise.resolve({
+        orderId: Number(orderId),
+        symbol: "XRPUSDT",
+        status: "CANCELED",
+        clientOrderId: "",
         price: "0",
         avgPrice: "0",
         origQty: "0",
@@ -176,13 +156,47 @@ async function runHotfixTests(): Promise<void> {
         reduceOnly: false,
         side: "BUY",
         positionSide: "SHORT",
-        stopPrice: payload?.stopPrice || "1.5164",
+        stopPrice: "0",
         workingType: "CONTRACT_PRICE",
         updateTime: Date.now(),
-      };
+      });
     }
-    return {};
-  };
+    protected override request<T>(
+      _method: "GET" | "POST" | "DELETE" | "PUT",
+      path: string,
+      payload: ReqPayload = {}
+    ): Promise<T> {
+      if (path === "/fapi/v1/order") {
+        attemptCount++;
+        if (attemptCount === 1) {
+          return Promise.reject(
+            new Error("Binance API Error [-4130]: An open stop or take profit order with GTE and closePosition in the direction is existing.")
+          );
+        }
+        return Promise.resolve({
+          orderId: 999888777,
+          symbol: typeof payload.symbol === "string" ? payload.symbol : "XRPUSDT",
+          status: "NEW",
+          clientOrderId: typeof payload.newClientOrderId === "string" ? payload.newClientOrderId : "",
+          price: "0",
+          avgPrice: "0",
+          origQty: "0",
+          executedQty: "0",
+          cumQuote: "0",
+          timeInForce: "GTC",
+          type: "STOP_MARKET",
+          reduceOnly: false,
+          side: "BUY",
+          positionSide: "SHORT",
+          stopPrice: String(payload.stopPrice ?? "1.5164"),
+          workingType: "CONTRACT_PRICE",
+          updateTime: Date.now(),
+        } as unknown as T);
+      }
+      return Promise.resolve({} as unknown as T);
+    }
+  }
+  const recoveryClient = new RecoveryMockClient();
 
   const recoveredRes = await recoveryClient.placePositionStopLoss("XRPUSDT", "BUY", "SHORT", 1.5164, "BAT_TEST_SL_001");
   assert.strictEqual(attemptCount, 2, "placeOrder must have retried after catching -4130");
@@ -196,7 +210,7 @@ async function runHotfixTests(): Promise<void> {
   console.log("=========================================================================\n");
 }
 
-runHotfixTests().catch((err) => {
+runHotfixTests().catch((err: unknown) => {
   console.error("TEST FAILED:", err);
   process.exit(1);
 });

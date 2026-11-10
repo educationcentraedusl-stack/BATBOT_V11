@@ -14,7 +14,7 @@ const positionLedger_1 = require("../strategy/positionLedger");
  * 6. Schmitt Trigger Counter Reset on Directional Retracement
  * 7. Sub-Microsecond Zero-Allocation Hot-Path Latency Benchmark (< 1.50 µs / tick)
  */
-async function runSotaAiReversalWhipsawEradicationProof() {
+function runSotaAiReversalWhipsawEradicationProof() {
     console.log("============================================================================================");
     console.log("  🔍 SOTA AUGUST 2026 AI REVERSAL WHIPSAW ERADICATION & SCHMITT TRIGGER PROOF");
     console.log("============================================================================================\n");
@@ -40,9 +40,9 @@ async function runSotaAiReversalWhipsawEradicationProof() {
             falseTriggers++;
         }
     }
-    console.log(`  Rapid Spikes Injected: 20 ticks | False Trigger Count: ${falseTriggers}`);
+    console.log(`  Rapid Spikes Injected: 20 ticks | False Trigger Count: ${String(falseTriggers)}`);
     if (falseTriggers !== 0) {
-        throw new Error(`❌ STAGE 1 FAILED: Single-tick noise caused ${falseTriggers} false exit triggers!`);
+        throw new Error(`❌ STAGE 1 FAILED: Single-tick noise caused ${String(falseTriggers)} false exit triggers!`);
     }
     console.log("  ✅ STAGE 1 PASSED: 100% Noise Immunity Verified. Transient spikes produce 0 false exits.");
     // ------------------------------------------------------------------------------------------
@@ -65,9 +65,9 @@ async function runSotaAiReversalWhipsawEradicationProof() {
             inProfitTriggers++;
         }
     }
-    console.log(`  In-Profit Ticks Injected: 50 ticks (dir=+0.95, conf=95%) | AI Reversal Triggers: ${inProfitTriggers}`);
+    console.log(`  In-Profit Ticks Injected: 50 ticks (dir=+0.95, conf=95%) | AI Reversal Triggers: ${String(inProfitTriggers)}`);
     if (inProfitTriggers !== 0) {
-        throw new Error(`❌ STAGE 2 FAILED: In-Profit Immunity breached! AI Reversal triggered ${inProfitTriggers} times on a winning trade.`);
+        throw new Error(`❌ STAGE 2 FAILED: In-Profit Immunity breached! AI Reversal triggered ${String(inProfitTriggers)} times on a winning trade.`);
     }
     console.log("  ✅ STAGE 2 PASSED: In-Profit Immunity 100% SECURED. Maker TP orders preserved from cannibalization.");
     // ------------------------------------------------------------------------------------------
@@ -95,7 +95,7 @@ async function runSotaAiReversalWhipsawEradicationProof() {
             beLockedTriggers++;
         }
     }
-    console.log(`  Break-Even Locked Ticks: 30 ticks | AI Reversal Triggers: ${beLockedTriggers}`);
+    console.log(`  Break-Even Locked Ticks: 30 ticks | AI Reversal Triggers: ${String(beLockedTriggers)}`);
     if (beLockedTriggers !== 0) {
         throw new Error(`❌ STAGE 3 FAILED: AI Reversal preempted Monotonic Break-Even Stop Loss!`);
     }
@@ -117,7 +117,7 @@ async function runSotaAiReversalWhipsawEradicationProof() {
             quarantineTriggers++;
         }
     }
-    console.log(`  Quarantine Window Ticks (< 3000ms): 20 ticks | AI Reversal Triggers: ${quarantineTriggers}`);
+    console.log(`  Quarantine Window Ticks (< 3000ms): 20 ticks | AI Reversal Triggers: ${String(quarantineTriggers)}`);
     if (quarantineTriggers !== 0) {
         throw new Error(`❌ STAGE 4 FAILED: AI Reversal executed inside the 3000ms quarantine window!`);
     }
@@ -138,14 +138,14 @@ async function runSotaAiReversalWhipsawEradicationProof() {
         const currentTickTime = startTs5 + tick * 100;
         debouncedTriggers = ledger5.evaluateHedgeDynamicTpSl(adverseMarkPrice, 0.75, 0.85, 0.30, 1.0, 0.0001, 0.0, currentTickTime);
         if (tick < 15 && debouncedTriggers.length > 0) {
-            throw new Error(`❌ STAGE 5 FAILED: Premature trigger at tick ${tick + 1} before 15-tick debounce completed!`);
+            throw new Error(`❌ STAGE 5 FAILED: Premature trigger at tick ${String(tick + 1)} before 15-tick debounce completed!`);
         }
     }
-    console.log(`  Evaluating Tick 16 (1500ms elapsed): Triggers Count = ${debouncedTriggers.length}`);
+    console.log(`  Evaluating Tick 16 (1500ms elapsed): Triggers Count = ${String(debouncedTriggers.length)}`);
     if (debouncedTriggers.length === 0 || debouncedTriggers[0].reason !== "AI_REVERSAL_EXIT_SHORT") {
         throw new Error(`❌ STAGE 5 FAILED: Verified debounced reversal failed to trigger after 15 ticks / 1500ms!`);
     }
-    console.log(`  📌 Exit Reason: ${debouncedTriggers[0].reason} | Qty: ${debouncedTriggers[0].quantity} | Mark: $${debouncedTriggers[0].markPrice}`);
+    console.log(`  📌 Exit Reason: ${debouncedTriggers[0].reason} | Qty: ${String(debouncedTriggers[0].quantity)} | Mark: $${String(debouncedTriggers[0].markPrice)}`);
     console.log("  ✅ STAGE 5 PASSED: SOTA Schmitt Trigger successfully fired after 15 consecutive debounced ticks.");
     // ------------------------------------------------------------------------------------------
     // STAGE 6: Schmitt Trigger Counter Reset on Retracement
@@ -166,7 +166,7 @@ async function runSotaAiReversalWhipsawEradicationProof() {
     for (let i = 0; i < 10; i++) {
         resetTriggers = ledger6.evaluateHedgeDynamicTpSl(entryPrice - 10.0, -0.75, 0.85, 0.30, 1.0, 0.0001, 0.0, t0_6 + 1500 + i * 100);
     }
-    console.log(`  Triggers Count after 14 ticks + Reset + 10 ticks: ${resetTriggers.length}`);
+    console.log(`  Triggers Count after 14 ticks + Reset + 10 ticks: ${String(resetTriggers.length)}`);
     if (resetTriggers.length !== 0) {
         throw new Error(`❌ STAGE 6 FAILED: Debounce counter failed to reset on directional retracement!`);
     }
@@ -199,7 +199,10 @@ async function runSotaAiReversalWhipsawEradicationProof() {
     console.log("  🏆 ALL 7 STAGES OF SOTA AI REVERSAL WHIPSAW ERADICATION PASSED WITH 100% FIDELITY!");
     console.log("============================================================================================\n");
 }
-runSotaAiReversalWhipsawEradicationProof().catch((err) => {
+try {
+    runSotaAiReversalWhipsawEradicationProof();
+}
+catch (err) {
     console.error("❌ SOTA AI Reversal Proof Failure:", err);
     process.exit(1);
-});
+}

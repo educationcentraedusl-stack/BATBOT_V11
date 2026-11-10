@@ -13,17 +13,11 @@
  * Stage 6: End-to-end multi-layer evaluation latency (< 3.0 µs SLA) & Zero-GC benchmark.
  */
 
-import { HedgePositionLedger, PositionSlot } from "../strategy/positionLedger";
+import { HedgePositionLedger } from "../strategy/positionLedger";
 import { MicrostructureHazardEngine, MicrostructureMetrics } from "../strategy/microstructureHazardEngine";
-import { VolatilitySurfaceEngine, VolatilitySurfaceMetrics } from "../strategy/volatilitySurfaceEngine";
+import { VolatilitySurfaceEngine } from "../strategy/volatilitySurfaceEngine";
 import { HJBReservationEngine } from "../strategy/hjbReservationEngine";
 import { MarketDataClient } from "../marketDataClient";
-import {
-  VegamTpLadderEngine,
-  DEFAULT_VEGAM_CONFIG,
-  computeObiWeightedTrailDistance,
-} from "../strategy/vegamTpLadderEngine";
-import { AdversarialExitGate } from "../strategy/adversarialExitGate";
 
 console.log("================================================================================");
 console.log("   BATBOT_V11 SOTA MASTER INTEGRATION SUITE: VEGAM PHASE 9");
@@ -43,7 +37,7 @@ function assert(condition: boolean, message: string): void {
   }
 }
 
-async function runMasterIntegrationSuite() {
+function runMasterIntegrationSuite(): void {
   const symbol = "BTCUSDT";
 
   // =========================================================================================
@@ -70,7 +64,6 @@ async function runMasterIntegrationSuite() {
 
   // Seed baseline volatility bars (Garman-Klass composite baseline ~90.6 bps)
   const baselineAtr = 0.00906;
-  const barVar = baselineAtr * baselineAtr;
   for (let i = 0; i < 50; i++) {
     volEngine.pushBar(60000.0, 60000.0 + 60000.0 * baselineAtr, 60000.0 - 60000.0 * baselineAtr, 60000.0);
   }
@@ -95,13 +88,13 @@ async function runMasterIntegrationSuite() {
   masterClient.setVegamTrailKRegime(testKRegime, 0);
   masterClient.setVegamCadmeState(testCadmeState, 0);
 
-  assert(Math.abs(masterClient.getOFI(0) - testOFI) < 1e-4, `SAB Slot 138 (OFI) verified: got ${masterClient.getOFI(0)}`);
-  assert(Math.abs(masterClient.getHJBReservationPrice(0) - testHJB) < 1e-2, `SAB Slot 139 (HJB Reservation) verified: got $${masterClient.getHJBReservationPrice(0)}`);
-  assert(Math.abs(masterClient.getSurvivalProbability(0) - testSurvival) < 1e-4, `SAB Slot 140 (Survival Prob) verified: got ${masterClient.getSurvivalProbability(0)}`);
-  assert(Math.abs(masterClient.getDynamicStopLossPrice(0) - testDynamicSL) < 1e-2, `SAB Slot 141 (Dynamic SL) verified: got $${masterClient.getDynamicStopLossPrice(0)}`);
-  assert(Math.abs(masterClient.getVegamGkAtrComposite(0) - testGkAtr) < 1e-5, `SAB Slot 156 (VEGAM_GK_ATR_COMPOSITE) verified: got ${masterClient.getVegamGkAtrComposite(0)}`);
-  assert(Math.abs(masterClient.getVegamTrailKRegime(0) - testKRegime) < 1e-4, `SAB Slot 157 (VEGAM_TRAIL_K_REGIME) verified: got ${masterClient.getVegamTrailKRegime(0)}`);
-  assert(masterClient.getVegamCadmeState(0) === testCadmeState, `SAB Slot 158 (VEGAM_CADME_STATE) verified: got ${masterClient.getVegamCadmeState(0)}`);
+  assert(Math.abs(masterClient.getOFI(0) - testOFI) < 1e-4, `SAB Slot 138 (OFI) verified: got ${String(masterClient.getOFI(0))}`);
+  assert(Math.abs(masterClient.getHJBReservationPrice(0) - testHJB) < 1e-2, `SAB Slot 139 (HJB Reservation) verified: got $${String(masterClient.getHJBReservationPrice(0))}`);
+  assert(Math.abs(masterClient.getSurvivalProbability(0) - testSurvival) < 1e-4, `SAB Slot 140 (Survival Prob) verified: got ${String(masterClient.getSurvivalProbability(0))}`);
+  assert(Math.abs(masterClient.getDynamicStopLossPrice(0) - testDynamicSL) < 1e-2, `SAB Slot 141 (Dynamic SL) verified: got $${String(masterClient.getDynamicStopLossPrice(0))}`);
+  assert(Math.abs(masterClient.getVegamGkAtrComposite(0) - testGkAtr) < 1e-5, `SAB Slot 156 (VEGAM_GK_ATR_COMPOSITE) verified: got ${String(masterClient.getVegamGkAtrComposite(0))}`);
+  assert(Math.abs(masterClient.getVegamTrailKRegime(0) - testKRegime) < 1e-4, `SAB Slot 157 (VEGAM_TRAIL_K_REGIME) verified: got ${String(masterClient.getVegamTrailKRegime(0))}`);
+  assert(masterClient.getVegamCadmeState(0) === testCadmeState, `SAB Slot 158 (VEGAM_CADME_STATE) verified: got ${String(masterClient.getVegamCadmeState(0))}`);
 
   // =========================================================================================
   // STAGE 2: HJB Optimal Stopping Preempted by Hard Stop-Loss (Flash Crash Test)
@@ -111,8 +104,8 @@ async function runMasterIntegrationSuite() {
   // Occupy CORE_LONG @ $60,000, qty: 0.001 BTC ($60 notional, target leverage budget), initial SL = 1.50% ($59,100)
   ledger.occupyCoreLong(0.001, 60000.0, 3.0, 1.5);
   const initialLong = ledger.getCoreLong();
-  assert(initialLong.isOccupied === true, "Core Long slot is occupied");
-  assert(initialLong.stopLossPrice === 59100.0, `Initial Core Long SL set to $59,100: got $${initialLong.stopLossPrice}`);
+  assert(initialLong.isOccupied, "Core Long slot is occupied");
+  assert(initialLong.stopLossPrice === 59100.0, `Initial Core Long SL set to $59,100: got $${String(initialLong.stopLossPrice)}`);
 
   const volMetricsNormal = volEngine.getVolatilitySurfaceMetrics();
   const hazardMetricsNormal = hazardEngine.getHazardMetrics("LONG", 0.50, 10000);
@@ -128,22 +121,24 @@ async function runMasterIntegrationSuite() {
     volMetricsNormal,
     stage2OpenTs + 150000 // 150s into the trade
   );
-  assert(hjbBoundaryTriggers.length === 1, `HJB boundary breach produces exactly 1 trigger: got ${hjbBoundaryTriggers.length}`);
-  assert(hjbBoundaryTriggers[0]?.reason === "HJB_RESERVATION_LIQUIDATE_LONG", `Emits HJB_RESERVATION_LIQUIDATE_LONG: got ${hjbBoundaryTriggers[0]?.reason}`);
-  assert(hjbBoundaryTriggers[0]?.executionStyle === "PASSIVE_MAKER", `HJB liquidation executionStyle is PASSIVE_MAKER: got ${hjbBoundaryTriggers[0]?.executionStyle}`);
+  const firstHjbTrigger = hjbBoundaryTriggers.at(0);
+  assert(hjbBoundaryTriggers.length === 1, `HJB boundary breach produces exactly 1 trigger: got ${String(hjbBoundaryTriggers.length)}`);
+  assert(firstHjbTrigger?.reason === "HJB_RESERVATION_LIQUIDATE_LONG", `Emits HJB_RESERVATION_LIQUIDATE_LONG: got ${String(firstHjbTrigger?.reason)}`);
+  assert(firstHjbTrigger?.executionStyle === "PASSIVE_MAKER", `HJB liquidation executionStyle is PASSIVE_MAKER: got ${String(firstHjbTrigger?.executionStyle)}`);
 
   // Sub-scenario 2B: Severe multi-sigma Flash Crash to $58,500 breaching BOTH HJB and Hard Stop-Loss ($59,100).
   // Constitutional Precedence Rule: Hard Stop-Loss MUST unconditionally preempt HJB liquidation,
   // executing immediately as AGGRESSIVE_MARKET to avoid passive maker inventory toxic absorption.
   const flashCrashTriggers = ledger.evaluateSotaDynamicExits(58500.0, hazardMetricsNormal, hjbEngine, volMetricsNormal, stage2OpenTs + 150000);
-  assert(flashCrashTriggers.length === 1, `Flash crash produces exactly 1 exit trigger: got ${flashCrashTriggers.length}`);
+  const firstFlashTrigger = flashCrashTriggers.at(0);
+  assert(flashCrashTriggers.length === 1, `Flash crash produces exactly 1 exit trigger: got ${String(flashCrashTriggers.length)}`);
   assert(
-    flashCrashTriggers[0]?.reason === "MVA_TRAILING_STOP_LONG" || flashCrashTriggers[0]?.reason === "BREAK_EVEN_STOP_LOSS",
-    `Hard Stop-Loss preempts HJB: reason is ${flashCrashTriggers[0]?.reason}`
+    firstFlashTrigger?.reason === "MVA_TRAILING_STOP_LONG" || firstFlashTrigger?.reason === "BREAK_EVEN_STOP_LOSS",
+    `Hard Stop-Loss preempts HJB: reason is ${String(firstFlashTrigger?.reason)}`
   );
-  assert(flashCrashTriggers[0]?.executionStyle === "AGGRESSIVE_MARKET", `Hard Stop-Loss executionStyle is strictly AGGRESSIVE_MARKET: got ${flashCrashTriggers[0]?.executionStyle}`);
-  assert(flashCrashTriggers[0]?.executionType === "AGGRESSIVE_MARKET", `executionType is strictly AGGRESSIVE_MARKET: got ${flashCrashTriggers[0]?.executionType}`);
-  assert(flashCrashTriggers[0]?.quantity === 0.001, `Full position liquidated: expected 0.001, got ${flashCrashTriggers[0]?.quantity}`);
+  assert(firstFlashTrigger?.executionStyle === "AGGRESSIVE_MARKET", `Hard Stop-Loss executionStyle is strictly AGGRESSIVE_MARKET: got ${String(firstFlashTrigger?.executionStyle)}`);
+  assert(firstFlashTrigger?.executionType === "AGGRESSIVE_MARKET", `executionType is strictly AGGRESSIVE_MARKET: got ${String(firstFlashTrigger?.executionType)}`);
+  assert(firstFlashTrigger?.quantity === 0.001, `Full position liquidated: expected 0.001, got ${String(firstFlashTrigger?.quantity)}`);
 
   ledger.releaseCoreLong();
 
@@ -164,7 +159,7 @@ async function runMasterIntegrationSuite() {
     isHazardExitTriggered: false,
   };
   const singleSignalTriggers = ledger.evaluateSotaDynamicExits(60010.0, singleSignalHazard, hjbEngine, volMetricsNormal, Date.now());
-  assert(singleSignalTriggers.length === 0, `Isolated adverse OBI does NOT trigger Adversarial Exit Gate: triggers count=${singleSignalTriggers.length}`);
+  assert(singleSignalTriggers.length === 0, `Isolated adverse OBI does NOT trigger Adversarial Exit Gate: triggers count=${String(singleSignalTriggers.length)}`);
 
   // Sub-scenario 3B: Isolated toxic VPIN (0.75) with neutral OBI and calm price MUST NOT trigger.
   const isolatedVpinHazard: MicrostructureMetrics = {
@@ -174,7 +169,7 @@ async function runMasterIntegrationSuite() {
     isHazardExitTriggered: false,
   };
   const isolatedVpinTriggers = ledger.evaluateSotaDynamicExits(60005.0, isolatedVpinHazard, hjbEngine, volMetricsNormal, Date.now());
-  assert(isolatedVpinTriggers.length === 0, `Isolated toxic VPIN does NOT trigger Adversarial Exit Gate: triggers count=${isolatedVpinTriggers.length}`);
+  assert(isolatedVpinTriggers.length === 0, `Isolated toxic VPIN does NOT trigger Adversarial Exit Gate: triggers count=${String(isolatedVpinTriggers.length)}`);
 
   // Sub-scenario 3C: Full Adversarial Cascade (Multi-Signal Consensus: Adverse OBI + Toxic VPIN + Sweep + Hawkes + Entropy Collapse + Price Shock)
   masterClient.setHawkesIntensity(2.40, 0); // High Hawkes burst (>= 1.80)
@@ -192,10 +187,11 @@ async function runMasterIntegrationSuite() {
 
   // Adverse price velocity shock down to $59,100 ($900 drop = 1.50% drop exceeding 1.25x GK_ATR threshold of 1.13%, but strictly above the $58,800 Stop-Loss)
   const advTriggers = ledger.evaluateSotaDynamicExits(59100.0, adversarialHazard, hjbEngine, volMetricsNormal, Date.now());
-  assert(advTriggers.length === 1, `Adversarial cascade emits defensive exit trigger: count=${advTriggers.length}`);
-  assert(advTriggers[0]?.reason === "ADVERSARIAL_CASCADE_EXIT_LONG", `Exact reason string matched: got ${advTriggers[0]?.reason}`);
-  assert(advTriggers[0]?.executionStyle === "AGGRESSIVE_MARKET", `Adversarial exit executes as AGGRESSIVE_MARKET: got ${advTriggers[0]?.executionStyle}`);
-  assert(advTriggers[0]?.quantity === 0.10, `Full position liquidated: got ${advTriggers[0]?.quantity}`);
+  const firstAdvTrigger = advTriggers.at(0);
+  assert(advTriggers.length === 1, `Adversarial cascade emits defensive exit trigger: count=${String(advTriggers.length)}`);
+  assert(firstAdvTrigger?.reason === "ADVERSARIAL_CASCADE_EXIT_LONG", `Exact reason string matched: got ${String(firstAdvTrigger?.reason)}`);
+  assert(firstAdvTrigger?.executionStyle === "AGGRESSIVE_MARKET", `Adversarial exit executes as AGGRESSIVE_MARKET: got ${String(firstAdvTrigger?.executionStyle)}`);
+  assert(firstAdvTrigger?.quantity === 0.10, `Full position liquidated: got ${String(firstAdvTrigger?.quantity)}`);
 
   // Reset telemetry
   masterClient.setHawkesIntensity(1.0, 0);
@@ -211,7 +207,7 @@ async function runMasterIntegrationSuite() {
   // Re-occupy CORE_LONG @ $60,000, initial SL = 1.50% ($59,100)
   ledger.occupyCoreLong(0.10, 60000.0, 3.0, 1.5);
   let coreLong = ledger.getCoreLong();
-  assert(coreLong.stopLossPrice === 59100.0, `Initial Core Long SL confirmed at $59,100: got $${coreLong.stopLossPrice}`);
+  assert(coreLong.stopLossPrice === 59100.0, `Initial Core Long SL confirmed at $59,100: got $${String(coreLong.stopLossPrice)}`);
 
   // Test 4A: Sub-activation gate: Price moves to $60,050 (+0.083% price move @ 2x = +0.167% ROE < 0.50%)
   const subActivationHazard: MicrostructureMetrics = {
@@ -222,15 +218,15 @@ async function runMasterIntegrationSuite() {
   };
   ledger.evaluateSotaDynamicExits(60050.0, subActivationHazard, hjbEngine, volMetricsNormal, Date.now());
   coreLong = ledger.getCoreLong();
-  assert(coreLong.stopLossPrice === 59100.0, `Trail does NOT activate below 0.50% ROE: SL remains $59,100 (got $${coreLong.stopLossPrice})`);
+  assert(coreLong.stopLossPrice === 59100.0, `Trail does NOT activate below 0.50% ROE: SL remains $59,100 (got $${String(coreLong.stopLossPrice)})`);
 
   // Test 4B: Trail activates at ROE >= 0.50% (+0.333% move @ 2x = +0.667% ROE @ $60,200)
   // Neutral OBI (0.0): trailDist = 60000 * 0.00906 * 1.0 = $543.60 -> proposed SL = 60200 - 543.60 = $59,656.40
   ledger.evaluateSotaDynamicExits(60200.0, subActivationHazard, hjbEngine, volMetricsNormal, Date.now());
   coreLong = ledger.getCoreLong();
-  assert(coreLong.stopLossPrice > 59100.0, `Dynamic trail activates at >= 0.50% ROE: SL ratcheted to $${coreLong.stopLossPrice}`);
-  assert(Math.abs(coreLong.stopLossPrice - 59656.4) < 1.0, `Neutral OBI trailing stop matches exact formula ($59,656.40): got $${coreLong.stopLossPrice}`);
-  assert(coreLong.stepCollarTier === undefined || coreLong.stepCollarTier === 0, `Tier 1 Break-Even ratchet remains inactive below 5.0% ROE: stepCollarTier=${coreLong.stepCollarTier ?? 0}`);
+  assert(coreLong.stopLossPrice > 59100.0, `Dynamic trail activates at >= 0.50% ROE: SL ratcheted to $${String(coreLong.stopLossPrice)}`);
+  assert(Math.abs(coreLong.stopLossPrice - 59656.4) < 1.0, `Neutral OBI trailing stop matches exact formula ($59,656.40): got $${String(coreLong.stopLossPrice)}`);
+  assert(coreLong.stepCollarTier === undefined || coreLong.stepCollarTier === 0, `Tier 1 Break-Even ratchet remains inactive below 5.0% ROE: stepCollarTier=${String(coreLong.stepCollarTier ?? 0)}`);
 
   // Test 4C: Adverse OBI Tightening (OBI = -0.35 < -0.20 -> k_regime = 0.80)
   // trailDist = 60000 * 0.00906 * 0.80 = $434.88 -> proposed SL = 60200 - 434.88 = $59,765.12
@@ -240,29 +236,29 @@ async function runMasterIntegrationSuite() {
   };
   ledger.evaluateSotaDynamicExits(60200.0, adverseObiHazard, hjbEngine, volMetricsNormal, Date.now());
   coreLong = ledger.getCoreLong();
-  assert(coreLong.stopLossPrice > 59656.4, `Adverse OBI tightens trail distance: SL raised from $59656.4 to $${coreLong.stopLossPrice}`);
-  assert(Math.abs(coreLong.stopLossPrice - 59765.12) < 1.0, `Tightened trailing stop matches exact 0.80x k_regime formula ($59,765.12): got $${coreLong.stopLossPrice}`);
+  assert(coreLong.stopLossPrice > 59656.4, `Adverse OBI tightens trail distance: SL raised from $59656.4 to $${String(coreLong.stopLossPrice)}`);
+  assert(Math.abs(coreLong.stopLossPrice - 59765.12) < 1.0, `Tightened trailing stop matches exact 0.80x k_regime formula ($59,765.12): got $${String(coreLong.stopLossPrice)}`);
 
   // Test 4D: Monotonic Zero-Retreat Invariant on Pullback
   // Price pulls back to $60,080 -> SL must NOT retreat back down
   ledger.evaluateSotaDynamicExits(60080.0, adverseObiHazard, hjbEngine, volMetricsNormal, Date.now());
   coreLong = ledger.getCoreLong();
-  assert(Math.abs(coreLong.stopLossPrice - 59765.12) < 1.0, `Monotonic zero-retreat invariant: SL strictly locked at $59,765.12 on pullback (got $${coreLong.stopLossPrice})`);
+  assert(Math.abs(coreLong.stopLossPrice - 59765.12) < 1.0, `Monotonic zero-retreat invariant: SL strictly locked at $59,765.12 on pullback (got $${String(coreLong.stopLossPrice)})`);
 
   // Test 4E: Tier 1 Break-Even Ratchet Coexistence at >= +5.0% ROE
   // Advance price to $61,600 (+2.667% price move @ 2x = +5.333% ROE >= 5.0%)
   ledger.evaluateSotaDynamicExits(61600.0, subActivationHazard, hjbEngine, volMetricsNormal, Date.now());
   coreLong = ledger.getCoreLong();
-  assert(coreLong.stepCollarTier === 1, `Tier 1 Break-Even ratchet engages at >= 5.0% ROE: stepCollarTier=${coreLong.stepCollarTier}`);
-  assert(coreLong.breakEvenLocked === true, `breakEvenLocked is set to true at Tier 1: got ${coreLong.breakEvenLocked}`);
-  assert(coreLong.stopLossPrice > 60000.0, `Stop-Loss ratcheted securely ABOVE entry: got $${coreLong.stopLossPrice}`);
+  assert(coreLong.stepCollarTier === 1, `Tier 1 Break-Even ratchet engages at >= 5.0% ROE: stepCollarTier=${String(coreLong.stepCollarTier)}`);
+  assert(coreLong.breakEvenLocked === true, `breakEvenLocked is set to true at Tier 1: got ${String(coreLong.breakEvenLocked)}`);
+  assert(coreLong.stopLossPrice > 60000.0, `Stop-Loss ratcheted securely ABOVE entry: got $${String(coreLong.stopLossPrice)}`);
 
   ledger.releaseCoreLong();
 
   // Test 4F: Symmetrical SHORT position verification
   ledger.occupyShortSlot(0, 0.10, 60000.0, 3.0, 1.5);
   let shortSlot0 = ledger.getShortSlots()[0];
-  assert(shortSlot0.stopLossPrice === 60900.0, `Initial Short SL set to $60,900: got $${shortSlot0.stopLossPrice}`);
+  assert(shortSlot0.stopLossPrice === 60900.0, `Initial Short SL set to $60,900: got $${String(shortSlot0.stopLossPrice)}`);
 
   // Short price drop to $59,800 (+0.667% ROE >= 0.50%) with adverse OBI (+0.35 against short -> directional OBI = -0.35)
   // directional OBI = -0.35 -> k_regime = 0.80 -> trailDist = $434.88 -> Short SL = 59800 + 434.88 = $60,234.88
@@ -272,13 +268,13 @@ async function runMasterIntegrationSuite() {
   };
   ledger.evaluateSotaDynamicExits(59800.0, shortAdverseHazard, hjbEngine, volMetricsNormal, Date.now());
   shortSlot0 = ledger.getShortSlots()[0];
-  assert(shortSlot0.stopLossPrice < 60900.0, `Short dynamic trail activates at >= 0.50% ROE: SL tightened to $${shortSlot0.stopLossPrice}`);
-  assert(Math.abs(shortSlot0.stopLossPrice - 60234.88) < 1.0, `Short tightened SL matches exact 0.80x k_regime formula ($60,234.88): got $${shortSlot0.stopLossPrice}`);
+  assert(shortSlot0.stopLossPrice < 60900.0, `Short dynamic trail activates at >= 0.50% ROE: SL tightened to $${String(shortSlot0.stopLossPrice)}`);
+  assert(Math.abs(shortSlot0.stopLossPrice - 60234.88) < 1.0, `Short tightened SL matches exact 0.80x k_regime formula ($60,234.88): got $${String(shortSlot0.stopLossPrice)}`);
 
   // Short pullback bounce to $59,950 -> Short SL must NOT retreat upwards
   ledger.evaluateSotaDynamicExits(59950.0, shortAdverseHazard, hjbEngine, volMetricsNormal, Date.now());
   shortSlot0 = ledger.getShortSlots()[0];
-  assert(Math.abs(shortSlot0.stopLossPrice - 60234.88) < 1.0, `Short Monotonic Zero-Retreat invariant: SL remains locked at $${shortSlot0.stopLossPrice} on bounce`);
+  assert(Math.abs(shortSlot0.stopLossPrice - 60234.88) < 1.0, `Short Monotonic Zero-Retreat invariant: SL remains locked at $${String(shortSlot0.stopLossPrice)} on bounce`);
 
   ledger.releaseShortSlot(0);
 
@@ -291,13 +287,12 @@ async function runMasterIntegrationSuite() {
   masterClient.setRollingIC(0.050, 0); // Ingest live IC 0.050 into SAB Slot 101
   ledger.occupyCoreLong(0.10, 60000.0, 3.0, 1.5);
   let cadmeSlot = ledger.getCoreLong();
-  assert(cadmeSlot.icAtEntry === 0.050, `Core Long captured live entry IC from SAB Slot 101: expected 0.050, got ${cadmeSlot.icAtEntry}`);
-  assert(cadmeSlot.cadmeState === 0, `Initial cadmeState is 0 (INACTIVE): got ${cadmeSlot.cadmeState}`);
+  assert(cadmeSlot.icAtEntry === 0.050, `Core Long captured live entry IC from SAB Slot 101: expected 0.050, got ${String(cadmeSlot.icAtEntry)}`);
+  assert(cadmeSlot.cadmeState === 0, `Initial cadmeState is 0 (INACTIVE): got ${String(cadmeSlot.cadmeState)}`);
 
   const openTs = cadmeSlot.openTime;
-  const halfLifeSec = 120.0; // 120s OU half-life
 
-  // 1. Prime alpha test: tau = 30s (< 0.5 * halfLifeSec) -> Zero premature exit
+  // 1. Prime alpha test: tau = 30s (< 0.5 * halfLifeSec=120s) -> Zero premature exit
   masterClient.setRollingIC(0.050, 0);
   const primeAlphaTriggers = ledger.evaluateSotaDynamicExits(
     60000.0,
@@ -306,7 +301,7 @@ async function runMasterIntegrationSuite() {
     volMetricsNormal,
     openTs + 30 * 1000
   );
-  assert(primeAlphaTriggers.length === 0, `Prime alpha regime suppresses CADME exit: triggers count=${primeAlphaTriggers.length}`);
+  assert(primeAlphaTriggers.length === 0, `Prime alpha regime suppresses CADME exit: triggers count=${String(primeAlphaTriggers.length)}`);
 
   // 2. Pre-warning monitoring: tau = 150s, modeled decay < 0.60 * icAtEntry, but live IC is strong (0.045 >= 0.0375)
   // Gate 2 prevents premature exit; cadmeState advances to 1 (MONITORING)
@@ -319,7 +314,7 @@ async function runMasterIntegrationSuite() {
     openTs + 150 * 1000
   );
   cadmeSlot = ledger.getCoreLong();
-  assert(cadmeSlot.cadmeState === 1, `cadmeState advances to 1 (MONITORING) under modeled decay without live drop: got ${cadmeSlot.cadmeState}`);
+  assert(cadmeSlot.cadmeState === 1, `cadmeState advances to 1 (MONITORING) under modeled decay without live drop: got ${String(cadmeSlot.cadmeState)}`);
 
   // 3. Dual-confirmation triggered: modeled decay < 0.60 * icAtEntry AND live IC < 0.75 * icAtEntry (0.020 < 0.0375)
   masterClient.setRollingIC(0.020, 0); // live IC collapse confirmed via SAB Slot 101
@@ -330,12 +325,13 @@ async function runMasterIntegrationSuite() {
     volMetricsNormal,
     openTs + 160 * 1000
   );
-  assert(cadmeExitTriggers.length === 1, `CADME dual-confirmation fires exit trigger: count=${cadmeExitTriggers.length}`);
-  assert(cadmeExitTriggers[0]?.reason === "CADME_ALPHA_DECAY_EXIT_LONG", `Exact CADME reason matched: got ${cadmeExitTriggers[0]?.reason}`);
-  assert(cadmeExitTriggers[0]?.executionStyle === "PASSIVE_MAKER", `CADME executes as PASSIVE_MAKER: got ${cadmeExitTriggers[0]?.executionStyle}`);
+  const firstCadmeTrigger = cadmeExitTriggers.at(0);
+  assert(cadmeExitTriggers.length === 1, `CADME dual-confirmation fires exit trigger: count=${String(cadmeExitTriggers.length)}`);
+  assert(firstCadmeTrigger?.reason === "CADME_ALPHA_DECAY_EXIT_LONG", `Exact CADME reason matched: got ${String(firstCadmeTrigger?.reason)}`);
+  assert(firstCadmeTrigger?.executionStyle === "PASSIVE_MAKER", `CADME executes as PASSIVE_MAKER: got ${String(firstCadmeTrigger?.executionStyle)}`);
   cadmeSlot = ledger.getCoreLong();
-  assert(cadmeSlot.cadmeState === 2, `cadmeState strictly updated to 2 (EXIT_TRIGGERED): got ${cadmeSlot.cadmeState}`);
-  assert(masterClient.getVegamCadmeState(0) === 2.0, `SAB Slot 158 atomically synchronized to 2.0: got ${masterClient.getVegamCadmeState(0)}`);
+  assert(cadmeSlot.cadmeState === 2, `cadmeState strictly updated to 2 (EXIT_TRIGGERED): got ${String(cadmeSlot.cadmeState)}`);
+  assert(masterClient.getVegamCadmeState(0) === 2.0, `SAB Slot 158 atomically synchronized to 2.0: got ${String(masterClient.getVegamCadmeState(0))}`);
 
   ledger.releaseCoreLong();
 
@@ -349,9 +345,10 @@ async function runMasterIntegrationSuite() {
     volMetricsNormal,
     terminalSlot.openTime + 1850 * 1000 // 1850 seconds elapsed (exceeds 1800s max horizon)
   );
-  assert(terminalTriggers.length === 1, `Terminal lifespan produces exactly 1 trigger: count=${terminalTriggers.length}`);
-  assert(terminalTriggers[0]?.reason === "LONG_HOLD_PROFIT_HARVEST", `Emits LONG_HOLD_PROFIT_HARVEST: got ${terminalTriggers[0]?.reason}`);
-  assert(terminalTriggers[0]?.executionStyle === "PASSIVE_MAKER", `Terminal liquidation executes as PASSIVE_MAKER: got ${terminalTriggers[0]?.executionStyle}`);
+  const firstTerminalTrigger = terminalTriggers.at(0);
+  assert(terminalTriggers.length === 1, `Terminal lifespan produces exactly 1 trigger: count=${String(terminalTriggers.length)}`);
+  assert(firstTerminalTrigger?.reason === "LONG_HOLD_PROFIT_HARVEST", `Emits LONG_HOLD_PROFIT_HARVEST: got ${String(firstTerminalTrigger?.reason)}`);
+  assert(firstTerminalTrigger?.executionStyle === "PASSIVE_MAKER", `Terminal liquidation executes as PASSIVE_MAKER: got ${String(firstTerminalTrigger?.executionStyle)}`);
 
   ledger.releaseCoreLong();
 
@@ -401,11 +398,11 @@ async function runMasterIntegrationSuite() {
   // SUMMARY & VERDICT
   // =========================================================================================
   console.log("\n================================================================================");
-  console.log(`   VEGAM PHASE 9 MASTER INTEGRATION TEST MATRIX: ${totalPassed} PASSED / ${totalFailed} FAILED`);
+  console.log(`   VEGAM PHASE 9 MASTER INTEGRATION TEST MATRIX: ${String(totalPassed)} PASSED / ${String(totalFailed)} FAILED`);
   console.log("================================================================================");
 
   if (totalFailed > 0) {
-    console.error(`\x1b[31m❌ VEGAM PHASE 9 MASTER INTEGRATION FAILED WITH ${totalFailed} FAILURES!\x1b[0m`);
+    console.error(`\x1b[31m❌ VEGAM PHASE 9 MASTER INTEGRATION FAILED WITH ${String(totalFailed)} FAILURES!\x1b[0m`);
     process.exit(1);
   } else {
     console.log("\x1b[32m✅ ALL VEGAM PHASE 9 MASTER INTEGRATION TESTS PASSED (100% SUCCESS)!\x1b[0m");
@@ -413,7 +410,9 @@ async function runMasterIntegrationSuite() {
   }
 }
 
-runMasterIntegrationSuite().catch((err) => {
+try {
+  runMasterIntegrationSuite();
+} catch (err: unknown) {
   console.error("FATAL ERROR IN MASTER INTEGRATION SUITE:", err);
   process.exit(1);
-});
+}

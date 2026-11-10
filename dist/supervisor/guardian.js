@@ -42,10 +42,50 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ProcessGuardian = void 0;
+exports.isWorkerMessage = isWorkerMessage;
 const node_child_process_1 = require("node:child_process");
 const path = __importStar(require("node:path"));
 const terminalSanitizer_1 = require("./terminalSanitizer");
 const workspaceHygiene_1 = require("./workspaceHygiene");
+function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isFiniteNumber(value) {
+    return typeof value === "number" && Number.isFinite(value);
+}
+function isWorkerMessage(msg) {
+    if (!isRecord(msg) || typeof msg["type"] !== "string") {
+        return false;
+    }
+    switch (msg["type"]) {
+        case "HANDSHAKE_INIT":
+            return (isFiniteNumber(msg["workerPid"]) &&
+                typeof msg["version"] === "string" &&
+                isFiniteNumber(msg["heartbeatIntervalMs"]) &&
+                isFiniteNumber(msg["timestamp"]));
+        case "HEARTBEAT_PING":
+            return (isFiniteNumber(msg["seq"]) &&
+                isFiniteNumber(msg["timestamp"]) &&
+                (msg["eventLoopLagMs"] === undefined || isFiniteNumber(msg["eventLoopLagMs"])));
+        case "INTENTIONAL_RESURRECT":
+            return (typeof msg["reason"] === "string" &&
+                isFiniteNumber(msg["consecutiveFailures"]) &&
+                (msg["lastReason"] === undefined || typeof msg["lastReason"] === "string") &&
+                isFiniteNumber(msg["cooldownMs"]) &&
+                isFiniteNumber(msg["timestamp"]));
+        case "USER_SHUTDOWN":
+            return (isFiniteNumber(msg["exitCode"]) &&
+                (msg["reason"] === undefined || typeof msg["reason"] === "string") &&
+                isFiniteNumber(msg["timestamp"]));
+        case "WORKER_TELEMETRY":
+            return (isFiniteNumber(msg["memoryUsageMb"]) &&
+                isFiniteNumber(msg["activeAssetCount"]) &&
+                isFiniteNumber(msg["totalTrades"]) &&
+                isFiniteNumber(msg["timestamp"]));
+        default:
+            return false;
+    }
+}
 class ProcessGuardian {
     config;
     hygiene;
@@ -134,8 +174,10 @@ class ProcessGuardian {
      */
     setupWorkerIpcListeners(worker) {
         worker.on("message", (msg) => {
-            if (!msg || typeof msg !== "object")
+            if (!isWorkerMessage(msg)) {
+                process.stderr.write(`\x1b[33m[BATBOT_GUARDIAN_WARN]\x1b[0m Ignoring malformed worker IPC message payload.\n`);
                 return;
+            }
             const payload = msg;
             switch (payload.type) {
                 case "HANDSHAKE_INIT": {

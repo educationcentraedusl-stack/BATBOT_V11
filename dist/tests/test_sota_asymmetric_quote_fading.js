@@ -15,9 +15,9 @@ function createMockExecutionClient() {
     const capturedOrders = [];
     const client = new binance_1.BinanceExecutionClient();
     client.isConfigured = () => true;
-    client.placeOrder = async (params) => {
+    client.placeOrder = (params) => {
         capturedOrders.push({ params });
-        return {
+        return Promise.resolve({
             orderId: 100001 + capturedOrders.length,
             symbol: params.symbol,
             status: "NEW",
@@ -28,16 +28,16 @@ function createMockExecutionClient() {
             executedQty: "0",
             cumQuote: "0",
             timeInForce: params.timeInForce || "GTX",
-            type: params.type || "LIMIT",
+            type: params.type,
             side: params.side,
             reduceOnly: params.reduceOnly || false,
             positionSide: params.positionSide || "BOTH",
             stopPrice: params.stopPrice ? String(params.stopPrice) : "0",
             workingType: "CONTRACT_PRICE",
             updateTime: Date.now(),
-        };
+        });
     };
-    client.cancelOrder = async () => ({
+    client.cancelOrder = () => Promise.resolve({
         orderId: 0,
         symbol: "BTCUSDT",
         status: "CANCELED",
@@ -56,8 +56,8 @@ function createMockExecutionClient() {
         workingType: "CONTRACT_PRICE",
         updateTime: Date.now(),
     });
-    client.cancelBatchOrders = async () => [];
-    client.placePositionStopLoss = async () => ({
+    client.cancelBatchOrders = () => Promise.resolve([]);
+    client.placePositionStopLoss = () => Promise.resolve({
         orderId: 999999,
         symbol: "BTCUSDT",
         status: "NEW",
@@ -76,9 +76,9 @@ function createMockExecutionClient() {
         workingType: "CONTRACT_PRICE",
         updateTime: Date.now(),
     });
-    client.getDualPositionRisk = async () => [];
-    client.getOpenOrders = async () => [];
-    client.getUserTrades = async () => [];
+    client.getDualPositionRisk = () => Promise.resolve([]);
+    client.getOpenOrders = () => Promise.resolve([]);
+    client.getUserTrades = () => Promise.resolve([]);
     client.subscribeIncomeUpdates = () => () => { };
     client.subscribeUserTradeUpdates = () => () => { };
     return { client, capturedOrders };
@@ -169,10 +169,10 @@ async function runQuoteFadingTest() {
             throw new Error("Case 1 Failed: Expected BUY order to be dispatched!");
         }
         const placedOrder = capturedOrders[0].params;
-        console.log(`  - Quoted Side: ${placedOrder.side}, Type: ${placedOrder.type}, TIF: ${placedOrder.timeInForce}`);
-        console.log(`  - Quoted Price: $${placedOrder.price} (Expected: $77000.0 Top of Book)`);
+        console.log(`  - Quoted Side: ${placedOrder.side}, Type: ${placedOrder.type}, TIF: ${String(placedOrder.timeInForce)}`);
+        console.log(`  - Quoted Price: $${String(placedOrder.price)} (Expected: $77000.0 Top of Book)`);
         if (placedOrder.price !== 77000.0) {
-            throw new Error(`Case 1 Failed: Expected quoted price 77000.0, got ${placedOrder.price}`);
+            throw new Error(`Case 1 Failed: Expected quoted price 77000.0, got ${String(placedOrder.price)}`);
         }
         console.log("  ✓ Case 1 Passed: Neutral order flow quotes at Top of Book with zero fading.\n");
     }
@@ -234,10 +234,10 @@ async function runQuoteFadingTest() {
             throw new Error("Case 2 Failed: Expected BUY order to be dispatched!");
         }
         const placedOrder = capturedOrders[0].params;
-        console.log(`  - Quoted Side: ${placedOrder.side}, Type: ${placedOrder.type}, TIF: ${placedOrder.timeInForce}`);
-        console.log(`  - Quoted Price: $${placedOrder.price} (Expected: $76999.9 Faded by 1 tick = $0.10)`);
+        console.log(`  - Quoted Side: ${placedOrder.side}, Type: ${placedOrder.type}, TIF: ${String(placedOrder.timeInForce)}`);
+        console.log(`  - Quoted Price: $${String(placedOrder.price)} (Expected: $76999.9 Faded by 1 tick = $0.10)`);
         if (placedOrder.price !== 76999.9) {
-            throw new Error(`Case 2 Failed: Expected faded bid quote 76999.9, got ${placedOrder.price}`);
+            throw new Error(`Case 2 Failed: Expected faded bid quote 76999.9, got ${String(placedOrder.price)}`);
         }
         console.log("  ✓ Case 2 Passed: Adverse toxic sell flow successfully faded BUY quote 1 tick deeper into the book!\n");
     }
@@ -299,10 +299,10 @@ async function runQuoteFadingTest() {
             throw new Error("Case 3 Failed: Expected SELL order to be dispatched!");
         }
         const placedOrder = capturedOrders[0].params;
-        console.log(`  - Quoted Side: ${placedOrder.side}, Type: ${placedOrder.type}, TIF: ${placedOrder.timeInForce}`);
-        console.log(`  - Quoted Price: $${placedOrder.price} (Expected: $77001.1 Faded by 1 tick = $0.10)`);
+        console.log(`  - Quoted Side: ${placedOrder.side}, Type: ${placedOrder.type}, TIF: ${String(placedOrder.timeInForce)}`);
+        console.log(`  - Quoted Price: $${String(placedOrder.price)} (Expected: $77001.1 Faded by 1 tick = $0.10)`);
         if (placedOrder.price !== 77001.1) {
-            throw new Error(`Case 3 Failed: Expected faded ask quote 77001.1, got ${placedOrder.price}`);
+            throw new Error(`Case 3 Failed: Expected faded ask quote 77001.1, got ${String(placedOrder.price)}`);
         }
         console.log("  ✓ Case 3 Passed: Adverse toxic buy flow successfully faded SELL quote 1 tick higher into the book!\n");
     }

@@ -21,7 +21,7 @@ async function runPhase5IntegrationTest() {
 
   // 2. Initialize Multi-Asset L2 LOB Manager
   const lobCreated = createMultiAssetLobManagerNapi();
-  console.log(`[Phase 5 QA] Multi-Asset L2 LOB Manager initialized: ${lobCreated}`);
+  console.log(`[Phase 5 QA] Multi-Asset L2 LOB Manager initialized: ${String(lobCreated)}`);
   if (!lobCreated) {
     throw new Error('Failed to initialize Multi-Asset LOB Manager!');
   }
@@ -29,7 +29,7 @@ async function runPhase5IntegrationTest() {
   // 3. Initialize Multi-Asset OMS Engine
   const symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'];
   const omsStarted = startMultiAssetOmsNapi(100000.0, JSON.stringify(symbols));
-  console.log(`[Phase 5 QA] Multi-Asset OMS Engine initialized: ${omsStarted}`);
+  console.log(`[Phase 5 QA] Multi-Asset OMS Engine initialized: ${String(omsStarted)}`);
   if (!omsStarted) {
     throw new Error('Failed to initialize Multi-Asset OMS Engine!');
   }
@@ -37,7 +37,7 @@ async function runPhase5IntegrationTest() {
   // 4. Start Strategy Orchestrator & Ingestion Stream Pipeline
   console.log('[Phase 5 QA] Launching Strategy Orchestrator & Multi-Stream Manager...');
   const orchStarted = startPhase5OrchestratorNapi(symbols);
-  console.log(`[Phase 5 QA] Strategy Orchestrator Status: ${orchStarted}`);
+  console.log(`[Phase 5 QA] Strategy Orchestrator Status: ${String(orchStarted)}`);
   if (!orchStarted) {
     throw new Error('Failed to start Strategy Orchestrator!');
   }
@@ -47,9 +47,13 @@ async function runPhase5IntegrationTest() {
   for (let i = 1; i <= 3; i++) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     const metricsJson = getPhase5OrchestratorMetricsNapi();
-    console.log(`[Phase 5 QA] Second ${i} Metrics: ${metricsJson}`);
-    const metrics = JSON.parse(metricsJson);
-    if (metrics.status !== 'ACTIVE') {
+    console.log(`[Phase 5 QA] Second ${String(i)} Metrics: ${metricsJson}`);
+    const metrics: unknown = JSON.parse(metricsJson);
+    if (
+      typeof metrics !== 'object' ||
+      metrics === null ||
+      (metrics as { status?: unknown }).status !== 'ACTIVE'
+    ) {
       throw new Error('Orchestrator metrics status is not ACTIVE!');
     }
   }
@@ -57,14 +61,14 @@ async function runPhase5IntegrationTest() {
   // 6. Clean Stop
   console.log('[Phase 5 QA] Stopping Strategy Orchestrator...');
   const stopped = stopPhase5OrchestratorNapi();
-  console.log(`[Phase 5 QA] Strategy Orchestrator stopped cleanly: ${stopped}`);
+  console.log(`[Phase 5 QA] Strategy Orchestrator stopped cleanly: ${String(stopped)}`);
 
   console.log('================================================================');
   console.log('✅ PHASE 5 MARKET DATA INGESTION & ALPHA ENGINE QA VERIFIED SUCCESS');
   console.log('================================================================');
 }
 
-runPhase5IntegrationTest().catch((err) => {
+runPhase5IntegrationTest().catch((err: unknown) => {
   console.error('❌ Phase 5 Integration Test Failed:', err);
   process.exit(1);
 });

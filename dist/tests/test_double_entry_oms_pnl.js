@@ -30,9 +30,9 @@ async function runTests() {
         apiSecret: "mock_api_secret",
     });
     // Default mock returns empty array for tests 1-4 to test fallback mark price settlement
-    mockExecutionClient.getUserTrades = async () => [];
-    mockExecutionClient.getDualPositionRisk = async () => [];
-    mockExecutionClient.getPositionRisk = async () => [];
+    mockExecutionClient.getUserTrades = () => Promise.resolve([]);
+    mockExecutionClient.getDualPositionRisk = () => Promise.resolve([]);
+    mockExecutionClient.getPositionRisk = () => Promise.resolve([]);
     const config = {
         symbol: "XRPUSDT",
         orderQuantity: 1000,
@@ -86,7 +86,7 @@ async function runTests() {
     // Occupy 1,000 XRP @ $2.5000 entry price ($2,500 notional)
     ledger.occupyCoreLong(1000, 2.5000, 0.5, 0.5);
     engine.syncSabPositionState(2.5031);
-    assert(ledger.getCoreLong().isOccupied === true, "Core Long is occupied");
+    assert(ledger.getCoreLong().isOccupied, "Core Long is occupied");
     assert(marketDataClient.getOmsRealizedPnl(5) === 0, "Initial Realized PnL in SAB Slot 107 is exactly $0.00");
     assert(marketDataClient.getOmsTotalTrades(5) === 0n, "Initial Total Trades in SAB Slot 111 is 0");
     assert(marketDataClient.getOmsWinningTrades(5) === 0n, "Initial Winning Trades in SAB Slot 135 is 0");
@@ -113,10 +113,10 @@ async function runTests() {
     const winsAfterWsExit = marketDataClient.getOmsWinningTrades(5);
     const lossesAfterWsExit = marketDataClient.getOmsLosingTrades(5);
     console.log(`  - Realized PnL in SAB (Slot 107): $${pnlAfterWsExit.toFixed(4)}`);
-    console.log(`  - Total Trades in SAB (Slot 111): ${tradesAfterWsExit}`);
-    console.log(`  - Winning Trades in SAB (Slot 135): ${winsAfterWsExit}`);
-    console.log(`  - Losing Trades in SAB (Slot 136): ${lossesAfterWsExit}`);
-    assert(ledger.getCoreLong().isOccupied === false, "Core Long slot is cleanly released");
+    console.log(`  - Total Trades in SAB (Slot 111): ${String(tradesAfterWsExit)}`);
+    console.log(`  - Winning Trades in SAB (Slot 135): ${String(winsAfterWsExit)}`);
+    console.log(`  - Losing Trades in SAB (Slot 136): ${String(lossesAfterWsExit)}`);
+    assert(!ledger.getCoreLong().isOccupied, "Core Long slot is cleanly released");
     assert(pnlAfterWsExit > 0, `Realized PnL is positive ($${pnlAfterWsExit.toFixed(4)}) and NOT $0.00 (Ghost PnL Eradicated)`);
     assert(tradesAfterWsExit === 1n, "Total Trades in SAB properly incremented to 1");
     assert(winsAfterWsExit === 1n, "Winning Trades in SAB properly incremented to 1");
@@ -129,16 +129,16 @@ async function runTests() {
     marketDataClient.writeAtomicFloat64Asset(5, 4, 2.5010);
     marketDataClient.writeAtomicFloat64Asset(5, 6, 2.5012); // Mid = $2.5011 ($3.90 gross profit)
     engine.syncSabPositionState(2.5011);
-    assert(ledger.getShortSlots()[0].isOccupied === true, "Short Slot #0 is occupied");
+    assert(ledger.getShortSlots()[0].isOccupied, "Short Slot #0 is occupied");
     // Simulate 5000ms periodic reconciliation finding activePositions is empty (position closed on Binance)
     await engine.syncExchangeStateWithData([], []);
     const pnlAfterSyncExit = marketDataClient.getOmsRealizedPnl(5);
     const tradesAfterSyncExit = marketDataClient.getOmsTotalTrades(5);
     const winsAfterSyncExit = marketDataClient.getOmsWinningTrades(5);
     console.log(`  - Cumulative Realized PnL in SAB: $${pnlAfterSyncExit.toFixed(4)}`);
-    console.log(`  - Cumulative Total Trades: ${tradesAfterSyncExit}`);
-    console.log(`  - Cumulative Winning Trades: ${winsAfterSyncExit}`);
-    assert(ledger.getShortSlots()[0].isOccupied === false, "Short Slot #0 cleanly released");
+    console.log(`  - Cumulative Total Trades: ${String(tradesAfterSyncExit)}`);
+    console.log(`  - Cumulative Winning Trades: ${String(winsAfterSyncExit)}`);
+    assert(!ledger.getShortSlots()[0].isOccupied, "Short Slot #0 cleanly released");
     assert(pnlAfterSyncExit > pnlAfterWsExit, `Cumulative Realized PnL increased from $${pnlAfterWsExit.toFixed(4)} to $${pnlAfterSyncExit.toFixed(4)}`);
     assert(tradesAfterSyncExit === 2n, "Total Trades in SAB properly incremented to 2");
     assert(winsAfterSyncExit === 2n, "Winning Trades in SAB properly incremented to 2");
@@ -176,7 +176,7 @@ async function runTests() {
             maker: true,
         },
     ];
-    mockExecutionClient.getUserTrades = async () => mockTrades;
+    mockExecutionClient.getUserTrades = () => Promise.resolve(mockTrades);
     // Occupy new Long position: 1,000 XRP @ $2.5000
     ledger.occupyCoreLong(1000, 2.5000, 0.5, 0.5);
     engine.syncSabPositionState(2.5031);
@@ -188,14 +188,14 @@ async function runTests() {
     console.log(`  - PnL Before Exact Settlement: $${pnlBeforeExact.toFixed(4)}`);
     console.log(`  - PnL After Exact Settlement:  $${pnlAfterExact.toFixed(4)}`);
     console.log(`  - Exact PnL Delta:            +$${(pnlAfterExact - pnlBeforeExact).toFixed(4)}`);
-    assert(ledger.getCoreLong().isOccupied === false, "Core Long cleanly settled via getUserTrades");
+    assert(!ledger.getCoreLong().isOccupied, "Core Long cleanly settled via getUserTrades");
     assert(Math.abs((pnlAfterExact - pnlBeforeExact) - 10.0) < 1e-4, "Exact Realized PnL matched Binance REST trade (+$10.0000) with 100% micro-cent fidelity");
     assert(tradesAfterExact === 3n, "Total Trades in SAB properly incremented to 3");
     // -----------------------------------------------------------------------------------------
     // FINAL SUMMARY
     // -----------------------------------------------------------------------------------------
     console.log("\n================================================================================");
-    console.log(`TEST SUITE COMPLETE: ${totalPassed} PASSED, ${totalFailed} FAILED`);
+    console.log(`TEST SUITE COMPLETE: ${String(totalPassed)} PASSED, ${String(totalFailed)} FAILED`);
     console.log("================================================================================");
     if (totalFailed > 0) {
         process.exit(1);

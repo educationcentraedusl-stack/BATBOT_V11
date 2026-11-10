@@ -3,18 +3,12 @@ import { MarketDataClient } from "../marketDataClient";
 import { MultiAssetRiskGuard } from "../strategy/risk";
 import { StrategyEngine } from "../strategy/engine";
 import { MultiAssetStrategyEngine } from "../strategy/multiEngine";
-import {
-  BinanceExecutionClient,
-  BinanceOrderResponse,
-} from "../execution/binance";
+import { BinanceExecutionClient } from "../execution/binance";
 import { HedgePositionLedger } from "../strategy/positionLedger";
 import {
   calculateInverseVolatilityLeverage,
-  getBaselineLeverageForSymbol,
   MIN_PERMITTED_LEVERAGE,
   MAX_PERMITTED_LEVERAGE,
-  PERMANENTLY_BANNED_LEVERAGE,
-  VOLATILITY_TARGET_DAILY,
 } from "../config/tradingSymbols";
 
 /**
@@ -27,13 +21,13 @@ class Phase4TestExecutionClient extends BinanceExecutionClient {
     super({ apiKey: "MOCK_KEY", apiSecret: "MOCK_SECRET", useTestnet: true });
   }
 
-  public override async setLeverage(
+  public override setLeverage(
     symbol: string,
     leverage: number
   ): Promise<{ symbol: string; leverage: number; maxNotionalValue: string } | null> {
     const roundedLev = Math.round(leverage);
     this.leverageCalls.push({ symbol, leverage: roundedLev });
-    return { symbol, leverage: roundedLev, maxNotionalValue: "1000000" };
+    return Promise.resolve({ symbol, leverage: roundedLev, maxNotionalValue: "1000000" });
   }
 }
 
@@ -54,22 +48,22 @@ async function runPhase4VerificationSuite(): Promise<void> {
 
   // Test 1A: BTC/ETH low volatility regime (sigma <= 0.0025) -> 5x
   const btcLev = calculateInverseVolatilityLeverage(0.0025);
-  console.log(`[Stage 1A] BTC low-vol (sigma=0.0025): Leverage = ${btcLev}x (Expected: 5x)`);
+  console.log(`[Stage 1A] BTC low-vol (sigma=0.0025): Leverage = ${String(btcLev)}x (Expected: 5x)`);
   assert.strictEqual(btcLev, 5, "BTC low vol should evaluate to 5x");
 
   // Test 1B: SOL/BNB moderate volatility regime (sigma = 0.0031) -> 4x
   const solLev = calculateInverseVolatilityLeverage(0.0031);
-  console.log(`[Stage 1B] SOL moderate-vol (sigma=0.0031): Leverage = ${solLev}x (Expected: 4x)`);
+  console.log(`[Stage 1B] SOL moderate-vol (sigma=0.0031): Leverage = ${String(solLev)}x (Expected: 4x)`);
   assert.strictEqual(solLev, 4, "SOL moderate vol should evaluate to 4x");
 
   // Test 1C: Altcoin high volatility regime (sigma = 0.0042) -> 3x
   const adaLev = calculateInverseVolatilityLeverage(0.0042);
-  console.log(`[Stage 1C] ADA high-vol (sigma=0.0042): Leverage = ${adaLev}x (Expected: 3x)`);
+  console.log(`[Stage 1C] ADA high-vol (sigma=0.0042): Leverage = ${String(adaLev)}x (Expected: 3x)`);
   assert.strictEqual(adaLev, 3, "ADA high vol should evaluate to 3x");
 
   // Test 1D: Extreme volatility regime (sigma >= 0.00625) -> 2x
   const dogeLev = calculateInverseVolatilityLeverage(0.00625);
-  console.log(`[Stage 1D] DOGE extreme-vol (sigma=0.00625): Leverage = ${dogeLev}x (Expected: 2x)`);
+  console.log(`[Stage 1D] DOGE extreme-vol (sigma=0.00625): Leverage = ${String(dogeLev)}x (Expected: 2x)`);
   assert.strictEqual(dogeLev, 2, "DOGE extreme vol should evaluate to 2x");
 
   // Test 1E: Out-of-bounds boundary clamping:
@@ -93,7 +87,7 @@ async function runPhase4VerificationSuite(): Promise<void> {
     hedgeLedger
   );
 
-  console.log(`[Stage 1F] Initial engine leverage: ${engine.getLeverageMultiplier()}x`);
+  console.log(`[Stage 1F] Initial engine leverage: ${String(engine.getLeverageMultiplier())}x`);
   assert(
     engine.getLeverageMultiplier() >= MIN_PERMITTED_LEVERAGE &&
     engine.getLeverageMultiplier() <= MAX_PERMITTED_LEVERAGE,
@@ -102,10 +96,10 @@ async function runPhase4VerificationSuite(): Promise<void> {
 
   // Attempt to inject legacy 20x leverage into StrategyEngine
   engine.setLeverageMultiplier(20);
-  console.log(`[Stage 1F] Leverage after attempting setLeverageMultiplier(20): ${engine.getLeverageMultiplier()}x`);
+  console.log(`[Stage 1F] Leverage after attempting setLeverageMultiplier(20): ${String(engine.getLeverageMultiplier())}x`);
   assert(
     engine.getLeverageMultiplier() <= MAX_PERMITTED_LEVERAGE,
-    `20x leverage must be permanently banned! Current leverage: ${engine.getLeverageMultiplier()}x`
+    `20x leverage must be permanently banned! Current leverage: ${String(engine.getLeverageMultiplier())}x`
   );
   assert.strictEqual(engine.getLeverageMultiplier(), 5, "Banned 20x leverage should clamp to 5x");
 
@@ -123,9 +117,9 @@ async function runPhase4VerificationSuite(): Promise<void> {
     const targetNotional = targetMarginUsdt * lev;
     const actualMargin = targetNotional / lev;
     console.log(
-      `[Stage 2] L_i = ${lev}x -> TargetNotional = $${targetNotional.toFixed(2)} USDT -> Actual Margin = $${actualMargin.toFixed(2)} USDT`
+      `[Stage 2] L_i = ${String(lev)}x -> TargetNotional = $${targetNotional.toFixed(2)} USDT -> Actual Margin = $${actualMargin.toFixed(2)} USDT`
     );
-    assert.strictEqual(actualMargin, 20.0, `Actual margin must equal 20.0 USDT at ${lev}x leverage`);
+    assert.strictEqual(actualMargin, 20.0, `Actual margin must equal 20.0 USDT at ${String(lev)}x leverage`);
   }
 
   // Verify that StrategyEngine dynamic sizing aligns with TargetNotional = 20.0 * L_i
@@ -158,12 +152,12 @@ async function runPhase4VerificationSuite(): Promise<void> {
     maxPortfolioLeverage: 2.50,
   });
 
-  console.log(`[Stage 3] Account Balance: $10,000.00 USDT. Max Aggregate Leverage Cap: ${multiRiskGuard.getMaxPortfolioLeverage()}x`);
+  console.log(`[Stage 3] Account Balance: $10,000.00 USDT. Max Aggregate Leverage Cap: ${String(multiRiskGuard.getMaxPortfolioLeverage())}x`);
   assert.strictEqual(multiRiskGuard.getMaxPortfolioLeverage(), 2.50, "Default max portfolio leverage must be 2.50x");
 
   // Fill $20,000 notional (2.0x leverage) on BTCUSDT
   multiRiskGuard.recordExecutionSuccess(20_000.0, "BUY", "BTCUSDT", false);
-  console.log(`[Stage 3] After BTCUSDT fill: Gross Notional = $${multiRiskGuard.getGrossPortfolioNotional()} (Leverage: ${multiRiskGuard.getPortfolioLeverage().toFixed(2)}x)`);
+  console.log(`[Stage 3] After BTCUSDT fill: Gross Notional = $${String(multiRiskGuard.getGrossPortfolioNotional())} (Leverage: ${multiRiskGuard.getPortfolioLeverage().toFixed(2)}x)`);
   assert.strictEqual(multiRiskGuard.getPortfolioLeverage(), 2.0, "Portfolio leverage should be 2.0x");
 
   // Attempt order of $4,000 notional on ETHUSDT: pushes gross to $24,000 = 2.4x leverage (<= 2.5x cap) -> Should PASS
@@ -176,7 +170,7 @@ async function runPhase4VerificationSuite(): Promise<void> {
     },
     true
   );
-  console.log(`[Stage 3] Order pushing to 2.40x leverage: Passed = ${validOrder.passed}, Reason = ${validOrder.reasonCode}`);
+  console.log(`[Stage 3] Order pushing to 2.40x leverage: Passed = ${String(validOrder.passed)}, Reason = ${validOrder.reasonCode}`);
   assert.strictEqual(validOrder.passed, true, "Order within 2.50x aggregate cap must PASS");
 
   // Attempt order of $6,000 notional on ETHUSDT: pushes gross to $26,000 = 2.6x leverage (> 2.5x cap) -> Should REJECT
@@ -189,7 +183,7 @@ async function runPhase4VerificationSuite(): Promise<void> {
     },
     true
   );
-  console.log(`[Stage 3] Order pushing to 2.60x leverage: Passed = ${excessiveOrder.passed}, Reason = ${excessiveOrder.reasonCode}`);
+  console.log(`[Stage 3] Order pushing to 2.60x leverage: Passed = ${String(excessiveOrder.passed)}, Reason = ${excessiveOrder.reasonCode}`);
   assert.strictEqual(excessiveOrder.passed, false, "Order exceeding 2.50x aggregate cap must REJECT");
   assert.strictEqual(excessiveOrder.reasonCode, "EXCEEDS_MAX_POSITION", "Rejection reason must be EXCEEDS_MAX_POSITION");
   console.log(`[Stage 3] Rejection Message: "${excessiveOrder.message}"`);
@@ -216,9 +210,9 @@ async function runPhase4VerificationSuite(): Promise<void> {
     const haircut = multiRiskGuard.getConcurrentHaircut(count);
     const expected = expectedHaircuts[i];
     console.log(
-      `[Stage 4] N_active = ${count}: Haircut Multiplier = ${haircut.toFixed(4)} (Expected: ${expected.toFixed(4)})`
+      `[Stage 4] N_active = ${String(count)}: Haircut Multiplier = ${haircut.toFixed(4)} (Expected: ${expected.toFixed(4)})`
     );
-    assert(Math.abs(haircut - expected) < 1e-6, `Haircut for N=${count} must match 1/sqrt(${count})`);
+    assert(Math.abs(haircut - expected) < 1e-6, `Haircut for N=${String(count)} must match 1/sqrt(${String(count)})`);
   }
 
   console.log("✅ STAGE 4 PASSED: Concurrent asset exposure haircut strictly verified.\n");
@@ -247,20 +241,20 @@ async function runPhase4VerificationSuite(): Promise<void> {
   assert(solEngine && solEngine.getLeverageMultiplier() === 4, "SOLUSDT baseline leverage must be 4x");
   assert(dogeEngine && dogeEngine.getLeverageMultiplier() === 2, "DOGEUSDT baseline leverage must be 2x");
 
-  console.log(`[Stage 5] Baseline leverages: BTC=${btcEngine?.getLeverageMultiplier()}x, ETH=${ethEngine?.getLeverageMultiplier()}x, SOL=${solEngine?.getLeverageMultiplier()}x, DOGE=${dogeEngine?.getLeverageMultiplier()}x`);
+  console.log(`[Stage 5] Baseline leverages: BTC=${String(btcEngine.getLeverageMultiplier())}x, ETH=${String(ethEngine.getLeverageMultiplier())}x, SOL=${String(solEngine.getLeverageMultiplier())}x, DOGE=${String(dogeEngine.getLeverageMultiplier())}x`);
 
   // Execute exchange leverage synchronization
   mockExec.leverageCalls.length = 0;
   await multiEngine.syncLeverageWithExchange();
 
-  console.log(`[Stage 5] Dispatched Binance setLeverage calls: ${mockExec.leverageCalls.length}`);
+  console.log(`[Stage 5] Dispatched Binance setLeverage calls: ${String(mockExec.leverageCalls.length)}`);
   assert.strictEqual(mockExec.leverageCalls.length, symbols.length, "Must sync leverage for all symbols");
 
   for (const call of mockExec.leverageCalls) {
-    console.log(`  -> Synced ${call.symbol} with ${call.leverage}x leverage on Binance.`);
+    console.log(`  -> Synced ${call.symbol} with ${String(call.leverage)}x leverage on Binance.`);
     assert(
       call.leverage >= MIN_PERMITTED_LEVERAGE && call.leverage <= MAX_PERMITTED_LEVERAGE,
-      `Leverage for ${call.symbol} (${call.leverage}x) must be within [2, 5]`
+      `Leverage for ${call.symbol} (${String(call.leverage)}x) must be within [2, 5]`
     );
   }
 
@@ -270,7 +264,7 @@ async function runPhase4VerificationSuite(): Promise<void> {
 
   console.log(`[Stage 5] Dispatched Binance calls with targetLeverage=20:`);
   for (const call of mockExec.leverageCalls) {
-    console.log(`  -> Requested 20x -> Clamped to ${call.leverage}x on Binance.`);
+    console.log(`  -> Requested 20x -> Clamped to ${String(call.leverage)}x on Binance.`);
     assert.strictEqual(call.leverage, 5, "Explicit 20x leverage request must be clamped to max 5x");
   }
 
@@ -285,7 +279,7 @@ runPhase4VerificationSuite()
   .then(() => {
     process.exit(0);
   })
-  .catch((err) => {
+  .catch((err: unknown) => {
     console.error("❌ Phase 4 Verification Suite Failed:", err);
     process.exit(1);
   });

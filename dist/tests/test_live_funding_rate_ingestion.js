@@ -40,7 +40,7 @@ async function runVerificationSuite() {
     // STAGE 1: Binance REST /fapi/v1/premiumIndex Ingestion
     console.log("\n--- STAGE 1: Live Binance REST /fapi/v1/premiumIndex Telemetry ---");
     const liveRate = await executionClient.fetchFundingRate("BTCUSDT");
-    console.log(`  [REST] Binance BTCUSDT Live Funding Rate fetched: ${liveRate} (${(liveRate * 10000).toFixed(4)} bps)`);
+    console.log(`  [REST] Binance BTCUSDT Live Funding Rate fetched: ${String(liveRate)} (${(liveRate * 10000).toFixed(4)} bps)`);
     assert(Number.isFinite(liveRate), "Live funding rate from Binance is a finite float");
     // Atomically write live rate to SAB Slot 168
     client.setFundingRate(liveRate, 0);
@@ -50,27 +50,27 @@ async function runVerificationSuite() {
     console.log("\n--- STAGE 2: Multi-Asset Batch Funding Rate Synchronization ---");
     await executionClient.syncAllFundingRates(client);
     const asset0Rate = client.getFundingRate(0);
-    console.log(`  [BATCH] Asset 0 (BTCUSDT) SAB Slot 168 after syncAllFundingRates: ${asset0Rate}`);
+    console.log(`  [BATCH] Asset 0 (BTCUSDT) SAB Slot 168 after syncAllFundingRates: ${String(asset0Rate)}`);
     assert(Number.isFinite(asset0Rate), "Batch sync successfully populated Asset 0 SAB Slot 168");
     // STAGE 3: StrategyEngine Real-Time Telemetry & Filtering
     console.log("\n--- STAGE 3: StrategyEngine Integration & Tick Filter Activation ---");
     const engine = new engine_1.StrategyEngine(client, riskGuard, executionClient, { symbol: "BTCUSDT", assetIndex: 0 });
     const syncedRate = await engine.syncFundingRate();
-    console.log(`  [ENGINE] engine.syncFundingRate() returned: ${syncedRate}`);
+    console.log(`  [ENGINE] engine.syncFundingRate() returned: ${String(syncedRate)}`);
     assert(Math.abs(engine.getFundingRate() - syncedRate) < 1e-12, "engine.getFundingRate() reflects freshly synced rate");
     // Verify mathematical filtering logic on live rate
     const maxFunding = engine.getMaxPermittedFundingRate();
     if (syncedRate > maxFunding) {
-        assert(engine.isFundingRatePermitted("LONG") === false, "Live High Positive Rate: LONG entry strictly BLOCKED");
-        assert(engine.isFundingRatePermitted("SHORT") === true, "Live High Positive Rate: SHORT entry strictly ALLOWED");
+        assert(!engine.isFundingRatePermitted("LONG"), "Live High Positive Rate: LONG entry strictly BLOCKED");
+        assert(engine.isFundingRatePermitted("SHORT"), "Live High Positive Rate: SHORT entry strictly ALLOWED");
     }
     else if (syncedRate < -maxFunding) {
-        assert(engine.isFundingRatePermitted("LONG") === true, "Live High Negative Rate: LONG entry strictly ALLOWED");
-        assert(engine.isFundingRatePermitted("SHORT") === false, "Live High Negative Rate: SHORT entry strictly BLOCKED");
+        assert(engine.isFundingRatePermitted("LONG"), "Live High Negative Rate: LONG entry strictly ALLOWED");
+        assert(!engine.isFundingRatePermitted("SHORT"), "Live High Negative Rate: SHORT entry strictly BLOCKED");
     }
     else {
-        assert(engine.isFundingRatePermitted("LONG") === true, "Within-Tolerance Rate: LONG entry allowed");
-        assert(engine.isFundingRatePermitted("SHORT") === true, "Within-Tolerance Rate: SHORT entry allowed");
+        assert(engine.isFundingRatePermitted("LONG"), "Within-Tolerance Rate: LONG entry allowed");
+        assert(engine.isFundingRatePermitted("SHORT"), "Within-Tolerance Rate: SHORT entry allowed");
     }
     // STAGE 4: Real-Time Stream Hook & Atomic Update Verification
     console.log("\n--- STAGE 4: Real-Time Stream Telemetry Hook Verification ---");
@@ -105,7 +105,7 @@ async function runVerificationSuite() {
     assert(avgUs < 0.50, `Sub-microsecond latency verified (${avgUs.toFixed(4)} µs < 0.50 µs)`);
     assert(bytesPerCall < 50.0, `Zero-GC invariant verified (${bytesPerCall.toFixed(2)} bytes/call < 50 bytes)`);
     console.log("\n================================================================================");
-    console.log(`  CRITICAL FAILURE 2 VERIFICATION SUMMARY: ${totalPassed} PASSED / ${totalFailed} FAILED`);
+    console.log(`  CRITICAL FAILURE 2 VERIFICATION SUMMARY: ${String(totalPassed)} PASSED / ${String(totalFailed)} FAILED`);
     console.log("================================================================================");
     if (totalFailed > 0) {
         process.exit(1);

@@ -4,7 +4,7 @@ const engine_1 = require("../strategy/engine");
 const marketDataClient_1 = require("../marketDataClient");
 const binance_1 = require("../execution/binance");
 const risk_1 = require("../strategy/risk");
-async function runLevel1SpreadBlowoutEntryGuardTest() {
+function runLevel1SpreadBlowoutEntryGuardTest() {
     console.log("================================================================================");
     console.log("  TEST SUITE: SOTA LEVEL-1 SPREAD BLOWOUT ENTRY GUARD VERIFICATION             ");
     console.log("================================================================================");
@@ -41,7 +41,7 @@ async function runLevel1SpreadBlowoutEntryGuardTest() {
     client.writeAtomicFloat64Asset(0, 110, 5.0); // CVD
     const blowoutResult = engineBtc.evaluateTick();
     console.log(`  -> Blowout Spread Signal Type: ${blowoutResult.signalType}`);
-    console.log(`  -> Risk Check Reason: ${blowoutResult.riskResult?.reasonCode}`);
+    console.log(`  -> Risk Check Reason: ${String(blowoutResult.riskResult?.reasonCode)}`);
     if (blowoutResult.signalType === "NONE") {
         console.log("  ✅ STAGE 1 PASSED: High-Confidence AI (+99%) entry strictly blocked under blown-out spread.");
     }
@@ -55,7 +55,7 @@ async function runLevel1SpreadBlowoutEntryGuardTest() {
     client.writeAtomicFloat64Asset(0, 6, 79050.30); // Best Ask ($0.30 spread <= $1.50 cap)
     const tightResult = engineBtc.evaluateTick();
     console.log(`  -> Tight Spread Signal Type: ${tightResult.signalType}`);
-    console.log(`  -> Position Side: ${tightResult.positionSide}`);
+    console.log(`  -> Position Side: ${String(tightResult.positionSide)}`);
     if (tightResult.signalType === "BUY") {
         console.log("  ✅ STAGE 2 PASSED: Tight spread ($0.30) cleanly executed BUY signal.");
     }
@@ -66,7 +66,10 @@ async function runLevel1SpreadBlowoutEntryGuardTest() {
     console.log("  ALL STAGES OF LEVEL-1 SPREAD BLOWOUT ENTRY GUARD VERIFICATION PASSED (100%)    ");
     console.log("================================================================================");
 }
-runLevel1SpreadBlowoutEntryGuardTest().catch((err) => {
+try {
+    runLevel1SpreadBlowoutEntryGuardTest();
+}
+catch (err) {
     console.error("Test failed with error:", err);
     process.exit(1);
-});
+}

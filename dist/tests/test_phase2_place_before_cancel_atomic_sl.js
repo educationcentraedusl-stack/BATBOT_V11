@@ -20,9 +20,9 @@ class FaultInjectionExecutionClient extends binance_1.BinanceExecutionClient {
     constructor() {
         super({ apiKey: "MOCK_KEY", apiSecret: "MOCK_SECRET", useTestnet: true });
     }
-    async placeQuantityStopLoss(symbol, side, positionSide, stopPrice, quantity, clientOrderId, signal) {
+    placeQuantityStopLoss(symbol, side, positionSide, stopPrice, quantity, clientOrderId, _signal) {
         if (this.shouldFailNewSl) {
-            throw new Error(this.simulatedFailureError);
+            return Promise.reject(new Error(this.simulatedFailureError));
         }
         const orderId = this.nextOrderId++;
         this.outboundDispatches.push({
@@ -33,11 +33,11 @@ class FaultInjectionExecutionClient extends binance_1.BinanceExecutionClient {
             clientOrderId,
             timestamp: Date.now(),
         });
-        return {
+        return Promise.resolve({
             orderId,
             symbol,
             status: "NEW",
-            clientOrderId: clientOrderId || `mock_sl_${orderId}`,
+            clientOrderId: clientOrderId || `mock_sl_${String(orderId)}`,
             price: "0",
             avgPrice: "0",
             origQty: String(quantity),
@@ -51,19 +51,19 @@ class FaultInjectionExecutionClient extends binance_1.BinanceExecutionClient {
             stopPrice: String(stopPrice),
             workingType: "CONTRACT_PRICE",
             updateTime: Date.now(),
-        };
+        });
     }
-    async cancelOrder(symbol, orderId, signal) {
+    cancelOrder(symbol, orderId, _signal) {
         this.outboundDispatches.push({
             type: "CANCEL",
             orderId,
             timestamp: Date.now(),
         });
-        return {
+        return Promise.resolve({
             orderId: Number(orderId),
             symbol,
             status: "CANCELED",
-            clientOrderId: `cancel_${orderId}`,
+            clientOrderId: `cancel_${String(orderId)}`,
             price: "0",
             avgPrice: "0",
             origQty: "0",
@@ -77,7 +77,7 @@ class FaultInjectionExecutionClient extends binance_1.BinanceExecutionClient {
             stopPrice: "0",
             workingType: "CONTRACT_PRICE",
             updateTime: Date.now(),
-        };
+        });
     }
 }
 async function runPhase2AtomicStopLossTests() {
@@ -103,7 +103,7 @@ async function runPhase2AtomicStopLossTests() {
     node_assert_1.default.strictEqual(initialSlId, 880001, "Initial SL OrderId must be registered as #880001");
     node_assert_1.default.strictEqual(execClient.outboundDispatches.length, 1, "Exactly 1 placement dispatch must have occurred");
     node_assert_1.default.strictEqual(execClient.outboundDispatches[0].type, "PLACE_QUANTITY_SL", "First dispatch must be PLACE_QUANTITY_SL");
-    console.log(`  ✅ Stage 1 Passed: Initial SL OrderId #${initialSlId} placed and registered in ledger.\n`);
+    console.log(`  ✅ Stage 1 Passed: Initial SL OrderId #${String(initialSlId)} placed and registered in ledger.\n`);
     // =========================================================================
     // STAGE 2: Place-Before-Cancel Succession Sequence Verification
     // =========================================================================
@@ -161,32 +161,34 @@ async function runPhase2AtomicStopLossTests() {
     // STAGE 5: Exact-Quantity Conditional Order Payload Verification
     // =========================================================================
     console.log("[STAGE 5] Testing Exact-Quantity Conditional Order Precision & Bypass of -4130/-4509...");
-    const realClient = new binance_1.BinanceExecutionClient();
-    let interceptedPayload;
-    // Intercept the low-level request payload
-    realClient.request = async (_method, _endpoint, payload) => {
-        interceptedPayload = payload;
-        return {
-            orderId: 999888,
-            symbol: "ETHUSDT",
-            status: "NEW",
-            clientOrderId: payload?.newClientOrderId || "",
-            price: "0",
-            avgPrice: "0",
-            origQty: String(payload?.quantity || "0"),
-            executedQty: "0",
-            cumQuote: "0",
-            timeInForce: "GTC",
-            type: "STOP_MARKET",
-            reduceOnly: false,
-            side: payload?.side,
-            positionSide: payload?.positionSide,
-            stopPrice: String(payload?.stopPrice || "0"),
-            workingType: "CONTRACT_PRICE",
-            updateTime: Date.now(),
-        };
-    };
+    class InterceptingExecutionClient extends binance_1.BinanceExecutionClient {
+        interceptedPayload;
+        request(_method, _endpoint, payload = {}) {
+            this.interceptedPayload = payload;
+            return Promise.resolve({
+                orderId: 999888,
+                symbol: "ETHUSDT",
+                status: "NEW",
+                clientOrderId: typeof payload.newClientOrderId === "string" ? payload.newClientOrderId : "",
+                price: "0",
+                avgPrice: "0",
+                origQty: String(payload.quantity ?? "0"),
+                executedQty: "0",
+                cumQuote: "0",
+                timeInForce: "GTC",
+                type: "STOP_MARKET",
+                reduceOnly: false,
+                side: typeof payload.side === "string" ? payload.side : "SELL",
+                positionSide: typeof payload.positionSide === "string" ? payload.positionSide : "LONG",
+                stopPrice: String(payload.stopPrice ?? "0"),
+                workingType: "CONTRACT_PRICE",
+                updateTime: Date.now(),
+            });
+        }
+    }
+    const realClient = new InterceptingExecutionClient();
     await realClient.placeQuantityStopLoss("ETHUSDT", "SELL", "LONG", 2500.5, 1.25);
+    const interceptedPayload = realClient.interceptedPayload;
     node_assert_1.default.ok(interceptedPayload !== undefined, "Payload must be captured");
     node_assert_1.default.strictEqual(interceptedPayload.symbol, "ETHUSDT");
     node_assert_1.default.strictEqual(interceptedPayload.side, "SELL");

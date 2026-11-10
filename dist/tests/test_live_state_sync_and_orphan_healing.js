@@ -5,6 +5,13 @@ const marketDataClient_1 = require("../marketDataClient");
 const risk_1 = require("../strategy/risk");
 const binance_1 = require("../execution/binance");
 const multiEngine_1 = require("../strategy/multiEngine");
+function requireEngine(multiEngine, symbol) {
+    const eng = multiEngine.getEngineForSymbol(symbol);
+    if (!eng) {
+        throw new Error(`${symbol} engine not found`);
+    }
+    return eng;
+}
 async function runStateSyncAndOrphanHealingTest() {
     console.log("=========================================================================");
     console.log("  TEST: SOTA ZERO-LOSS STATE SYNCHRONIZATION & ORPHAN AUTO-HEALING        ");
@@ -56,8 +63,8 @@ async function runStateSyncAndOrphanHealingTest() {
     solEngine.handleWsOrderUpdate(mockWsOrderUpdate);
     const solSummary = solEngine.getHedgeLedger().getSummary(76.05);
     console.log(`  - SOLUSDT Ledger Side: ${solSummary.side} (Expected: SHORT)`);
-    console.log(`  - SOLUSDT Ledger Short Qty: ${solSummary.shortQuantity} (Expected: 0.78)`);
-    console.log(`  - SOLUSDT Ledger Entry Price: $${solSummary.averageEntryPrice} (Expected: 76.05)`);
+    console.log(`  - SOLUSDT Ledger Short Qty: ${String(solSummary.shortQuantity)} (Expected: 0.78)`);
+    console.log(`  - SOLUSDT Ledger Entry Price: $${String(solSummary.averageEntryPrice)} (Expected: 76.05)`);
     if (solSummary.side !== "SHORT" || Math.abs(solSummary.shortQuantity - 0.78) > 1e-4) {
         throw new Error(`Test 1 Failed: SOLUSDT position not bound properly to HedgePositionLedger!`);
     }
@@ -67,10 +74,10 @@ async function runStateSyncAndOrphanHealingTest() {
     const sabShortQty = client.getOmsShortPositionQty(solAssetIdx);
     const sabSideCode = client.getOmsPositionSide(solAssetIdx);
     const sabEntryPx = client.getOmsAvgEntryPrice(solAssetIdx);
-    console.log(`  - SAB Slot #2 Position Qty: ${sabQty} (Expected: 0.78)`);
-    console.log(`  - SAB Slot #2 Short Qty: ${sabShortQty} (Expected: 0.78)`);
-    console.log(`  - SAB Slot #2 Side Code: ${sabSideCode} (Expected: 2.0 = SHORT)`);
-    console.log(`  - SAB Slot #2 Entry Price: $${sabEntryPx} (Expected: 76.05)`);
+    console.log(`  - SAB Slot #2 Position Qty: ${String(sabQty)} (Expected: 0.78)`);
+    console.log(`  - SAB Slot #2 Short Qty: ${String(sabShortQty)} (Expected: 0.78)`);
+    console.log(`  - SAB Slot #2 Side Code: ${String(sabSideCode)} (Expected: 2.0 = SHORT)`);
+    console.log(`  - SAB Slot #2 Entry Price: $${String(sabEntryPx)} (Expected: 76.05)`);
     if (sabSideCode !== 2.0 || Math.abs(sabShortQty - 0.78) > 1e-4 || Math.abs(sabEntryPx - 76.05) > 1e-4) {
         throw new Error(`Test 1 Failed: SharedArrayBuffer not synchronized with SOLUSDT state!`);
     }
@@ -93,17 +100,17 @@ async function runStateSyncAndOrphanHealingTest() {
             },
         ],
     };
-    const ethEngine = multiEngine.getEngineForSymbol("ETHUSDT");
+    const ethEngine = requireEngine(multiEngine, "ETHUSDT");
     ethEngine.handleWsAccountPositionUpdate(mockAccountUpdate.positions[0]);
     const ethSummary = ethEngine.getHedgeLedger().getSummary(1888.50);
     console.log(`  - ETHUSDT Ledger Side: ${ethSummary.side} (Expected: LONG)`);
-    console.log(`  - ETHUSDT Ledger Long Qty: ${ethSummary.longQuantity} (Expected: 0.05)`);
-    console.log(`  - ETHUSDT Ledger Entry Price: $${ethSummary.averageEntryPrice} (Expected: 1888.5)`);
+    console.log(`  - ETHUSDT Ledger Long Qty: ${String(ethSummary.longQuantity)} (Expected: 0.05)`);
+    console.log(`  - ETHUSDT Ledger Entry Price: $${String(ethSummary.averageEntryPrice)} (Expected: 1888.5)`);
     const ethAssetIdx = 1;
     const ethSabLongQty = client.getOmsLongPositionQty(ethAssetIdx);
     const ethSabSideCode = client.getOmsPositionSide(ethAssetIdx);
-    console.log(`  - SAB Slot #1 Long Qty: ${ethSabLongQty} (Expected: 0.05)`);
-    console.log(`  - SAB Slot #1 Side Code: ${ethSabSideCode} (Expected: 1.0 = LONG)`);
+    console.log(`  - SAB Slot #1 Long Qty: ${String(ethSabLongQty)} (Expected: 0.05)`);
+    console.log(`  - SAB Slot #1 Side Code: ${String(ethSabSideCode)} (Expected: 1.0 = LONG)`);
     if (ethSabSideCode !== 1.0 || Math.abs(ethSabLongQty - 0.05) > 1e-4) {
         throw new Error(`Test 2 Failed: ETHUSDT ACCOUNT_UPDATE not reconciled to SAB!`);
     }
@@ -147,12 +154,12 @@ async function runStateSyncAndOrphanHealingTest() {
         },
     ];
     multiEngine.reconcileStartupPositions(mockExchangePositions);
-    const btcEngine = multiEngine.getEngineForSymbol("BTCUSDT");
-    const bnbEngine = multiEngine.getEngineForSymbol("BNBUSDT");
+    const btcEngine = requireEngine(multiEngine, "BTCUSDT");
+    const bnbEngine = requireEngine(multiEngine, "BNBUSDT");
     const btcSummary = btcEngine.getHedgeLedger().getSummary(63400.0);
     const bnbSummary = bnbEngine.getHedgeLedger().getSummary(610.0);
-    console.log(`  - BTCUSDT Synced Qty: ${btcSummary.longQuantity} (Expected: 0.0009)`);
-    console.log(`  - BNBUSDT Synced Qty: ${bnbSummary.longQuantity} (Expected: 0.1)`);
+    console.log(`  - BTCUSDT Synced Qty: ${String(btcSummary.longQuantity)} (Expected: 0.0009)`);
+    console.log(`  - BNBUSDT Synced Qty: ${String(bnbSummary.longQuantity)} (Expected: 0.1)`);
     const btcSabQty = client.getOmsLongPositionQty(0);
     const bnbSabQty = client.getOmsLongPositionQty(3);
     if (Math.abs(btcSabQty - 0.0009) > 1e-6 || Math.abs(bnbSabQty - 0.1) > 1e-4) {
@@ -171,7 +178,8 @@ async function runStateSyncAndOrphanHealingTest() {
 }
 if (require.main === module) {
     runStateSyncAndOrphanHealingTest().catch((err) => {
-        console.error(`❌ Test Suite Failed: ${err.message}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`❌ Test Suite Failed: ${msg}`);
         process.exit(1);
     });
 }

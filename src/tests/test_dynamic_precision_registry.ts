@@ -1,7 +1,7 @@
 import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
-import { formatQuantityForSymbol, getSymbolQuantityPrecision } from "../strategy/engine";
+import { formatQuantityForSymbol } from "../strategy/engine";
 
-async function runPrecisionRegistryTest() {
+function runPrecisionRegistryTest(): void {
   console.log("=========================================================================");
   console.log("  BATBOT_V11 DYNAMIC EXCHANGE-INFO PRECISION REGISTRY TEST SUITE         ");
   console.log("=========================================================================\n");
@@ -12,9 +12,9 @@ async function runPrecisionRegistryTest() {
 
   // Test SUIUSDT precision (previously unmapped flaw)
   const suiRule = SymbolPrecisionRegistry.getPrecisionRule("SUIUSDT");
-  console.log(`  - SUIUSDT Rule: qtyDecimals=${suiRule.qtyDecimals}, stepSize=${suiRule.stepSize}, minNotional=${suiRule.minNotional}`);
+  console.log(`  - SUIUSDT Rule: qtyDecimals=${String(suiRule.qtyDecimals)}, stepSize=${String(suiRule.stepSize)}, minNotional=${String(suiRule.minNotional)}`);
   if (suiRule.qtyDecimals !== 1 || suiRule.stepSize !== 0.1) {
-    throw new Error(`❌ SUIUSDT precision test failed! Expected decimals=1, stepSize=0.1, got decimals=${suiRule.qtyDecimals}, stepSize=${suiRule.stepSize}`);
+    throw new Error(`❌ SUIUSDT precision test failed! Expected decimals=1, stepSize=0.1, got decimals=${String(suiRule.qtyDecimals)}, stepSize=${String(suiRule.stepSize)}`);
   }
   console.log("  ✅ SUIUSDT precision rule verified (1 decimal, stepSize 0.1).");
 
@@ -24,15 +24,15 @@ async function runPrecisionRegistryTest() {
   const formattedStandard = formatQuantityForSymbol("SUIUSDT", rawQty, false);
   const formattedMinNotional = formatQuantityForSymbol("SUIUSDT", rawQty, true);
 
-  console.log(`  - Raw Qty: ${rawQty}`);
-  console.log(`  - Standard Formatted (Floor): ${formattedStandard}`);
-  console.log(`  - MinNotional Formatted (Ceiling): ${formattedMinNotional}`);
+  console.log(`  - Raw Qty: ${String(rawQty)}`);
+  console.log(`  - Standard Formatted (Floor): ${String(formattedStandard)}`);
+  console.log(`  - MinNotional Formatted (Ceiling): ${String(formattedMinNotional)}`);
 
   if (formattedStandard !== 12.3) {
-    throw new Error(`❌ Standard floor quantity formatting failed! Expected 12.3, got ${formattedStandard}`);
+    throw new Error(`❌ Standard floor quantity formatting failed! Expected 12.3, got ${String(formattedStandard)}`);
   }
   if (formattedMinNotional !== 12.4) {
-    throw new Error(`❌ MinNotional ceiling quantity formatting failed! Expected 12.4, got ${formattedMinNotional}`);
+    throw new Error(`❌ MinNotional ceiling quantity formatting failed! Expected 12.4, got ${String(formattedMinNotional)}`);
   }
   console.log("  ✅ Quantity formatting math verified (Floor=12.3, Ceiling=12.4).");
 
@@ -44,29 +44,31 @@ async function runPrecisionRegistryTest() {
   const ethQty = formatQuantityForSymbol("ETHUSDT", requiredQty, true);
   const resultingNotional = ethQty * ethPrice;
 
-  console.log(`  - ETH Price: $${ethPrice}, Required Qty: ${requiredQty}`);
-  console.log(`  - Formatted ETH Qty (MinNotional Guard): ${ethQty}`);
+  console.log(`  - ETH Price: $${String(ethPrice)}, Required Qty: ${String(requiredQty)}`);
+  console.log(`  - Formatted ETH Qty (MinNotional Guard): ${String(ethQty)}`);
   console.log(`  - Resulting Order Notional: $${resultingNotional.toFixed(2)} USDT`);
 
   if (resultingNotional < minNotionalUsdt) {
-    throw new Error(`❌ MinNotional guard failed! Resulting notional $${resultingNotional} < required $${minNotionalUsdt}`);
+    throw new Error(`❌ MinNotional guard failed! Resulting notional $${String(resultingNotional)} < required $${String(minNotionalUsdt)}`);
   }
-  console.log(`  ✅ MinNotional guard verified! Resulting notional $${resultingNotional} >= $${minNotionalUsdt} USDT threshold.`);
+  console.log(`  ✅ MinNotional guard verified! Resulting notional $${String(resultingNotional)} >= $${String(minNotionalUsdt)} USDT threshold.`);
 
   // Step 4: Test Safe Default Fallback for Unmapped Symbol
   console.log("\n[Test 4/4] Testing Safe Fallback Rule for Unmapped Symbol...");
   const fallbackRule = SymbolPrecisionRegistry.getPrecisionRule("UNKNOWN_COIN_XYZ");
-  if (!fallbackRule || fallbackRule.qtyDecimals !== 2 || fallbackRule.stepSize !== 0.01 || fallbackRule.minNotional !== 5.0) {
+  if (fallbackRule.qtyDecimals !== 2 || fallbackRule.stepSize !== 0.01 || fallbackRule.minNotional !== 5.0) {
     throw new Error(`❌ Safe fallback failed! Unexpected fallback rule: ${JSON.stringify(fallbackRule)}`);
   }
-  console.log(`  ✅ Safe fallback default rule generated successfully: decimals=${fallbackRule.qtyDecimals}, stepSize=${fallbackRule.stepSize}, minNotional=${fallbackRule.minNotional}`);
+  console.log(`  ✅ Safe fallback default rule generated successfully: decimals=${String(fallbackRule.qtyDecimals)}, stepSize=${String(fallbackRule.stepSize)}, minNotional=${String(fallbackRule.minNotional)}`);
 
   console.log("\n=========================================================================");
   console.log("  ✅ ALL DYNAMIC PRECISION REGISTRY UNIT TESTS PASSED DETERMINISTICALLY!   ");
   console.log("=========================================================================\n");
 }
 
-runPrecisionRegistryTest().catch((err) => {
+try {
+  runPrecisionRegistryTest();
+} catch (err: unknown) {
   console.error("❌ Precision Registry Test Suite Failed:", err);
   process.exit(1);
-});
+}

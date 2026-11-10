@@ -4,7 +4,7 @@ const engine_1 = require("../strategy/engine");
 const marketDataClient_1 = require("../marketDataClient");
 const risk_1 = require("../strategy/risk");
 const binance_1 = require("../execution/binance");
-async function runAutoSwitchingSpreadGuardTest() {
+function runAutoSwitchingSpreadGuardTest() {
     console.log("================================================================================");
     console.log("  TEST SUITE: AUTO-SWITCHING SPREAD GUARD (TESTNET VS MAINNET)                   ");
     console.log("================================================================================");
@@ -69,7 +69,7 @@ async function runAutoSwitchingSpreadGuardTest() {
     client.writeAtomicFloat64Asset(7, 6, 8.863); // Ask (Spread = 0.068 USDT, 77.0 bps)
     const avaxResult = avaxEngine.evaluateTick();
     if (avaxResult.riskResult?.reasonCode !== "REJECTED_MAX_SPREAD_BLOWOUT") {
-        throw new Error(`STAGE 1 FAILED: AVAXUSDT 77 bps spread should have been rejected! Got: ${avaxResult.riskResult?.reasonCode}`);
+        throw new Error(`STAGE 1 FAILED: AVAXUSDT 77 bps spread should have been rejected! Got: ${String(avaxResult.riskResult?.reasonCode)}`);
     }
     console.log("  ✅ AVAXUSDT 77.0 bps blowout (> 50.0 bps ceiling) was strictly REJECTED.");
     // =========================================================================
@@ -115,9 +115,11 @@ async function runAutoSwitchingSpreadGuardTest() {
     console.log("  ALL AUTO-SWITCHING SPREAD GUARD VERIFICATION CHECKS PASSED (100%)              ");
     console.log("================================================================================");
 }
-runAutoSwitchingSpreadGuardTest()
-    .then(() => process.exit(0))
-    .catch((err) => {
+try {
+    runAutoSwitchingSpreadGuardTest();
+    process.exit(0);
+}
+catch (err) {
     console.error("Test failed:", err);
     process.exit(1);
-});
+}

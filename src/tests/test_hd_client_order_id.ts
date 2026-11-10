@@ -1,5 +1,4 @@
 import { ClientOrderIdGenerator } from "../execution/clientOrderIdGenerator";
-import { BinanceOrderParams } from "../execution/binance";
 import { HedgePositionLedger } from "../strategy/positionLedger";
 
 console.log("================================================================================");
@@ -49,7 +48,7 @@ for (const sym of symbols) {
 
       if (cid.length > 36 || cid.length < 15) {
         allCompliant = false;
-        console.error(`Invalid length ${cid.length} for ${cid}`);
+        console.error(`Invalid length ${String(cid.length)} for ${cid}`);
       }
       if (!/^[A-Za-z0-9_]+$/.test(cid)) {
         allCompliant = false;
@@ -63,7 +62,7 @@ for (const sym of symbols) {
   }
 }
 
-assert(allCompliant, `Generated ${sampleCids.length} CIDs; all strictly <= 36 characters and valid alphanumeric`);
+assert(allCompliant, `Generated ${String(sampleCids.length)} CIDs; all strictly <= 36 characters and valid alphanumeric`);
 console.log(`Sample Generated CIDs:`);
 console.log(`  - BTC Long Entry:     ${ClientOrderIdGenerator.generate("BTCUSDT", "CORE_LONG", "EN")}`);
 console.log(`  - XRP Long SL:        ${ClientOrderIdGenerator.generate("XRPUSDT", "CORE_LONG", "SL")}`);
@@ -115,7 +114,7 @@ for (let i = 0; i < 4096; i++) {
   seenCids.add(cid);
 }
 
-assert(collisions === 0, `Zero collisions detected across 4,096 rapid sequential generations (Unique CIDs: ${seenCids.size})`);
+assert(collisions === 0, `Zero collisions detected across 4,096 rapid sequential generations (Unique CIDs: ${String(seenCids.size)})`);
 
 // -----------------------------------------------------------------------------------------
 // TEST 4: Batch TP Intent Generation Attaches HD ClientOrderId
@@ -124,13 +123,13 @@ console.log("\n[TEST 4] Testing HedgePositionLedger.generateBatchTpOrderIntents(
 const ledger = new HedgePositionLedger("XRPUSDT");
 const tpIntents = ledger.generateBatchTpOrderIntents("CORE_LONG", 2.50, 1000, "LONG", 0.00906);
 
-assert(tpIntents.length > 0, `Generated ${tpIntents.length} TP order intents`);
+assert(tpIntents.length > 0, `Generated ${String(tpIntents.length)} TP order intents`);
 let allTpCidsValid = true;
 for (let i = 0; i < tpIntents.length; i++) {
   const intent = tpIntents[i];
   if (!intent.clientOrderId || !intent.clientOrderId.startsWith("BB11_XRP_L0_TP")) {
     allTpCidsValid = false;
-    console.error(`Invalid TP CID: ${intent.clientOrderId}`);
+    console.error(`Invalid TP CID: ${String(intent.clientOrderId)}`);
   }
 }
 assert(allTpCidsValid, "All batch TP limit order intents have valid HD ClientOrderIds with stage identifiers");
@@ -139,7 +138,7 @@ assert(allTpCidsValid, "All batch TP limit order intents have valid HD ClientOrd
 // FINAL SUMMARY
 // -----------------------------------------------------------------------------------------
 console.log("\n================================================================================");
-console.log(`TEST SUITE COMPLETE: ${totalPassed} PASSED, ${totalFailed} FAILED`);
+console.log(`TEST SUITE COMPLETE: ${String(totalPassed)} PASSED, ${String(totalFailed)} FAILED`);
 console.log("================================================================================");
 
 if (totalFailed > 0) {

@@ -21,10 +21,10 @@ async function runSotaRestingOrderSpreadAnnihilationTests() {
   let placedOrders: BinanceOrderParams[] = [];
 
   mockExecutionClient.isConfigured = () => true;
-  mockExecutionClient.cancelOrder = async (symbol: string, orderId: number | string): Promise<BinanceOrderResponse> => {
+  mockExecutionClient.cancelOrder = (symbol: string, orderId: number | string): Promise<BinanceOrderResponse> => {
     const numericId = typeof orderId === "number" ? orderId : parseInt(orderId, 10);
     cancelledOrderIds.push(numericId);
-    return {
+    return Promise.resolve({
       symbol,
       orderId: numericId,
       clientOrderId: "CANCEL_CID",
@@ -42,12 +42,12 @@ async function runSotaRestingOrderSpreadAnnihilationTests() {
       stopPrice: "0",
       workingType: "CONTRACT_PRICE",
       updateTime: Date.now(),
-    };
+    });
   };
-  mockExecutionClient.placeOrder = async (params: BinanceOrderParams): Promise<BinanceOrderResponse> => {
+  mockExecutionClient.placeOrder = (params: BinanceOrderParams): Promise<BinanceOrderResponse> => {
     placedOrders.push(params);
     // Return pending resting LIMIT order
-    return {
+    return Promise.resolve({
       symbol: params.symbol,
       orderId: 888123,
       clientOrderId: params.clientOrderId || "CID_TEST",
@@ -65,7 +65,7 @@ async function runSotaRestingOrderSpreadAnnihilationTests() {
       stopPrice: "0",
       workingType: "CONTRACT_PRICE",
       updateTime: Date.now(),
-    };
+    });
   };
 
   const hedgeLedger = new HedgePositionLedger("BTCUSDT", 3);
@@ -106,14 +106,14 @@ async function runSotaRestingOrderSpreadAnnihilationTests() {
   client.writeAtomicFloat64Asset(0, 2, -5.0);    // CVD
 
   const res1 = engine.evaluateTick();
-  console.log(`  -> Signal Type: ${res1.signalType}, Target Side: ${res1.positionSide}`);
+  console.log(`  -> Signal Type: ${res1.signalType}, Target Side: ${String(res1.positionSide)}`);
   assert.strictEqual(res1.signalType, "SELL", "Stage 1: Must generate SELL signal on tight spread");
   assert.ok(res1.executionPromise, "Stage 1: executionPromise must be present");
 
   // Await order dispatch
   const orderRes = await res1.executionPromise;
   assert.ok(orderRes, "Stage 1: Order response must be returned");
-  assert.strictEqual(orderRes?.orderId, 888123, "Stage 1: Order ID must match mock");
+  assert.strictEqual(orderRes.orderId, 888123, "Stage 1: Order ID must match mock");
   assert.strictEqual(hedgeLedger.getShortSlots()[0].lifecycleState, "PENDING_ENTRY", "Stage 1: Slot 0 must be PENDING_ENTRY");
   console.log("  ✅ STAGE 1 PASSED: Limit order #888123 placed & resting on Binance orderbook (PENDING_ENTRY).");
 
@@ -127,7 +127,7 @@ async function runSotaRestingOrderSpreadAnnihilationTests() {
   client.writeAtomicFloat64Asset(0, 6, 79060.30); // Best Ask ($60.30 spread > $1.50 cap)
 
   const res2 = engine.evaluateTick();
-  console.log(`  -> Tick #2 Signal Type: ${res2.signalType}, Reason: ${res2.riskResult?.reasonCode}`);
+  console.log(`  -> Tick #2 Signal Type: ${res2.signalType}, Reason: ${String(res2.riskResult?.reasonCode)}`);
   assert.strictEqual(res2.signalType, "NONE", "Stage 2: Must reject tick evaluation on blowout");
 
   // Verify AROS-CA triggered immediate cancellation of resting order #888123
@@ -213,7 +213,7 @@ async function runSotaRestingOrderSpreadAnnihilationTests() {
   const gridLedger = new HedgePositionLedger("BTCUSDT", 3);
   const tightAlloc = gridLedger.evaluateDispersedShortSlotAllocation(79000.0, 0.1, 0.005, 1.2, 0, nowMs, 0.50, 1.50);
   assert.ok(tightAlloc !== null, "Stage 4: Tight spread must permit slot allocation");
-  assert.strictEqual(tightAlloc?.slotIndex, 0, "Stage 4: First slot index must be 0");
+  assert.strictEqual(tightAlloc.slotIndex, 0, "Stage 4: First slot index must be 0");
 
   const blowoutAlloc = gridLedger.evaluateDispersedShortSlotAllocation(79000.0, 0.1, 0.005, 1.2, 0, nowMs, 60.30, 1.50);
   assert.strictEqual(blowoutAlloc, null, "Stage 4: Blown-out spread (60.30 > 1.50) MUST strictly reject slot allocation");
@@ -224,7 +224,7 @@ async function runSotaRestingOrderSpreadAnnihilationTests() {
   console.log("================================================================================");
 }
 
-runSotaRestingOrderSpreadAnnihilationTests().catch((err) => {
+runSotaRestingOrderSpreadAnnihilationTests().catch((err: unknown) => {
   console.error("Test failed with error:", err);
   process.exit(1);
 });

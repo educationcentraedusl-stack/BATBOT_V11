@@ -1,11 +1,7 @@
 import "dotenv/config";
-import { MarketDataClient } from "../marketDataClient";
-import { RiskGuard } from "../strategy/risk";
-import { BinanceExecutionClient } from "../execution/binance";
-import { StrategyEngine } from "../strategy/engine";
 import { HedgePositionLedger } from "../strategy/positionLedger";
 
-async function runPhase3Phase4IntegrationTest() {
+function runPhase3Phase4IntegrationTest(): void {
   console.log(`=======================================================`);
   console.log(`[TEST] BATBOT_V11 Phase 3 & Phase 4 Integration Test Suite`);
   console.log(`=======================================================\n`);
@@ -18,12 +14,12 @@ async function runPhase3Phase4IntegrationTest() {
   ledger.occupyCoreLong(0.005, 60000, 2.5, 1.2);
   const coreLongSlot = ledger.getCoreLong();
 
-  console.log(`- Core Long Occupied: Qty = ${coreLongSlot.quantity}, Entry = $${coreLongSlot.entryPrice}`);
+  console.log(`- Core Long Occupied: Qty = ${String(coreLongSlot.quantity)}, Entry = $${String(coreLongSlot.entryPrice)}`);
 
   const tpIntents = ledger.generateBatchTpOrderIntents("CORE_LONG", 60000, 0.005, "LONG", 0.00906);
-  console.log(`- Generated ${tpIntents.length} POST_ONLY TP limit order intents:`);
+  console.log(`- Generated ${String(tpIntents.length)} POST_ONLY TP limit order intents:`);
   tpIntents.forEach((intent, idx) => {
-    console.log(`  Stage ${idx + 1}: ${intent.side} ${intent.quantity} ${intent.symbol} @ $${intent.price} [${intent.timeInForce}]`);
+    console.log(`  Stage ${String(idx + 1)}: ${intent.side} ${String(intent.quantity)} ${intent.symbol} @ $${String(intent.price)} [${String(intent.timeInForce)}]`);
   });
 
   if (tpIntents.length !== 3) {
@@ -48,8 +44,8 @@ async function runPhase3Phase4IntegrationTest() {
   // Fill Stage 1 Limit TP Order (#100001) for 0.002 BTC @ $60,150
   const fill1Res = ledger.processTpLimitFill("CORE_LONG", 100001, 0.002, 60150, true);
   console.log(`- Stage 1 Limit TP Filled as MAKER:`);
-  console.log(`  Closed: ${fill1Res.isPositionClosed}`);
-  console.log(`  Remaining Qty: ${fill1Res.remainingQuantity}`);
+  console.log(`  Closed: ${String(fill1Res.isPositionClosed)}`);
+  console.log(`  Remaining Qty: ${String(fill1Res.remainingQuantity)}`);
   console.log(`  New Stop Loss Price (Locked Break-Even): $${fill1Res.newStopLossPrice.toFixed(2)}`);
 
   if (!ledger.getCoreLong().breakEvenLocked || fill1Res.newStopLossPrice <= 60000) {
@@ -80,7 +76,10 @@ async function runPhase3Phase4IntegrationTest() {
   console.log(`=======================================================\n`);
 }
 
-runPhase3Phase4IntegrationTest().catch((err) => {
-  console.error(`❌ INTEGRATION TEST ERROR: ${err.message}`);
+try {
+  runPhase3Phase4IntegrationTest();
+} catch (err: unknown) {
+  const errMsg = err instanceof Error ? err.message : String(err);
+  console.error(`❌ INTEGRATION TEST ERROR: ${errMsg}`);
   process.exit(1);
-});
+}

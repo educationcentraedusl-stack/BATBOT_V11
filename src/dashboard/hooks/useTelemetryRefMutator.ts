@@ -47,18 +47,18 @@ export function useTelemetryRefMutator(refs: TelemetryRefMap): void {
 
         // 1. Sequence Number
         if (refs.sequenceNumRef?.current) {
-          refs.sequenceNumRef.current.textContent = `#${frame.sequenceNum || "0"}`;
+          refs.sequenceNumRef.current.textContent = `#${frame.sequenceNum.length > 0 ? frame.sequenceNum : "0"}`;
         }
 
         // 2. Tick Latency (µs)
         if (refs.tickLatencyRef?.current) {
-          const lat = frame.tickEvaluationLatencyUs || 0;
+          const lat = frame.tickEvaluationLatencyUs;
           refs.tickLatencyRef.current.textContent = `${lat.toFixed(2)} µs`;
         }
 
         // 3. RTT (ms)
         if (refs.rttMsRef?.current) {
-          const rtt = frame.rttMs || 0;
+          const rtt = frame.rttMs;
           refs.rttMsRef.current.textContent = `${rtt.toFixed(1)} ms`;
         }
 
@@ -91,7 +91,8 @@ export function useTelemetryRefMutator(refs: TelemetryRefMap): void {
         }
 
         if (refs.infLatUsRef?.current) {
-          const infLatUs = frame.aiInferenceLatencyNs ? Number(frame.aiInferenceLatencyNs) / 1000 : 0;
+          const parsedInfNs = frame.aiInferenceLatencyNs.length > 0 ? Number(frame.aiInferenceLatencyNs) : 0;
+          const infLatUs = Number.isFinite(parsedInfNs) ? parsedInfNs / 1000 : 0;
           refs.infLatUsRef.current.textContent = `(${infLatUs.toFixed(1)} µs)`;
         }
 
@@ -166,11 +167,11 @@ export function useTelemetryRefMutator(refs: TelemetryRefMap): void {
         }
 
         if (refs.bidPriceRef?.current) {
-          refs.bidPriceRef.current.textContent = `$${frame.bidPrice ? frame.bidPrice.toFixed(2) : "0.00"}`;
+          refs.bidPriceRef.current.textContent = `$${frame.bidPrice > 0 ? frame.bidPrice.toFixed(2) : "0.00"}`;
         }
 
         if (refs.askPriceRef?.current) {
-          refs.askPriceRef.current.textContent = `$${frame.askPrice ? frame.askPrice.toFixed(2) : "0.00"}`;
+          refs.askPriceRef.current.textContent = `$${frame.askPrice > 0 ? frame.askPrice.toFixed(2) : "0.00"}`;
         }
       }
 

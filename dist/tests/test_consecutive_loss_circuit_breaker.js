@@ -8,7 +8,7 @@ function assert(condition, message) {
         throw new Error(`[ASSERTION_FAILED] ${message}`);
     }
 }
-async function runConsecutiveLossCircuitBreakerTestSuite() {
+function runConsecutiveLossCircuitBreakerTestSuite() {
     console.log("================================================================================");
     console.log("  BATBOT_V11 SOTA: CONSECUTIVE-LOSS CIRCUIT BREAKER & PACING TEST SUITE");
     console.log("  - Exponential Cooldown Escalation: 15s -> 60s -> 180s -> 900s (15m halt)");
@@ -130,7 +130,10 @@ async function runConsecutiveLossCircuitBreakerTestSuite() {
     console.log("  ALL CONSECUTIVE-LOSS CIRCUIT BREAKER TESTS PASSED! (100% VERIFIED)");
     console.log("================================================================================");
 }
-runConsecutiveLossCircuitBreakerTestSuite().catch((err) => {
+try {
+    runConsecutiveLossCircuitBreakerTestSuite();
+}
+catch (err) {
     console.error("FATAL TEST FAILURE:", err);
     process.exit(1);
-});
+}

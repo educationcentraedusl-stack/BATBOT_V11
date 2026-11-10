@@ -104,7 +104,10 @@ async function runVerificationTests() {
     }
     console.log("  ✓ BUY signal generation on high OBI/CVD + AI Bullish prediction verified.");
     if (eval1.executionPromise) {
-        await eval1.executionPromise.catch(() => { }); // await promise to avoid unhandled rejection in test output
+        await eval1.executionPromise.catch((err) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.log(`  ℹ️ Expected offline execution rejection (eval1): ${msg}`);
+        });
     }
     // Evaluate tick 2 without sequence change: Should yield NONE
     const eval2 = engine.evaluateTick();
@@ -124,7 +127,10 @@ async function runVerificationTests() {
     }
     console.log("  ✓ SELL signal generation on negative OBI/CVD + AI Bearish prediction verified.");
     if (eval3.executionPromise) {
-        await eval3.executionPromise.catch(() => { });
+        await eval3.executionPromise.catch((err) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.log(`  ℹ️ Expected offline execution rejection (eval3): ${msg}`);
+        });
     }
     // -------------------------------------------------------------------
     // TEST 4: Hot-Path Performance & Allocation Stress Test
@@ -169,15 +175,14 @@ async function runVerificationTests() {
         throw new Error("FAIL: timeInForce parameter was serialized for MARKET order query string!");
     }
     console.log("  ✓ MARKET order query string is 100% free of timeInForce.");
-    // Test payload construction logic in placeOrder
-    // We subclass or inspect placeOrder payload behavior
-    let capturedPayload = null;
-    const mockClient = new (class extends binance_1.BinanceExecutionClient {
-        async request(method, endpoint, params) {
-            capturedPayload = params;
-            return { orderId: 12345, status: "FILLED" };
+    class PayloadInspectingClient extends binance_1.BinanceExecutionClient {
+        lastPayload = null;
+        request(_method, _endpoint, params = {}) {
+            this.lastPayload = params;
+            return Promise.resolve({ orderId: 12345, status: "FILLED" });
         }
-    })({ apiKey: "key", apiSecret: "secret" });
+    }
+    const mockClient = new PayloadInspectingClient({ apiKey: "key", apiSecret: "secret" });
     // Test 5a: MARKET order
     await mockClient.placeOrder({
         symbol: "BTCUSDT",
@@ -186,10 +191,14 @@ async function runVerificationTests() {
         quantity: 0.001,
         timeInForce: undefined, // pass undefined explicitly to test vulnerability
     });
-    if ("timeInForce" in capturedPayload || Object.prototype.hasOwnProperty.call(capturedPayload, "timeInForce")) {
+    const payload5a = mockClient.lastPayload;
+    if (!payload5a) {
+        throw new Error("FAIL: MARKET order payload was not captured!");
+    }
+    if ("timeInForce" in payload5a || Object.prototype.hasOwnProperty.call(payload5a, "timeInForce")) {
         throw new Error("FAIL: timeInForce key exists in MARKET order payload object!");
     }
-    if (JSON.stringify(capturedPayload).includes("timeInForce")) {
+    if (JSON.stringify(payload5a).includes("timeInForce")) {
         throw new Error("FAIL: JSON.stringify(capturedPayload) contains timeInForce key for MARKET order!");
     }
     console.log("  ✓ MARKET order payload structurally guarantees total absence of timeInForce key.");
@@ -202,7 +211,11 @@ async function runVerificationTests() {
         stopPrice: 60000,
         timeInForce: "GTC", // attempt to supply timeInForce to STOP_MARKET
     });
-    if ("timeInForce" in capturedPayload || Object.prototype.hasOwnProperty.call(capturedPayload, "timeInForce")) {
+    const payload5b = mockClient.lastPayload;
+    if (!payload5b) {
+        throw new Error("FAIL: STOP_MARKET order payload was not captured!");
+    }
+    if ("timeInForce" in payload5b || Object.prototype.hasOwnProperty.call(payload5b, "timeInForce")) {
         throw new Error("FAIL: timeInForce key exists in STOP_MARKET order payload object!");
     }
     console.log("  ✓ STOP_MARKET order payload structurally strips timeInForce key.");
@@ -215,7 +228,8 @@ async function runVerificationTests() {
         price: 64000,
         timeInForce: "GTX",
     });
-    if (!("timeInForce" in capturedPayload) || capturedPayload.timeInForce !== "GTX") {
+    const payload5c = mockClient.lastPayload;
+    if (!payload5c || !("timeInForce" in payload5c) || payload5c.timeInForce !== "GTX") {
         throw new Error("FAIL: timeInForce key was missing or incorrect for LIMIT order!");
     }
     console.log("  ✓ LIMIT order payload correctly retains timeInForce=GTX.");

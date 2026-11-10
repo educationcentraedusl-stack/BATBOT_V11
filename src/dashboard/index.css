@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@source not "../../.loki";
+@source not "../../batbot_system_status_log.md";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));

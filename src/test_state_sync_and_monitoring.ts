@@ -11,13 +11,13 @@ async function runAuditAndVerification() {
   console.log("==========================================================================");
 
   let passedTests = 0;
-  let totalTests = 4;
+  const totalTests = 4;
 
   // TEST 1: Time Offset Calculation & Signed Query Verification
   console.log("\n[TEST 1] Testing Binance Server Time Sync & Time Offset Application...");
   const client = new BinanceExecutionClient({ useTestnet: true });
   const offset = await client.syncServerTime();
-  console.log(`Calculated Server Time Offset: ${offset}ms`);
+  console.log(`Calculated Server Time Offset: ${String(offset)}ms`);
   const signedQuery = client.signQuery({ symbol: "BTCUSDT", side: "BUY", quantity: 0.001, price: 50000 });
   const hasTimestamp = signedQuery.includes("timestamp=");
   const hasRecvWindow = signedQuery.includes("recvWindow=10000");
@@ -41,12 +41,12 @@ async function runAuditAndVerification() {
   const engineWithEnv = new StrategyEngine(mktClient, riskGuard, client);
   const cfgEnv = engineWithEnv.getConfig();
 
-  console.log(`Engine Config TP: ${cfgEnv.longTakeProfitPercent}%, SL: ${cfgEnv.longStopLossPercent}%`);
+  console.log(`Engine Config TP: ${String(cfgEnv.longTakeProfitPercent)}%, SL: ${String(cfgEnv.longStopLossPercent)}%`);
   if (cfgEnv.longTakeProfitPercent === 2.5 && cfgEnv.longStopLossPercent === 1.2) {
     console.log("✅ TEST 2 PASSED: StrategyEngine dynamically parsed .env LONG_TAKE_PROFIT_PERCENT (2.5%) and LONG_STOP_LOSS_PERCENT (1.2%).");
     passedTests++;
   } else {
-    console.error(`❌ TEST 2 FAILED: Expected TP 2.5% and SL 1.2%, got TP ${cfgEnv.longTakeProfitPercent}% and SL ${cfgEnv.longStopLossPercent}%.`);
+    console.error(`❌ TEST 2 FAILED: Expected TP 2.5% and SL 1.2%, got TP ${String(cfgEnv.longTakeProfitPercent)}% and SL ${String(cfgEnv.longStopLossPercent)}%.`);
   }
 
   // TEST 3: Startup State Sync Verification
@@ -93,7 +93,7 @@ async function runAuditAndVerification() {
   }
 
   console.log("\n==========================================================================");
-  console.log(`                  AUDIT SUMMARY: ${passedTests}/${totalTests} TESTS PASSED`);
+  console.log(`                  AUDIT SUMMARY: ${String(passedTests)}/${String(totalTests)} TESTS PASSED`);
   console.log("==========================================================================");
 
   if (passedTests === totalTests) {
@@ -103,7 +103,8 @@ async function runAuditAndVerification() {
   }
 }
 
-runAuditAndVerification().catch((err) => {
-  console.error(`Unhandled test error: ${err.message}`);
+runAuditAndVerification().catch((err: unknown) => {
+  const errMsg = err instanceof Error ? err.message : String(err);
+  console.error(`Unhandled test error: ${errMsg}`);
   process.exit(1);
 });

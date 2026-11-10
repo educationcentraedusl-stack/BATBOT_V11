@@ -1,12 +1,9 @@
 import "dotenv/config";
-import { MarketDataClient } from "./marketDataClient";
-import { BinanceExecutionClient } from "./execution/binance";
-import { RiskGuard, RISK_PASSED } from "./strategy/risk";
+import { RiskGuard } from "./strategy/risk";
 import { HedgePositionLedger } from "./strategy/positionLedger";
-import { StrategyEngine } from "./strategy/engine";
 import { AutoRecalibrationManager } from "./ai/recalibrationWorker";
 
-async function runHedgeAndProfitLockTests() {
+function runHedgeAndProfitLockTests() {
   console.log("================================================================================");
   console.log("            BATBOT_V11 HEDGE MODE & PROFIT LOCK VERIFICATION SUITE              ");
   console.log("================================================================================");
@@ -23,12 +20,12 @@ async function runHedgeAndProfitLockTests() {
   if (isNaN(longTp) || isNaN(longSl) || isNaN(shortTp) || isNaN(shortSl) || isNaN(profitLock) || isNaN(maxSlots)) {
     throw new Error("FAIL: One or more strategy environment variables missing in .env!");
   }
-  console.log(`  ✓ LONG_TAKE_PROFIT_PERCENT: ${longTp}%`);
-  console.log(`  ✓ LONG_STOP_LOSS_PERCENT: ${longSl}%`);
-  console.log(`  ✓ SHORT_TAKE_PROFIT_PERCENT: ${shortTp}%`);
-  console.log(`  ✓ SHORT_STOP_LOSS_PERCENT: ${shortSl}%`);
-  console.log(`  ✓ DAILY_PROFIT_LOCK_USDT: ${profitLock} USDT`);
-  console.log(`  ✓ MAX_SHORT_SLOTS: ${maxSlots}`);
+  console.log(`  ✓ LONG_TAKE_PROFIT_PERCENT: ${String(longTp)}%`);
+  console.log(`  ✓ LONG_STOP_LOSS_PERCENT: ${String(longSl)}%`);
+  console.log(`  ✓ SHORT_TAKE_PROFIT_PERCENT: ${String(shortTp)}%`);
+  console.log(`  ✓ SHORT_STOP_LOSS_PERCENT: ${String(shortSl)}%`);
+  console.log(`  ✓ DAILY_PROFIT_LOCK_USDT: ${String(profitLock)} USDT`);
+  console.log(`  ✓ MAX_SHORT_SLOTS: ${String(maxSlots)}`);
 
   // 2. Verify Multi-Slot Hedge Position Ledger
   console.log("\n[TEST 2] Verifying Multi-Slot HedgePositionLedger & Slot Recycling...");
@@ -45,13 +42,13 @@ async function runHedgeAndProfitLockTests() {
   for (let i = 0; i < maxSlots; i++) {
     const slotIdx = hedgeLedger.getAvailableShortSlotIndex();
     if (slotIdx === -1) {
-      throw new Error(`FAIL: Expected short slot ${i} to be available!`);
+      throw new Error(`FAIL: Expected short slot ${String(i)} to be available!`);
     }
     const occupied = hedgeLedger.occupyShortSlot(slotIdx, 0.005, 67000 + i * 100, shortTp, shortSl);
     if (!occupied) {
-      throw new Error(`FAIL: Short slot ${slotIdx} occupation failed!`);
+      throw new Error(`FAIL: Short slot ${String(slotIdx)} occupation failed!`);
     }
-    console.log(`  ✓ Short Slot ${slotIdx} occupied successfully.`);
+    console.log(`  ✓ Short Slot ${String(slotIdx)} occupied successfully.`);
   }
 
   // Verify full short capacity
@@ -83,7 +80,7 @@ async function runHedgeAndProfitLockTests() {
   if (riskGuard.isProfitLockedState()) {
     throw new Error("FAIL: Profit lock triggered prematurely!");
   }
-  console.log(`  ✓ Realized PnL ($${riskGuard.getCumulativeDailyRealizedPnl().toFixed(2)}) below target ($${profitLock} USDT) - Execution LIVE.`);
+  console.log(`  ✓ Realized PnL ($${riskGuard.getCumulativeDailyRealizedPnl().toFixed(2)}) below target ($${String(profitLock)} USDT) - Execution LIVE.`);
 
   // Record remaining profit to exceed lock target
   riskGuard.recordRealizedPnl(2.0);
@@ -135,7 +132,10 @@ async function runHedgeAndProfitLockTests() {
   console.log("================================================================================");
 }
 
-runHedgeAndProfitLockTests().catch((err) => {
-  console.error("Critical Test Failure:", err.message);
+try {
+  runHedgeAndProfitLockTests();
+} catch (err: unknown) {
+  const errMsg = err instanceof Error ? err.message : String(err);
+  console.error("Critical Test Failure:", errMsg);
   process.exit(1);
-});
+}

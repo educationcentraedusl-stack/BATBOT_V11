@@ -19,9 +19,10 @@ async function runMakerTpRemediationTests() {
         new dynamicSizing_1.DynamicSizingCalculator();
     }
     catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
         errorThrown1A = true;
-        if (!err.message.includes("Missing required environment variable: TP_STAGE_ALLOCATION_3STAGE")) {
-            throw new Error(`[FAIL] Expected message containing missing 3STAGE env var, got: ${err.message}`);
+        if (!msg.includes("Missing required environment variable: TP_STAGE_ALLOCATION_3STAGE")) {
+            throw new Error(`[FAIL] Expected message containing missing 3STAGE env var, got: ${msg}`);
         }
     }
     if (!errorThrown1A) {
@@ -36,9 +37,10 @@ async function runMakerTpRemediationTests() {
         new dynamicSizing_1.DynamicSizingCalculator();
     }
     catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
         errorThrown1B = true;
-        if (!err.message.includes("Missing required environment variable: MAKER_FEE_RATE")) {
-            throw new Error(`[FAIL] Expected message containing missing MAKER_FEE_RATE env var, got: ${err.message}`);
+        if (!msg.includes("Missing required environment variable: MAKER_FEE_RATE")) {
+            throw new Error(`[FAIL] Expected message containing missing MAKER_FEE_RATE env var, got: ${msg}`);
         }
     }
     if (!errorThrown1B) {
@@ -61,10 +63,10 @@ async function runMakerTpRemediationTests() {
     const makerFee = sizingCalc.getMakerFeeRate();
     const takerFee = sizingCalc.getTakerFeeRate();
     if (makerFee !== 0.00018) {
-        throw new Error(`[FAIL] getMakerFeeRate() returned ${makerFee}, expected 0.00018`);
+        throw new Error(`[FAIL] getMakerFeeRate() returned ${String(makerFee)}, expected 0.00018`);
     }
     if (takerFee !== 0.00045) {
-        throw new Error(`[FAIL] getTakerFeeRate() returned ${takerFee}, expected 0.00045`);
+        throw new Error(`[FAIL] getTakerFeeRate() returned ${String(takerFee)}, expected 0.00045`);
     }
     console.log(`  ✓ Test 2 Passed: getMakerFeeRate() strictly returned dynamic .env rate (${(makerFee * 100).toFixed(3)}%).\n`);
     // =========================================================================
@@ -101,23 +103,25 @@ async function runMakerTpRemediationTests() {
     // TEST 4: DEF-01 - Sequential Async Batch Order Cancellation Guard
     // =========================================================================
     console.log(`[TEST 4: DEF-01] Verifying async cancelBatchOrders execution blocking before MARKET SL dispatch...`);
-    let cancelBatchOrdersCalled = false;
-    let cancelBatchOrdersTimestamp = 0;
-    let placeOrderCalled = false;
-    let placeOrderTimestamp = 0;
+    const execState = {
+        cancelBatchOrdersCalled: false,
+        cancelBatchOrdersTimestamp: 0,
+        placeOrderCalled: false,
+        placeOrderTimestamp: 0,
+    };
     const mockExecutionClient = {
         isConfigured: () => true,
-        cancelBatchOrders: async (symbol, orderIds) => {
-            cancelBatchOrdersCalled = true;
-            cancelBatchOrdersTimestamp = Date.now();
+        cancelBatchOrders: async (_symbol, orderIds) => {
+            execState.cancelBatchOrdersCalled = true;
+            execState.cancelBatchOrdersTimestamp = Date.now();
             // Simulate 50ms REST network delay for cancellation
             await new Promise((r) => setTimeout(r, 50));
             return [{ orderId: orderIds[0], status: "CANCELED" }];
         },
-        placeOrder: async (params) => {
-            placeOrderCalled = true;
-            placeOrderTimestamp = Date.now();
-            return { orderId: 123456, status: "FILLED", executedQty: params.quantity };
+        placeOrder: (params) => {
+            execState.placeOrderCalled = true;
+            execState.placeOrderTimestamp = Date.now();
+            return Promise.resolve({ orderId: 123456, status: "FILLED", executedQty: params.quantity });
         },
     };
     // Simulate StrategyEngine async execution pipeline block
@@ -135,22 +139,23 @@ async function runMakerTpRemediationTests() {
         });
     };
     await executionPipeline();
-    if (!cancelBatchOrdersCalled || !placeOrderCalled) {
+    if (!execState.cancelBatchOrdersCalled || !execState.placeOrderCalled) {
         throw new Error(`[FAIL] Both cancelBatchOrders and placeOrder must be invoked during emergency close.`);
     }
-    if (placeOrderTimestamp <= cancelBatchOrdersTimestamp) {
+    if (execState.placeOrderTimestamp <= execState.cancelBatchOrdersTimestamp) {
         throw new Error(`[FAIL] placeOrder was executed BEFORE cancelBatchOrders completed! Async await sequence broken!`);
     }
-    const timeDiff = placeOrderTimestamp - cancelBatchOrdersTimestamp;
+    const timeDiff = execState.placeOrderTimestamp - execState.cancelBatchOrdersTimestamp;
     if (timeDiff < 45) {
-        throw new Error(`[FAIL] placeOrder executed too quickly (${timeDiff}ms), indicating cancelBatchOrders was not awaited!`);
+        throw new Error(`[FAIL] placeOrder executed too quickly (${String(timeDiff)}ms), indicating cancelBatchOrders was not awaited!`);
     }
-    console.log(`  ✓ Test 4 Passed: cancelBatchOrders was fully awaited (${timeDiff}ms delay) prior to placeOrder MARKET dispatch.\n`);
+    console.log(`  ✓ Test 4 Passed: cancelBatchOrders was fully awaited (${String(timeDiff)}ms delay) prior to placeOrder MARKET dispatch.\n`);
     console.log(`=================================================================`);
     console.log(`✅ ALL MAKER/TAKER TP REMEDIATION TESTS PASSED DETERMINISTICALLY!`);
     console.log(`=================================================================\n`);
 }
 runMakerTpRemediationTests().catch((err) => {
-    console.error(`❌ QA TEST SUITE ERROR: ${err.message}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`❌ QA TEST SUITE ERROR: ${msg}`);
     process.exit(1);
 });

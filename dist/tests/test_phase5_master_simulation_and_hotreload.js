@@ -46,8 +46,6 @@ const binance_1 = require("../execution/binance");
 const positionLedger_1 = require("../strategy/positionLedger");
 const recalibrationWorker_1 = require("../ai/recalibrationWorker");
 const tradingSymbols_1 = require("../config/tradingSymbols");
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const nativeAddon = require("../../index.js");
 function wrapWsUpdate(order) {
     return {
         eventType: "ORDER_TRADE_UPDATE",
@@ -67,9 +65,9 @@ class Phase5TestExecutionClient extends binance_1.BinanceExecutionClient {
     constructor() {
         super({ apiKey: "MOCK_KEY", apiSecret: "MOCK_SECRET", useTestnet: true });
     }
-    async placeQuantityStopLoss(symbol, side, positionSide, stopPrice, quantity, clientOrderId, signal) {
+    placeQuantityStopLoss(symbol, side, positionSide, stopPrice, quantity, clientOrderId, _signal) {
         if (this.shouldFailNewSl) {
-            throw new Error(this.simulatedFailureError);
+            return Promise.reject(new Error(this.simulatedFailureError));
         }
         const orderId = this.nextOrderId++;
         this.outboundDispatches.push({
@@ -80,11 +78,11 @@ class Phase5TestExecutionClient extends binance_1.BinanceExecutionClient {
             clientOrderId,
             timestamp: Date.now(),
         });
-        return {
+        return Promise.resolve({
             orderId,
             symbol,
             status: "NEW",
-            clientOrderId: clientOrderId || `mock_sl_${orderId}`,
+            clientOrderId: clientOrderId || `mock_sl_${String(orderId)}`,
             price: "0",
             avgPrice: "0",
             origQty: String(quantity),
@@ -98,9 +96,9 @@ class Phase5TestExecutionClient extends binance_1.BinanceExecutionClient {
             stopPrice: String(stopPrice),
             workingType: "CONTRACT_PRICE",
             updateTime: Date.now(),
-        };
+        });
     }
-    async placePositionStopLoss(symbol, side, positionSide, stopPrice, clientOrderId, signal, quantity) {
+    placePositionStopLoss(symbol, side, positionSide, stopPrice, clientOrderId, _signal, quantity) {
         const orderId = this.nextOrderId++;
         this.outboundDispatches.push({
             type: "PLACE_POSITION_SL",
@@ -110,11 +108,11 @@ class Phase5TestExecutionClient extends binance_1.BinanceExecutionClient {
             clientOrderId,
             timestamp: Date.now(),
         });
-        return {
+        return Promise.resolve({
             orderId,
             symbol,
             status: "NEW",
-            clientOrderId: clientOrderId || `mock_pos_sl_${orderId}`,
+            clientOrderId: clientOrderId || `mock_pos_sl_${String(orderId)}`,
             price: "0",
             avgPrice: "0",
             origQty: String(quantity || 0.05),
@@ -128,19 +126,19 @@ class Phase5TestExecutionClient extends binance_1.BinanceExecutionClient {
             stopPrice: String(stopPrice),
             workingType: "CONTRACT_PRICE",
             updateTime: Date.now(),
-        };
+        });
     }
-    async cancelOrder(symbol, orderId, signal) {
+    cancelOrder(symbol, orderId, _signal) {
         this.outboundDispatches.push({
             type: "CANCEL",
             orderId,
             timestamp: Date.now(),
         });
-        return {
+        return Promise.resolve({
             orderId: typeof orderId === "number" ? orderId : parseInt(orderId, 10),
             symbol,
             status: "CANCELED",
-            clientOrderId: `mock_cancel_${orderId}`,
+            clientOrderId: `mock_cancel_${String(orderId)}`,
             price: "0",
             avgPrice: "0",
             origQty: "0.05",
@@ -154,16 +152,16 @@ class Phase5TestExecutionClient extends binance_1.BinanceExecutionClient {
             stopPrice: "0",
             workingType: "CONTRACT_PRICE",
             updateTime: Date.now(),
-        };
+        });
     }
-    async setLeverage(symbol, leverage) {
+    setLeverage(symbol, leverage) {
         const rounded = Math.round(leverage);
         this.outboundDispatches.push({
             type: "SET_LEVERAGE",
             leverage: rounded,
             timestamp: Date.now(),
         });
-        return { symbol, leverage: rounded, maxNotionalValue: "1000000" };
+        return Promise.resolve({ symbol, leverage: rounded, maxNotionalValue: "1000000" });
     }
 }
 async function runPhase5MasterSimulationSuite() {
@@ -184,16 +182,16 @@ async function runPhase5MasterSimulationSuite() {
     const buf1 = recalibManager.getSabBufferForNapi();
     const buf2 = recalibManager.getSabBufferForNapi();
     node_assert_1.default.strictEqual(buf1, buf2, "getSabBufferForNapi() MUST return the exact cached Buffer reference (Zero V8 heap allocations)");
-    console.log(`[Stage 1A] Buffer identity verified (buf1 === buf2). ByteLength: ${buf1.byteLength}`);
+    console.log(`[Stage 1A] Buffer identity verified (buf1 === buf2). ByteLength: ${String(buf1.byteLength)}`);
     // 1B: HOTSWAP_EPOCH Atomic Bump Verification on SAB slot 151
     const initialEpoch = client.getHotswapEpoch(0);
-    console.log(`[Stage 1B] Initial HOTSWAP_EPOCH on SAB slot 151: ${initialEpoch}`);
+    console.log(`[Stage 1B] Initial HOTSWAP_EPOCH on SAB slot 151: ${String(initialEpoch)}`);
     const nextEpoch = client.incrementHotswapEpoch(0);
     node_assert_1.default.strictEqual(nextEpoch, initialEpoch + 1.0, "incrementHotswapEpoch() must atomically increment epoch by 1.0");
     for (let asset = 0; asset < 10; asset++) {
-        node_assert_1.default.strictEqual(client.getHotswapEpoch(asset), nextEpoch, `HOTSWAP_EPOCH must be synchronized across asset ${asset}`);
+        node_assert_1.default.strictEqual(client.getHotswapEpoch(asset), nextEpoch, `HOTSWAP_EPOCH must be synchronized across asset ${String(asset)}`);
     }
-    console.log(`[Stage 1B] HOTSWAP_EPOCH successfully bumped to ${nextEpoch} across all 10 asset slots.`);
+    console.log(`[Stage 1B] HOTSWAP_EPOCH successfully bumped to ${String(nextEpoch)} across all 10 asset slots.`);
     // 1C: State-to-Live Reset & Single-Flight Mutex Guarantees
     recalibManager.resetStateToLive();
     const status = recalibManager.getStatus();
@@ -214,7 +212,7 @@ async function runPhase5MasterSimulationSuite() {
     const validWeightsPath = path.join(process.cwd(), "models", "cfc_weights.safetensors");
     if (fs.existsSync(validWeightsPath) && fs.existsSync(corruptedTkanPath)) {
         const validRes = await recalibManager.verifyCandidateModelInShadow(validWeightsPath, corruptedTkanPath, 0.01, 10, 10, 1000);
-        console.log(`[Stage 2B] Valid weights shadow pre-flight check result: ${validRes}`);
+        console.log(`[Stage 2B] Valid weights shadow pre-flight check result: ${String(validRes)}`);
         node_assert_1.default.strictEqual(validRes, true, "Valid candidate weights must pass preflight initialization");
     }
     else {
@@ -235,17 +233,15 @@ async function runPhase5MasterSimulationSuite() {
     // Initial SL dispatch
     await engine.syncExchangeStopLossOrder("SHORT", initialSummary.totalQuantity, 71000.0);
     const initialSlId = hedgeLedger.getActiveStopLossOrderId("SHORT");
-    node_assert_1.default.ok(initialSlId > 0, "Initial SL must be registered in ledger");
-    console.log(`[Stage 3] Initial SL registered: #${initialSlId}`);
+    node_assert_1.default.ok(initialSlId !== undefined && initialSlId > 0, "Initial SL must be registered in ledger");
+    console.log(`[Stage 3] Initial SL registered: #${String(initialSlId)}`);
     // 3A: Simulate network failure (HTTP 429) during SL replacement
     mockExec.shouldFailNewSl = true;
     mockExec.outboundDispatches.length = 0;
-    let slErrorThrown = false;
     try {
         await engine.syncExchangeStopLossOrder("SHORT", initialSummary.totalQuantity, 70500.0);
     }
     catch (err) {
-        slErrorThrown = true;
         const msg = err instanceof Error ? err.message : String(err);
         node_assert_1.default.ok(msg.includes("429"), `Expected 429 error, got: ${msg}`);
     }
@@ -271,6 +267,7 @@ async function runPhase5MasterSimulationSuite() {
     console.log("--- STAGE 4: WebSocket Cancellation Healing & Sovereign Order State Machine ---");
     // 4A: Order Type Partitioning - Maker TP LIMIT orders must NOT satisfy SL protection
     const activeSlId = hedgeLedger.getActiveStopLossOrderId("SHORT");
+    node_assert_1.default.ok(activeSlId !== undefined && activeSlId > 0, "Active SHORT SL order ID must be set");
     const mockOrdersWithTpOnly = [
         {
             orderId: 88001,
@@ -294,13 +291,13 @@ async function runPhase5MasterSimulationSuite() {
     ];
     const auditRes = riskGuard.auditAggregatedPositionRisk("BTCUSDT", "SHORT", 0.05, 88001, mockOrdersWithTpOnly);
     node_assert_1.default.strictEqual(auditRes.isProtected, false, "LIMIT order must NOT satisfy SL protection check");
-    node_assert_1.default.ok(auditRes.reason && auditRes.reason.includes("INVALID_ORDER_TYPE"), `Audit reason must specify INVALID_ORDER_TYPE, got: ${auditRes.reason}`);
+    node_assert_1.default.ok(auditRes.reason && auditRes.reason.includes("INVALID_ORDER_TYPE"), `Audit reason must specify INVALID_ORDER_TYPE, got: ${String(auditRes.reason)}`);
     console.log("[Stage 4A] Strict order type partitioning verified: LIMIT orders strictly excluded from SL.");
     // 4B: WebSocket external cancellation healing
     mockExec.outboundDispatches.length = 0;
     const wsCancelUpdate = {
         symbol: "BTCUSDT",
-        clientOrderId: `mock_pos_sl_${activeSlId}`,
+        clientOrderId: `mock_pos_sl_${String(activeSlId)}`,
         side: "BUY",
         orderType: "STOP_MARKET",
         timeInForce: "GTC",
@@ -359,7 +356,7 @@ async function runPhase5MasterSimulationSuite() {
     const minPayoffRatio = 0.85;
     const calculatedTpPercent = Math.max(baseSlPercent * minPayoffRatio, baseSlPercent * 1.5);
     const payoffRatio = calculatedTpPercent / baseSlPercent;
-    (0, node_assert_1.default)(payoffRatio >= minPayoffRatio, `Payoff ratio (${payoffRatio.toFixed(2)}) must be >= ${minPayoffRatio}`);
+    (0, node_assert_1.default)(payoffRatio >= minPayoffRatio, `Payoff ratio (${payoffRatio.toFixed(2)}) must be >= ${String(minPayoffRatio)}`);
     console.log(`[Stage 5C] Payoff ratio invariant confirmed: TP/SL = ${payoffRatio.toFixed(2)} >= 0.85.`);
     console.log("✅ STAGE 5 PASSED: Dynamic alpha hurdle & asymmetric payoff ratio barrier verified.\n");
     // ---------------------------------------------------------------------------
@@ -373,14 +370,14 @@ async function runPhase5MasterSimulationSuite() {
     node_assert_1.default.strictEqual(levHighVol, 2, "High vol asset must scale to 2x");
     engine.setLeverageMultiplier(20);
     node_assert_1.default.strictEqual(engine.getLeverageMultiplier(), 5, "Attempting to set 20x leverage must be permanently banned and clamped to 5x");
-    console.log(`[Stage 6A] Leverage scaling verified: LowVol=5x, HighVol=2x, 20x request clamped to ${engine.getLeverageMultiplier()}x.`);
+    console.log(`[Stage 6A] Leverage scaling verified: LowVol=5x, HighVol=2x, 20x request clamped to ${String(engine.getLeverageMultiplier())}x.`);
     // 6B: Strict ~20 USDT Margin Deployment Invariant
     const targetMarginUsdt = 20.0;
     for (const lev of [5, 4, 3, 2]) {
         const targetNotional = targetMarginUsdt * lev;
         const actualMargin = targetNotional / lev;
         node_assert_1.default.strictEqual(actualMargin, 20.0, "Actual allocated margin must evaluate to exactly 20.0 USDT");
-        console.log(`  -> L_i = ${lev}x: TargetNotional = $${targetNotional.toFixed(2)} USDT -> Actual Margin = $${actualMargin.toFixed(2)} USDT`);
+        console.log(`  -> L_i = ${String(lev)}x: TargetNotional = $${targetNotional.toFixed(2)} USDT -> Actual Margin = $${actualMargin.toFixed(2)} USDT`);
     }
     // 6C: Portfolio Aggregate Leverage Cap (<= 2.50x)
     const balanceUsdt = 10000.0;

@@ -42,7 +42,7 @@ function createMockSharedArrayBuffer(): SharedArrayBuffer {
   return sab;
 }
 
-async function runDynamicRiskAndTrapTests() {
+function runDynamicRiskAndTrapTests(): void {
   console.log("=== BATBOT_V11: 2026 Dynamic Risk & Microstructure Trap Mitigation Test Suite ===");
 
   const sab = createMockSharedArrayBuffer();
@@ -61,9 +61,9 @@ async function runDynamicRiskAndTrapTests() {
   const tickResult1 = strategy.evaluateTick();
 
   console.log(`Signal Type: ${tickResult1.signalType}`);
-  console.log(`Position Side: ${tickResult1.positionSide}`);
+  console.log(`Position Side: ${String(tickResult1.positionSide)}`);
   if (tickResult1.riskResult) {
-    console.log(`Risk Check Passed: ${tickResult1.riskResult.passed}, Reason: ${tickResult1.riskResult.reasonCode}`);
+    console.log(`Risk Check Passed: ${String(tickResult1.riskResult.passed)}, Reason: ${tickResult1.riskResult.reasonCode}`);
   }
   console.assert(tickResult1.signalType === "BUY", "Expected BUY signal under high AI confidence and bullish OBI");
 
@@ -81,7 +81,7 @@ async function runDynamicRiskAndTrapTests() {
   const tickResult2 = strategy.evaluateTick();
   console.log(`Signal Type: ${tickResult2.signalType}`);
   if (tickResult2.riskResult) {
-    console.log(`Risk Check Passed: ${tickResult2.riskResult.passed}, Reason: ${tickResult2.riskResult.reasonCode}`);
+    console.log(`Risk Check Passed: ${String(tickResult2.riskResult.passed)}, Reason: ${tickResult2.riskResult.reasonCode}`);
     console.log(`Message: ${tickResult2.riskResult.message}`);
     console.assert(!tickResult2.riskResult.passed, "Order should be rejected under high VPIN toxic flow");
     console.assert(
@@ -101,7 +101,7 @@ async function runDynamicRiskAndTrapTests() {
 
   const tickResult3 = strategy.evaluateTick();
   if (tickResult3.riskResult) {
-    console.log(`Risk Check Passed: ${tickResult3.riskResult.passed}, Reason: ${tickResult3.riskResult.reasonCode}`);
+    console.log(`Risk Check Passed: ${String(tickResult3.riskResult.passed)}, Reason: ${tickResult3.riskResult.reasonCode}`);
     console.log(`Message: ${tickResult3.riskResult.message}`);
     console.assert(!tickResult3.riskResult.passed, "Order should be rejected during liquidity sweep");
     console.assert(
@@ -140,7 +140,9 @@ async function runDynamicRiskAndTrapTests() {
   console.log("\n=== ALL DYNAMIC RISK & TRAP MITIGATION TESTS COMPLETED SUCCESSFULLY ===");
 }
 
-runDynamicRiskAndTrapTests().catch((err) => {
+try {
+  runDynamicRiskAndTrapTests();
+} catch (err: unknown) {
   console.error("Test Suite Failed with error:", err);
   process.exit(1);
-});
+}

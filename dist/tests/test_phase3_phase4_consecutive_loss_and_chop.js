@@ -19,30 +19,30 @@ async function runPhase3Phase4TestSuite() {
     const riskGuard = new risk_1.RiskGuard();
     const symbol = "BTCUSDT";
     if (riskGuard.getConsecutiveLosses(symbol) !== 0) {
-        throw new Error(`FAIL: Initial consecutive losses must be 0, got ${riskGuard.getConsecutiveLosses(symbol)}`);
+        throw new Error(`FAIL: Initial consecutive losses must be 0, got ${String(riskGuard.getConsecutiveLosses(symbol))}`);
     }
     // 1st Loss: -$0.50 PnL, -1.0% ROE -> consecutive losses = 1
     let losses = riskGuard.recordTradeOutcome(symbol, -0.50, -1.0);
     if (losses !== 1 || riskGuard.getConsecutiveLosses(symbol) !== 1) {
-        throw new Error(`FAIL: Consecutive losses after 1st loss should be 1, got ${losses}`);
+        throw new Error(`FAIL: Consecutive losses after 1st loss should be 1, got ${String(losses)}`);
     }
     console.log("  ✓ 1st loss (-$0.50, -1.0% ROE) -> consecutive losses: 1");
     // 2nd Loss: -$1.20 PnL, -2.4% ROE -> consecutive losses = 2
     losses = riskGuard.recordTradeOutcome(symbol, -1.20, -2.4);
     if (losses !== 2 || riskGuard.getConsecutiveLosses(symbol) !== 2) {
-        throw new Error(`FAIL: Consecutive losses after 2nd loss should be 2, got ${losses}`);
+        throw new Error(`FAIL: Consecutive losses after 2nd loss should be 2, got ${String(losses)}`);
     }
     console.log("  ✓ 2nd loss (-$1.20, -2.4% ROE) -> consecutive losses: 2");
     // Scratch trade: +$0.02 PnL, +0.05% Net ROE (<= +0.20% threshold) -> should NOT reset consecutive losses
     losses = riskGuard.recordTradeOutcome(symbol, 0.02, 0.05);
     if (losses !== 2 || riskGuard.getConsecutiveLosses(symbol) !== 2) {
-        throw new Error(`FAIL: Scratch trade (+0.05% ROE <= +0.20%) must NOT reset consecutive losses, got ${losses}`);
+        throw new Error(`FAIL: Scratch trade (+0.05% ROE <= +0.20%) must NOT reset consecutive losses, got ${String(losses)}`);
     }
     console.log("  ✓ Scratch exit (+0.05% Net ROE <= +0.20%) -> consecutive losses remain: 2 (no reset)");
     // Realized winning exit: +$1.50 PnL, +1.20% Net ROE (> +0.20% threshold) -> MUST reset consecutive losses to 0
     losses = riskGuard.recordTradeOutcome(symbol, 1.50, 1.20);
     if (losses !== 0 || riskGuard.getConsecutiveLosses(symbol) !== 0) {
-        throw new Error(`FAIL: Realized winning exit (+1.20% ROE > +0.20%) must reset consecutive losses to 0, got ${losses}`);
+        throw new Error(`FAIL: Realized winning exit (+1.20% ROE > +0.20%) must reset consecutive losses to 0, got ${String(losses)}`);
     }
     console.log("  ✓ Realized winning exit (+1.20% Net ROE > +0.20%) -> consecutive losses reset to 0\n");
     // ============================================================================
@@ -51,26 +51,26 @@ async function runPhase3Phase4TestSuite() {
     console.log("[TEST 2] Testing Exponential Backoff Cooldown Durations...");
     // 0 losses -> 0ms
     if (risk_1.RiskGuard.calculateExponentialLossCooldownMs(0) !== 0) {
-        throw new Error(`FAIL: 0 losses cooldown should be 0ms, got ${risk_1.RiskGuard.calculateExponentialLossCooldownMs(0)}ms`);
+        throw new Error(`FAIL: 0 losses cooldown should be 0ms, got ${String(risk_1.RiskGuard.calculateExponentialLossCooldownMs(0))}ms`);
     }
     // 1 loss -> 15s (15,000ms)
     if (risk_1.RiskGuard.calculateExponentialLossCooldownMs(1) !== 15_000) {
-        throw new Error(`FAIL: 1 loss cooldown should be 15,000ms (15s), got ${risk_1.RiskGuard.calculateExponentialLossCooldownMs(1)}ms`);
+        throw new Error(`FAIL: 1 loss cooldown should be 15,000ms (15s), got ${String(risk_1.RiskGuard.calculateExponentialLossCooldownMs(1))}ms`);
     }
     console.log("  ✓ 1 loss  -> 15s cooldown (15,000ms)");
     // 2 losses -> 60s (60,000ms)
     if (risk_1.RiskGuard.calculateExponentialLossCooldownMs(2) !== 60_000) {
-        throw new Error(`FAIL: 2 losses cooldown should be 60,000ms (60s), got ${risk_1.RiskGuard.calculateExponentialLossCooldownMs(2)}ms`);
+        throw new Error(`FAIL: 2 losses cooldown should be 60,000ms (60s), got ${String(risk_1.RiskGuard.calculateExponentialLossCooldownMs(2))}ms`);
     }
     console.log("  ✓ 2 losses -> 60s cooldown (60,000ms)");
     // 3 losses -> 180s (180,000ms)
     if (risk_1.RiskGuard.calculateExponentialLossCooldownMs(3) !== 180_000) {
-        throw new Error(`FAIL: 3 losses cooldown should be 180,000ms (180s), got ${risk_1.RiskGuard.calculateExponentialLossCooldownMs(3)}ms`);
+        throw new Error(`FAIL: 3 losses cooldown should be 180,000ms (180s), got ${String(risk_1.RiskGuard.calculateExponentialLossCooldownMs(3))}ms`);
     }
     console.log("  ✓ 3 losses -> 180s cooldown (180,000ms)");
     // 5 losses -> 900s (900,000ms / 15 min hard symbol circuit breaker halt)
     if (risk_1.RiskGuard.calculateExponentialLossCooldownMs(5) !== 900_000) {
-        throw new Error(`FAIL: 5 losses cooldown should be 900,000ms (15 min), got ${risk_1.RiskGuard.calculateExponentialLossCooldownMs(5)}ms`);
+        throw new Error(`FAIL: 5 losses cooldown should be 900,000ms (15 min), got ${String(risk_1.RiskGuard.calculateExponentialLossCooldownMs(5))}ms`);
     }
     console.log("  ✓ 5 losses -> 900s hard symbol circuit breaker halt (900,000ms / 15 min)\n");
     // ============================================================================
@@ -90,7 +90,7 @@ async function runPhase3Phase4TestSuite() {
     riskGuard.recordExitExecution(300.0, -2.50, "SELL", ethSymbol, -1.0);
     const check1 = riskGuard.validateOrder(dummyIntent, true);
     if (check1.passed || check1.reasonCode !== "COOLDOWN_ACTIVE") {
-        throw new Error(`FAIL: Expected COOLDOWN_ACTIVE after 1 loss, got ${check1.reasonCode} (passed: ${check1.passed})`);
+        throw new Error(`FAIL: Expected COOLDOWN_ACTIVE after 1 loss, got ${check1.reasonCode} (passed: ${String(check1.passed)})`);
     }
     console.log(`  ✓ 1 loss on ETH: Order rejected with reason '${check1.reasonCode}'`);
     // Simulate 4 more losses to reach 5 consecutive losses
@@ -99,14 +99,14 @@ async function runPhase3Phase4TestSuite() {
     riskGuard.recordExitExecution(300.0, -2.50, "SELL", ethSymbol, -1.0);
     riskGuard.recordExitExecution(300.0, -2.50, "SELL", ethSymbol, -1.0);
     if (riskGuard.getConsecutiveLosses(ethSymbol) !== 5) {
-        throw new Error(`FAIL: Expected 5 consecutive losses on ETH, got ${riskGuard.getConsecutiveLosses(ethSymbol)}`);
+        throw new Error(`FAIL: Expected 5 consecutive losses on ETH, got ${String(riskGuard.getConsecutiveLosses(ethSymbol))}`);
     }
     if (!riskGuard.isCircuitBreakerActive(ethSymbol)) {
         throw new Error("FAIL: Circuit breaker should be active on ETH after 5 consecutive losses");
     }
     const check5 = riskGuard.validateOrder(dummyIntent, true);
     if (check5.passed || check5.reasonCode !== "CIRCUIT_BREAKER_ACTIVE") {
-        throw new Error(`FAIL: Expected CIRCUIT_BREAKER_ACTIVE after 5 losses, got ${check5.reasonCode} (passed: ${check5.passed})`);
+        throw new Error(`FAIL: Expected CIRCUIT_BREAKER_ACTIVE after 5 losses, got ${check5.reasonCode} (passed: ${String(check5.passed)})`);
     }
     console.log(`  ✓ 5 losses on ETH: Order rejected with reason '${check5.reasonCode}' (15m Circuit Breaker Halt)`);
     // Emergency close order must bypass circuit breaker
@@ -135,10 +135,10 @@ async function runPhase3Phase4TestSuite() {
     const readHurst = client.getHurstExponent(0);
     const readEntropy = client.getLOBEntropy(0);
     if (Math.abs(readHurst - 0.625) > 1e-6) {
-        throw new Error(`FAIL: Slot 123 (Hurst) read mismatch: expected 0.625, got ${readHurst}`);
+        throw new Error(`FAIL: Slot 123 (Hurst) read mismatch: expected 0.625, got ${String(readHurst)}`);
     }
     if (Math.abs(readEntropy - 0.710) > 1e-6) {
-        throw new Error(`FAIL: Slot 124 (LOB Entropy) read mismatch: expected 0.710, got ${readEntropy}`);
+        throw new Error(`FAIL: Slot 124 (LOB Entropy) read mismatch: expected 0.710, got ${String(readEntropy)}`);
     }
     console.log(`  ✓ SAB Slot 123 (Hurst: ${readHurst.toFixed(3)}) & Slot 124 (LOB Entropy: ${readEntropy.toFixed(3)}) verified.\n`);
     // ============================================================================
@@ -243,7 +243,7 @@ async function runPhase3Phase4TestSuite() {
     });
     const longLock1 = client.getLongCooldownLock(0);
     if (longLock1 < now + 14_000) {
-        throw new Error(`FAIL: Expected SAB long cooldown lock >= now + 14s, got diff ${longLock1 - now}ms`);
+        throw new Error(`FAIL: Expected SAB long cooldown lock >= now + 14s, got diff ${String(longLock1 - now)}ms`);
     }
     console.log(`  ✓ 1st loss onExecutionCompleted -> SAB Long cooldown lock set to +15s`);
     // Simulate 4 more losses to trigger the 15-minute hard symbol circuit breaker
@@ -262,7 +262,7 @@ async function runPhase3Phase4TestSuite() {
     }
     const longLock5 = client.getLongCooldownLock(0);
     if (longLock5 < now + 890_000) {
-        throw new Error(`FAIL: Expected SAB long cooldown lock >= now + 890s (15 min), got diff ${longLock5 - now}ms`);
+        throw new Error(`FAIL: Expected SAB long cooldown lock >= now + 890s (15 min), got diff ${String(longLock5 - now)}ms`);
     }
     console.log(`  ✓ 5th loss onExecutionCompleted -> SAB Long cooldown lock set to +900s (15 min Circuit Breaker Halt)`);
     // Next tick evaluation must be blocked by cooldown lock
@@ -285,7 +285,7 @@ async function runPhase3Phase4TestSuite() {
         fillTimestampMs: now,
     });
     if (testRiskGuard.getConsecutiveLosses("BTCUSDT") !== 0) {
-        throw new Error(`FAIL: Winning exit must reset consecutive losses to 0, got ${testRiskGuard.getConsecutiveLosses("BTCUSDT")}`);
+        throw new Error(`FAIL: Winning exit must reset consecutive losses to 0, got ${String(testRiskGuard.getConsecutiveLosses("BTCUSDT"))}`);
     }
     console.log(`  ✓ Realized winning exit onExecutionCompleted -> Consecutive losses reset to 0`);
     console.log("\n================================================================================");
@@ -295,6 +295,7 @@ async function runPhase3Phase4TestSuite() {
     console.log("================================================================================\n");
 }
 runPhase3Phase4TestSuite().catch((err) => {
-    console.error(`\n❌ TEST SUITE FAILED: ${err?.stack || err?.message || String(err)}\n`);
+    const errDetail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    console.error(`\n❌ TEST SUITE FAILED: ${errDetail}\n`);
     process.exit(1);
 });

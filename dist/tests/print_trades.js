@@ -34,6 +34,9 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const fs = __importStar(require("fs"));
+function isPrintedTradeRecord(v) {
+    return typeof v === "object" && v !== null && typeof v.time === "number";
+}
 function printUserTrades() {
     const logContent = fs.readFileSync("C:/Users/SMART PLUS/.gemini/antigravity-ide/brain/3f60ccb6-1145-44a0-a4a7-c544bfb2e603/.system_generated/tasks/task-69.log", "utf8");
     const tradeMatches = logContent.matchAll(/--- Symbol: (\w+) \(\d+ trades found\) ---\s*(\[\s*[\s\S]*?\])\s*(?=--- Symbol:|\n>>> ALL ORDERS)/g);
@@ -41,9 +44,17 @@ function printUserTrades() {
     for (const match of tradeMatches) {
         try {
             const parsed = JSON.parse(match[2]);
-            allTrades.push(...parsed);
+            if (Array.isArray(parsed)) {
+                for (const item of parsed) {
+                    if (isPrintedTradeRecord(item))
+                        allTrades.push(item);
+                }
+            }
         }
-        catch (e) { }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[printUserTrades] Failed parsing trades block: ${msg}`);
+        }
     }
     allTrades.sort((a, b) => a.time - b.time);
     console.log("LAST 15 TRADES:");

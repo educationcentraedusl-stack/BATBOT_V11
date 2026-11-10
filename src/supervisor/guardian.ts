@@ -18,6 +18,59 @@ import {
   SupervisorMessage
 } from "./types";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+export function isWorkerMessage(msg: unknown): msg is WorkerMessage {
+  if (!isRecord(msg) || typeof msg["type"] !== "string") {
+    return false;
+  }
+
+  switch (msg["type"]) {
+    case "HANDSHAKE_INIT":
+      return (
+        isFiniteNumber(msg["workerPid"]) &&
+        typeof msg["version"] === "string" &&
+        isFiniteNumber(msg["heartbeatIntervalMs"]) &&
+        isFiniteNumber(msg["timestamp"])
+      );
+    case "HEARTBEAT_PING":
+      return (
+        isFiniteNumber(msg["seq"]) &&
+        isFiniteNumber(msg["timestamp"]) &&
+        (msg["eventLoopLagMs"] === undefined || isFiniteNumber(msg["eventLoopLagMs"]))
+      );
+    case "INTENTIONAL_RESURRECT":
+      return (
+        typeof msg["reason"] === "string" &&
+        isFiniteNumber(msg["consecutiveFailures"]) &&
+        (msg["lastReason"] === undefined || typeof msg["lastReason"] === "string") &&
+        isFiniteNumber(msg["cooldownMs"]) &&
+        isFiniteNumber(msg["timestamp"])
+      );
+    case "USER_SHUTDOWN":
+      return (
+        isFiniteNumber(msg["exitCode"]) &&
+        (msg["reason"] === undefined || typeof msg["reason"] === "string") &&
+        isFiniteNumber(msg["timestamp"])
+      );
+    case "WORKER_TELEMETRY":
+      return (
+        isFiniteNumber(msg["memoryUsageMb"]) &&
+        isFiniteNumber(msg["activeAssetCount"]) &&
+        isFiniteNumber(msg["totalTrades"]) &&
+        isFiniteNumber(msg["timestamp"])
+      );
+    default:
+      return false;
+  }
+}
+
 export class ProcessGuardian {
   private readonly config: SupervisorConfig;
   private readonly hygiene: WorkspaceHygiene;
@@ -129,8 +182,13 @@ export class ProcessGuardian {
    */
   private setupWorkerIpcListeners(worker: ChildProcess): void {
     worker.on("message", (msg: unknown) => {
-      if (!msg || typeof msg !== "object") return;
-      const payload = msg as WorkerMessage;
+      if (!isWorkerMessage(msg)) {
+        process.stderr.write(
+          `\x1b[33m[BATBOT_GUARDIAN_WARN]\x1b[0m Ignoring malformed worker IPC message payload.\n`
+        );
+        return;
+      }
+      const payload: WorkerMessage = msg;
 
       switch (payload.type) {
         case "HANDSHAKE_INIT": {

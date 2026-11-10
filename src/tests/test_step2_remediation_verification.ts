@@ -10,7 +10,7 @@ function assert(condition: boolean, message: string): void {
   }
 }
 
-async function runStep2RemediationTests() {
+function runStep2RemediationTests(): void {
   console.log("================================================================================");
   console.log("   STEP 2 REMEDIATION COMPREHENSIVE VERIFICATION SUITE");
   console.log("   1. Cross-Asset Drift Isolation & SAB Slot 102 Integrity");
@@ -116,7 +116,8 @@ async function runStep2RemediationTests() {
   // Even with 0 samples, updateICKillSwitchState should NOT auto-unlatch from DEGRADED to ALPHA_ACTIVE
   const now = Date.now();
   // Force state to DEGRADED
-  (engine as any).icState = "DEGRADED";
+  const enginePriv = engine as unknown as { icState: "ALPHA_ACTIVE" | "DEGRADED" | "MODEL_BROKEN" };
+  enginePriv.icState = "DEGRADED";
   assert(engine.getIcState() === "DEGRADED", "Engine state should be DEGRADED");
 
   // Call updateICKillSwitchState with safeIC=0.00 and no drift, sampleCount=0
@@ -127,10 +128,10 @@ async function runStep2RemediationTests() {
   // 2B: Strict Drift Latching when SAB Slot 102 reads 1.0 (Drifted)
   // Flag drift on asset 0 in SAB
   client.setIsModelDrifted(true, 0);
-  assert(client.getIsModelDrifted(0) === true, "SAB Slot 102 must read true");
+  assert(client.getIsModelDrifted(0), "SAB Slot 102 must read true");
 
   // Even if engine was in ALPHA_ACTIVE or DEGRADED, and sample count is 0:
-  (engine as any).icState = "ALPHA_ACTIVE";
+  enginePriv.icState = "ALPHA_ACTIVE";
   engine.updateICKillSwitchState(0.02, true, now);
   assert(engine.getIcState() === "MODEL_BROKEN", "SAB Slot 102 Drift flag must strictly latch engine to MODEL_BROKEN!");
   console.log("  ✓ Strict drift latching verified: SAB Slot 102=1.0 latched engine to MODEL_BROKEN");
@@ -145,7 +146,7 @@ async function runStep2RemediationTests() {
   const tickResult = engine.evaluateTick();
   assert(tickResult.signalType === "NONE", "Signal must be NONE when MODEL_BROKEN");
   assert(!tickResult.riskResult?.passed, "Risk result must be passed=false");
-  assert(tickResult.riskResult?.reasonCode === "IC_MODEL_BROKEN", `Expected IC_MODEL_BROKEN, got ${tickResult.riskResult?.reasonCode}`);
+  assert(tickResult.riskResult?.reasonCode === "IC_MODEL_BROKEN", `Expected IC_MODEL_BROKEN, got ${String(tickResult.riskResult?.reasonCode)}`);
   console.log("  ✓ evaluateTick short-circuited and blocked entry with IC_MODEL_BROKEN\n");
 
   // -----------------------------------------------------------------------------------------
@@ -159,9 +160,9 @@ async function runStep2RemediationTests() {
   // Asset 2 (SOLUSDT): Clear drift
   client.setIsModelDrifted(false, 2);
 
-  assert(client.getIsModelDrifted(0) === false, "Asset 0 drift must be false");
-  assert(client.getIsModelDrifted(1) === true, "Asset 1 drift must be true");
-  assert(client.getIsModelDrifted(2) === false, "Asset 2 drift must be false");
+  assert(!client.getIsModelDrifted(0), "Asset 0 drift must be false");
+  assert(client.getIsModelDrifted(1), "Asset 1 drift must be true");
+  assert(!client.getIsModelDrifted(2), "Asset 2 drift must be false");
   console.log("  ✓ SAB Slot 102 verified orthogonal across all asset slots");
 
   console.log("\n================================================================================");
@@ -169,7 +170,9 @@ async function runStep2RemediationTests() {
   console.log("================================================================================");
 }
 
-runStep2RemediationTests().catch((err) => {
+try {
+  runStep2RemediationTests();
+} catch (err: unknown) {
   console.error("\n[FATAL FAILURE IN STEP 2 TESTS]:", err);
   process.exit(1);
-});
+}

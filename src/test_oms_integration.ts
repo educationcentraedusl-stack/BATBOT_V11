@@ -6,7 +6,7 @@ import {
   getPositionSnapshot,
 } from "../index";
 
-async function main() {
+function main(): void {
   console.log("=== BATBOT_V11 Rust OMS N-API Integration Verification ===");
 
   // 1. Initialize Core Engine
@@ -15,7 +15,7 @@ async function main() {
 
   // 2. Initialize OMS Engine
   const omsStarted = startOmsEngine("BTCUSDT", 100000.0, "", "", true);
-  console.log(`OMS Engine Started: ${omsStarted}`);
+  console.log(`OMS Engine Started: ${String(omsStarted)}`);
 
   // 3. Allocate SharedArrayBuffer (2048 bytes)
   const sab = new SharedArrayBuffer(2048);
@@ -52,7 +52,9 @@ async function main() {
   }
 }
 
-main().catch((err) => {
+try {
+  main();
+} catch (err: unknown) {
   console.error("Fatal test error:", err);
   process.exit(1);
-});
+}

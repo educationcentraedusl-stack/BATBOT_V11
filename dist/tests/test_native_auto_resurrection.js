@@ -48,7 +48,7 @@ const path = __importStar(require("node:path"));
 const node_child_process_1 = require("node:child_process");
 const terminalSanitizer_1 = require("../supervisor/terminalSanitizer");
 const workspaceHygiene_1 = require("../supervisor/workspaceHygiene");
-async function runStage1HygieneAndSanitization() {
+function runStage1HygieneAndSanitization() {
     process.stdout.write("\n\x1b[1m=== STAGE 1: WORKSPACE HYGIENE & TERMINAL SANITIZER VALIDATION ===\x1b[0m\n");
     const hygiene = new workspaceHygiene_1.WorkspaceHygiene();
     const testLockDir = path.resolve(process.cwd(), "training");
@@ -75,7 +75,7 @@ async function runStage1HygieneAndSanitization() {
     if (fs.existsSync(testProgressPath)) {
         throw new Error("Stage 1 Failure: testProgressPath was not unlinked!");
     }
-    process.stdout.write(`  [OK] Decontamination verified: ${purged.length} stale artifact(s) successfully unlinked.\n`);
+    process.stdout.write(`  [OK] Decontamination verified: ${String(purged.length)} stale artifact(s) successfully unlinked.\n`);
     // Execute terminal sanitizer
     terminalSanitizer_1.TerminalSanitizer.performFullSanitization(false);
     process.stdout.write("  [OK] TerminalSanitizer executed cleanly with zero exceptions.\n");
@@ -109,16 +109,29 @@ function runStage2IpcContractValidation() {
         reason: "KEYBOARD_QUIT",
         timestamp: Date.now()
     };
-    if (handshake.type !== "HANDSHAKE_INIT" || handshake.workerPid !== 12345) {
+    const parsedHandshake = JSON.parse(JSON.stringify(handshake));
+    const parsedPing = JSON.parse(JSON.stringify(ping));
+    const parsedResurrect = JSON.parse(JSON.stringify(resurrect));
+    const parsedShutdown = JSON.parse(JSON.stringify(shutdown));
+    const isPlainRecord = (val) => typeof val === "object" && val !== null && !Array.isArray(val);
+    if (!isPlainRecord(parsedHandshake) ||
+        parsedHandshake["type"] !== "HANDSHAKE_INIT" ||
+        parsedHandshake["workerPid"] !== 12345) {
         throw new Error("Stage 2 Failure: Invalid HandshakeInitPayload structure.");
     }
-    if (ping.type !== "HEARTBEAT_PING" || ping.seq !== 1) {
+    if (!isPlainRecord(parsedPing) ||
+        parsedPing["type"] !== "HEARTBEAT_PING" ||
+        parsedPing["seq"] !== 1) {
         throw new Error("Stage 2 Failure: Invalid HeartbeatPingPayload structure.");
     }
-    if (resurrect.type !== "INTENTIONAL_RESURRECT" || resurrect.consecutiveFailures !== 3) {
+    if (!isPlainRecord(parsedResurrect) ||
+        parsedResurrect["type"] !== "INTENTIONAL_RESURRECT" ||
+        parsedResurrect["consecutiveFailures"] !== 3) {
         throw new Error("Stage 2 Failure: Invalid IntentionalResurrectPayload structure.");
     }
-    if (shutdown.type !== "USER_SHUTDOWN" || shutdown.exitCode !== 0) {
+    if (!isPlainRecord(parsedShutdown) ||
+        parsedShutdown["type"] !== "USER_SHUTDOWN" ||
+        parsedShutdown["exitCode"] !== 0) {
         throw new Error("Stage 2 Failure: Invalid UserShutdownPayload structure.");
     }
     process.stdout.write("  [OK] All 4 IPC message types verified with strict type integrity.\n");
@@ -208,24 +221,28 @@ if (generation === 1) {
                     fs.unlinkSync(mockWorkerPath);
                 }
             }
-            catch {
-                // Ignore
+            catch (unlinkErr) {
+                process.stderr.write(`[warn] Failed to unlink mock worker: ${unlinkErr instanceof Error ? unlinkErr.message : String(unlinkErr)}\n`);
             }
             if (code !== 0) {
-                return reject(new Error(`Stage 3/4 Failure: Guardian exited with non-zero code: ${code}\nStderr: ${stderrBuffer}`));
+                reject(new Error(`Stage 3/4 Failure: Guardian exited with non-zero code: ${String(code)}\nStderr: ${stderrBuffer}`));
+                return;
             }
             // Verify stdout contained generation 1 AND generation 2
             const sawGen1 = stdoutBuffer.includes("Generation #1") || stdoutBuffer.includes("Worker Generation #1");
             const sawResurrect = stdoutBuffer.includes("Resurrecting Generation #2") || stdoutBuffer.includes("Worker Generation #2");
             const sawCleanExit = stdoutBuffer.includes("Shutting down Guardian Kernel");
             if (!sawGen1) {
-                return reject(new Error("Stage 3/4 Failure: Guardian did not launch Generation #1!"));
+                reject(new Error("Stage 3/4 Failure: Guardian did not launch Generation #1!"));
+                return;
             }
             if (!sawResurrect) {
-                return reject(new Error("Stage 3/4 Failure: Guardian did not resurrect Generation #2!"));
+                reject(new Error("Stage 3/4 Failure: Guardian did not resurrect Generation #2!"));
+                return;
             }
             if (!sawCleanExit) {
-                return reject(new Error("Stage 3/4 Failure: Guardian did not detect clean shutdown on Generation #2!"));
+                reject(new Error("Stage 3/4 Failure: Guardian did not detect clean shutdown on Generation #2!"));
+                return;
             }
             process.stdout.write("\n  [OK] Stages 3 & 4 Verified: Generation #1 hard crash (code 1) autonomously resurrected Generation #2, which then exited cleanly with code 0!\n");
             resolve();
@@ -237,12 +254,12 @@ async function runMasterVerification() {
     process.stdout.write("  BATBOT_V11 SOTA NATIVE AUTO-RESURRECTION MASTER VERIFICATION SUITE    \n");
     process.stdout.write("=========================================================================\n");
     const startTime = Date.now();
-    await runStage1HygieneAndSanitization();
+    runStage1HygieneAndSanitization();
     runStage2IpcContractValidation();
     await runStage3And4LiveAutoResurrection();
     const elapsed = Date.now() - startTime;
     process.stdout.write("\n=========================================================================\n");
-    process.stdout.write(`  ✅ ALL 4 STAGES PASSED 100% CLEANLY (Elapsed: ${elapsed}ms)              \n`);
+    process.stdout.write(`  ✅ ALL 4 STAGES PASSED 100% CLEANLY (Elapsed: ${String(elapsed)}ms)              \n`);
     process.stdout.write("  Zero-Touch Autonomous Native Terminal Resurrection Verified.           \n");
     process.stdout.write("=========================================================================\n\n");
     process.exit(0);

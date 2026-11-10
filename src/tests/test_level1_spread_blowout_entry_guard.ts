@@ -3,7 +3,7 @@ import { MarketDataClient } from "../marketDataClient";
 import { BinanceExecutionClient } from "../execution/binance";
 import { RiskGuard } from "../strategy/risk";
 
-async function runLevel1SpreadBlowoutEntryGuardTest() {
+function runLevel1SpreadBlowoutEntryGuardTest(): void {
   console.log("================================================================================");
   console.log("  TEST SUITE: SOTA LEVEL-1 SPREAD BLOWOUT ENTRY GUARD VERIFICATION             ");
   console.log("================================================================================");
@@ -50,7 +50,7 @@ async function runLevel1SpreadBlowoutEntryGuardTest() {
 
   const blowoutResult = engineBtc.evaluateTick();
   console.log(`  -> Blowout Spread Signal Type: ${blowoutResult.signalType}`);
-  console.log(`  -> Risk Check Reason: ${blowoutResult.riskResult?.reasonCode}`);
+  console.log(`  -> Risk Check Reason: ${String(blowoutResult.riskResult?.reasonCode)}`);
   if (blowoutResult.signalType === "NONE") {
     console.log("  ✅ STAGE 1 PASSED: High-Confidence AI (+99%) entry strictly blocked under blown-out spread.");
   } else {
@@ -65,7 +65,7 @@ async function runLevel1SpreadBlowoutEntryGuardTest() {
 
   const tightResult = engineBtc.evaluateTick();
   console.log(`  -> Tight Spread Signal Type: ${tightResult.signalType}`);
-  console.log(`  -> Position Side: ${tightResult.positionSide}`);
+  console.log(`  -> Position Side: ${String(tightResult.positionSide)}`);
   if (tightResult.signalType === "BUY") {
     console.log("  ✅ STAGE 2 PASSED: Tight spread ($0.30) cleanly executed BUY signal.");
   } else {
@@ -77,7 +77,9 @@ async function runLevel1SpreadBlowoutEntryGuardTest() {
   console.log("================================================================================");
 }
 
-runLevel1SpreadBlowoutEntryGuardTest().catch((err) => {
+try {
+  runLevel1SpreadBlowoutEntryGuardTest();
+} catch (err: unknown) {
   console.error("Test failed with error:", err);
   process.exit(1);
-});
+}

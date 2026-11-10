@@ -1,5 +1,5 @@
-import { HedgePositionLedger, PositionLedger } from "../strategy/positionLedger";
-import { BinanceExecutionClient, BinanceIncomeHistory, BinanceUserTrade } from "../execution/binance";
+import { HedgePositionLedger } from "../strategy/positionLedger";
+import { BinanceExecutionClient } from "../execution/binance";
 import { CLIDashboard, TelemetryFrame } from "../telemetry/dashboard";
 
 function assert(condition: boolean, message: string): void {
@@ -8,7 +8,7 @@ function assert(condition: boolean, message: string): void {
   }
 }
 
-async function runPhase4Tests() {
+function runPhase4Tests(): void {
   console.log("===============================================================================");
   console.log("BATBOT_V11: PHASE 4 EXCHANGE PNL, INCOME & SLIPPAGE PIPELINE TEST SUITE");
   console.log("===============================================================================");
@@ -23,43 +23,43 @@ async function runPhase4Tests() {
   hedgeLedger.recordFundingFee(0.1525, "BTCUSDT");
   assert(
     Math.abs(hedgeLedger.getCumulativeFundingFees() - 0.1525) < 1e-6,
-    `Funding fee should be 0.1525, got ${hedgeLedger.getCumulativeFundingFees()}`
+    `Funding fee should be 0.1525, got ${String(hedgeLedger.getCumulativeFundingFees())}`
   );
   assert(
     Math.abs(hedgeLedger.getCumulativeRealizedPnl() - 0.1525) < 1e-6,
-    `Cumulative Realized PnL should include funding fee (+0.1525), got ${hedgeLedger.getCumulativeRealizedPnl()}`
+    `Cumulative Realized PnL should include funding fee (+0.1525), got ${String(hedgeLedger.getCumulativeRealizedPnl())}`
   );
 
   // Ingest negative funding fee (e.g. -$0.0420 paid on long)
   hedgeLedger.recordFundingFee(-0.0420, "BTCUSDT");
   assert(
     Math.abs(hedgeLedger.getCumulativeFundingFees() - 0.1105) < 1e-6,
-    `Net funding fee should be 0.1105, got ${hedgeLedger.getCumulativeFundingFees()}`
+    `Net funding fee should be 0.1105, got ${String(hedgeLedger.getCumulativeFundingFees())}`
   );
   assert(
     Math.abs(hedgeLedger.getCumulativeRealizedPnl() - 0.1105) < 1e-6,
-    `Cumulative Realized PnL should reflect net funding fee (+0.1105), got ${hedgeLedger.getCumulativeRealizedPnl()}`
+    `Cumulative Realized PnL should reflect net funding fee (+0.1105), got ${String(hedgeLedger.getCumulativeRealizedPnl())}`
   );
 
   // Ingest exact commission (e.g. $0.2700 from Binance REST trade)
   hedgeLedger.recordExactCommission(0.2700);
   assert(
     Math.abs(hedgeLedger.getCumulativeCommissions() - 0.2700) < 1e-6,
-    `Cumulative commissions should be 0.2700, got ${hedgeLedger.getCumulativeCommissions()}`
+    `Cumulative commissions should be 0.2700, got ${String(hedgeLedger.getCumulativeCommissions())}`
   );
 
   // Set reconciled wallet balance
   hedgeLedger.setReconciledWalletBalance(1250.75);
   assert(
     hedgeLedger.getReconciledWalletBalance() === 1250.75,
-    `Reconciled wallet balance should be 1250.75, got ${hedgeLedger.getReconciledWalletBalance()}`
+    `Reconciled wallet balance should be 1250.75, got ${String(hedgeLedger.getReconciledWalletBalance())}`
   );
 
   // Set active step-collar tier
   hedgeLedger.setActiveStepCollarTier(2); // Tier 2 Partial Profit Lock
   assert(
     hedgeLedger.getActiveStepCollarTier() === 2,
-    `Active Step-Collar Tier should be 2, got ${hedgeLedger.getActiveStepCollarTier()}`
+    `Active Step-Collar Tier should be 2, got ${String(hedgeLedger.getActiveStepCollarTier())}`
   );
 
   console.log("  -> [PASS] Funding fee, exact commission, reconciled balance and SC tier ingested with micro-cent precision.");
@@ -76,25 +76,25 @@ async function runPhase4Tests() {
   const summaryAt60600 = hedgeLedger.getSummary(60600.0);
   assert(
     Math.abs(summaryAt60600.roePercent - 10.00) < 0.05,
-    `ROE should be +10.00%, got ${summaryAt60600.roePercent}%`
+    `ROE should be +10.00%, got ${String(summaryAt60600.roePercent)}%`
   );
   assert(
     Math.abs(summaryAt60600.longUnrealizedPnl - 6.00) < 1e-4,
-    `Long unrealized PnL should be +$6.00, got ${summaryAt60600.longUnrealizedPnl}`
+    `Long unrealized PnL should be +$6.00, got ${String(summaryAt60600.longUnrealizedPnl)}`
   );
   assert(
     Math.abs(summaryAt60600.cumulativeFundingFees - 0.1105) < 1e-6,
-    `Summary should contain exact funding fee (0.1105), got ${summaryAt60600.cumulativeFundingFees}`
+    `Summary should contain exact funding fee (0.1105), got ${String(summaryAt60600.cumulativeFundingFees)}`
   );
   assert(
     summaryAt60600.reconciledWalletBalance === 1250.75,
-    `Summary should contain reconciled wallet balance (1250.75), got ${summaryAt60600.reconciledWalletBalance}`
+    `Summary should contain reconciled wallet balance (1250.75), got ${String(summaryAt60600.reconciledWalletBalance)}`
   );
   assert(
     summaryAt60600.activeStepCollarTier === 2,
-    `Summary should contain active Step-Collar tier (2), got ${summaryAt60600.activeStepCollarTier}`
+    `Summary should contain active Step-Collar tier (2), got ${String(summaryAt60600.activeStepCollarTier)}`
   );
-  console.log(`  -> [PASS] ROE = +${summaryAt60600.roePercent}% @ 10x leverage, Unr PnL = $${summaryAt60600.longUnrealizedPnl.toFixed(2)}, Summary synchronized.`);
+  console.log(`  -> [PASS] ROE = +${String(summaryAt60600.roePercent)}% @ 10x leverage, Unr PnL = $${summaryAt60600.longUnrealizedPnl.toFixed(2)}, Summary synchronized.`);
 
   // -----------------------------------------------------------------------------------------
   // TEST 3: Eradication of Fallback $0.00 PnL Resets on Order Errors
@@ -136,6 +136,7 @@ async function runPhase4Tests() {
   // -----------------------------------------------------------------------------------------
   console.log("\n[TEST 5] Telemetry Frame & CLI Dashboard Rendering Verification...");
   const dashboard = new CLIDashboard(false); // instantiated without writing ANSI to stdout
+  assert(typeof dashboard.render === "function", "CLIDashboard must expose render method");
 
   const frame: TelemetryFrame = {
     symbol: "BTCUSDT",
@@ -200,7 +201,9 @@ async function runPhase4Tests() {
   console.log("===============================================================================");
 }
 
-runPhase4Tests().catch((err) => {
+try {
+  runPhase4Tests();
+} catch (err: unknown) {
   console.error("❌ Phase 4 Test Suite Failed:", err);
   process.exit(1);
-});
+}

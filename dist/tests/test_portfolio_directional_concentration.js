@@ -87,7 +87,6 @@ async function runPortfolioDirectionalConcentrationTestSuite() {
         aggressiveConfidenceThreshold: 0.75,
     });
     const engines = [engineBTC, engineETH, engineSOL, engineAVAX];
-    const symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT"];
     const prices = [60000.0, 3000.0, 150.0, 30.0];
     const spreads = [0.5, 0.1, 0.01, 0.005];
     // Initialize healthy baseline metrics across all 4 assets
@@ -115,9 +114,9 @@ async function runPortfolioDirectionalConcentrationTestSuite() {
     console.log("[STAGE 1] Verifying Baseline Directional Position Counts...");
     const initialLongs = engineAVAX.getGlobalDirectionalPositionCount("LONG");
     const initialShorts = engineAVAX.getGlobalDirectionalPositionCount("SHORT");
-    console.log(`  Initial Global Long Count: ${initialLongs}, Short Count: ${initialShorts}`);
-    assert(initialLongs === 0, `Initial Longs must be 0, got ${initialLongs}`);
-    assert(initialShorts === 0, `Initial Shorts must be 0, got ${initialShorts}`);
+    console.log(`  Initial Global Long Count: ${String(initialLongs)}, Short Count: ${String(initialShorts)}`);
+    assert(initialLongs === 0, `Initial Longs must be 0, got ${String(initialLongs)}`);
+    assert(initialShorts === 0, `Initial Shorts must be 0, got ${String(initialShorts)}`);
     console.log("  ✓ Baseline verified: 0 Longs and 0 Shorts across all registered engines\n");
     // --------------------------------------------------------------------------
     // STAGE 2: Allocate 3 Concurrent LONG Positions (BTC, ETH, SOL)
@@ -136,8 +135,8 @@ async function runPortfolioDirectionalConcentrationTestSuite() {
         createMockPositionRisk("SOLUSDT", "1.0", "150.0", "LONG", "10"),
     ]);
     const activeLongsCount = engineAVAX.getGlobalDirectionalPositionCount("LONG");
-    console.log(`  Active Global Long Count: ${activeLongsCount} (Max Allowed = 3)`);
-    assert(activeLongsCount === 3, `Expected exactly 3 active Long positions, got ${activeLongsCount}`);
+    console.log(`  Active Global Long Count: ${String(activeLongsCount)} (Max Allowed = 3)`);
+    assert(activeLongsCount === 3, `Expected exactly 3 active Long positions, got ${String(activeLongsCount)}`);
     console.log("  ✓ 3 Concurrent Long positions successfully confirmed in global portfolio\n");
     // --------------------------------------------------------------------------
     // STAGE 3: 4th Asset (AVAX) Evaluates Strong BUY Setup -> Must be BLOCKED
@@ -162,12 +161,12 @@ async function runPortfolioDirectionalConcentrationTestSuite() {
     client.setCVD(100.0, 3);
     const blockedSignal = engineAVAX.evaluateTick();
     console.log(`  AVAX Signal: ${blockedSignal.signalType}`);
-    console.log(`  AVAX Risk Result Passed: ${blockedSignal.riskResult?.passed}`);
-    console.log(`  AVAX Reason Code: ${blockedSignal.riskResult?.reasonCode}`);
+    console.log(`  AVAX Risk Result Passed: ${String(blockedSignal.riskResult?.passed)}`);
+    console.log(`  AVAX Reason Code: ${String(blockedSignal.riskResult?.reasonCode)}`);
     assert(blockedSignal.signalType === "NONE", `4th Long entry MUST be blocked (signalType=NONE), got ${blockedSignal.signalType}`);
     assert(blockedSignal.riskResult !== undefined, "Expected riskResult to be defined");
     assert(blockedSignal.riskResult?.passed === false, "Expected riskResult.passed === false");
-    assert(blockedSignal.riskResult?.reasonCode === "PORTFOLIO_CONCENTRATION_LIMIT", `Expected reasonCode "PORTFOLIO_CONCENTRATION_LIMIT", got "${blockedSignal.riskResult?.reasonCode}"`);
+    assert(blockedSignal.riskResult?.reasonCode === "PORTFOLIO_CONCENTRATION_LIMIT", `Expected reasonCode "PORTFOLIO_CONCENTRATION_LIMIT", got "${String(blockedSignal.riskResult?.reasonCode)}"`);
     console.log("  ✓ DEF-3101 Verified: 4th Long signal physically blocked at the engine entry gate!\n");
     // --------------------------------------------------------------------------
     // STAGE 4: Deallocate 1 Long (ETH) -> AVAX 4th Long is Now PERMITTED
@@ -177,8 +176,8 @@ async function runPortfolioDirectionalConcentrationTestSuite() {
     engineETH.getHedgeLedger().clearSlots();
     engineETH.syncSabPositionState(0);
     const relievedLongsCount = engineAVAX.getGlobalDirectionalPositionCount("LONG");
-    console.log(`  Relieved Global Long Count: ${relievedLongsCount}`);
-    assert(relievedLongsCount === 2, `Expected 2 active Longs after ETH release, got ${relievedLongsCount}`);
+    console.log(`  Relieved Global Long Count: ${String(relievedLongsCount)}`);
+    assert(relievedLongsCount === 2, `Expected 2 active Longs after ETH release, got ${String(relievedLongsCount)}`);
     await new Promise((r) => setTimeout(r, 10));
     const nowMs3 = timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs();
     Atomics.store(bigIntView, 3 * slotsPerAsset, BigInt(nowMs3) * 1000000n);
@@ -192,7 +191,7 @@ async function runPortfolioDirectionalConcentrationTestSuite() {
         await approvedSignal.executionPromise;
     console.log(`  AVAX Signal after capacity freed: ${approvedSignal.signalType}`);
     assert(approvedSignal.signalType === "BUY", `AVAX entry must be approved when under limit (BUY), got ${approvedSignal.signalType}`);
-    assert(approvedSignal.positionSide === "LONG", `Expected positionSide LONG, got ${approvedSignal.positionSide}`);
+    assert(approvedSignal.positionSide === "LONG", `Expected positionSide LONG, got ${String(approvedSignal.positionSide)}`);
     console.log("  ✓ AVAX BUY order successfully approved once concentration fell below limit of 3\n");
     // --------------------------------------------------------------------------
     // STAGE 5: Symmetric SHORT Concentration Limit Verification
@@ -219,8 +218,8 @@ async function runPortfolioDirectionalConcentrationTestSuite() {
         createMockPositionRisk("SOLUSDT", "-1.0", "150.0", "SHORT", "10"),
     ]);
     const activeShortsCount = engineAVAX.getGlobalDirectionalPositionCount("SHORT");
-    console.log(`  Active Global Short Count: ${activeShortsCount} (Max Allowed = 3)`);
-    assert(activeShortsCount === 3, `Expected exactly 3 active Short positions, got ${activeShortsCount}`);
+    console.log(`  Active Global Short Count: ${String(activeShortsCount)} (Max Allowed = 3)`);
+    assert(activeShortsCount === 3, `Expected exactly 3 active Short positions, got ${String(activeShortsCount)}`);
     // AVAX evaluates strong SELL setup
     client.writeAtomicFloat64Asset(3, sabSchema_1.SAB_SLOTS.AI_DIRECTION, -0.85);
     client.writeAtomicFloat64Asset(3, sabSchema_1.SAB_SLOTS.AI_CONFIDENCE, 0.90);
@@ -240,17 +239,17 @@ async function runPortfolioDirectionalConcentrationTestSuite() {
     client.setCVD(-100.0, 3);
     const blockedShortSignal = engineAVAX.evaluateTick();
     console.log(`  AVAX Short Signal: ${blockedShortSignal.signalType}`);
-    console.log(`  AVAX Short Reason Code: ${blockedShortSignal.riskResult?.reasonCode}`);
+    console.log(`  AVAX Short Reason Code: ${String(blockedShortSignal.riskResult?.reasonCode)}`);
     assert(blockedShortSignal.signalType === "NONE", `4th Short entry MUST be blocked (signalType=NONE), got ${blockedShortSignal.signalType}`);
-    assert(blockedShortSignal.riskResult?.reasonCode === "PORTFOLIO_CONCENTRATION_LIMIT", `Expected reasonCode "PORTFOLIO_CONCENTRATION_LIMIT", got "${blockedShortSignal.riskResult?.reasonCode}"`);
+    assert(blockedShortSignal.riskResult?.reasonCode === "PORTFOLIO_CONCENTRATION_LIMIT", `Expected reasonCode "PORTFOLIO_CONCENTRATION_LIMIT", got "${String(blockedShortSignal.riskResult?.reasonCode)}"`);
     console.log("  ✓ DEF-3101 Verified: 4th Short signal physically blocked at the engine entry gate!\n");
     // Deallocate 1 Short (BTC)
     client.setOmsShortPositionQty(0.0, 0);
     engineBTC.getHedgeLedger().clearSlots();
     engineBTC.syncSabPositionState(0);
     const relievedShortsCount = engineAVAX.getGlobalDirectionalPositionCount("SHORT");
-    console.log(`  Relieved Global Short Count: ${relievedShortsCount}`);
-    assert(relievedShortsCount === 2, `Expected 2 active Shorts after BTC release, got ${relievedShortsCount}`);
+    console.log(`  Relieved Global Short Count: ${String(relievedShortsCount)}`);
+    assert(relievedShortsCount === 2, `Expected 2 active Shorts after BTC release, got ${String(relievedShortsCount)}`);
     await new Promise((r) => setTimeout(r, 10));
     const nowMs6 = timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs();
     Atomics.store(bigIntView, 3 * slotsPerAsset, BigInt(nowMs6) * 1000000n);
@@ -264,7 +263,7 @@ async function runPortfolioDirectionalConcentrationTestSuite() {
         await approvedShortSignal.executionPromise;
     console.log(`  AVAX Short Signal after capacity freed: ${approvedShortSignal.signalType}`);
     assert(approvedShortSignal.signalType === "SELL", `AVAX short entry must be approved when under limit (SELL), got ${approvedShortSignal.signalType}`);
-    assert(approvedShortSignal.positionSide === "SHORT", `Expected positionSide SHORT, got ${approvedShortSignal.positionSide}`);
+    assert(approvedShortSignal.positionSide === "SHORT", `Expected positionSide SHORT, got ${String(approvedShortSignal.positionSide)}`);
     console.log("  ✓ AVAX SELL order successfully approved once short concentration fell below limit of 3\n");
     engine_1.StrategyEngine.resetRegisteredEngines();
     console.log("================================================================================");

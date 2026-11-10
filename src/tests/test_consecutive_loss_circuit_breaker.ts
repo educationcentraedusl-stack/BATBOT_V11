@@ -1,7 +1,6 @@
 import "dotenv/config";
 import { RiskGuard, MultiAssetRiskGuard, OrderIntent } from "../strategy/risk";
 import { MarketDataClient } from "../marketDataClient";
-import { SAB_SLOTS } from "../ipc/sabSchema";
 
 function assert(condition: boolean, message: string): void {
   if (!condition) {
@@ -9,7 +8,7 @@ function assert(condition: boolean, message: string): void {
   }
 }
 
-async function runConsecutiveLossCircuitBreakerTestSuite() {
+function runConsecutiveLossCircuitBreakerTestSuite(): void {
   console.log("================================================================================");
   console.log("  BATBOT_V11 SOTA: CONSECUTIVE-LOSS CIRCUIT BREAKER & PACING TEST SUITE");
   console.log("  - Exponential Cooldown Escalation: 15s -> 60s -> 180s -> 900s (15m halt)");
@@ -153,7 +152,9 @@ async function runConsecutiveLossCircuitBreakerTestSuite() {
   console.log("================================================================================");
 }
 
-runConsecutiveLossCircuitBreakerTestSuite().catch((err) => {
+try {
+  runConsecutiveLossCircuitBreakerTestSuite();
+} catch (err: unknown) {
   console.error("FATAL TEST FAILURE:", err);
   process.exit(1);
-});
+}

@@ -59,18 +59,18 @@ async function runRuthlessHardStopTests() {
     hedgeLedger.getShortSlots()[0].stopLossPrice = 1868.70;
     console.log("\n[TEST 1] Initial Short Slot State:");
     const initialSlot = hedgeLedger.getShortSlots()[0];
-    console.log(`- Occupied: ${initialSlot.isOccupied}`);
-    console.log(`- Entry Price: $${initialSlot.entryPrice}`);
-    console.log(`- Stop Loss Price: $${initialSlot.stopLossPrice}`);
+    console.log(`- Occupied: ${String(initialSlot.isOccupied)}`);
+    console.log(`- Entry Price: $${String(initialSlot.entryPrice)}`);
+    console.log(`- Stop Loss Price: $${String(initialSlot.stopLossPrice)}`);
     // TEST 2: Simulate Price Breach ($1868.84 > $1868.70) under HIGH VPIN TOXIC FLOW (vpin = 0.95) & SWEEP TRAP
     console.log("\n[TEST 2] Simulating SL Breach at $1868.84 under HIGH VPIN TOXIC FLOW (0.95)...");
     setMarketState(100n, 1868.80, 1868.88, 0.95, true, -0.03, 0.51);
     // Evaluate tick
     const signalResult = engine.evaluateTick();
     console.log(`- Signal Type: ${signalResult.signalType}`);
-    console.log(`- Exit Reason: ${signalResult.exitReason}`);
-    console.log(`- Risk Passed: ${signalResult.riskResult?.passed}`);
-    console.log(`- Risk Reason Code: ${signalResult.riskResult?.reasonCode}`);
+    console.log(`- Exit Reason: ${String(signalResult.exitReason)}`);
+    console.log(`- Risk Passed: ${String(signalResult.riskResult?.passed)}`);
+    console.log(`- Risk Reason Code: ${String(signalResult.riskResult?.reasonCode)}`);
     if (signalResult.signalType === "BUY" && signalResult.riskResult?.passed === true) {
         console.log("✅ PASSED: Ruthless Hard Stop bypassed toxic flow traps and dispatched MARKET close order!");
     }
@@ -80,7 +80,7 @@ async function runRuthlessHardStopTests() {
     }
     // TEST 3: Verify Decoupled State Release (Slot remains occupied until order execution callback)
     console.log("\n[TEST 3] Verifying Decoupled State Release:");
-    console.log(`- Slot occupied BEFORE execution promise resolves: ${hedgeLedger.getShortSlots()[0].isOccupied}`);
+    console.log(`- Slot occupied BEFORE execution promise resolves: ${String(hedgeLedger.getShortSlots()[0].isOccupied)}`);
     if (hedgeLedger.getShortSlots()[0].isOccupied) {
         console.log("✅ PASSED: Slot remains occupied during order in-flight phase, preventing unmanaged state loss!");
     }
@@ -90,23 +90,29 @@ async function runRuthlessHardStopTests() {
     }
     // Await order execution promise resolution (simulated)
     if (signalResult.executionPromise) {
-        await signalResult.executionPromise.catch(() => { });
+        try {
+            await signalResult.executionPromise;
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.log(`  ℹ️ Expected simulated offline rejection: ${msg}`);
+        }
     }
     // TEST 4: Profit Hunting Micro-TP1 Verification
     console.log("\n[TEST 4] Testing Profit Hunting Micro-TP1 (+0.25% ROI) & Immediate Break-Even SL Lock:");
     hedgeLedger.releaseShortSlot(0);
     hedgeLedger.occupyShortSlot(0, 1.0, 1864.04, 0.25, 0.20);
     const tpSlot = hedgeLedger.getShortSlots()[0];
-    console.log(`- Initial SL Price: $${tpSlot.stopLossPrice}`);
-    console.log(`- TP1 Target Price: $${tpSlot.tpPrices?.[0].toFixed(2)}`);
+    console.log(`- Initial SL Price: $${String(tpSlot.stopLossPrice)}`);
+    console.log(`- TP1 Target Price: $${String(tpSlot.tpPrices?.[0].toFixed(2))}`);
     // Move price down to TP1 ($1859.38 or below for short)
     const tp1Price = (tpSlot.tpPrices?.[0] ?? 1859.00) - 0.50;
     console.log(`- Moving price to $${tp1Price.toFixed(2)} (TP1 breached)...`);
     setMarketState(101n, tp1Price - 0.05, tp1Price + 0.05, 0.20, false, -0.5, 0.80);
     const tpSignal = engine.evaluateTick();
     console.log(`- TP Signal Type: ${tpSignal.signalType}`);
-    console.log(`- TP Exit Reason: ${tpSignal.exitReason}`);
-    console.log(`- Break-Even Locked: ${tpSlot.breakEvenLocked}`);
+    console.log(`- TP Exit Reason: ${String(tpSignal.exitReason)}`);
+    console.log(`- Break-Even Locked: ${String(tpSlot.breakEvenLocked)}`);
     console.log(`- Updated SL Price (Break-Even): $${tpSlot.stopLossPrice.toFixed(2)}`);
     if (tpSlot.breakEvenLocked && tpSlot.stopLossPrice < tpSlot.entryPrice) {
         console.log("✅ PASSED: Micro-TP1 triggered partial exit and locked fee-adjusted Break-Even Stop Loss!");

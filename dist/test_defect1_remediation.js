@@ -25,9 +25,7 @@ async function runDefect1Test() {
         apiSecret: "dummy_secret",
     });
     // Mock placeOrder to simulate a severe Binance REST API network failure / timeout
-    executionClient.placeOrder = async () => {
-        throw new Error("SIMULATED_BINANCE_API_NETWORK_TIMEOUT (-1001: Internal error; unable to process request)");
-    };
+    executionClient.placeOrder = () => Promise.reject(new Error("SIMULATED_BINANCE_API_NETWORK_TIMEOUT (-1001: Internal error; unable to process request)"));
     const engine = new engine_1.StrategyEngine(client, riskGuard, executionClient, {
         symbol: "BTCUSDT",
         tradeSizeUsdt: 60,
@@ -52,7 +50,7 @@ async function runDefect1Test() {
     catch (err) {
         uncaughtError = err;
     }
-    if (uncaughtError) {
+    if (uncaughtError !== null) {
         console.error("  ❌ FAIL: Execution promise threw an uncaught error!", uncaughtError);
         process.exit(1);
     }
@@ -63,8 +61,8 @@ async function runDefect1Test() {
     console.log("  ✓ executionPromise resolved to null gracefully without throwing an exception.");
     // Verify that isOrderInFlight is reset to false
     const inFlight = engine.isOrderInFlight;
-    if (inFlight !== false) {
-        console.error(`  ❌ FAIL: Expected isOrderInFlight to be false, got ${inFlight}`);
+    if (inFlight) {
+        console.error(`  ❌ FAIL: Expected isOrderInFlight to be false, got ${String(inFlight)}`);
         process.exit(1);
     }
     console.log("  ✓ Engine state 'isOrderInFlight' successfully reset to false in finally block.");

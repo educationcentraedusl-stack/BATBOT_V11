@@ -39,12 +39,11 @@ const engine_1 = require("../strategy/engine");
 const marketDataClient_1 = require("../marketDataClient");
 const risk_1 = require("../strategy/risk");
 const binance_1 = require("../execution/binance");
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const nativeAddon = require("../../index.js");
+const nativeAddon = __importStar(require("../../index"));
 function createMockExecutionClient() {
     const client = new binance_1.BinanceExecutionClient();
     client.isConfigured = () => true;
-    client.placeOrder = async () => ({
+    client.placeOrder = () => Promise.resolve({
         orderId: 0,
         symbol: "MOCK",
         status: "NEW",
@@ -63,7 +62,7 @@ function createMockExecutionClient() {
         workingType: "CONTRACT_PRICE",
         updateTime: Date.now(),
     });
-    client.cancelOrder = async () => ({
+    client.cancelOrder = () => Promise.resolve({
         orderId: 0,
         symbol: "MOCK",
         status: "CANCELED",
@@ -82,8 +81,8 @@ function createMockExecutionClient() {
         workingType: "CONTRACT_PRICE",
         updateTime: Date.now(),
     });
-    client.cancelBatchOrders = async () => [];
-    client.placePositionStopLoss = async () => ({
+    client.cancelBatchOrders = () => Promise.resolve([]);
+    client.placePositionStopLoss = () => Promise.resolve({
         orderId: 0,
         symbol: "MOCK",
         status: "NEW",
@@ -102,9 +101,9 @@ function createMockExecutionClient() {
         workingType: "CONTRACT_PRICE",
         updateTime: Date.now(),
     });
-    client.getDualPositionRisk = async () => [];
-    client.getOpenOrders = async () => [];
-    client.getUserTrades = async () => [];
+    client.getDualPositionRisk = () => Promise.resolve([]);
+    client.getOpenOrders = () => Promise.resolve([]);
+    client.getUserTrades = () => Promise.resolve([]);
     client.subscribeIncomeUpdates = () => () => { };
     client.subscribeUserTradeUpdates = () => () => { };
     return client;
@@ -175,13 +174,13 @@ async function runAscrgTestSuite() {
         const metaLogitAbs = client.getAiMetaLogitAbs(5);
         console.log(`  - Physical Rust AI Output: Direction=${aiDir.toFixed(4)}, Confidence=${(aiConf * 100).toFixed(2)}%, |meta_logit|=${metaLogitAbs.toFixed(4)}`);
         if (!Number.isFinite(aiDir) || aiDir === 0.0) {
-            throw new Error(`Test 1 Failed: Expected non-zero physical AI direction, received ${aiDir}`);
+            throw new Error(`Test 1 Failed: Expected non-zero physical AI direction, received ${String(aiDir)}`);
         }
         if (!Number.isFinite(aiConf) || aiConf < 0.30 || aiConf > 0.70) {
-            throw new Error(`Test 1 Failed: Physical AI confidence ${aiConf} out of calibrated range [0.30, 0.70]`);
+            throw new Error(`Test 1 Failed: Physical AI confidence ${String(aiConf)} out of calibrated range [0.30, 0.70]`);
         }
         if (!Number.isFinite(metaLogitAbs) || metaLogitAbs < 0.0) {
-            throw new Error(`Test 1 Failed: Invalid |meta_logit| in isolated SAB slot 152: ${metaLogitAbs}`);
+            throw new Error(`Test 1 Failed: Invalid |meta_logit| in isolated SAB slot 152: ${String(metaLogitAbs)}`);
         }
         // Advance sequence number
         const bigIntView = new BigInt64Array(sab);
@@ -228,10 +227,10 @@ async function runAscrgTestSuite() {
         const metaLogitAbs = client.getAiMetaLogitAbs(6);
         console.log(`  - Physical Rust AI Output: Direction=${aiDir.toFixed(4)}, Confidence=${(aiConf * 100).toFixed(2)}%, |meta_logit|=${metaLogitAbs.toFixed(4)}`);
         if (!Number.isFinite(aiDir) || aiDir === 0.0) {
-            throw new Error(`Test 2 Failed: Expected non-zero physical AI direction, received ${aiDir}`);
+            throw new Error(`Test 2 Failed: Expected non-zero physical AI direction, received ${String(aiDir)}`);
         }
         if (!Number.isFinite(aiConf) || aiConf < 0.30 || aiConf > 0.70) {
-            throw new Error(`Test 2 Failed: Physical AI confidence ${aiConf} out of calibrated range [0.30, 0.70]`);
+            throw new Error(`Test 2 Failed: Physical AI confidence ${String(aiConf)} out of calibrated range [0.30, 0.70]`);
         }
         const bigIntView = new BigInt64Array(sab);
         Atomics.store(bigIntView, 6 * 256 + 92, 202n);
@@ -276,7 +275,7 @@ async function runAscrgTestSuite() {
         const aiConf = client.getAIPredictionConfidence(4);
         console.log(`  - Physical Rust AI Output: Direction=${aiDir.toFixed(4)}, Confidence=${(aiConf * 100).toFixed(2)}%`);
         if (!Number.isFinite(aiDir) || aiDir === 0.0) {
-            throw new Error(`Test 3 Failed: Expected non-zero physical AI direction, received ${aiDir}`);
+            throw new Error(`Test 3 Failed: Expected non-zero physical AI direction, received ${String(aiDir)}`);
         }
         const bigIntView = new BigInt64Array(sab);
         Atomics.store(bigIntView, 4 * 256 + 92, 303n);
@@ -305,7 +304,7 @@ async function runAscrgTestSuite() {
         client.writeAtomicFloat64Asset(2, 5, 1000);
         client.writeAtomicFloat64Asset(2, 6, 77.24);
         client.writeAtomicFloat64Asset(2, 7, 1000);
-        client.writeAtomicFloat64Asset(2, 1, +0.65); // Massive aggressive bid wall (sweep trap)
+        client.writeAtomicFloat64Asset(2, 1, 0.65); // Massive aggressive bid wall (sweep trap)
         client.writeAtomicFloat64Asset(2, 112, 1.3);
         client.writeAtomicFloat64Asset(2, 121, 0.0001);
         // Physical Rust AI Inference Execution on SAB (ZERO mock injection!)
@@ -370,7 +369,7 @@ async function runAscrgTestSuite() {
         const vel2 = client.getCVDVelocity(1, 5000);
         console.log(`  - CVD Delta +2000.0 over ~250ms, Rolling Velocity: ${vel2.toFixed(4)}`);
         if (Math.abs(vel1) > 1.0 || Math.abs(vel2) > 1.0 || vel2 <= 0.0) {
-            throw new Error(`Test 6 Failed: CVD velocity ${vel2} invalid or out of bounds`);
+            throw new Error(`Test 6 Failed: CVD velocity ${String(vel2)} invalid or out of bounds`);
         }
         console.log("  ✓ Test 6 Passed: Rolling CVD Velocity correctly computed positive velocity with zero session drift!\n");
     }

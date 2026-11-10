@@ -81,8 +81,8 @@ async function runHedgeModeSplitProof(): Promise<void> {
 
   multiEngine.reconcileStartupPositions(rawBinancePositions);
 
-  const btcEngine = multiEngine.getEngineForSymbol("BTCUSDT")!;
-  const ethEngine = multiEngine.getEngineForSymbol("ETHUSDT")!;
+  const btcEngine = multiEngine.getEngineForSymbol("BTCUSDT");
+  const ethEngine = multiEngine.getEngineForSymbol("ETHUSDT");
   if (!btcEngine || !ethEngine) {
     throw new Error("FAIL: Engine instances for BTCUSDT or ETHUSDT not initialized!");
   }
@@ -93,22 +93,22 @@ async function runHedgeModeSplitProof(): Promise<void> {
   const btcShortSlots = btcEngine.getHedgeLedger().getShortSlots();
   const btcSummary = btcEngine.getHedgeLedger().getSummary(62700.00);
 
-  console.log(`  - Slot #0-LONG : Occupied=${btcCoreLong.isOccupied}, Qty=${btcCoreLong.quantity}, EntryPrice=$${btcCoreLong.entryPrice}`);
-  console.log(`  - Slot #0-SHORT: Occupied=${btcShortSlots[0].isOccupied}, Qty=${btcShortSlots[0].quantity}, EntryPrice=$${btcShortSlots[0].entryPrice}`);
-  console.log(`  - Summary: Side=${btcSummary.side}, LongQty=${btcSummary.longQuantity}, ShortQty=${btcSummary.shortQuantity}, NetQty=${btcSummary.netQuantity}, GrossQty=${btcSummary.grossQuantity}`);
-  console.log(`  - Summary Long Entry Price : $${btcSummary.longAverageEntryPrice} (Must be exactly 62500.00)`);
-  console.log(`  - Summary Short Entry Price: $${btcSummary.shortAverageEntryPrice} (Must be exactly 62891.00)`);
-  console.log(`  - Summary Long Unrealized  : +$${btcSummary.longUnrealizedPnl} (Must be > 0 under $62700 mark price)`);
-  console.log(`  - Summary Short Unrealized : +$${btcSummary.shortUnrealizedPnl} (Must be > 0 under $62700 mark price)`);
+  console.log(`  - Slot #0-LONG : Occupied=${String(btcCoreLong.isOccupied)}, Qty=${String(btcCoreLong.quantity)}, EntryPrice=$${String(btcCoreLong.entryPrice)}`);
+  console.log(`  - Slot #0-SHORT: Occupied=${String(btcShortSlots[0].isOccupied)}, Qty=${String(btcShortSlots[0].quantity)}, EntryPrice=$${String(btcShortSlots[0].entryPrice)}`);
+  console.log(`  - Summary: Side=${btcSummary.side}, LongQty=${String(btcSummary.longQuantity)}, ShortQty=${String(btcSummary.shortQuantity)}, NetQty=${String(btcSummary.netQuantity)}, GrossQty=${String(btcSummary.grossQuantity)}`);
+  console.log(`  - Summary Long Entry Price : $${String(btcSummary.longAverageEntryPrice)} (Must be exactly 62500.00)`);
+  console.log(`  - Summary Short Entry Price: $${String(btcSummary.shortAverageEntryPrice)} (Must be exactly 62891.00)`);
+  console.log(`  - Summary Long Unrealized  : +$${String(btcSummary.longUnrealizedPnl)} (Must be > 0 under $62700 mark price)`);
+  console.log(`  - Summary Short Unrealized : +$${String(btcSummary.shortUnrealizedPnl)} (Must be > 0 under $62700 mark price)`);
 
   if (!btcCoreLong.isOccupied || Math.abs(btcCoreLong.quantity - 0.0008) > 1e-6 || Math.abs(btcCoreLong.entryPrice - 62500.00) > 1e-2) {
-    throw new Error(`FAIL: Slot #0-LONG mismatch! Expected 0.0008 @ $62500, got ${btcCoreLong.quantity} @ ${btcCoreLong.entryPrice}`);
+    throw new Error(`FAIL: Slot #0-LONG mismatch! Expected 0.0008 @ $62500, got ${String(btcCoreLong.quantity)} @ ${String(btcCoreLong.entryPrice)}`);
   }
   if (!btcShortSlots[0].isOccupied || Math.abs(btcShortSlots[0].quantity - 0.0018) > 1e-6 || Math.abs(btcShortSlots[0].entryPrice - 62891.00) > 1e-2) {
-    throw new Error(`FAIL: Slot #0-SHORT mismatch! Expected 0.0018 @ $62891, got ${btcShortSlots[0].quantity} @ ${btcShortSlots[0].entryPrice}`);
+    throw new Error(`FAIL: Slot #0-SHORT mismatch! Expected 0.0018 @ $62891, got ${String(btcShortSlots[0].quantity)} @ ${String(btcShortSlots[0].entryPrice)}`);
   }
   if (Math.abs(btcSummary.longAverageEntryPrice - 62500.00) > 1e-2 || Math.abs(btcSummary.shortAverageEntryPrice - 62891.00) > 1e-2) {
-    throw new Error(`FAIL: Summary entry prices were blended! Long: ${btcSummary.longAverageEntryPrice}, Short: ${btcSummary.shortAverageEntryPrice}`);
+    throw new Error(`FAIL: Summary entry prices were blended! Long: ${String(btcSummary.longAverageEntryPrice)}, Short: ${String(btcSummary.shortAverageEntryPrice)}`);
   }
   console.log("  ✅ Phase 2 Passed: Dual slots tracked with 100% unblended, independent cost bases.");
 
@@ -122,19 +122,19 @@ async function runHedgeModeSplitProof(): Promise<void> {
   const sabShortUPnl = client.getOmsShortUnrealizedPnl(0);
   const sabSideCode = client.getOmsPositionSide(0);
 
-  console.log(`  - SAB Slot 142 (Side Code)       : ${sabSideCode} (Expected: 3.0 = BOTH)`);
-  console.log(`  - SAB Slot 143 (Long Qty)        : ${sabLongQty} (Expected: 0.0008)`);
-  console.log(`  - SAB Slot 144 (Short Qty)       : ${sabShortQty} (Expected: 0.0018)`);
-  console.log(`  - SAB Slot 145 (Long Avg Entry)  : $${sabLongEntry} (Expected: 62500.00)`);
-  console.log(`  - SAB Slot 146 (Short Avg Entry) : $${sabShortEntry} (Expected: 62891.00)`);
-  console.log(`  - SAB Slot 147 (Long Unr PnL)    : +$${sabLongUPnl}`);
-  console.log(`  - SAB Slot 148 (Short Unr PnL)   : +$${sabShortUPnl}`);
+  console.log(`  - SAB Slot 142 (Side Code)       : ${String(sabSideCode)} (Expected: 3.0 = BOTH)`);
+  console.log(`  - SAB Slot 143 (Long Qty)        : ${String(sabLongQty)} (Expected: 0.0008)`);
+  console.log(`  - SAB Slot 144 (Short Qty)       : ${String(sabShortQty)} (Expected: 0.0018)`);
+  console.log(`  - SAB Slot 145 (Long Avg Entry)  : $${String(sabLongEntry)} (Expected: 62500.00)`);
+  console.log(`  - SAB Slot 146 (Short Avg Entry) : $${String(sabShortEntry)} (Expected: 62891.00)`);
+  console.log(`  - SAB Slot 147 (Long Unr PnL)    : +$${String(sabLongUPnl)}`);
+  console.log(`  - SAB Slot 148 (Short Unr PnL)   : +$${String(sabShortUPnl)}`);
 
   if (sabSideCode !== 3.0 || Math.abs(sabLongQty - 0.0008) > 1e-6 || Math.abs(sabShortQty - 0.0018) > 1e-6) {
     throw new Error("FAIL: SAB quantities or side code mismatch!");
   }
   if (Math.abs(sabLongEntry - 62500.00) > 1e-2 || Math.abs(sabShortEntry - 62891.00) > 1e-2) {
-    throw new Error(`FAIL: SAB entry prices not unblended! Long: ${sabLongEntry}, Short: ${sabShortEntry}`);
+    throw new Error(`FAIL: SAB entry prices not unblended! Long: ${String(sabLongEntry)}, Short: ${String(sabShortEntry)}`);
   }
   console.log("  ✅ Phase 3 Passed: Zero-copy SAB memory reflects dual-directional positions.");
 
@@ -143,17 +143,17 @@ async function runHedgeModeSplitProof(): Promise<void> {
   const btcActiveTrades = btcEngine.getActiveTrades(62700.00);
   const ethActiveTrades = ethEngine.getActiveTrades(1874.45);
 
-  console.log(`  - BTCUSDT Active Trades Count: ${btcActiveTrades.length} (Expected: 2)`);
+  console.log(`  - BTCUSDT Active Trades Count: ${String(btcActiveTrades.length)} (Expected: 2)`);
   for (let i = 0; i < btcActiveTrades.length; i++) {
     const t = btcActiveTrades[i];
-    console.log(`    [Slot ${i + 1}] ${t.symbol} | ${t.side} | Size: ${t.size} | Entry: $${t.entryPrice} | TP: $${t.tpPrice.toFixed(2)} | SL: $${t.slPrice.toFixed(2)}`);
+    console.log(`    [Slot ${String(i + 1)}] ${t.symbol} | ${t.side} | Size: ${String(t.size)} | Entry: $${String(t.entryPrice)} | TP: $${t.tpPrice.toFixed(2)} | SL: $${t.slPrice.toFixed(2)}`);
   }
 
   if (btcActiveTrades.length !== 2) {
-    throw new Error(`FAIL: Expected 2 active trade slots for BTCUSDT, got ${btcActiveTrades.length}`);
+    throw new Error(`FAIL: Expected 2 active trade slots for BTCUSDT, got ${String(btcActiveTrades.length)}`);
   }
   if (ethActiveTrades.length !== 1) {
-    throw new Error(`FAIL: Expected 1 active trade slot for ETHUSDT, got ${ethActiveTrades.length}`);
+    throw new Error(`FAIL: Expected 1 active trade slot for ETHUSDT, got ${String(ethActiveTrades.length)}`);
   }
   console.log("  ✅ Phase 4 Passed: 3 total active trade slots independently exposed for telemetry.");
 
@@ -161,9 +161,9 @@ async function runHedgeModeSplitProof(): Promise<void> {
   console.log("\n[Phase 5] Verifying Independent Dynamic TP/SL Exit Triggers...");
   // Test Mark Price Surge to 64000.00 (Should trigger SHORT Stop Loss without affecting LONG)
   const triggersHigh = btcEngine.getHedgeLedger().evaluateHedgeDynamicTpSl(64000.00);
-  console.log(`  - Triggers on Bullish Price Surge ($64000): ${triggersHigh.length} trigger(s)`);
+  console.log(`  - Triggers on Bullish Price Surge ($64000): ${String(triggersHigh.length)} trigger(s)`);
   for (const trg of triggersHigh) {
-    console.log(`    Triggered: Slot=${trg.slotId}, Side=${trg.side}, Reason=${trg.reason}, Qty=${trg.quantity}`);
+    console.log(`    Triggered: Slot=${trg.slotId}, Side=${trg.side}, Reason=${trg.reason}, Qty=${String(trg.quantity)}`);
   }
   const shortTriggered = triggersHigh.some((t) => t.side === "SHORT" && t.reason === "STOP_LOSS");
   if (!shortTriggered) {
@@ -188,8 +188,8 @@ async function runHedgeModeSplitProof(): Promise<void> {
   const afterCloseCoreLong = btcEngine.getHedgeLedger().getCoreLong();
   const afterCloseShort = btcEngine.getHedgeLedger().getShortSlots()[0];
 
-  console.log(`  - After LONG Close: Long Occupied=${afterCloseCoreLong.isOccupied}, LongQty=${afterCloseSummary.longQuantity}`);
-  console.log(`  - After LONG Close: Short Occupied=${afterCloseShort.isOccupied}, ShortQty=${afterCloseSummary.shortQuantity}, ShortEntry=$${afterCloseShort.entryPrice}`);
+  console.log(`  - After LONG Close: Long Occupied=${String(afterCloseCoreLong.isOccupied)}, LongQty=${String(afterCloseSummary.longQuantity)}`);
+  console.log(`  - After LONG Close: Short Occupied=${String(afterCloseShort.isOccupied)}, ShortQty=${String(afterCloseSummary.shortQuantity)}, ShortEntry=$${String(afterCloseShort.entryPrice)}`);
   console.log(`  - Summary Side: ${afterCloseSummary.side} (Expected: SHORT)`);
 
   if (afterCloseCoreLong.isOccupied || afterCloseSummary.longQuantity > 1e-6) {
@@ -205,7 +205,7 @@ async function runHedgeModeSplitProof(): Promise<void> {
   console.log("=========================================================================\n");
 }
 
-runHedgeModeSplitProof().catch((err) => {
+runHedgeModeSplitProof().catch((err: unknown) => {
   console.error("❌ TEST FAILED:", err);
   process.exit(1);
 });

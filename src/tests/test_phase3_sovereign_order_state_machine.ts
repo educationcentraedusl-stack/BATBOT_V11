@@ -32,13 +32,13 @@ class SovereignTestExecutionClient extends BinanceExecutionClient {
     super({ apiKey: "MOCK_KEY", apiSecret: "MOCK_SECRET", useTestnet: true });
   }
 
-  public override async placePositionStopLoss(
+  public override placePositionStopLoss(
     symbol: string,
     side: "BUY" | "SELL",
     positionSide: "LONG" | "SHORT" | "BOTH",
     stopPrice: number,
     clientOrderId?: string,
-    signal?: AbortSignal,
+    _signal?: AbortSignal,
     quantity?: number
   ): Promise<BinanceOrderResponse> {
     const orderId = this.nextOrderId++;
@@ -51,11 +51,11 @@ class SovereignTestExecutionClient extends BinanceExecutionClient {
       timestamp: Date.now(),
     });
 
-    return {
+    return Promise.resolve({
       orderId,
       symbol,
       status: "NEW",
-      clientOrderId: clientOrderId || `mock_pos_sl_${orderId}`,
+      clientOrderId: clientOrderId || `mock_pos_sl_${String(orderId)}`,
       price: "0",
       avgPrice: "0",
       origQty: String(quantity || 0.05),
@@ -69,17 +69,17 @@ class SovereignTestExecutionClient extends BinanceExecutionClient {
       stopPrice: String(stopPrice),
       workingType: "CONTRACT_PRICE",
       updateTime: Date.now(),
-    };
+    });
   }
 
-  public override async placeQuantityStopLoss(
+  public override placeQuantityStopLoss(
     symbol: string,
     side: "BUY" | "SELL",
     positionSide: "LONG" | "SHORT" | "BOTH",
     stopPrice: number,
     quantity: number,
     clientOrderId?: string,
-    signal?: AbortSignal
+    _signal?: AbortSignal
   ): Promise<BinanceOrderResponse> {
     const orderId = this.nextOrderId++;
     this.outboundDispatches.push({
@@ -91,11 +91,11 @@ class SovereignTestExecutionClient extends BinanceExecutionClient {
       timestamp: Date.now(),
     });
 
-    return {
+    return Promise.resolve({
       orderId,
       symbol,
       status: "NEW",
-      clientOrderId: clientOrderId || `mock_qty_sl_${orderId}`,
+      clientOrderId: clientOrderId || `mock_qty_sl_${String(orderId)}`,
       price: "0",
       avgPrice: "0",
       origQty: String(quantity),
@@ -109,12 +109,12 @@ class SovereignTestExecutionClient extends BinanceExecutionClient {
       stopPrice: String(stopPrice),
       workingType: "CONTRACT_PRICE",
       updateTime: Date.now(),
-    };
+    });
   }
 
-  public override async placeBatchOrders(
+  public override placeBatchOrders(
     orders: BinanceOrderParams[],
-    signal?: AbortSignal
+    _signal?: AbortSignal
   ): Promise<BinanceOrderResponse[]> {
     const responses: BinanceOrderResponse[] = [];
     for (const ord of orders) {
@@ -130,7 +130,7 @@ class SovereignTestExecutionClient extends BinanceExecutionClient {
         orderId,
         symbol: ord.symbol,
         status: "NEW",
-        clientOrderId: ord.clientOrderId || `mock_tp_${orderId}`,
+        clientOrderId: ord.clientOrderId || `mock_tp_${String(orderId)}`,
         price: String(ord.price || 0),
         avgPrice: "0",
         origQty: String(ord.quantity),
@@ -146,13 +146,13 @@ class SovereignTestExecutionClient extends BinanceExecutionClient {
         updateTime: Date.now(),
       });
     }
-    return responses;
+    return Promise.resolve(responses);
   }
 
-  public override async cancelOrder(
+  public override cancelOrder(
     symbol: string,
     orderId: number | string,
-    signal?: AbortSignal
+    _signal?: AbortSignal
   ): Promise<BinanceOrderResponse> {
     this.outboundDispatches.push({
       type: "CANCEL",
@@ -160,11 +160,11 @@ class SovereignTestExecutionClient extends BinanceExecutionClient {
       timestamp: Date.now(),
     });
 
-    return {
+    return Promise.resolve({
       orderId: Number(orderId),
       symbol,
       status: "CANCELED",
-      clientOrderId: `cancel_${orderId}`,
+      clientOrderId: `cancel_${String(orderId)}`,
       price: "0",
       avgPrice: "0",
       origQty: "0",
@@ -178,7 +178,7 @@ class SovereignTestExecutionClient extends BinanceExecutionClient {
       stopPrice: "0",
       workingType: "CONTRACT_PRICE",
       updateTime: Date.now(),
-    };
+    });
   }
 }
 
@@ -262,7 +262,7 @@ async function runPhase3SovereignOrderStateMachineTests(): Promise<void> {
   assert.strictEqual(auditLimit.isProtected, false, "Audit must fail when orderId is a LIMIT order");
   assert.ok(
     auditLimit.reason && auditLimit.reason.includes("INVALID_ORDER_TYPE"),
-    `Reason must mention INVALID_ORDER_TYPE, got: ${auditLimit.reason}`
+    `Reason must mention INVALID_ORDER_TYPE, got: ${String(auditLimit.reason)}`
   );
 
   // 1b: auditAggregatedPositionRisk must reject TAKE_PROFIT_MARKET order
@@ -270,7 +270,7 @@ async function runPhase3SovereignOrderStateMachineTests(): Promise<void> {
   assert.strictEqual(auditTpMkt.isProtected, false, "Audit must fail when orderId is a TAKE_PROFIT_MARKET order");
   assert.ok(
     auditTpMkt.reason && auditTpMkt.reason.includes("INVALID_ORDER_TYPE"),
-    `Reason must mention INVALID_ORDER_TYPE, got: ${auditTpMkt.reason}`
+    `Reason must mention INVALID_ORDER_TYPE, got: ${String(auditTpMkt.reason)}`
   );
 
   // 1c: syncExchangeStateWithData with only LIMIT order must NOT satisfy SL protection and must dispatch STOP_MARKET
@@ -305,22 +305,22 @@ async function runPhase3SovereignOrderStateMachineTests(): Promise<void> {
   const registeredSlId = hedgeLedger.getActiveStopLossOrderId("LONG");
   assert.ok(registeredSlId !== undefined && registeredSlId > 0, "Ledger must have registered active Stop Loss order ID");
 
-  console.log(`  ✅ Stage 1 Passed: LIMIT/TP orders strictly rejected for SL protection. Emergency SL #${registeredSlId} dispatched.\n`);
+  console.log(`  ✅ Stage 1 Passed: LIMIT/TP orders strictly rejected for SL protection. Emergency SL #${String(registeredSlId)} dispatched.\n`);
 
   // =========================================================================
   // STAGE 2: Reactive WS Invalidation Test (CANCELED)
   // =========================================================================
   console.log("[STAGE 2] Testing Reactive WS Invalidation on CANCELED event...");
 
-  const activeSlId = hedgeLedger.getActiveStopLossOrderId("LONG")!;
-  assert.ok(activeSlId > 0, "Pre-condition: Active SL order ID must be set");
+  const activeSlId = hedgeLedger.getActiveStopLossOrderId("LONG");
+  assert.ok(activeSlId !== undefined && activeSlId > 0, "Pre-condition: Active SL order ID must be set");
 
   const cancelDispatchesStart = execClient.outboundDispatches.length;
 
   // Simulate Binance WebSocket executionReport with CANCELED status for the active SL order
   const wsCancelUpdate: BinanceWsOrderUpdate = {
     symbol: "BTCUSDT",
-    clientOrderId: `mock_pos_sl_${activeSlId}`,
+    clientOrderId: `mock_pos_sl_${String(activeSlId)}`,
     side: "SELL",
     orderType: "STOP_MARKET",
     timeInForce: "GTC",
@@ -352,15 +352,15 @@ async function runPhase3SovereignOrderStateMachineTests(): Promise<void> {
 
   const postCancelSlId = hedgeLedger.getActiveStopLossOrderId("LONG");
   assert.ok(
-    postCancelSlId !== undefined && postCancelSlId !== activeSlId,
-    `Ledger must have cleared old SL #${activeSlId} and registered new emergency replacement SL #${postCancelSlId}`
+    postCancelSlId !== activeSlId,
+    `Ledger must have cleared old SL #${String(activeSlId)} and registered new emergency replacement SL #${String(postCancelSlId)}`
   );
 
   const emergencyDispatches = execClient.outboundDispatches.filter(
     (d, idx) => idx >= cancelDispatchesStart && (d.type === "PLACE_POSITION_SL" || d.type === "PLACE_QUANTITY_SL")
   );
   assert.ok(emergencyDispatches.length >= 1, "Fast-path emergency Stop-Loss replacement must have been dispatched to Binance");
-  console.log(`  ✅ Stage 2 Passed: CANCELED SL #${activeSlId} reactively healed with replacement SL #${postCancelSlId}.\n`);
+  console.log(`  ✅ Stage 2 Passed: CANCELED SL #${String(activeSlId)} reactively healed with replacement SL #${String(postCancelSlId)}.\n`);
 
   // =========================================================================
   // STAGE 3: Reactive WS Invalidation Test (EXPIRED & REJECTED)
@@ -368,7 +368,11 @@ async function runPhase3SovereignOrderStateMachineTests(): Promise<void> {
   console.log("[STAGE 3] Testing Reactive WS Invalidation on EXPIRED and REJECTED events...");
 
   // 3a: Test EXPIRED
-  const currentSlBeforeExpire = hedgeLedger.getActiveStopLossOrderId("LONG")!;
+  const currentSlBeforeExpire = hedgeLedger.getActiveStopLossOrderId("LONG");
+  assert.ok(
+    currentSlBeforeExpire !== undefined && currentSlBeforeExpire > 0,
+    "Pre-condition: Active SL order ID must be set before EXPIRED test"
+  );
   const wsExpireUpdate: BinanceWsOrderUpdate = {
     ...wsCancelUpdate,
     orderId: currentSlBeforeExpire,
@@ -382,18 +386,26 @@ async function runPhase3SovereignOrderStateMachineTests(): Promise<void> {
 
   const postExpireSlId = hedgeLedger.getActiveStopLossOrderId("LONG");
   assert.ok(
-    postExpireSlId !== undefined && postExpireSlId !== currentSlBeforeExpire,
-    `Ledger must clear expired SL #${currentSlBeforeExpire} and replace with #${postExpireSlId}`
+    postExpireSlId !== currentSlBeforeExpire,
+    `Ledger must clear expired SL #${String(currentSlBeforeExpire)} and replace with #${String(postExpireSlId)}`
   );
-  console.log(`  ✅ Stage 3a Passed: EXPIRED SL #${currentSlBeforeExpire} replaced with #${postExpireSlId}.`);
+  const expireReplacementDispatches = execClient.outboundDispatches.filter(
+    (d, idx) => idx >= expireDispatchesStart && (d.type === "PLACE_POSITION_SL" || d.type === "PLACE_QUANTITY_SL")
+  );
+  assert.ok(expireReplacementDispatches.length >= 1, "EXPIRED replacement SL must have been dispatched");
+  console.log(`  ✅ Stage 3a Passed: EXPIRED SL #${String(currentSlBeforeExpire)} replaced with #${String(postExpireSlId)}.`);
 
   // 3b: Test REJECTED
   const currentSlBeforeReject = postExpireSlId;
+  assert.ok(
+    currentSlBeforeReject !== undefined && currentSlBeforeReject > 0,
+    "Pre-condition: Active SL order ID must be set before REJECTED test"
+  );
   const wsRejectUpdate: BinanceWsOrderUpdate = {
     ...wsCancelUpdate,
     orderId: currentSlBeforeReject,
-    orderStatus: "REJECTED" as any,
-    executionType: "REJECTED" as any,
+    orderStatus: "REJECTED" as unknown as BinanceWsOrderUpdate["orderStatus"],
+    executionType: "REJECTED",
   };
 
   engine.handleWsOrderUpdate(wrapWsUpdate(wsRejectUpdate));
@@ -401,10 +413,10 @@ async function runPhase3SovereignOrderStateMachineTests(): Promise<void> {
 
   const postRejectSlId = hedgeLedger.getActiveStopLossOrderId("LONG");
   assert.ok(
-    postRejectSlId !== undefined && postRejectSlId !== currentSlBeforeReject,
-    `Ledger must clear rejected SL #${currentSlBeforeReject} and replace with #${postRejectSlId}`
+    postRejectSlId !== currentSlBeforeReject,
+    `Ledger must clear rejected SL #${String(currentSlBeforeReject)} and replace with #${String(postRejectSlId)}`
   );
-  console.log(`  ✅ Stage 3b Passed: REJECTED SL #${currentSlBeforeReject} replaced with #${postRejectSlId}.\n`);
+  console.log(`  ✅ Stage 3b Passed: REJECTED SL #${String(currentSlBeforeReject)} replaced with #${String(postRejectSlId)}.\n`);
 
   // =========================================================================
   // STAGE 4: TP Invalidation & Ledger Pruning
@@ -413,7 +425,8 @@ async function runPhase3SovereignOrderStateMachineTests(): Promise<void> {
 
   // Register active TP order IDs in coreLong
   hedgeLedger.registerActiveTpOrderIds("CORE_LONG", [60001, 60002, 60003]);
-  const initialTpIds = hedgeLedger.getCoreLong().activeTpOrderIds!;
+  const initialTpIds = hedgeLedger.getCoreLong().activeTpOrderIds;
+  assert.ok(initialTpIds !== undefined, "CoreLong activeTpOrderIds must be defined");
   assert.deepStrictEqual(initialTpIds, [60001, 60002, 60003], "CoreLong must have 3 TP order IDs registered");
 
   // 4a: Simulate WS CANCELED on TP order #60002
@@ -428,7 +441,8 @@ async function runPhase3SovereignOrderStateMachineTests(): Promise<void> {
   };
 
   engine.handleWsOrderUpdate(wrapWsUpdate(wsTpCancelUpdate));
-  const remainingTpIdsAfterCancel = hedgeLedger.getCoreLong().activeTpOrderIds!;
+  const remainingTpIdsAfterCancel = hedgeLedger.getCoreLong().activeTpOrderIds;
+  assert.ok(remainingTpIdsAfterCancel !== undefined, "CoreLong activeTpOrderIds must be defined after cancel");
   assert.deepStrictEqual(
     remainingTpIdsAfterCancel,
     [60001, 60003],
@@ -452,9 +466,9 @@ async function runPhase3SovereignOrderStateMachineTests(): Promise<void> {
   };
 
   engine.handleWsOrderUpdate(wrapWsUpdate(wsTpFillUpdate));
-  const remainingTpIdsAfterFill = hedgeLedger.getCoreLong().activeTpOrderIds!;
+  const remainingTpIdsAfterFill = hedgeLedger.getCoreLong().activeTpOrderIds;
   assert.ok(
-    !remainingTpIdsAfterFill.includes(60001),
+    remainingTpIdsAfterFill !== undefined && !remainingTpIdsAfterFill.includes(60001),
     "Order #60001 must be pruned from activeTpOrderIds on fill"
   );
   console.log(`  ✅ Stage 4b Passed: FILLED TP Order #60001 pruned from activeTpOrderIds.\n`);
@@ -507,14 +521,14 @@ async function runPhase3SovereignOrderStateMachineTests(): Promise<void> {
   const healedSlId = hedgeLedger.getActiveStopLossOrderId("LONG");
   assert.ok(
     healedSlId !== undefined && healedSlId !== 99001,
-    `Vanished order #99001 must be cleared and replaced with a newly dispatched SL, got: #${healedSlId}`
+    `Vanished order #99001 must be cleared and replaced with a newly dispatched SL, got: #${String(healedSlId)}`
   );
 
   const healingDispatches = execClient.outboundDispatches.filter(
     (d, idx) => idx >= preHealingDispatches && (d.type === "PLACE_POSITION_SL" || d.type === "PLACE_QUANTITY_SL")
   );
   assert.strictEqual(healingDispatches.length, 1, "Exactly 1 emergency healing SL must be dispatched to Binance");
-  console.log(`  ✅ Stage 5b Passed: Vanished SL #99001 detected, desync cleared, emergency SL #${healedSlId} dispatched.\n`);
+  console.log(`  ✅ Stage 5b Passed: Vanished SL #99001 detected, desync cleared, emergency SL #${String(healedSlId)} dispatched.\n`);
 
   console.log("==========================================================================================");
   console.log("  ALL 5 STAGES PASSED: SOVEREIGN ORDER STATE MACHINE & REACTIVE WS HEALING VERIFIED 100%  ");
@@ -522,7 +536,7 @@ async function runPhase3SovereignOrderStateMachineTests(): Promise<void> {
   process.exit(0);
 }
 
-runPhase3SovereignOrderStateMachineTests().catch((err) => {
+runPhase3SovereignOrderStateMachineTests().catch((err: unknown) => {
   console.error("❌ Phase 3 Sovereign Order State Machine Test Suite FAILED:", err);
   process.exit(1);
 });

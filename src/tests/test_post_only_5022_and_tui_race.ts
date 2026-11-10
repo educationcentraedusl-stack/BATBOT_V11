@@ -3,6 +3,23 @@ import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
 import { MultiAssetCLIDashboard } from "../telemetry/multiAssetDashboard";
 import { MarketDataClient } from "../marketDataClient";
 
+type ReqPayload = Record<string, string | number | boolean | undefined | null>;
+
+class PostOnlyMockExecutionClient extends BinanceExecutionClient {
+  public handler: ((payload: ReqPayload) => Promise<unknown>) | null = null;
+
+  protected override request<T>(
+    _method: "GET" | "POST" | "DELETE" | "PUT",
+    _endpoint: string,
+    payload: ReqPayload = {}
+  ): Promise<T> {
+    if (!this.handler) {
+      return Promise.reject(new Error("Mock request handler not set"));
+    }
+    return this.handler(payload) as Promise<T>;
+  }
+}
+
 async function runPostOnlyAndTuiTests() {
   console.log("==========================================================================");
   console.log("       RUNNING -5022 POST_ONLY MITIGATION & TUI RACE CONDITION TESTS       ");
@@ -15,8 +32,8 @@ async function runPostOnlyAndTuiTests() {
   console.log("\n[TEST 1] Testing SymbolPrecisionRegistry.getTickSize() helper...");
   const btcTick = SymbolPrecisionRegistry.getTickSize("BTCUSDT");
   const ethTick = SymbolPrecisionRegistry.getTickSize("ETHUSDT");
-  console.log(`  ✓ BTCUSDT Tick Size: ${btcTick}`);
-  console.log(`  ✓ ETHUSDT Tick Size: ${ethTick}`);
+  console.log(`  ✓ BTCUSDT Tick Size: ${String(btcTick)}`);
+  console.log(`  ✓ ETHUSDT Tick Size: ${String(ethTick)}`);
   if (btcTick <= 0 || ethTick <= 0) {
     throw new Error("[FAIL] SymbolPrecisionRegistry.getTickSize returned invalid value.");
   }
@@ -24,33 +41,31 @@ async function runPostOnlyAndTuiTests() {
 
   // Test 2: BinanceExecutionClient -5022 Rejection 1-Tick Shift & Retry
   console.log("[TEST 2] Testing BinanceExecutionClient -5022 GTX rejection & 1-tick shift retry...");
-  const client = new BinanceExecutionClient({ useTestnet: true, apiKey: "MOCK_KEY", apiSecret: "MOCK_SECRET" });
+  const client = new PostOnlyMockExecutionClient({ useTestnet: true, apiKey: "MOCK_KEY", apiSecret: "MOCK_SECRET" });
 
   let callCount = 0;
   const attemptedPrices: number[] = [];
   const attemptedTimeInForces: (string | undefined)[] = [];
 
   // Mock internal request method to simulate -5022 rejection on initial POST_ONLY attempt
-  (client as any).request = async (method: string, endpoint: string, payload: any) => {
+  client.handler = (payload: ReqPayload) => {
     callCount++;
-    attemptedPrices.push(payload.price);
-    attemptedTimeInForces.push(payload.timeInForce);
+    attemptedPrices.push(Number(payload.price));
+    attemptedTimeInForces.push(typeof payload.timeInForce === "string" ? payload.timeInForce : undefined);
 
     if (callCount === 1) {
-      // Reject first GTX attempt at price 60000.0 with -5022
-      throw new Error("Binance API Error [-5022]: Order would immediately match and take.");
+      return Promise.reject(new Error("Binance API Error [-5022]: Order would immediately match and take."));
     }
-    // Succeed on second attempt
-    return {
+    return Promise.resolve({
       orderId: 999111,
-      symbol: payload.symbol,
+      symbol: String(payload.symbol),
       status: "NEW",
       price: String(payload.price),
-      side: payload.side,
+      side: String(payload.side),
       executedQty: "0",
-      type: payload.type,
-      timeInForce: payload.timeInForce,
-    };
+      type: String(payload.type),
+      timeInForce: String(payload.timeInForce),
+    });
   };
 
   const initialParams: BinanceOrderParams = {
@@ -63,16 +78,16 @@ async function runPostOnlyAndTuiTests() {
   };
 
   const res = await client.placeOrder(initialParams);
-  console.log(`  ✓ PlaceOrder result: OrderID #${res.orderId}, Price: $${res.price}, TIF: ${res.timeInForce}`);
-  console.log(`  ✓ Execution Call Count: ${callCount}`);
+  console.log(`  ✓ PlaceOrder result: OrderID #${String(res.orderId)}, Price: $${res.price}, TIF: ${res.timeInForce}`);
+  console.log(`  ✓ Execution Call Count: ${String(callCount)}`);
   console.log(`  ✓ Attempted Prices: ${attemptedPrices.join(" -> ")}`);
 
   if (callCount !== 2) {
-    throw new Error(`[FAIL] Expected 2 execution attempts, got ${callCount}`);
+    throw new Error(`[FAIL] Expected 2 execution attempts, got ${String(callCount)}`);
   }
   // BUY order @ 60000 shifted 1 tick (0.1) down = 59999.9
   if (attemptedPrices[1] !== 59999.9) {
-    throw new Error(`[FAIL] Expected price to shift 1 tick down to 59999.9, got ${attemptedPrices[1]}`);
+    throw new Error(`[FAIL] Expected price to shift 1 tick down to 59999.9, got ${String(attemptedPrices[1])}`);
   }
   console.log("  ✅ Test 2 Passed: -5022 GTX 1-tick price shift & instant retry succeeded.\n");
 
@@ -82,26 +97,24 @@ async function runPostOnlyAndTuiTests() {
   attemptedPrices.length = 0;
   attemptedTimeInForces.length = 0;
 
-  (client as any).request = async (method: string, endpoint: string, payload: any) => {
+  client.handler = (payload: ReqPayload) => {
     callCount++;
-    attemptedPrices.push(payload.price);
-    attemptedTimeInForces.push(payload.timeInForce);
+    attemptedPrices.push(Number(payload.price));
+    attemptedTimeInForces.push(typeof payload.timeInForce === "string" ? payload.timeInForce : undefined);
 
     if (payload.timeInForce === "GTX") {
-      // Reject both GTX attempts with -5022
-      throw new Error("Binance API Error [-5022]: Order would immediately match and take.");
+      return Promise.reject(new Error("Binance API Error [-5022]: Order would immediately match and take."));
     }
-    // Succeed when timeInForce is GTC
-    return {
+    return Promise.resolve({
       orderId: 999222,
-      symbol: payload.symbol,
+      symbol: String(payload.symbol),
       status: "NEW",
       price: String(payload.price),
-      side: payload.side,
+      side: String(payload.side),
       executedQty: "0",
-      type: payload.type,
-      timeInForce: payload.timeInForce,
-    };
+      type: String(payload.type),
+      timeInForce: String(payload.timeInForce),
+    });
   };
 
   const sellParams: BinanceOrderParams = {
@@ -114,7 +127,7 @@ async function runPostOnlyAndTuiTests() {
   };
 
   const fallbackRes = await client.placeOrder(sellParams);
-  console.log(`  ✓ Fallback Result: OrderID #${fallbackRes.orderId}, Price: $${fallbackRes.price}, TIF: ${fallbackRes.timeInForce}`);
+  console.log(`  ✓ Fallback Result: OrderID #${String(fallbackRes.orderId)}, Price: $${fallbackRes.price}, TIF: ${fallbackRes.timeInForce}`);
   console.log(`  ✓ Attempted TIF sequence: ${attemptedTimeInForces.join(" -> ")}`);
 
   if (fallbackRes.timeInForce !== "GTC") {
@@ -122,7 +135,7 @@ async function runPostOnlyAndTuiTests() {
   }
   const expectedPrice = SymbolPrecisionRegistry.formatPrice("ETHUSDT", 3000.0 + ethTick * 2);
   if (attemptedPrices[attemptedPrices.length - 1] !== expectedPrice) {
-    throw new Error(`[FAIL] Expected SELL price shifted 2 ticks up to ${expectedPrice}, got ${attemptedPrices[attemptedPrices.length - 1]}`);
+    throw new Error(`[FAIL] Expected SELL price shifted 2 ticks up to ${String(expectedPrice)}, got ${String(attemptedPrices[attemptedPrices.length - 1])}`);
   }
   console.log("  ✅ Test 3 Passed: Fallback to GTC limit order on repeated -5022 rejections verified.\n");
 
@@ -181,7 +194,7 @@ async function runPostOnlyAndTuiTests() {
   console.log("==========================================================================");
 }
 
-runPostOnlyAndTuiTests().catch((err) => {
+runPostOnlyAndTuiTests().catch((err: unknown) => {
   console.error("❌ TEST FAILED:", err);
   process.exit(1);
 });
