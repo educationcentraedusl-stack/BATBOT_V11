@@ -131,3 +131,4 @@ CREATE TABLE IF NOT EXISTS account_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_account_snapshots_ts
   ON account_snapshots (snapshot_ts_ms DESC);
+

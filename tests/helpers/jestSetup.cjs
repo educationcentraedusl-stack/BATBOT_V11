@@ -32,3 +32,4 @@ if (typeof globalThis.devicePixelRatio === "undefined") {
     value: 1,
   });
 }
+

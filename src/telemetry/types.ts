@@ -58,3 +58,4 @@ export interface TelemetryFrame {
   slippageTicks?: number;
   activeTrades?: TelemetryActiveTradeSlot[];
 }
+

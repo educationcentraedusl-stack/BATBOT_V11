@@ -49,3 +49,4 @@ export type TelemetryWorkerInboundMessage =
 export type TelemetryWorkerOutboundMessage =
   | { type: "STATUS"; status: ConnectionStatus }
   | { type: "FRAME_BATCH"; frame: WorkerFrameData; recentCount: number };
+

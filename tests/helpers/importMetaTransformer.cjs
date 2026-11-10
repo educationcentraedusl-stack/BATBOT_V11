@@ -47,3 +47,4 @@ function factory({ configSet }) {
 }
 
 exports.factory = factory;
+
