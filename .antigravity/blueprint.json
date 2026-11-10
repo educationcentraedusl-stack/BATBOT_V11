@@ -9,7 +9,7 @@
             "typescript",
             "n-api"
         ],
-        "packageManager": "pnpm"
+        "packageManager": "npm"
     },
     "agentConfiguration": {
         "defaultMode": "planning",

@@ -33,9 +33,9 @@ class SymbolPrecisionRegistryManager {
      */
     parseSymbolInfo(symbolInfo) {
         const symbol = symbolInfo.symbol.toUpperCase();
-        let qtyDecimals = symbolInfo.quantityPrecision ?? 3;
+        let qtyDecimals = Number.isFinite(symbolInfo.quantityPrecision) ? symbolInfo.quantityPrecision : 3;
         let stepSize = Math.pow(10, -qtyDecimals);
-        let priceDecimals = symbolInfo.pricePrecision ?? 2;
+        let priceDecimals = Number.isFinite(symbolInfo.pricePrecision) ? symbolInfo.pricePrecision : 2;
         let tickSize = Math.pow(10, -priceDecimals);
         let minNotional = 5.0; // Standard Binance Futures min notional default
         if (Array.isArray(symbolInfo.filters)) {
@@ -78,7 +78,7 @@ class SymbolPrecisionRegistryManager {
         try {
             const execClient = client || new binance_1.BinanceExecutionClient();
             const exchangeInfo = await execClient.fetchExchangeInfo();
-            if (exchangeInfo && Array.isArray(exchangeInfo.symbols)) {
+            if (Array.isArray(exchangeInfo.symbols)) {
                 this.precisionMap.clear();
                 for (const symInfo of exchangeInfo.symbols) {
                     if (symInfo.symbol) {
@@ -87,14 +87,15 @@ class SymbolPrecisionRegistryManager {
                     }
                 }
                 this.isInitialized = true;
-                console.log(`[SymbolPrecisionRegistry] ✅ Dynamic exchangeInfo LOT_SIZE & PRICE_FILTER rules cached for ${this.precisionMap.size} symbols.`);
+                console.log(`[SymbolPrecisionRegistry] ✅ Dynamic exchangeInfo LOT_SIZE & PRICE_FILTER rules cached for ${String(this.precisionMap.size)} symbols.`);
             }
             else {
                 throw new Error("Invalid response schema received from Binance Futures exchangeInfo endpoint.");
             }
         }
         catch (err) {
-            console.warn(`[SymbolPrecisionRegistry] Notice fetching online Binance exchangeInfo: ${err.message}. Pre-seeding fallback precision rules.`);
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[SymbolPrecisionRegistry] Notice fetching online Binance exchangeInfo: ${msg}. Pre-seeding fallback precision rules.`);
             // Pre-seed default offline rules if network is offline or unconfigured
             this.preseedOfflineDefaults(["ETHUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "SUIUSDT"]);
         }
@@ -105,10 +106,14 @@ class SymbolPrecisionRegistryManager {
      */
     getPrecisionRule(symbol) {
         const sym = symbol.toUpperCase();
-        let rule = this.precisionMap.get(sym);
+        const rule = this.precisionMap.get(sym);
         if (!rule) {
             this.preseedOfflineDefaults([sym]);
-            rule = this.precisionMap.get(sym);
+            const seededRule = this.precisionMap.get(sym);
+            if (!seededRule) {
+                throw new Error(`[SymbolPrecisionRegistry] Failed to pre-seed precision rule for symbol ${sym}`);
+            }
+            return seededRule;
         }
         return rule;
     }
@@ -165,7 +170,7 @@ class SymbolPrecisionRegistryManager {
             let stepSize = 0.01;
             let priceDecimals = 2;
             let tickSize = 0.01;
-            let minNotional = 5.0;
+            const minNotional = 5.0;
             if (sym.includes("BTC") || sym.includes("ETH")) {
                 qtyDecimals = 3;
                 stepSize = 0.001;

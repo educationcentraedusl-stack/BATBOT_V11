@@ -1,5 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
+import type { TradeLoggerStats } from "./types";
+
+export type { TradeLoggerStats } from "./types";
 
 export interface SignalRecord {
   timestamp: number;
@@ -22,23 +25,6 @@ export interface ExecutionRecord {
   realizedPnl: number;
   fee: number;
   latencyMs: number;
-}
-
-export interface TradeLoggerStats {
-  totalSignalsLogged: number;
-  totalExecutionsLogged: number;
-  totalTrades: number;
-  winningTrades: number;
-  losingTrades: number;
-  realizedPnl: number;
-  unrealizedPnl: number;
-  positionSide: "FLAT" | "LONG" | "SHORT" | "BOTH";
-  netQuantity: number;
-  averageEntryPrice: number;
-  totalFees: number;
-  winRatePercent: number;
-  avgTickLatencyUs: number;
-  bufferQueueDepth: number;
 }
 
 const DEFAULT_BUFFER_SIZE = 10000;
@@ -119,8 +105,9 @@ export class TradeLogger {
 
     // Background asynchronous batch persistence timer (flushes every 250ms)
     this.flushTimer = setInterval(() => {
-      this.flushAsync().catch((err) => {
-        console.error(`[TradeLogger] Background flush error: ${err.message}`);
+      this.flushAsync().catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[TradeLogger] Background flush error: ${msg}`);
       });
     }, 250);
   }

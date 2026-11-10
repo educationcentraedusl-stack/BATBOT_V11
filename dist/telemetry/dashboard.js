@@ -47,8 +47,9 @@ function readTrainingProgress() {
             }
         }
     }
-    catch (_e) {
-        // Safe non-blocking read
+    catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[CLIDashboard] Training progress read notice: ${msg}`);
     }
     return null;
 }
@@ -101,7 +102,6 @@ class CLIDashboard {
         const aiDirStr = aiDir >= 0 ? `+${aiDir.toFixed(4)}` : aiDir.toFixed(4);
         const borderLine = `${cyan}${bold}===================================================================================================================================${reset}${clearLine}\n`;
         const subDivider = `-----------------------------------------------------------------------------------------------------------------------------------${clearLine}\n`;
-        const tableDivider = `+-----------+-------------+----------+--------------+----------------+------------+------------+-----------+---------------------+-----------+-----------+-----------+${clearLine}\n`;
         let output = "";
         output += "\x1b[H"; // Move cursor to top-left (0,0) without full screen erase to eliminate flicker
         const engineStatusStr = frame.riskStatus.includes("TRAINING_LOCK")
@@ -115,7 +115,7 @@ class CLIDashboard {
         output += `${cyan}${bold}                               BATBOT_V11 HFT ENGINE TELEMETRY & COMMAND MONITOR                                                   ${reset}${clearLine}\n`;
         output += borderLine;
         output += ` Status: ${engineStatusStr}  |  Memory: ${memMb} MB  |  Sequence: #${frame.sequenceNum.toString()}${clearLine}\n`;
-        output += ` Tick Latency: ${yellow}${frame.tickEvaluationLatencyUs.toFixed(3)} µs${reset}  |  Avg Latency: ${frame.stats.avgTickLatencyUs.toFixed(3)} µs  |  Queue Depth: ${frame.stats.bufferQueueDepth}${clearLine}\n`;
+        output += ` Tick Latency: ${yellow}${frame.tickEvaluationLatencyUs.toFixed(3)} µs${reset}  |  Avg Latency: ${frame.stats.avgTickLatencyUs.toFixed(3)} µs  |  Queue Depth: ${String(frame.stats.bufferQueueDepth)}${clearLine}\n`;
         output += subDivider;
         output += `${bold}--- ORDER BOOK & MICROSTRUCTURE METRICS (${frame.symbol}) ---${reset}${clearLine}\n`;
         output += ` Best Bid: ${frame.bidPrice.toFixed(2)}  |  Best Ask: ${frame.askPrice.toFixed(2)}  |  Spread: ${spread}${clearLine}\n`;
@@ -124,11 +124,11 @@ class CLIDashboard {
         output += subDivider;
         output += `${bold}--- AI PREDICTION & DYNAMIC EXECUTION METRICS ---${reset}${clearLine}\n`;
         output += ` Direction: ${aiDir >= 0 ? "\x1b[32m" : "\x1b[31m"}${aiDirStr}${reset}  |  Confidence: ${yellow}${aiConf.toFixed(1)}%${reset}  |  IC: ${icVal.toFixed(4)}  |  Inference: ${infLatUs.toFixed(1)} µs${clearLine}\n`;
-        output += ` REST RTT: ${yellow}${rtt.toFixed(1)} ms${reset}  |  Latency Penalty: ${penalty.toFixed(3)}  |  Slippage Buffer: +${slippage} Ticks${clearLine}\n`;
+        output += ` REST RTT: ${yellow}${rtt.toFixed(1)} ms${reset}  |  Latency Penalty: ${penalty.toFixed(3)}  |  Slippage Buffer: +${String(slippage)} Ticks${clearLine}\n`;
         output += subDivider;
         output += `${bold}--- STRATEGY & RISK STATUS ---${reset}${clearLine}\n`;
         output += ` Active Signal: ${signalColor}${bold}${frame.lastSignal}${reset}  |  Risk Gate: ${frame.riskStatus}${clearLine}\n`;
-        output += ` Logged Signals: ${frame.stats.totalSignalsLogged}  |  Executions Logged: ${frame.stats.totalExecutionsLogged}${clearLine}\n`;
+        output += ` Logged Signals: ${String(frame.stats.totalSignalsLogged)}  |  Executions Logged: ${String(frame.stats.totalExecutionsLogged)}${clearLine}\n`;
         output += subDivider;
         output += `${bold}--- ACTIVE TRADES MONITOR (SLOTS, TP, SL & STEP-COLLAR) ---${reset}${clearLine}\n`;
         const tradeTableDivider = `+--------+------------+----------+--------------+-------------------+----------------+----------------+----------------+----------------+--------------------------+${clearLine}\n`;
@@ -144,7 +144,7 @@ class CLIDashboard {
             for (const trade of activeTrades) {
                 const rawSide = trade.side.startsWith("BUY") || trade.side === "LONG" ? "LONG" : "SHORT";
                 const sideColor = rawSide === "LONG" ? green : red;
-                const slotStr = `#${slotIdx}-${rawSide}`.padEnd(6);
+                const slotStr = `#${String(slotIdx)}-${rawSide}`.padEnd(6);
                 const symStr = trade.symbol.padEnd(10);
                 const sidePadded = rawSide.padEnd(8);
                 const sizeStr = trade.size.toFixed(4).padStart(12);
@@ -174,7 +174,7 @@ class CLIDashboard {
         output += `${bold}--- TRADING PERFORMANCE, INVENTORY & EXCHANGE PnL ---${reset}${clearLine}\n`;
         output += ` Position: ${posSideColor}${bold}${frame.stats.positionSide}${reset} (${frame.stats.netQuantity.toFixed(4)})  |  Avg Entry: $${frame.stats.averageEntryPrice.toFixed(2)}  |  Unrealized PnL: ${unrealizedColor}${bold}$${frame.stats.unrealizedPnl.toFixed(2)}${reset}  |  ROE: ${frame.roePercent !== undefined ? `${frame.roePercent >= 0 ? green : red}${bold}${frame.roePercent >= 0 ? "+" : ""}${frame.roePercent.toFixed(2)}%${reset}` : "0.00%"}${clearLine}\n`;
         output += ` Available Balance: ${green}${bold}$${frame.usdtBalance.toFixed(2)}${reset}  |  Reconciled Wallet: ${cyan}${bold}$${recBalance.toFixed(2)}${reset}  |  Realized PnL: ${pnlColor}${bold}$${frame.stats.realizedPnl.toFixed(2)}${reset}  |  Funding: ${fundingColor}${bold}${fundingSign}$${fundingVal.toFixed(4)}${reset}  |  Fees: $${frame.stats.totalFees.toFixed(2)}${clearLine}\n`;
-        output += ` Win Rate: ${yellow}${frame.stats.winRatePercent.toFixed(2)}%${reset}  |  Total Trades: ${frame.stats.totalTrades} (W: ${frame.stats.winningTrades} / L: ${frame.stats.losingTrades})  |  SC Tier: ${yellow}${bold}${frame.activeStepCollarTier ?? "NONE"}${reset}${clearLine}\n`;
+        output += ` Win Rate: ${yellow}${frame.stats.winRatePercent.toFixed(2)}%${reset}  |  Total Trades: ${String(frame.stats.totalTrades)} (W: ${String(frame.stats.winningTrades)} / L: ${String(frame.stats.losingTrades)})  |  SC Tier: ${yellow}${bold}${String(frame.activeStepCollarTier ?? "NONE")}${reset}${clearLine}\n`;
         const trainingProgress = readTrainingProgress();
         if (trainingProgress !== null) {
             const totalBlocks = 20;
@@ -183,7 +183,7 @@ class CLIDashboard {
             const progressBar = "▓".repeat(filledBlocks) + "░".repeat(emptyBlocks);
             output += subDivider;
             output += `${bold}--- NOTIFICATION AREA & REAL-TIME TRAINING MONITOR ---${reset}${clearLine}\n`;
-            output += ` [BATBOT_V11][TRAINING] Progress: ${yellow}${bold}${trainingProgress}%${reset} [${green}${progressBar}${reset}]${clearLine}\n`;
+            output += ` [BATBOT_V11][TRAINING] Progress: ${yellow}${bold}${String(trainingProgress)}%${reset} [${green}${progressBar}${reset}]${clearLine}\n`;
         }
         output += borderLine;
         process.stdout.write(output);
@@ -195,12 +195,12 @@ class CLIDashboard {
         const m = Math.floor(seconds / 60);
         const s = seconds % 60;
         if (m === 0)
-            return `${s}s`;
+            return `${String(s)}s`;
         const h = Math.floor(m / 60);
         const remM = m % 60;
         if (h === 0)
-            return `${m}m ${s < 10 ? "0" : ""}${s}s`;
-        return `${h}h ${remM}m`;
+            return `${String(m)}m ${s < 10 ? "0" : ""}${String(s)}s`;
+        return `${String(h)}h ${String(remM)}m`;
     }
     formatProgressBar(val, min, max, length) {
         const clamped = Math.max(min, Math.min(max, val));

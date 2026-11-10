@@ -1,72 +1,72 @@
 // Telemetry WebWorker for Off-Main-Thread Processing & 60Hz Batching
-import { decodeTelemetryFrame, encodeControlCommand, ControlCommand } from "../telemetry/proto";
+import { decodeTelemetryFrame, encodeControlCommand, type ControlCommand } from "../telemetry/proto";
+import type {
+  WorkerFrameData,
+  TelemetryWorkerInboundMessage,
+  TelemetryWorkerOutboundMessage,
+} from "./telemetry.types";
 
-export interface WorkerFrameData {
-  symbol: string;
-  sequenceNum: string;
-  bidPrice: number;
-  askPrice: number;
-  obi: number;
-  cvd: number;
-  spreadVelocity: number;
-  lastSignal: string;
-  tickEvaluationLatencyUs: number;
-  riskStatus: string;
-  isEngineActive: boolean;
-  usdtBalance: number;
-  aiDirection: number;
-  aiConfidence: number;
-  rollingIc: number;
-  aiInferenceLatencyNs: string;
-  rttMs: number;
-  latencyPenalty: number;
-  slippageTicks: number;
-  timestamp: number;
-  stats: {
-    realizedPnl: number;
-    unrealizedPnl: number;
-    totalFees: number;
-    totalTrades: number;
-    winningTrades: number;
-    losingTrades: number;
-    winRatePercent: number;
-    positionSide: string;
-    netQuantity: number;
-    averageEntryPrice: number;
-    totalSignalsLogged: number;
-    totalExecutionsLogged: number;
-    avgTickLatencyUs: number;
-    bufferQueueDepth: number;
-  };
-}
-
-export type ConnectionStatus = "DISCONNECTED" | "CONNECTING" | "CONNECTED" | "ERROR";
-
-export type TelemetryWorkerInboundMessage =
-  | { type: "CONNECT"; url?: string }
-  | { type: "SEND_COMMAND"; command?: ControlCommand }
-  | { type: "DISCONNECT" };
-
-export type TelemetryWorkerOutboundMessage =
-  | { type: "STATUS"; status: ConnectionStatus }
-  | { type: "FRAME_BATCH"; frame: WorkerFrameData; recentCount: number };
-
-interface TelemetryWorkerScope {
-  postMessage: (message: TelemetryWorkerOutboundMessage) => void;
-  onmessage: ((e: MessageEvent<TelemetryWorkerInboundMessage>) => void) | null;
-}
+export type {
+  WorkerFrameData,
+  ConnectionStatus,
+  TelemetryWorkerInboundMessage,
+  TelemetryWorkerOutboundMessage,
+} from "./telemetry.types";
 
 let socket: WebSocket | null = null;
 let latestFrame: WorkerFrameData | null = null;
 let frameQueue: WorkerFrameData[] = [];
 let batchInterval: ReturnType<typeof setInterval> | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-function ctx(): TelemetryWorkerScope {
-  return globalThis;
+function ctx(): DedicatedWorkerGlobalScope {
+  return self;
 }
 
-ctx().onmessage = (e: MessageEvent<TelemetryWorkerInboundMessage>) => {
-  const msg = e.data;
+function postOutbound(message: TelemetryWorkerOutboundMessage): void {
+  ctx().postMessage(message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseControlCommand(raw: unknown): ControlCommand | undefined {
+  if (!isRecord(raw)) return undefined;
+  const action = raw["action"];
+  if (
+    action !== "ENGINE_START" &&
+    action !== "ENGINE_PAUSE" &&
+    action !== "EMERGENCY_KILL" &&
+    action !== "AI_HOT_SWAP"
+  ) {
+    return undefined;
+  }
+  const modelPath = typeof raw["modelPath"] === "string" ? raw["modelPath"] : undefined;
+  const timestamp = typeof raw["timestamp"] === "number" ? raw["timestamp"] : undefined;
+  return { action, modelPath, timestamp };
+}
+
+function parseInboundMessage(raw: unknown): TelemetryWorkerInboundMessage | null {
+  if (!isRecord(raw)) return null;
+  const msgType = raw["type"];
+  if (msgType === "CONNECT") {
+    const url = typeof raw["url"] === "string" ? raw["url"] : undefined;
+    return { type: "CONNECT", url };
+  }
+  if (msgType === "SEND_COMMAND") {
+    const command = parseControlCommand(raw["command"]);
+    return { type: "SEND_COMMAND", command };
+  }
+  if (msgType === "DISCONNECT") {
+    return { type: "DISCONNECT" };
+  }
+  return null;
+}
+
+ctx().onmessage = (e: MessageEvent<unknown>): void => {
+  const msg = parseInboundMessage(e.data);
+  if (!msg) return;
 
   if (msg.type === "CONNECT") {
     connectWebSocket(msg.url ?? "ws://localhost:8080");
@@ -76,11 +76,27 @@ ctx().onmessage = (e: MessageEvent<TelemetryWorkerInboundMessage>) => {
       socket.send(binaryCmd);
     }
   } else {
-    if (socket) socket.close();
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (batchInterval !== null) {
+      clearInterval(batchInterval);
+      batchInterval = null;
+    }
+    if (socket) {
+      socket.close();
+      socket = null;
+    }
   }
 };
 
 function connectWebSocket(url: string): void {
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
   if (socket) {
     try {
       socket.close();
@@ -94,7 +110,7 @@ function connectWebSocket(url: string): void {
   socket.binaryType = "arraybuffer";
 
   socket.onopen = () => {
-    ctx().postMessage({ type: "STATUS", status: "CONNECTED" });
+    postOutbound({ type: "STATUS", status: "CONNECTED" });
   };
 
   socket.onmessage = (event: MessageEvent<unknown>) => {
@@ -127,18 +143,20 @@ function connectWebSocket(url: string): void {
   };
 
   socket.onclose = () => {
-    ctx().postMessage({ type: "STATUS", status: "DISCONNECTED" });
-    setTimeout(() => { connectWebSocket(url); }, 2000);
+    postOutbound({ type: "STATUS", status: "DISCONNECTED" });
+    reconnectTimer = setTimeout(() => {
+      connectWebSocket(url);
+    }, 2000);
   };
 
   socket.onerror = () => {
-    ctx().postMessage({ type: "STATUS", status: "ERROR" });
+    postOutbound({ type: "STATUS", status: "ERROR" });
   };
 
   if (batchInterval !== null) clearInterval(batchInterval);
   batchInterval = setInterval(() => {
     if (latestFrame) {
-      ctx().postMessage({
+      postOutbound({
         type: "FRAME_BATCH",
         frame: latestFrame,
         recentCount: frameQueue.length,

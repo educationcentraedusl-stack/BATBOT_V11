@@ -32,8 +32,9 @@ export class CsvTradeLogger {
       const headers = "Time,Symbol,Side,Size,Entry Price,Exit Price,Exit Reason,Duration,ROE %,PnL USDT,Win/Loss\n";
       try {
         fs.writeFileSync(this.filePath, headers, "utf8");
-      } catch (err: any) {
-        console.error(`[CsvTradeLogger] Error initializing CSV header: ${err.message}`);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[CsvTradeLogger] Error initializing CSV header: ${msg}`);
       }
     }
     this.isInitialized = true;
@@ -83,12 +84,12 @@ function formatDate(ts: number): string {
   const hours = pad(d.getHours());
   const minutes = pad(d.getMinutes());
   const seconds = pad(d.getSeconds());
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  return `${String(year)}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
 function formatDuration(durationMs: number): string {
   if (durationMs < 1000) {
-    return `${Math.max(0, durationMs)}ms`;
+    return `${String(Math.max(0, durationMs))}ms`;
   }
   const sec = (durationMs / 1000).toFixed(1);
   return `${sec}s`;

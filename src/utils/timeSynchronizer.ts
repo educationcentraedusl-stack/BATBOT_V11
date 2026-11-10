@@ -152,7 +152,7 @@ export class TimeSynchronizer {
     try {
       const serverTime = await this.fetchBinanceServerTime();
       if (!Number.isFinite(serverTime)) {
-        console.warn(`[TimeSynchronizer][NON_FINITE_PAYLOAD] serverTime ${serverTime} is not finite. Discarding probe.`);
+        console.warn(`[TimeSynchronizer][NON_FINITE_PAYLOAD] serverTime ${String(serverTime)} is not finite. Discarding probe.`);
         return null;
       }
       const t1 = Date.now();
@@ -160,7 +160,7 @@ export class TimeSynchronizer {
 
       if (rtt > this.maxAcceptableRttMs) {
         console.warn(
-          `[TimeSynchronizer][OUTLIER_REJECTED] Probe RTT ${rtt}ms exceeds threshold (${this.maxAcceptableRttMs}ms). Discarding sample.`
+          `[TimeSynchronizer][OUTLIER_REJECTED] Probe RTT ${String(rtt)}ms exceeds threshold (${String(this.maxAcceptableRttMs)}ms). Discarding sample.`
         );
         return null;
       }
@@ -218,7 +218,7 @@ export class TimeSynchronizer {
       return;
     }
 
-    console.log(`[TimeSynchronizer] Starting SOTA Time Synchronization Engine (BaseUrl: ${this.baseUrl}, Interval: ${this.syncIntervalMs}ms)...`);
+    console.log(`[TimeSynchronizer] Starting SOTA Time Synchronization Engine (BaseUrl: ${this.baseUrl}, Interval: ${String(this.syncIntervalMs)}ms)...`);
 
     // Startup Burst: Probe multiple times and pick the best (lowest RTT) sample for initial calibration
     const validSamples: TimeSyncSample[] = [];
@@ -242,7 +242,7 @@ export class TimeSynchronizer {
       this.lastSyncTimestamp = Date.now();
 
       console.log(
-        `[TimeSynchronizer][CALIBRATED] Startup calibration complete. Initial Offset: ${this.offsetMs > 0 ? "+" : ""}${this.offsetMs}ms (Best RTT: ${bestSample.rttMs}ms from ${validSamples.length} samples). Adjusted Now: ${new Date(this.getAdjustedNowMs()).toISOString()}`
+        `[TimeSynchronizer][CALIBRATED] Startup calibration complete. Initial Offset: ${this.offsetMs > 0 ? "+" : ""}${String(this.offsetMs)}ms (Best RTT: ${String(bestSample.rttMs)}ms from ${String(validSamples.length)} samples). Adjusted Now: ${new Date(this.getAdjustedNowMs()).toISOString()}`
       );
 
       for (const cb of this.onOffsetUpdatedCallbacks) {
@@ -253,7 +253,7 @@ export class TimeSynchronizer {
         }
       }
     } else {
-      console.warn(`[TimeSynchronizer][WARN] Startup burst failed to collect valid samples under ${this.maxAcceptableRttMs}ms RTT. Operating with zero offset until background sync.`);
+      console.warn(`[TimeSynchronizer][WARN] Startup burst failed to collect valid samples under ${String(this.maxAcceptableRttMs)}ms RTT. Operating with zero offset until background sync.`);
     }
 
     // Start continuous periodic synchronization loop
@@ -323,21 +323,28 @@ export class TimeSynchronizer {
         },
         (res) => {
           let body = "";
-          res.on("data", (chunk) => {
-            body += chunk;
+          res.on("data", (chunk: Buffer | string) => {
+            body += typeof chunk === "string" ? chunk : chunk.toString("utf8");
           });
           res.on("end", () => {
             if (isSettled) return;
             isSettled = true;
             try {
-              const data = JSON.parse(body);
-              if (data && typeof data.serverTime === "number" && Number.isFinite(data.serverTime)) {
+              const data: unknown = JSON.parse(body);
+              if (
+                typeof data === "object" &&
+                data !== null &&
+                "serverTime" in data &&
+                typeof data.serverTime === "number" &&
+                Number.isFinite(data.serverTime)
+              ) {
                 resolve(data.serverTime);
               } else {
                 reject(new Error(`Invalid serverTime payload: ${body}`));
               }
-            } catch (err) {
-              reject(new Error(`Failed to parse Binance time response: ${body}`));
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : String(err);
+              reject(new Error(`Failed to parse Binance time response (${msg}): ${body}`));
             }
           });
         }
@@ -346,8 +353,8 @@ export class TimeSynchronizer {
       req.setTimeout(socketTimeoutMs, () => {
         if (isSettled) return;
         isSettled = true;
-        req.destroy(new Error(`Timeout (${socketTimeoutMs}ms) fetching Binance server time`));
-        reject(new Error(`Timeout (${socketTimeoutMs}ms) fetching Binance server time`));
+        req.destroy(new Error(`Timeout (${String(socketTimeoutMs)}ms) fetching Binance server time`));
+        reject(new Error(`Timeout (${String(socketTimeoutMs)}ms) fetching Binance server time`));
       });
 
       req.on("error", (err) => {

@@ -39,13 +39,9 @@ const path = __importStar(require("path"));
 const tradingSymbols_1 = require("../config/tradingSymbols");
 const symbolPrecision_1 = require("../config/symbolPrecision");
 const recalibrationWorker_1 = require("../ai/recalibrationWorker");
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-let nativeAddon = null;
-try {
-    nativeAddon = require("../../index.js");
-}
-catch {
-    // Safe fallback
+const index_1 = require("../../index");
+function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function readTrainingProgress() {
     try {
@@ -58,8 +54,9 @@ function readTrainingProgress() {
             }
         }
     }
-    catch (_e) {
-        // Safe non-blocking read
+    catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[MultiAssetCLIDashboard] Training progress read notice: ${msg}`);
     }
     return null;
 }
@@ -171,10 +168,10 @@ class MultiAssetCLIDashboard {
                 return arg;
             if (typeof arg === "object" && arg !== null) {
                 try {
-                    return JSON.stringify(arg, (_, val) => (typeof val === "bigint" ? val.toString() : val));
+                    return JSON.stringify(arg, (_key, val) => typeof val === "bigint" ? val.toString() : val);
                 }
                 catch {
-                    return String(arg);
+                    return "[Unserializable Object]";
                 }
             }
             return String(arg);
@@ -321,19 +318,19 @@ class MultiAssetCLIDashboard {
         const winRatePct = numTrades > 0 ? (numWins / numTrades) * 100 : 0;
         let out = "\x1b[H"; // Move cursor top-left
         out += MultiAssetCLIDashboard.BORDER;
-        out += `${cyan}${bold}                                        BATBOT_V11 MULTI-ASSET HFT TELEMETRY & COMMAND MONITOR (${this.client.maxAssets} ASSETS)                                         ${reset}${clearLine}\n`;
+        out += `${cyan}${bold}                                        BATBOT_V11 MULTI-ASSET HFT TELEMETRY & COMMAND MONITOR (${String(this.client.maxAssets)} ASSETS)                                         ${reset}${clearLine}\n`;
         out += MultiAssetCLIDashboard.BORDER;
         const availBalance = this.client.getAvailableBalance(0);
-        out += ` Engine Status: ${statusStr} | Memory: ${memMb} MB | Seq: #${seqNum.toString()} | Active Pos: ${activePositionCount}/${this.client.maxAssets}${clearLine}\n`;
-        out += ` Avail Bal: ${green}${bold}$${availBalance.toFixed(2)}${reset} | Unr PnL: ${totalUnrealizedPnl >= 0 ? green : red}${bold}$${totalUnrealizedPnl.toFixed(2)}${reset} | Real PnL: ${totalRealizedPnl >= 0 ? green : red}${bold}$${totalRealizedPnl.toFixed(2)}${reset} | Trades: ${totalTrades} | Win: ${green}${bold}${totalWinningTrades}${reset} | Loss: ${red}${bold}${totalLosingTrades}${reset} | Win Rate: ${yellow}${bold}${winRatePct.toFixed(1)}%${reset}${clearLine}\n`;
+        out += ` Engine Status: ${statusStr} | Memory: ${memMb} MB | Seq: #${seqNum.toString()} | Active Pos: ${String(activePositionCount)}/${String(this.client.maxAssets)}${clearLine}\n`;
+        out += ` Avail Bal: ${green}${bold}$${availBalance.toFixed(2)}${reset} | Unr PnL: ${totalUnrealizedPnl >= 0 ? green : red}${bold}$${totalUnrealizedPnl.toFixed(2)}${reset} | Real PnL: ${totalRealizedPnl >= 0 ? green : red}${bold}$${totalRealizedPnl.toFixed(2)}${reset} | Trades: ${String(totalTrades)} | Win: ${green}${bold}${String(totalWinningTrades)}${reset} | Loss: ${red}${bold}${String(totalLosingTrades)}${reset} | Win Rate: ${yellow}${bold}${winRatePct.toFixed(1)}%${reset}${clearLine}\n`;
         out += MultiAssetCLIDashboard.SUB_DIVIDER;
-        out += `${bold}--- ${this.client.maxAssets}-ASSET CONCURRENCY REAL-TIME MATRIX ---${reset}${clearLine}\n`;
+        out += `${bold}--- ${String(this.client.maxAssets)}-ASSET CONCURRENCY REAL-TIME MATRIX ---${reset}${clearLine}\n`;
         out += MultiAssetCLIDashboard.TABLE_DIVIDER;
         out += `| ${bold}Slot${reset} | ${bold}Symbol${reset}   | ${bold}Best Bid${reset}   | ${bold}Best Ask${reset}   | ${bold}Live Price${reset} | ${bold}Spread${reset}  | ${bold}OBI (-1..+1)${reset} | ${bold}CVD${reset}        | ${bold}Hawkes${reset}   | ${bold}Garman-Klass${reset} | ${bold}Dir${reset}   | ${bold}Conf%${reset}  | ${bold}Signal${reset} | ${bold}VEGAM${reset}           |${clearLine}\n`;
         out += MultiAssetCLIDashboard.TABLE_DIVIDER;
         const nowMs = Date.now();
         for (let i = 0; i < this.client.maxAssets; i++) {
-            const symName = this.assetSymbols[i] || `ASSET_${i}`;
+            const symName = this.assetSymbols[i] || `ASSET_${String(i)}`;
             const symStr = " " + this.formatCell(symName, 8, false) + " ";
             const precisionRule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(symName);
             const dec = precisionRule.priceDecimals;
@@ -383,8 +380,8 @@ class MultiAssetCLIDashboard {
             }
             const signalStr = " " + signalColor + this.formatCell(signalText, 6, false) + reset + " ";
             const slotStr = i === this.focusedAssetIdx
-                ? "  " + yellow + bold + "#" + i + reset + "  "
-                : "  #" + i + "  ";
+                ? `  ${yellow}${bold}#${String(i)}${reset}  `
+                : `  #${String(i)}  `;
             // VEGAM Dynamic Exit State — read SAB slots 156/157/158 atomically (zero-allocation)
             const vegamAtr = this.client.getVegamGkAtrComposite(i);
             const vegamKr = this.client.getVegamTrailKRegime(i);
@@ -402,7 +399,7 @@ class MultiAssetCLIDashboard {
         out += MultiAssetCLIDashboard.TABLE_DIVIDER;
         // Focused Asset Deep Microstructure & L2 View
         const fIdx = this.focusedAssetIdx;
-        const fSym = this.assetSymbols[fIdx] || `ASSET_${fIdx}`;
+        const fSym = this.assetSymbols[fIdx] || `ASSET_${String(fIdx)}`;
         const fPrecisionRule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(fSym);
         const fDec = fPrecisionRule.priceDecimals;
         this.client.fillTopBids(this.bidBuffer, 5, fIdx);
@@ -411,7 +408,7 @@ class MultiAssetCLIDashboard {
         const fCvd = this.client.getCVDVelocity(fIdx, 5000, nowMs);
         const fHawkes = this.client.getHawkesIntensity(fIdx);
         const fVpin = this.client.getVPIN(fIdx);
-        const fHurst = this.client.getHurstExponent(fIdx);
+        const _fHurst = this.client.getHurstExponent(fIdx);
         const fAiDir = this.client.getAIPredictionDirection(fIdx);
         const fAiConf = (this.client.getAIPredictionConfidence(fIdx) * 100).toFixed(1);
         const fInfLat = (Number(this.client.getAIInferenceLatencyNs(fIdx)) / 1000).toFixed(1);
@@ -419,13 +416,13 @@ class MultiAssetCLIDashboard {
         const fSurvival = this.client.getSurvivalProbability(fIdx);
         const hjbStr = (fHjb > 0 ? fHjb : 0).toFixed(fDec);
         const survivalStr = (fSurvival > 0 ? fSurvival * 100 : 100.0).toFixed(1);
-        out += `${bold}--- FOCUSED ASSET METRICS & LEVEL-2 BOOK (#${fIdx} - ${fSym}) ---${reset}${clearLine}\n`;
+        out += `${bold}--- FOCUSED ASSET METRICS & LEVEL-2 BOOK (#${String(fIdx)} - ${fSym}) ---${reset}${clearLine}\n`;
         out += ` OBI: ${fObi >= 0 ? "+" : ""}${fObi.toFixed(4)} | CVD: ${fCvd >= 0 ? "+" : ""}${fCvd.toFixed(4)} | Hawkes: ${fHawkes.toFixed(3)} | VPIN: ${fVpin.toFixed(4)} | HJB Res: $${hjbStr} | Survival: ${survivalStr}%${clearLine}\n`;
         out += ` AI Prediction Direction: ${fAiDir >= 0 ? green : red}${fAiDir >= 0 ? "+" : ""}${fAiDir.toFixed(4)}${reset}  |  Confidence: ${yellow}${fAiConf}%${reset}  |  Inference Latency: ${fInfLat} µs${clearLine}\n`;
         out += ` Top 3 Bids: [1] $${this.bidBuffer[0].toFixed(fDec)} (${this.bidBuffer[1].toFixed(3)})  [2] $${this.bidBuffer[2].toFixed(fDec)} (${this.bidBuffer[3].toFixed(3)})  [3] $${this.bidBuffer[4].toFixed(fDec)} (${this.bidBuffer[5].toFixed(3)})${clearLine}\n`;
         out += ` Top 3 Asks: [1] $${this.askBuffer[0].toFixed(fDec)} (${this.askBuffer[1].toFixed(3)})  [2] $${this.askBuffer[2].toFixed(fDec)} (${this.askBuffer[3].toFixed(3)})  [3] $${this.askBuffer[4].toFixed(fDec)} (${this.askBuffer[5].toFixed(3)})${clearLine}\n`;
         out += MultiAssetCLIDashboard.SUB_DIVIDER;
-        out += `${bold}--- MULTI-ASSET ACTIVE POSITIONS (${this.client.maxAssets} OMS SLOTS) ---${reset}${clearLine}\n`;
+        out += `${bold}--- MULTI-ASSET ACTIVE POSITIONS (${String(this.client.maxAssets)} OMS SLOTS) ---${reset}${clearLine}\n`;
         out += MultiAssetCLIDashboard.TRADES_DIVIDER;
         out += `| ${bold}Slot${reset}   | ${bold}Symbol${reset}     | ${bold}Side${reset}     | ${bold}Position${reset}     | ${bold}Trade Value ($)${reset}   | ${bold}Entry Price${reset}    | ${bold}Current Price${reset}  | ${bold}TP${reset}             | ${bold}SL${reset}             | ${bold}Unr PnL ($)${reset}                |${clearLine}\n`;
         out += MultiAssetCLIDashboard.TRADES_DIVIDER;
@@ -444,7 +441,7 @@ class MultiAssetCLIDashboard {
             const posBid = this.client.getBestBidPrice(i);
             const posAsk = this.client.getBestAskPrice(i);
             const mark = (posBid > 0 && posAsk > 0) ? (posBid + posAsk) / 2.0 : (posBid > 0 ? posBid : posAsk);
-            const symName = this.assetSymbols[i] || `ASSET_${i}`;
+            const symName = this.assetSymbols[i] || `ASSET_${String(i)}`;
             const posPrecisionRule = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(symName);
             const posDec = posPrecisionRule.priceDecimals;
             const sym = this.formatCell(symName, 10, false);
@@ -454,7 +451,7 @@ class MultiAssetCLIDashboard {
             if (hasLong && hasShort) {
                 hasActivePosition = true;
                 // 1. Render #i-LONG slot
-                const longSlotStr = this.formatCell(`#${i}-LONG`, 6, false);
+                const longSlotStr = this.formatCell(`#${String(i)}-LONG`, 6, false);
                 const longSide = `${green}${this.formatCell("LONG", 8, false)}${reset}`;
                 const longEntryPx = longEntry > 0 ? longEntry : this.client.getOmsAvgEntryPrice(i);
                 const longEffectivePx = mark > 0 ? mark : longEntryPx;
@@ -468,7 +465,7 @@ class MultiAssetCLIDashboard {
                 const longUPnlFormatted = this.formatCell(longUPnlStr, 26, false);
                 out += `| ${longSlotStr} | ${sym} | ${longSide} | ${this.formatCell(longQty.toFixed(4), 12)} | $${this.formatCell(longTradeVal.toFixed(2), 16)} | $${this.formatCell(longEntryPx.toFixed(posDec), 13)} | $${this.formatCell(mark.toFixed(posDec), 13)} | $${this.formatCell(longTpPx.toFixed(posDec), 13)} | $${this.formatCell(longSlPx.toFixed(posDec), 13)} | ${longUPnlColor}${bold}${longUPnlFormatted}${reset} |${clearLine}\n`;
                 // 2. Render #i-SHORT slot
-                const shortSlotStr = this.formatCell(`#${i}-SHORT`, 6, false);
+                const shortSlotStr = this.formatCell(`#${String(i)}-SHORT`, 6, false);
                 const shortSide = `${red}${this.formatCell("SHORT", 8, false)}${reset}`;
                 const shortEntryPx = shortEntry > 0 ? shortEntry : this.client.getOmsAvgEntryPrice(i);
                 const shortEffectivePx = mark > 0 ? mark : shortEntryPx;
@@ -490,7 +487,7 @@ class MultiAssetCLIDashboard {
                 const tradeVal = displayQty * effectivePx;
                 const tpPx = entry > 0 ? entry * (1 + (envLongTp > 0 ? envLongTp : 0.80) / 100) : 0;
                 const slPx = dynamicSl > 0 ? dynamicSl : (entry > 0 ? entry * (1 - (envLongSl > 0 ? envLongSl : 1.20) / 100) : 0);
-                const slotStr = this.formatCell(`#${i}-LONG`, 6, false);
+                const slotStr = this.formatCell(`#${String(i)}-LONG`, 6, false);
                 const side = `${green}${this.formatCell("LONG", 8, false)}${reset}`;
                 const uPnl = mark > 0 && entry > 0 ? (mark - entry) * displayQty : this.client.getOmsUnrealizedPnl(i);
                 const roe = mark > 0 && entry > 0 ? ((mark - entry) / entry) * this.client.getOmsLeverage(i) * 100 : 0;
@@ -507,7 +504,7 @@ class MultiAssetCLIDashboard {
                 const tradeVal = displayQty * effectivePx;
                 const tpPx = entry > 0 ? entry * (1 - (envShortTp > 0 ? envShortTp : 0.80) / 100) : 0;
                 const slPx = dynamicSl > 0 ? dynamicSl : (entry > 0 ? entry * (1 + (envShortSl > 0 ? envShortSl : 1.20) / 100) : 0);
-                const slotStr = this.formatCell(`#${i}-SHORT`, 6, false);
+                const slotStr = this.formatCell(`#${String(i)}-SHORT`, 6, false);
                 const side = `${red}${this.formatCell("SHORT", 8, false)}${reset}`;
                 const uPnl = mark > 0 && entry > 0 ? (entry - mark) * displayQty : this.client.getOmsUnrealizedPnl(i);
                 const roe = mark > 0 && entry > 0 ? ((entry - mark) / entry) * this.client.getOmsLeverage(i) * 100 : 0;
@@ -518,7 +515,7 @@ class MultiAssetCLIDashboard {
             }
         }
         if (!hasActivePosition) {
-            const noPosMsg = "NO ACTIVE OPEN POSITIONS ACROSS ALL " + this.client.maxAssets + " ASSET SLOTS (ALL POSITIONS FLAT)";
+            const noPosMsg = `NO ACTIVE OPEN POSITIONS ACROSS ALL ${String(this.client.maxAssets)} ASSET SLOTS (ALL POSITIONS FLAT)`;
             out += `| ${yellow}` + this.formatCell(noPosMsg, 162, false) + `${reset} |${clearLine}\n`;
         }
         out += MultiAssetCLIDashboard.TRADES_DIVIDER;
@@ -549,23 +546,35 @@ class MultiAssetCLIDashboard {
         let ewmaIc = 0;
         let adaptiveThreshold = 0.01;
         let sampleCount = 0;
-        if (nativeAddon && typeof nativeAddon.getIcStatus === "function") {
-            try {
-                const rawJson = nativeAddon.getIcStatus();
-                const parsed = JSON.parse(rawJson);
-                if (typeof parsed.ic === "number" && !isNaN(parsed.ic)) {
-                    rollingIc = parsed.ic;
+        try {
+            const rawJson = (0, index_1.getIcStatus)();
+            const parsed = JSON.parse(rawJson);
+            if (isRecord(parsed)) {
+                const parsedIc = parsed["ic"];
+                if (typeof parsedIc === "number" && Number.isFinite(parsedIc)) {
+                    rollingIc = parsedIc;
                 }
-                if (typeof parsed.is_drifted === "boolean") {
-                    isDrifted = parsed.is_drifted;
+                const parsedDrifted = parsed["is_drifted"];
+                if (typeof parsedDrifted === "boolean") {
+                    isDrifted = parsedDrifted;
                 }
-                ewmaIc = parsed.ewma_ic ?? 0;
-                adaptiveThreshold = parsed.adaptive_threshold ?? 0.01;
-                sampleCount = parsed.sample_count ?? 0;
+                const parsedEwma = parsed["ewma_ic"];
+                if (typeof parsedEwma === "number" && Number.isFinite(parsedEwma)) {
+                    ewmaIc = parsedEwma;
+                }
+                const parsedThreshold = parsed["adaptive_threshold"];
+                if (typeof parsedThreshold === "number" && Number.isFinite(parsedThreshold)) {
+                    adaptiveThreshold = parsedThreshold;
+                }
+                const parsedCount = parsed["sample_count"];
+                if (typeof parsedCount === "number" && Number.isFinite(parsedCount)) {
+                    sampleCount = parsedCount;
+                }
             }
-            catch {
-                // Safe non-blocking parse
-            }
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[MultiAssetCLIDashboard] getIcStatus parse notice: ${msg}`);
         }
         // Physical Hard Gate: Clamp drift to false during warm-up period (< 1000 pairs)
         if (sampleCount < 1000) {
@@ -599,8 +608,8 @@ class MultiAssetCLIDashboard {
         const filledBlocks = Math.round((progressVal / 100) * totalBlocks);
         const emptyBlocks = totalBlocks - filledBlocks;
         const progressBar = progressVal > 0 ? `${green}${"▓".repeat(filledBlocks)}${gray}${"░".repeat(emptyBlocks)}${reset}` : `${gray}${"-".repeat(20)}${reset}`;
-        out += ` IC (Spearman): ${icColor}${icSign}${rollingIc.toFixed(4)}${reset} | EWMA IC: ${ewmaSign}${ewmaIc.toFixed(4)} | Threshold: ${adaptiveThreshold.toFixed(4)} | Drift State: ${driftStateStr} | Window Pairs: ${sampleCount}/1000${clearLine}\n`;
-        out += ` Auto-Trainer: ${trainerStateStr} | Drift Ticks: ${recalStatus.driftTickCounter}/50 | Recalibrations: ${recalStatus.totalRecalibrations} | Hot-Swap: ${green}[ACTIVE]${reset} | Training: [${progressBar}] ${progressVal}%${clearLine}\n`;
+        out += ` IC (Spearman): ${icColor}${icSign}${rollingIc.toFixed(4)}${reset} | EWMA IC: ${ewmaSign}${ewmaIc.toFixed(4)} | Threshold: ${adaptiveThreshold.toFixed(4)} | Drift State: ${driftStateStr} | Window Pairs: ${String(sampleCount)}/1000${clearLine}\n`;
+        out += ` Auto-Trainer: ${trainerStateStr} | Drift Ticks: ${String(recalStatus.driftTickCounter)}/50 | Recalibrations: ${String(recalStatus.totalRecalibrations)} | Hot-Swap: ${green}[ACTIVE]${reset} | Training: [${progressBar}] ${String(progressVal)}%${clearLine}\n`;
         // Rolling 100-tick Confidence Flatline Monitor for Focused Asset (Zero-Allocation)
         const assetIdx = this.focusedAssetIdx;
         const currConf = this.client.getAIPredictionConfidence(assetIdx);
@@ -627,7 +636,7 @@ class MultiAssetCLIDashboard {
         if (isFlatline && !this.isConfFlatlined[assetIdx]) {
             this.isConfFlatlined[assetIdx] = true;
             this.flatlineOnsetTs[assetIdx] = Date.now();
-            this.pushNotification(`\x1b[31m[CONF_FLATLINE_DETECTED] Asset #${assetIdx} (${this.assetSymbols[assetIdx] || "ASSET"}) Platt Calibration Flatline: StdDev=${(confStdDev * 100).toFixed(4)}% < 0.02%. WATCHDOG ARMED (5min auto-restart).\x1b[0m`);
+            this.pushNotification(`\x1b[31m[CONF_FLATLINE_DETECTED] Asset #${String(assetIdx)} (${this.assetSymbols[assetIdx] || "ASSET"}) Platt Calibration Flatline: StdDev=${(confStdDev * 100).toFixed(4)}% < 0.02%. WATCHDOG ARMED (5min auto-restart).\x1b[0m`);
         }
         else if (!isFlatline && this.isConfFlatlined[assetIdx] && confStdDev >= 0.0002) {
             this.isConfFlatlined[assetIdx] = false;
@@ -657,7 +666,7 @@ class MultiAssetCLIDashboard {
             const watchdogStr = recalStatusForHealth.isRecalibrating
                 ? `${yellow}[RECALIBRATING...]${reset}`
                 : watchdogRemainSec > 0
-                    ? `${yellow}[WATCHDOG: AUTO-RESTART IN ${watchdogRemainSec}s]${reset}`
+                    ? `${yellow}[WATCHDOG: AUTO-RESTART IN ${String(watchdogRemainSec)}s]${reset}`
                     : `${red}${bold}[WATCHDOG: TRIGGERING NOW]${reset}`;
             calibHealthStr = `${red}${bold}[COLLAPSED ⚠️ - ${reasonStr}]${reset} ${watchdogStr}`;
         }
@@ -665,7 +674,7 @@ class MultiAssetCLIDashboard {
             calibHealthStr = `${green}${bold}[HEALTHY ✅ - OPTIMAL DISPERSION]${reset}`;
         }
         out += ` Platt Scale (A): ${plattA >= 0.8 ? green + bold : plattA >= 0.5 ? yellow : red + bold}${plattA.toFixed(4)}${reset} | Platt Offset (B): ${plattB.toFixed(4)} | Temperature (T): ${plattT.toFixed(4)}${clearLine}\n`;
-        out += ` Meta-Logit |μ|: ${metaLogitAbs.toFixed(4)} | Conf% StdDev: ${(confStdDev * 100).toFixed(3)}% (N=${count}) | Health: ${calibHealthStr}${clearLine}\n`;
+        out += ` Meta-Logit |μ|: ${metaLogitAbs.toFixed(4)} | Conf% StdDev: ${(confStdDev * 100).toFixed(3)}% (N=${String(count)}) | Health: ${calibHealthStr}${clearLine}\n`;
         out += MultiAssetCLIDashboard.BORDER;
         out += "\x1b[J";
         process.stdout.write(out);

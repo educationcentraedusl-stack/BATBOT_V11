@@ -1,11 +1,12 @@
 import { useSyncExternalStore, useRef } from "react";
+import type { ControlCommand } from "../telemetry/proto";
 import {
-  WorkerFrameData,
-  ConnectionStatus,
-  TelemetryWorkerOutboundMessage,
-} from "./telemetry.worker";
+  type WorkerFrameData,
+  type ConnectionStatus,
+  type TelemetryWorkerOutboundMessage,
+} from "./telemetry.types";
 
-export type { WorkerFrameData, ConnectionStatus } from "./telemetry.worker";
+export type { WorkerFrameData, ConnectionStatus } from "./telemetry.types";
 
 export const HISTORY_CAPACITY = 300;
 
@@ -189,7 +190,7 @@ export function initTelemetryWorker(wsUrl: string = "ws://localhost:8080"): void
   }
 }
 
-export function sendRpcCommand(action: string, modelPath?: string): void {
+export function sendRpcCommand(action: ControlCommand["action"], modelPath?: string): void {
   if (worker) {
     worker.postMessage({
       type: "SEND_COMMAND",

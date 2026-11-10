@@ -76,7 +76,7 @@ export const SYMBOL_LEVERAGE_CONFIG: Record<string, SymbolRiskConfig> = {
  */
 export function getBaselineLeverageForSymbol(symbol: string): number {
   const upper = symbol.toUpperCase();
-  if (SYMBOL_LEVERAGE_CONFIG[upper]) {
+  if (Object.prototype.hasOwnProperty.call(SYMBOL_LEVERAGE_CONFIG, upper)) {
     return SYMBOL_LEVERAGE_CONFIG[upper].baselineLeverage;
   }
   if (upper.includes("BTC") || upper.includes("ETH")) {

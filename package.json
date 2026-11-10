@@ -12,7 +12,7 @@
     "build": "npm run build:rust && npm run build:ts && npm run build:dashboard",
     "check": "cargo check",
     "lint": "eslint . --max-warnings 0",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.dashboard.json --noEmit && tsc -p tsconfig.jest.json --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.dashboard.json --noEmit && tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.jest.json --noEmit",
     "test": "jest",
     "test:phase9": "tsc && node dist/tests/test_phase9_master_validation.js",
     "test:ws": "tsc && node dist/tests/test_ws_order_client.js",
@@ -28,6 +28,7 @@
     "trainmodels": "npm run build:ts && node dist/scripts/manual_train.js"
   },
   "dependencies": {
+    "@radix-ui/react-select": "^2.4.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dotenv": "^17.4.2",
@@ -46,6 +47,8 @@
     "@jest/globals": "^30.5.2",
     "@napi-rs/cli": "^2.18.4",
     "@tailwindcss/vite": "^4.3.3",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.13.0",
     "@types/react": "^19.2.17",
@@ -56,6 +59,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.14.0",
     "jest": "^30.5.2",
+    "jest-environment-jsdom": "^30.5.2",
     "tailwindcss": "^4.3.3",
     "ts-jest": "^29.4.15",
     "tw-animate-css": "^1.4.0",

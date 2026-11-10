@@ -1,5 +1,5 @@
 import * as protobuf from "protobufjs";
-import { TelemetryFrame } from "./dashboard";
+import type { TelemetryFrame } from "./types";
 
 const TELEMETRY_PROTO_SCHEMA = `
 syntax = "proto3";
@@ -66,23 +66,71 @@ message ControlResponseProto {
 }
 `;
 
-let root: protobuf.Root | null = null;
-let TelemetryFrameMsg: protobuf.Type | null = null;
-let ControlCommandMsg: protobuf.Type | null = null;
-let ControlResponseMsg: protobuf.Type | null = null;
+interface ProtoTypes {
+  telemetryFrame: protobuf.Type;
+  controlCommand: protobuf.Type;
+  controlResponse: protobuf.Type;
+}
+
+let cachedTypes: ProtoTypes | null = null;
+
+function getProtoTypes(): ProtoTypes {
+  if (cachedTypes !== null) {
+    return cachedTypes;
+  }
+  const parsed = protobuf.parse(TELEMETRY_PROTO_SCHEMA);
+  const loadedRoot = parsed.root;
+  cachedTypes = {
+    telemetryFrame: loadedRoot.lookupType("batbot.telemetry.TelemetryFrameProto"),
+    controlCommand: loadedRoot.lookupType("batbot.telemetry.ControlCommandProto"),
+    controlResponse: loadedRoot.lookupType("batbot.telemetry.ControlResponseProto"),
+  };
+  return cachedTypes;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readString(obj: Record<string, unknown>, key: string, fallback: string): string {
+  const val = obj[key];
+  return typeof val === "string" && val.length > 0 ? val : fallback;
+}
+
+function readOptionalString(obj: Record<string, unknown>, key: string): string | undefined {
+  const val = obj[key];
+  return typeof val === "string" ? val : undefined;
+}
+
+function readNumber(obj: Record<string, unknown>, key: string, fallback: number): number {
+  const val = obj[key];
+  return typeof val === "number" && Number.isFinite(val) ? val : fallback;
+}
+
+function readOptionalNumber(obj: Record<string, unknown>, key: string): number | undefined {
+  const val = obj[key];
+  return typeof val === "number" && Number.isFinite(val) ? val : undefined;
+}
+
+function readBoolean(obj: Record<string, unknown>, key: string): boolean {
+  return Boolean(obj[key]);
+}
+
+function readBigInt(obj: Record<string, unknown>, key: string): bigint {
+  const val = obj[key];
+  if (typeof val === "bigint") return val;
+  if (typeof val === "number" && Number.isFinite(val)) return BigInt(Math.trunc(val));
+  if (typeof val === "string" && /^\d+$/.test(val)) return BigInt(val);
+  return 0n;
+}
 
 export function initProtobuf(): void {
-  if (root) return;
-  const parsed = protobuf.parse(TELEMETRY_PROTO_SCHEMA);
-  root = parsed.root;
-  TelemetryFrameMsg = root.lookupType("batbot.telemetry.TelemetryFrameProto");
-  ControlCommandMsg = root.lookupType("batbot.telemetry.ControlCommandProto");
-  ControlResponseMsg = root.lookupType("batbot.telemetry.ControlResponseProto");
+  getProtoTypes();
 }
 
 export function encodeTelemetryFrame(frame: TelemetryFrame, timestamp: number = Date.now()): Uint8Array {
-  if (!TelemetryFrameMsg) initProtobuf();
-  
+  const { telemetryFrame } = getProtoTypes();
+
   const payload = {
     symbol: frame.symbol,
     sequenceNum: typeof frame.sequenceNum === "bigint" ? Number(frame.sequenceNum) : frame.sequenceNum,
@@ -115,64 +163,75 @@ export function encodeTelemetryFrame(frame: TelemetryFrame, timestamp: number = 
     aiDirection: frame.aiDirection ?? 0,
     aiConfidence: frame.aiConfidence ?? 0,
     rollingIc: frame.rollingIc ?? 0,
-    aiInferenceLatencyNs: typeof frame.aiInferenceLatencyNs === "bigint" ? Number(frame.aiInferenceLatencyNs) : (frame.aiInferenceLatencyNs ?? 0),
+    aiInferenceLatencyNs:
+      frame.aiInferenceLatencyNs !== undefined ? Number(frame.aiInferenceLatencyNs) : 0,
     rttMs: frame.rttMs ?? 0,
     latencyPenalty: frame.latencyPenalty ?? 1.0,
     slippageTicks: frame.slippageTicks ?? 2,
-    timestamp: timestamp,
+    timestamp,
   };
 
-  const err = TelemetryFrameMsg!.verify(payload);
+  const err = telemetryFrame.verify(payload);
   if (err) {
     throw new Error(`Protobuf verification failed: ${err}`);
   }
 
-  const message = TelemetryFrameMsg!.create(payload);
-  return TelemetryFrameMsg!.encode(message).finish();
+  const message = telemetryFrame.create(payload);
+  return telemetryFrame.encode(message).finish();
 }
 
 export function decodeTelemetryFrame(buffer: Uint8Array): TelemetryFrame {
-  if (!TelemetryFrameMsg) initProtobuf();
-  const decoded = TelemetryFrameMsg!.decode(buffer);
-  const obj = TelemetryFrameMsg!.toObject(decoded, { longs: Number, enums: String, defaults: true });
-  
-  const statsObj = obj.stats || {};
+  const { telemetryFrame } = getProtoTypes();
+  const decoded = telemetryFrame.decode(buffer);
+  const rawObj = telemetryFrame.toObject(decoded, { longs: Number, enums: String, defaults: true }) as unknown;
+  const obj: Record<string, unknown> = isRecord(rawObj) ? rawObj : {};
+  const statsRaw = obj["stats"];
+  const statsObj: Record<string, unknown> = isRecord(statsRaw) ? statsRaw : {};
+
+  const rawSignal = readString(obj, "lastSignal", "NONE");
+  const lastSignal: TelemetryFrame["lastSignal"] =
+    rawSignal === "BUY" || rawSignal === "SELL" ? rawSignal : "NONE";
+
+  const rawSide = readString(statsObj, "positionSide", "FLAT");
+  const positionSide: TelemetryFrame["stats"]["positionSide"] =
+    rawSide === "LONG" || rawSide === "SHORT" || rawSide === "BOTH" ? rawSide : "FLAT";
+
   return {
-    symbol: obj.symbol || process.env.SYMBOL || "BTCUSDT",
-    sequenceNum: BigInt(obj.sequenceNum || 0),
-    bidPrice: obj.bidPrice || 0,
-    askPrice: obj.askPrice || 0,
-    obi: obj.obi || 0,
-    cvd: obj.cvd || 0,
-    spreadVelocity: obj.spreadVelocity || 0,
-    lastSignal: obj.lastSignal || "NONE",
-    tickEvaluationLatencyUs: obj.tickEvaluationLatencyUs || 0,
+    symbol: readString(obj, "symbol", "BTCUSDT"),
+    sequenceNum: readBigInt(obj, "sequenceNum"),
+    bidPrice: readNumber(obj, "bidPrice", 0),
+    askPrice: readNumber(obj, "askPrice", 0),
+    obi: readNumber(obj, "obi", 0),
+    cvd: readNumber(obj, "cvd", 0),
+    spreadVelocity: readNumber(obj, "spreadVelocity", 0),
+    lastSignal,
+    tickEvaluationLatencyUs: readNumber(obj, "tickEvaluationLatencyUs", 0),
     stats: {
-      realizedPnl: statsObj.realizedPnl || 0,
-      unrealizedPnl: statsObj.unrealizedPnl || 0,
-      totalFees: statsObj.totalFees || 0,
-      totalTrades: statsObj.totalTrades || 0,
-      winningTrades: statsObj.winningTrades || 0,
-      losingTrades: statsObj.losingTrades || 0,
-      winRatePercent: statsObj.winRatePercent || 0,
-      positionSide: statsObj.positionSide || "FLAT",
-      netQuantity: statsObj.netQuantity || 0,
-      averageEntryPrice: statsObj.averageEntryPrice || 0,
-      totalSignalsLogged: statsObj.totalSignalsLogged || 0,
-      totalExecutionsLogged: statsObj.totalExecutionsLogged || 0,
-      avgTickLatencyUs: statsObj.avgTickLatencyUs || 0,
-      bufferQueueDepth: statsObj.bufferQueueDepth || 0,
+      realizedPnl: readNumber(statsObj, "realizedPnl", 0),
+      unrealizedPnl: readNumber(statsObj, "unrealizedPnl", 0),
+      totalFees: readNumber(statsObj, "totalFees", 0),
+      totalTrades: readNumber(statsObj, "totalTrades", 0),
+      winningTrades: readNumber(statsObj, "winningTrades", 0),
+      losingTrades: readNumber(statsObj, "losingTrades", 0),
+      winRatePercent: readNumber(statsObj, "winRatePercent", 0),
+      positionSide,
+      netQuantity: readNumber(statsObj, "netQuantity", 0),
+      averageEntryPrice: readNumber(statsObj, "averageEntryPrice", 0),
+      totalSignalsLogged: readNumber(statsObj, "totalSignalsLogged", 0),
+      totalExecutionsLogged: readNumber(statsObj, "totalExecutionsLogged", 0),
+      avgTickLatencyUs: readNumber(statsObj, "avgTickLatencyUs", 0),
+      bufferQueueDepth: readNumber(statsObj, "bufferQueueDepth", 0),
     },
-    riskStatus: obj.riskStatus || "PASSED",
-    isEngineActive: Boolean(obj.isEngineActive),
-    usdtBalance: obj.usdtBalance || 0,
-    aiDirection: obj.aiDirection || 0,
-    aiConfidence: obj.aiConfidence || 0,
-    rollingIc: obj.rollingIc || 0,
-    aiInferenceLatencyNs: BigInt(obj.aiInferenceLatencyNs || 0),
-    rttMs: obj.rttMs || 0,
-    latencyPenalty: obj.latencyPenalty || 1.0,
-    slippageTicks: obj.slippageTicks || 0,
+    riskStatus: readString(obj, "riskStatus", "PASSED"),
+    isEngineActive: readBoolean(obj, "isEngineActive"),
+    usdtBalance: readNumber(obj, "usdtBalance", 0),
+    aiDirection: readNumber(obj, "aiDirection", 0),
+    aiConfidence: readNumber(obj, "aiConfidence", 0),
+    rollingIc: readNumber(obj, "rollingIc", 0),
+    aiInferenceLatencyNs: readBigInt(obj, "aiInferenceLatencyNs"),
+    rttMs: readNumber(obj, "rttMs", 0),
+    latencyPenalty: readNumber(obj, "latencyPenalty", 1.0),
+    slippageTicks: readNumber(obj, "slippageTicks", 0),
   };
 }
 
@@ -183,21 +242,22 @@ export interface ControlCommand {
 }
 
 export function encodeControlCommand(cmd: ControlCommand): Uint8Array {
-  if (!ControlCommandMsg) initProtobuf();
+  const { controlCommand } = getProtoTypes();
   const payload = {
     action: cmd.action,
     modelPath: cmd.modelPath || "",
     timestamp: cmd.timestamp || Date.now(),
   };
-  const message = ControlCommandMsg!.create(payload);
-  return ControlCommandMsg!.encode(message).finish();
+  const message = controlCommand.create(payload);
+  return controlCommand.encode(message).finish();
 }
 
 export function decodeControlCommand(buffer: Uint8Array): ControlCommand {
-  if (!ControlCommandMsg) initProtobuf();
-  const message = ControlCommandMsg!.decode(buffer);
-  const object = ControlCommandMsg!.toObject(message, { enums: String, defaults: true });
-  const rawAction = typeof object.action === "string" ? object.action : "ENGINE_PAUSE";
+  const { controlCommand } = getProtoTypes();
+  const message = controlCommand.decode(buffer);
+  const rawObj = controlCommand.toObject(message, { enums: String, defaults: true }) as unknown;
+  const object: Record<string, unknown> = isRecord(rawObj) ? rawObj : {};
+  const rawAction = readString(object, "action", "ENGINE_PAUSE");
   const validAction: ControlCommand["action"] =
     rawAction === "ENGINE_START" ||
     rawAction === "ENGINE_PAUSE" ||
@@ -208,20 +268,19 @@ export function decodeControlCommand(buffer: Uint8Array): ControlCommand {
 
   return {
     action: validAction,
-    modelPath: object.modelPath,
-    timestamp: object.timestamp,
+    modelPath: readOptionalString(object, "modelPath"),
+    timestamp: readOptionalNumber(object, "timestamp"),
   };
 }
 
 export function encodeControlResponse(success: boolean, action: string, messageStr: string): Uint8Array {
-  if (!ControlResponseMsg) initProtobuf();
+  const { controlResponse } = getProtoTypes();
   const payload = {
     success,
     action,
     message: messageStr,
     timestamp: Date.now(),
   };
-  const message = ControlResponseMsg!.create(payload);
-  return ControlResponseMsg!.encode(message).finish();
+  const message = controlResponse.create(payload);
+  return controlResponse.encode(message).finish();
 }
-

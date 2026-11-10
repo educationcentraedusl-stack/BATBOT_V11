@@ -174,10 +174,10 @@ export const ExecutionView: React.FC = () => {
           <span ref={obiValRef} className="font-mono text-yellow-400">+0.0000</span>
         </div>
 
-        {/* Visual OBI Progress Bar */}
+        {/* Visual OBI Progress Bar - Direct RAF width mutation without CSS transitions (Rule 5) */}
         <div className="w-full bg-slate-800 h-3 rounded-full overflow-hidden flex">
-          <div ref={obiBarGreenRef} className="bg-emerald-500 h-full transition-all duration-100" style={{ width: "50%" }}></div>
-          <div ref={obiBarRedRef} className="bg-rose-500 h-full transition-all duration-100" style={{ width: "50%" }}></div>
+          <div ref={obiBarGreenRef} className="bg-emerald-500 h-full" style={{ width: "50%" }}></div>
+          <div ref={obiBarRedRef} className="bg-rose-500 h-full" style={{ width: "50%" }}></div>
         </div>
 
         <div className="flex justify-between text-xs text-slate-400 font-mono pt-1">

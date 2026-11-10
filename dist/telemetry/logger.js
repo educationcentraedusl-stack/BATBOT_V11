@@ -105,7 +105,8 @@ class TradeLogger {
         // Background asynchronous batch persistence timer (flushes every 250ms)
         this.flushTimer = setInterval(() => {
             this.flushAsync().catch((err) => {
-                console.error(`[TradeLogger] Background flush error: ${err.message}`);
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`[TradeLogger] Background flush error: ${msg}`);
             });
         }, 250);
     }

@@ -24,14 +24,16 @@ class TerminalOutputMux {
         this.originalStdoutWrite = process.stdout.write.bind(process.stdout);
         this.originalStderrWrite = process.stderr.write.bind(process.stderr);
         // Override process.stdout.write to pass prompt and readline input echoes, buffering background logs
-        process.stdout.write = (chunk, encoding, callback) => {
+        const muxStdoutWrite = (chunk, encodingOrCallback, callback) => {
             let cb = callback;
-            let enc = encoding;
-            if (typeof encoding === "function") {
-                cb = encoding;
-                enc = undefined;
+            let enc;
+            if (typeof encodingOrCallback === "function") {
+                cb = encodingOrCallback;
             }
-            const str = typeof chunk === "string" ? chunk : chunk.toString(enc || "utf8");
+            else {
+                enc = encodingOrCallback;
+            }
+            const str = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString(enc ?? "utf8");
             // Allow prompt text, readline control codes, and user keypress echoes to pass through
             const isPromptString = str.includes("Recalibration triggered") ||
                 str.includes("Modal Cloud GPU") ||
@@ -42,28 +44,37 @@ class TerminalOutputMux {
                 str.trim() === "yes" ||
                 str.trim() === "no";
             if (isPromptString && this.originalStdoutWrite) {
-                return this.originalStdoutWrite(chunk, enc, cb);
+                if (enc !== undefined) {
+                    return this.originalStdoutWrite(chunk, enc, cb);
+                }
+                return this.originalStdoutWrite(chunk, cb);
             }
             // Buffer background logs so they don't break the CLI prompt line
             this.logBuffer.push(str);
-            if (typeof cb === "function")
+            if (cb)
                 cb();
             return true;
         };
+        const stdoutTarget = process.stdout;
+        stdoutTarget.write = muxStdoutWrite;
         // Override process.stderr.write to buffer background error/warning logs during prompt session
-        process.stderr.write = (chunk, encoding, callback) => {
+        const muxStderrWrite = (chunk, encodingOrCallback, callback) => {
             let cb = callback;
-            let enc = encoding;
-            if (typeof encoding === "function") {
-                cb = encoding;
-                enc = undefined;
+            let enc;
+            if (typeof encodingOrCallback === "function") {
+                cb = encodingOrCallback;
             }
-            const str = typeof chunk === "string" ? chunk : chunk.toString(enc || "utf8");
+            else {
+                enc = encodingOrCallback;
+            }
+            const str = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString(enc ?? "utf8");
             this.logBuffer.push(str);
-            if (typeof cb === "function")
+            if (cb)
                 cb();
             return true;
         };
+        const stderrTarget = process.stderr;
+        stderrTarget.write = muxStderrWrite;
     }
     endPromptSession() {
         if (!this.isPromptActive)

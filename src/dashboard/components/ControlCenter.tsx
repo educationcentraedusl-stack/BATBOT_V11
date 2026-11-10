@@ -2,6 +2,13 @@ import React, { useEffect, useRef, useState } from "react";
 import { AnimatePresence, m } from "framer-motion";
 import { useTelemetrySelector, sendRpcCommand } from "../store";
 import { Button } from "@/dashboard/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/dashboard/components/ui/select";
 
 export const ControlCenter: React.FC = () => {
   const isEngineActive = useTelemetrySelector((state) => state.isEngineActive);
@@ -99,15 +106,25 @@ export const ControlCenter: React.FC = () => {
         </h3>
 
         <div className="flex flex-col sm:flex-row gap-3">
-          <select
-            value={selectedModel}
-            onChange={(e) => { setSelectedModel(e.target.value); }}
-            className="bg-slate-900 border border-yellow-600/40 text-yellow-300 text-xs rounded px-3 py-2 focus:outline-none focus:border-yellow-500 font-mono flex-1"
-          >
-            <option value="models/tkan_v2_optimized.bin">tkan_v2_optimized.bin (T-KAN Spline LUT)</option>
-            <option value="models/cfc_hft_model.safetensors">cfc_hft_model.safetensors (CfC Recurrent Cell)</option>
-            <option value="models/shadow_experiment_v3.bin">shadow_experiment_v3.bin (Experimental Model)</option>
-          </select>
+          <Select value={selectedModel} onValueChange={setSelectedModel}>
+            <SelectTrigger
+              aria-label="AI Model Weights Selector"
+              className="flex-1 bg-slate-900 border-yellow-600/40 text-yellow-300 text-xs font-mono focus:ring-yellow-500"
+            >
+              <SelectValue placeholder="Select AI model weights" />
+            </SelectTrigger>
+            <SelectContent className="bg-slate-900 border-yellow-600/40 text-yellow-300 font-mono">
+              <SelectItem value="models/tkan_v2_optimized.bin">
+                tkan_v2_optimized.bin (T-KAN Spline LUT)
+              </SelectItem>
+              <SelectItem value="models/cfc_hft_model.safetensors">
+                cfc_hft_model.safetensors (CfC Recurrent Cell)
+              </SelectItem>
+              <SelectItem value="models/shadow_experiment_v3.bin">
+                shadow_experiment_v3.bin (Experimental Model)
+              </SelectItem>
+            </SelectContent>
+          </Select>
 
           <Button
             onClick={handleHotSwap}

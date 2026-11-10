@@ -131,7 +131,8 @@ class OrderManager {
                     await this.executionClient.cancelOrder(symbol, state.activeStopLossOrderId);
                 }
                 catch (cancelErr) {
-                    // Non-blocking catch for already filled / expired orders
+                    const cancelMsg = cancelErr instanceof Error ? cancelErr.message : String(cancelErr);
+                    console.warn(`[OrderManager] Non-blocking previous SL cancel notice for ${symbol} ${side}: ${cancelMsg}`);
                 }
             }
             // 2. Dispatch new STOP_MARKET conditional order
@@ -154,7 +155,7 @@ class OrderManager {
         }
         catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
-            console.warn(`[OrderManager] Failed to update Stop Loss for ${symbol} ${side} @ ${newStopPrice}: ${errMsg}`);
+            console.warn(`[OrderManager] Failed to update Stop Loss for ${symbol} ${side} @ ${String(newStopPrice)}: ${errMsg}`);
             return null;
         }
         finally {
@@ -163,7 +164,10 @@ class OrderManager {
             if (state.pendingSlTarget !== null && state.pendingSlTarget !== state.lastSyncedStopPrice) {
                 const queuedTarget = state.pendingSlTarget;
                 state.pendingSlTarget = null;
-                this.updateStopLossOrder(symbol, side, quantity, queuedTarget).catch(() => { });
+                this.updateStopLossOrder(symbol, side, quantity, queuedTarget).catch((queueErr) => {
+                    const queueMsg = queueErr instanceof Error ? queueErr.message : String(queueErr);
+                    console.warn(`[OrderManager] Queued SL ratchet update notice for ${symbol} ${side}: ${queueMsg}`);
+                });
             }
         }
     }
@@ -190,7 +194,7 @@ class OrderManager {
         }
         catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
-            console.warn(`[OrderManager] Failed to place TP order for ${symbol} ${side} @ ${newTpPrice}: ${errMsg}`);
+            console.warn(`[OrderManager] Failed to place TP order for ${symbol} ${side} @ ${String(newTpPrice)}: ${errMsg}`);
             return null;
         }
     }
@@ -207,7 +211,8 @@ class OrderManager {
             await this.executionClient.cancelAllOrders(symbol);
         }
         catch (cancelErr) {
-            // Proceed to emergency market close regardless
+            const cancelMsg = cancelErr instanceof Error ? cancelErr.message : String(cancelErr);
+            console.warn(`[OrderManager] Pre-emergency cancelAllOrders notice for ${symbol}: ${cancelMsg}`);
         }
         try {
             const params = {
@@ -232,7 +237,8 @@ class OrderManager {
      * Ingests Binance WebSocket User Data Stream Execution Reports.
      */
     handleExecutionReport(update) {
-        if (!update || update.eventType !== "ORDER_TRADE_UPDATE")
+        const eventType = update.eventType;
+        if (eventType !== "ORDER_TRADE_UPDATE")
             return;
         const ord = update.order;
         const parsedCid = clientOrderIdGenerator_1.ClientOrderIdGenerator.parse(ord.clientOrderId);
@@ -289,7 +295,7 @@ class OrderManager {
             console.warn(`[OrderManager] Asynchronous SL ratchet dispatch error: ${err instanceof Error ? err.message : String(err)}`);
         });
     }
-    handleTakeProfitTrigger(symbol, side, quantity, markPrice, reason) {
+    handleTakeProfitTrigger(symbol, side, quantity, _markPrice, _reason) {
         const exitSide = side === "LONG" ? "SELL" : "BUY";
         const slotId = side === "LONG" ? "CORE_LONG" : "SHORT_SLOT_0";
         const clientOrderId = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(symbol, slotId, "TP5");
@@ -306,7 +312,7 @@ class OrderManager {
             console.error(`[OrderManager] Take Profit execution error for ${symbol} ${side}: ${err instanceof Error ? err.message : String(err)}`);
         });
     }
-    handleStopLossTrigger(symbol, side, quantity, markPrice, reason) {
+    handleStopLossTrigger(symbol, side, quantity, _markPrice, reason) {
         this.executeEmergencyClose(symbol, side, quantity, reason).catch((err) => {
             console.error(`[OrderManager] Stop Loss execution error for ${symbol} ${side}: ${err instanceof Error ? err.message : String(err)}`);
         });

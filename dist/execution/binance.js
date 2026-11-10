@@ -49,6 +49,12 @@ const wsOrderClient_1 = require("./wsOrderClient");
 const sabSchema_1 = require("../ipc/sabSchema");
 const tradingSymbols_1 = require("../config/tradingSymbols");
 const ws_1 = __importDefault(require("ws"));
+function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function formatRejectionReason(reason) {
+    return reason instanceof Error ? reason.message : String(reason);
+}
 class BinanceRateLimiter {
     static MAX_WEIGHT_1M = 2400;
     static MAX_ORDERS_10S = 300;
@@ -89,7 +95,7 @@ class BinanceRateLimiter {
                 const retrySec = parseInt(Array.isArray(val) ? val[0] : String(val), 10);
                 if (!isNaN(retrySec) && retrySec > 0) {
                     this.backoffUntil = Math.max(this.backoffUntil, now + retrySec * 1000);
-                    console.warn(`[BinanceRateLimiter] Received Retry-After: ${retrySec}s. Enforcing backoff until ${new Date(this.backoffUntil).toISOString()}`);
+                    console.warn(`[BinanceRateLimiter] Received Retry-After: ${String(retrySec)}s. Enforcing backoff until ${new Date(this.backoffUntil).toISOString()}`);
                 }
             }
         }
@@ -97,33 +103,34 @@ class BinanceRateLimiter {
     register429Backoff(retryAfterMs = 5000) {
         const now = Date.now();
         this.backoffUntil = Math.max(this.backoffUntil, now + retryAfterMs);
-        console.error(`[BinanceRateLimiter][429_CIRCUIT_BREAKER] Binance 429/418 detected. Backing off for ${retryAfterMs}ms.`);
+        console.error(`[BinanceRateLimiter][429_CIRCUIT_BREAKER] Binance 429/418 detected. Backing off for ${String(retryAfterMs)}ms.`);
     }
     async acquirePreFlightAllowance(isOrder, signal) {
         const now = Date.now();
         // 1. Check active 429/418 Circuit Breaker Backoff
         if (this.backoffUntil > now) {
             const waitMs = this.backoffUntil - now;
-            console.warn(`[BinanceRateLimiter][THROTTLED_CIRCUIT_BREAKER] Waiting ${waitMs}ms before dispatching request...`);
+            console.warn(`[BinanceRateLimiter][THROTTLED_CIRCUIT_BREAKER] Waiting ${String(waitMs)}ms before dispatching request...`);
             await this.sleep(waitMs, signal);
         }
         // 2. Check 80% Weight Threshold (2400 limit -> 1920 threshold)
         if (this.usedWeight1m >= BinanceRateLimiter.THRESHOLD_WEIGHT_1M) {
             const waitMs = Math.min(2000, Math.max(250, (this.usedWeight1m - BinanceRateLimiter.THRESHOLD_WEIGHT_1M) * 5));
-            console.warn(`[BinanceRateLimiter][WEIGHT_THROTTLED] Weight approaching limit (${this.usedWeight1m}/${BinanceRateLimiter.MAX_WEIGHT_1M}). Pre-flight delay: ${waitMs}ms`);
+            console.warn(`[BinanceRateLimiter][WEIGHT_THROTTLED] Weight approaching limit (${String(this.usedWeight1m)}/${String(BinanceRateLimiter.MAX_WEIGHT_1M)}). Pre-flight delay: ${String(waitMs)}ms`);
             await this.sleep(waitMs, signal);
         }
         // 3. Check 80% Order Count Threshold (300/10s limit -> 240 threshold)
         if (isOrder && this.orderCount10s >= BinanceRateLimiter.THRESHOLD_ORDERS_10S) {
             const waitMs = Math.min(1500, Math.max(200, (this.orderCount10s - BinanceRateLimiter.THRESHOLD_ORDERS_10S) * 25));
-            console.warn(`[BinanceRateLimiter][ORDER_COUNT_THROTTLED] 10s Order count approaching limit (${this.orderCount10s}/${BinanceRateLimiter.MAX_ORDERS_10S}). Pre-flight delay: ${waitMs}ms`);
+            console.warn(`[BinanceRateLimiter][ORDER_COUNT_THROTTLED] 10s Order count approaching limit (${String(this.orderCount10s)}/${String(BinanceRateLimiter.MAX_ORDERS_10S)}). Pre-flight delay: ${String(waitMs)}ms`);
             await this.sleep(waitMs, signal);
         }
     }
     sleep(ms, signal) {
         return new Promise((resolve, reject) => {
             if (signal?.aborted) {
-                return reject(new Error("Request aborted during rate-limit backoff"));
+                reject(new Error("Request aborted during rate-limit backoff"));
+                return;
             }
             const timer = setTimeout(() => {
                 cleanup();
@@ -260,8 +267,10 @@ class BinanceExecutionClient {
                     useTestnet: this.testnet,
                     apiKey: this.apiKey,
                     apiSecret: this.apiSecret,
-                    requestTimeoutMs: Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : undefined,
-                    maxReconnectAttempts: Number.isFinite(envMaxReconnect) && envMaxReconnect >= 0 ? envMaxReconnect : undefined,
+                    requestTimeoutMs: envTimeout !== undefined && Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : undefined,
+                    maxReconnectAttempts: envMaxReconnect !== undefined && Number.isFinite(envMaxReconnect) && envMaxReconnect >= 0
+                        ? envMaxReconnect
+                        : undefined,
                 });
                 await wsClient.connect();
                 this.attachWsOrderClient(wsClient, sabClient, assetIndex);
@@ -292,11 +301,13 @@ class BinanceExecutionClient {
             try {
                 wsClient.destroy();
             }
-            catch (_) { }
+            catch (destroyErr) {
+                console.warn(`[BinanceExecutionClient][WS_ORDER_CLIENT] Redundant client destroy notice: ${formatRejectionReason(destroyErr)}`);
+            }
         }
         // Mark the WS stream as healthy for this asset in the SAB
         sabClient.writeAtomicFloat64Asset(assetIndex, sabSchema_1.SAB_SLOTS.WS_ORDER_STREAM_HEALTH, 1.0);
-        console.log(`[BinanceExecutionClient][WS_ORDER_CLIENT] WebSocket Order API primary path attached (assetIndex=${assetIndex}).`);
+        console.log(`[BinanceExecutionClient][WS_ORDER_CLIENT] WebSocket Order API primary path attached (assetIndex=${String(assetIndex)}).`);
     }
     /**
      * Detaches the WsOrderClient and destroys it. Reverts to REST fallback.
@@ -497,11 +508,11 @@ class BinanceExecutionClient {
         // 3. Ensure periodic background poll timer is active
         if (!this.fundingRatePollTimer) {
             this.fundingRatePollTimer = setInterval(() => {
-                this.syncAllFundingRates(client).catch(() => { });
+                this.syncAllFundingRates(client).catch((pollErr) => {
+                    console.warn(`[BinanceExecutionClient][FUNDING_POLL] Poll sync notice: ${formatRejectionReason(pollErr)}`);
+                });
             }, 30000);
-            if (this.fundingRatePollTimer.unref) {
-                this.fundingRatePollTimer.unref();
-            }
+            this.fundingRatePollTimer.unref();
         }
     }
     /**
@@ -527,35 +538,49 @@ class BinanceExecutionClient {
                     this.fundingRateWs.removeAllListeners();
                     this.fundingRateWs.terminate();
                 }
-                catch (_) { }
+                catch (termErr) {
+                    console.warn(`[BinanceExecutionClient][FUNDING_WS] Existing socket terminate notice: ${formatRejectionReason(termErr)}`);
+                }
                 this.fundingRateWs = null;
             }
             const ws = new ws_1.default(wsEndpoint);
             this.fundingRateWs = ws;
             ws.on("open", () => {
                 this.isFundingRateConnecting = false;
-                console.log(`[BinanceExecutionClient][FUNDING_WS] Live Perpetual Funding Rate stream connected (${this.registeredFundingSymbols.size} symbols).`);
+                console.log(`[BinanceExecutionClient][FUNDING_WS] Live Perpetual Funding Rate stream connected (${String(this.registeredFundingSymbols.size)} symbols).`);
             });
             ws.on("message", (raw) => {
                 try {
-                    const msgStr = raw.toString();
+                    const msgStr = Buffer.isBuffer(raw)
+                        ? raw.toString("utf8")
+                        : Array.isArray(raw)
+                            ? Buffer.concat(raw).toString("utf8")
+                            : Buffer.from(raw).toString("utf8");
                     if (!msgStr.includes("markPriceUpdate"))
                         return;
                     const parsed = JSON.parse(msgStr);
-                    const data = "data" in parsed && parsed.data ? parsed.data : ("e" in parsed && parsed.e === "markPriceUpdate" ? parsed : undefined);
-                    if (!data || !data.s || data.r === undefined)
+                    let payload = null;
+                    if (isRecord(parsed)) {
+                        if (isRecord(parsed["data"])) {
+                            payload = parsed["data"];
+                        }
+                        else if (parsed["e"] === "markPriceUpdate") {
+                            payload = parsed;
+                        }
+                    }
+                    if (!payload || typeof payload["s"] !== "string" || typeof payload["r"] !== "string")
                         return;
-                    const rate = parseFloat(data.r);
+                    const rate = parseFloat(payload["r"]);
                     if (!Number.isFinite(rate))
                         return;
-                    const sym = data.s.toUpperCase();
+                    const sym = payload["s"].toUpperCase();
                     const target = this.registeredFundingSymbols.get(sym);
                     if (target) {
                         target.client.setFundingRate(rate, target.assetIndex);
                     }
                 }
-                catch (_) {
-                    // Zero-GC hot stream: ignore JSON parse anomalies
+                catch (parseErr) {
+                    console.warn(`[BinanceExecutionClient][FUNDING_WS] Message parse notice: ${formatRejectionReason(parseErr)}`);
                 }
             });
             ws.on("error", (err) => {
@@ -570,9 +595,7 @@ class BinanceExecutionClient {
                 this.fundingRateReconnectTimer = setTimeout(() => {
                     this.startOrUpdateFundingRateWs();
                 }, 5000);
-                if (this.fundingRateReconnectTimer.unref) {
-                    this.fundingRateReconnectTimer.unref();
-                }
+                this.fundingRateReconnectTimer.unref();
             });
         }
         catch (err) {
@@ -590,7 +613,9 @@ class BinanceExecutionClient {
                 this.fundingRateWs.removeAllListeners();
                 this.fundingRateWs.terminate();
             }
-            catch (_) { }
+            catch (destroyErr) {
+                console.warn(`[BinanceExecutionClient][FUNDING_WS] Destroy terminate notice: ${formatRejectionReason(destroyErr)}`);
+            }
             this.fundingRateWs = null;
         }
         if (this.fundingRatePollTimer) {
@@ -731,7 +756,19 @@ class BinanceExecutionClient {
         }
         const isOrderEndpoint = endpoint.includes("/order") || endpoint.includes("/batchOrders") || endpoint.includes("/algoOrder");
         await this.rateLimiter.acquirePreFlightAllowance(isOrderEndpoint, signal);
-        const queryString = signed ? this.signQuery(params) : new URLSearchParams(params).toString();
+        let queryString = "";
+        if (signed) {
+            queryString = this.signQuery(params);
+        }
+        else {
+            const unsignedParams = new URLSearchParams();
+            for (const [key, value] of Object.entries(params)) {
+                if (value !== undefined && value !== null) {
+                    unsignedParams.append(key, String(value));
+                }
+            }
+            queryString = unsignedParams.toString();
+        }
         const fullUrl = `${this.baseUrl}${endpoint}${queryString ? "?" + queryString : ""}`;
         const url = new node_url_1.URL(fullUrl);
         const defaultTimeoutMs = parseInt(process.env.REST_REQUEST_TIMEOUT_MS || "2500", 10);
@@ -754,55 +791,62 @@ class BinanceExecutionClient {
                 let body = "";
                 this.rateLimiter.updateFromHeaders(res.headers);
                 res.on("data", (chunk) => {
-                    body += chunk;
+                    body += typeof chunk === "string" ? chunk : chunk.toString("utf8");
                 });
-                res.on("end", async () => {
-                    if (isSettled)
-                        return;
-                    cleanup();
-                    this.rateLimiter.updateFromHeaders(res.headers);
-                    try {
-                        const data = JSON.parse(body);
-                        if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-                            isSettled = true;
-                            resolve(data);
-                        }
-                        else {
-                            const errCode = data?.code ?? res.statusCode;
-                            const errMsg = data?.msg ?? body;
-                            const isRateLimit = res.statusCode === 429 ||
-                                res.statusCode === 418 ||
-                                errCode === -1003 ||
-                                errCode === -1015 ||
-                                String(errMsg).includes("Too Many Requests") ||
-                                String(errMsg).includes("IP banned");
-                            if (isRateLimit) {
-                                this.rateLimiter.register429Backoff(5000);
+                res.on("end", () => {
+                    void (async () => {
+                        if (isSettled)
+                            return;
+                        cleanup();
+                        this.rateLimiter.updateFromHeaders(res.headers);
+                        try {
+                            const data = JSON.parse(body);
+                            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+                                isSettled = true;
+                                resolve(data);
                             }
-                            // Auto-resync timestamp and retry once if error code is -1021 (Timestamp ahead/behind)
-                            if (errCode === -1021 && signed && !isRetryAfterSync) {
-                                console.warn(`[BinanceExecutionClient] Timestamp error -1021 detected. Resynchronizing server time and retrying request...`);
-                                await this.syncServerTime();
-                                try {
-                                    const retryRes = await this.request(method, endpoint, params, signed, true, signal);
-                                    isSettled = true;
-                                    resolve(retryRes);
-                                    return;
+                            else {
+                                const rawCode = isRecord(data) ? data["code"] : undefined;
+                                const rawMsg = isRecord(data) ? data["msg"] : undefined;
+                                const errCode = typeof rawCode === "number" || typeof rawCode === "string"
+                                    ? String(rawCode)
+                                    : String(res.statusCode ?? "UNKNOWN");
+                                const errMsg = typeof rawMsg === "string" ? rawMsg : body;
+                                const isRateLimit = res.statusCode === 429 ||
+                                    res.statusCode === 418 ||
+                                    errCode === "-1003" ||
+                                    errCode === "-1015" ||
+                                    errMsg.includes("Too Many Requests") ||
+                                    errMsg.includes("IP banned");
+                                if (isRateLimit) {
+                                    this.rateLimiter.register429Backoff(5000);
                                 }
-                                catch (retryErr) {
-                                    isSettled = true;
-                                    reject(retryErr);
-                                    return;
+                                // Auto-resync timestamp and retry once if error code is -1021 (Timestamp ahead/behind)
+                                if (errCode === "-1021" && signed && !isRetryAfterSync) {
+                                    console.warn(`[BinanceExecutionClient] Timestamp error -1021 detected. Resynchronizing server time and retrying request...`);
+                                    await this.syncServerTime();
+                                    try {
+                                        const retryRes = await this.request(method, endpoint, params, signed, true, signal);
+                                        isSettled = true;
+                                        resolve(retryRes);
+                                        return;
+                                    }
+                                    catch (retryErr) {
+                                        isSettled = true;
+                                        reject(retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
+                                        return;
+                                    }
                                 }
+                                isSettled = true;
+                                reject(new Error(`Binance API Error [${errCode}]: ${errMsg}`));
                             }
-                            isSettled = true;
-                            reject(new Error(`Binance API Error [${errCode}]: ${errMsg}`));
                         }
-                    }
-                    catch (err) {
-                        isSettled = true;
-                        reject(new Error(`Failed to parse Binance response: ${body}`));
-                    }
+                        catch (parseErr) {
+                            const parseMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+                            isSettled = true;
+                            reject(new Error(`Failed to parse Binance response (${parseMsg}): ${body}`));
+                        }
+                    })();
                 });
             });
             // Transport-level Socket Timeout Enforcement:
@@ -811,8 +855,8 @@ class BinanceExecutionClient {
                     return;
                 isSettled = true;
                 cleanup();
-                req.destroy(new Error(`[BinanceExecutionClient] HTTP request socket timeout (${defaultTimeoutMs}ms) exceeded on ${method} ${endpoint}`));
-                reject(new Error(`[BinanceExecutionClient] HTTP request socket timeout (${defaultTimeoutMs}ms) exceeded on ${method} ${endpoint}`));
+                req.destroy(new Error(`[BinanceExecutionClient] HTTP request socket timeout (${String(defaultTimeoutMs)}ms) exceeded on ${method} ${endpoint}`));
+                reject(new Error(`[BinanceExecutionClient] HTTP request socket timeout (${String(defaultTimeoutMs)}ms) exceeded on ${method} ${endpoint}`));
             });
             let abortHandler = null;
             if (signal) {
@@ -848,13 +892,13 @@ class BinanceExecutionClient {
         try {
             const dualSidePosition = enable ? "true" : "false";
             const res = await this.request("POST", "/fapi/v1/positionSide/dual", { dualSidePosition }, true);
-            console.log(`[BinanceExecutionClient] Dual-side Hedge Mode set to ${enable} (Response: ${JSON.stringify(res)})`);
+            console.log(`[BinanceExecutionClient] Dual-side Hedge Mode set to ${String(enable)} (Response: ${JSON.stringify(res)})`);
             return true;
         }
         catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             if (errMsg.includes("-4059")) {
-                console.log(`[BinanceExecutionClient] Dual-side Hedge Mode is already set to ${enable}.`);
+                console.log(`[BinanceExecutionClient] Dual-side Hedge Mode is already set to ${String(enable)}.`);
                 return true;
             }
             console.warn(`[BinanceExecutionClient] Unable to set Hedge Mode: ${errMsg}`);
@@ -867,12 +911,12 @@ class BinanceExecutionClient {
         try {
             const roundedLev = Math.round(leverage);
             const res = await this.request("POST", "/fapi/v1/leverage", { symbol, leverage: roundedLev }, true);
-            console.log(`[BinanceExecutionClient] Exchange Leverage for ${symbol} set to ${res.leverage}x (MaxNotional: $${res.maxNotionalValue})`);
+            console.log(`[BinanceExecutionClient] Exchange Leverage for ${symbol} set to ${String(res.leverage)}x (MaxNotional: $${res.maxNotionalValue})`);
             return res;
         }
         catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
-            console.warn(`[BinanceExecutionClient] Unable to set leverage for ${symbol} to ${leverage}x: ${errMsg}`);
+            console.warn(`[BinanceExecutionClient] Unable to set leverage for ${symbol} to ${String(leverage)}x: ${errMsg}`);
             return null;
         }
     }
@@ -897,7 +941,7 @@ class BinanceExecutionClient {
                 return matchesPosSide && isConditionalOrClose;
             });
             if (conflictingOrders.length > 0) {
-                console.log(`[BinanceExecutionClient][PRE_FLIGHT_ANNIHILATION] Found ${conflictingOrders.length} conflicting resting order(s) for ${symbol} (${targetPosSide}). Forcibly cancelling...`);
+                console.log(`[BinanceExecutionClient][PRE_FLIGHT_ANNIHILATION] Found ${String(conflictingOrders.length)} conflicting resting order(s) for ${symbol} (${targetPosSide}). Forcibly cancelling...`);
                 for (const ord of conflictingOrders) {
                     try {
                         await this.cancelOrder(symbol, ord.orderId, signal);
@@ -906,7 +950,7 @@ class BinanceExecutionClient {
                     catch (cancelErr) {
                         const errMsg = cancelErr instanceof Error ? cancelErr.message : String(cancelErr);
                         if (!errMsg.includes("-2011") && !errMsg.includes("Unknown order")) {
-                            console.warn(`[BinanceExecutionClient][PRE_FLIGHT_CANCEL_WARN] Order #${ord.orderId} cancel notice: ${errMsg}`);
+                            console.warn(`[BinanceExecutionClient][PRE_FLIGHT_CANCEL_WARN] Order #${String(ord.orderId)} cancel notice: ${errMsg}`);
                         }
                     }
                 }
@@ -932,16 +976,19 @@ class BinanceExecutionClient {
                         });
                         remainingConflicts = stillActive.length;
                         if (remainingConflicts > 0) {
-                            console.warn(`[BinanceExecutionClient][VERIFY_BARRIER_POLL] ${remainingConflicts} order(s) still clearing on Binance (Probe ${verifyAttempts}/${maxVerifyAttempts})...`);
+                            console.warn(`[BinanceExecutionClient][VERIFY_BARRIER_POLL] ${String(remainingConflicts)} order(s) still clearing on Binance (Probe ${String(verifyAttempts)}/${String(maxVerifyAttempts)})...`);
                             for (const ord of stillActive) {
                                 try {
                                     await this.cancelOrder(symbol, ord.orderId, signal);
                                 }
-                                catch (_) { }
+                                catch (retryCancelErr) {
+                                    console.warn(`[BinanceExecutionClient][VERIFY_BARRIER_CANCEL_NOTICE] Order #${String(ord.orderId)} probe cancel notice: ${formatRejectionReason(retryCancelErr)}`);
+                                }
                             }
                         }
                     }
                     catch (recheckErr) {
+                        console.warn(`[BinanceExecutionClient][VERIFY_BARRIER_POLL_NOTICE] Open orders recheck aborted: ${formatRejectionReason(recheckErr)}`);
                         break;
                     }
                 }
@@ -1026,7 +1073,7 @@ class BinanceExecutionClient {
                         const errObj = cr.newOrderResponse;
                         const code = errObj?.code ?? -1;
                         const msg = errObj?.msg ?? "Placement of replacement order failed";
-                        throw new Error(`[BinanceExecutionClient][WS_CANCEL_REPLACE_PARTIAL] Original order ${rawCancelId ?? strOrigClientOrderId} was CANCELED, but replacement order failed [${code}]: ${msg}`);
+                        throw new Error(`[BinanceExecutionClient][WS_CANCEL_REPLACE_PARTIAL] Original order ${String(rawCancelId ?? strOrigClientOrderId ?? "UNKNOWN")} was CANCELED, but replacement order failed [${String(code)}]: ${msg}`);
                     }
                     // Case 3: Cancel failed (e.g. STOP_ON_FAILURE). Original order is still resting on exchange.
                     // Safe to fall through to REST PUT below.
@@ -1128,7 +1175,9 @@ class BinanceExecutionClient {
                                 fallbackQty = amt;
                         }
                     }
-                    catch (_) { }
+                    catch (posErr) {
+                        console.warn(`[BinanceExecutionClient][SL_ZERO_NAKED_FALLBACK] Position query notice: ${formatRejectionReason(posErr)}`);
+                    }
                 }
                 if (fallbackQty && fallbackQty > 0) {
                     const fallbackCid = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(symbol, positionSide === "LONG" ? "CORE_LONG" : "SHORT_AGG", "SL_FALLBACK");
@@ -1164,7 +1213,7 @@ class BinanceExecutionClient {
             return this.placePositionStopLoss(symbol, side, positionSide, stopPrice, clientOrderId, signal, quantity);
         }
         if (!Number.isFinite(quantity) || quantity <= 0) {
-            throw new Error(`[BinanceExecutionClient][INVALID_QUANTITY] Cannot place quantity-based STOP_MARKET on ${symbol} with non-positive quantity: ${quantity}`);
+            throw new Error(`[BinanceExecutionClient][INVALID_QUANTITY] Cannot place quantity-based STOP_MARKET on ${symbol} with non-positive quantity: ${String(quantity)}`);
         }
         const formattedSlPx = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(symbol, stopPrice);
         const formattedQty = symbolPrecision_1.SymbolPrecisionRegistry.formatQuantity(symbol, quantity);
@@ -1181,7 +1230,7 @@ class BinanceExecutionClient {
         // PLACE-BEFORE-CANCEL ARCHITECTURE (Zero-Naked Invariant):
         // By omitting pre-flight order annihilation and setting closePosition: false,
         // this conditional order coexists with the prior resting SL, enabling atomic place-before-cancel.
-        const isOneWay = positionSide === "BOTH" || positionSide === undefined;
+        const isOneWay = positionSide === "BOTH";
         const params = {
             symbol,
             side: sanitizedSide,
@@ -1291,7 +1340,7 @@ class BinanceExecutionClient {
                             const adjustedPrice = params.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
                             const newPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, adjustedPrice);
                             if (retryCount === 0 && params.timeInForce === "GTX") {
-                                console.warn(`[BinanceExecutionClient][-5022 WS REJECTION] POST_ONLY order for ${params.symbol} ${params.side} @ ${currentPrice} crossed spread. Shifting 1 tick away to ${newPrice} and retrying...`);
+                                console.warn(`[BinanceExecutionClient][-5022 WS REJECTION] POST_ONLY order for ${params.symbol} ${params.side} @ ${String(currentPrice)} crossed spread. Shifting 1 tick away to ${String(newPrice)} and retrying...`);
                                 return await this.placeOrder({
                                     ...params,
                                     price: newPrice,
@@ -1299,7 +1348,7 @@ class BinanceExecutionClient {
                                 }, 1, signal);
                             }
                             else if (retryCount === 1) {
-                                console.warn(`[BinanceExecutionClient][-5022 WS FALLBACK] GTX retry failed for ${params.symbol}. Falling back to standard LIMIT (GTC) order @ ${newPrice} to safeguard position...`);
+                                console.warn(`[BinanceExecutionClient][-5022 WS FALLBACK] GTX retry failed for ${params.symbol}. Falling back to standard LIMIT (GTC) order @ ${String(newPrice)} to safeguard position...`);
                                 return await this.placeOrder({
                                     ...params,
                                     price: newPrice,
@@ -1318,8 +1367,8 @@ class BinanceExecutionClient {
                         if (isConflictOrGteError && retryCount < 2) {
                             this._writeWsTelemetry(targetAssetIndex, 0.0, false);
                             console.warn(`[BinanceExecutionClient][-4509/-4130 WS RECOVERY] Binance WS rejected order on ${params.symbol}: ${wsErrMsg}. Synchronizing conflicting orders and retrying...`);
-                            await this.synchronizeAndCancelConflictingOrders(params.symbol, params.positionSide || "BOTH", signal);
-                            const nextCid = params.clientOrderId ? `${params.clientOrderId}_R${retryCount + 1}` : undefined;
+                            await this.synchronizeAndCancelConflictingOrders(params.symbol, params.positionSide ?? "BOTH", signal);
+                            const nextCid = params.clientOrderId ? `${params.clientOrderId}_R${String(retryCount + 1)}` : undefined;
                             return await this.placeOrder({
                                 ...params,
                                 clientOrderId: nextCid,
@@ -1404,17 +1453,17 @@ class BinanceExecutionClient {
                     }
                     delete algoPayload.reduceOnly;
                     const algoRes = await this.request("POST", "/fapi/v1/algoOrder", algoPayload, true, false, signal);
-                    if (algoRes && (algoRes.algoId || algoRes.orderId)) {
+                    if (algoRes.algoId || algoRes.orderId) {
                         return {
                             orderId: Number(algoRes.algoId || algoRes.orderId),
                             symbol: algoRes.symbol || params.symbol,
                             status: algoRes.algoStatus || algoRes.status || "NEW",
                             clientOrderId: algoRes.clientAlgoId || algoRes.clientOrderId || "",
-                            price: String(algoRes.price || "0"),
-                            avgPrice: String(algoRes.avgPrice || "0"),
-                            origQty: String(algoRes.quantity || formattedQty),
-                            executedQty: String(algoRes.executedQty || "0"),
-                            cumQuote: String(algoRes.cumQuote || "0"),
+                            price: algoRes.price || "0",
+                            avgPrice: algoRes.avgPrice || "0",
+                            origQty: algoRes.quantity || String(formattedQty),
+                            executedQty: algoRes.executedQty || "0",
+                            cumQuote: algoRes.cumQuote || "0",
                             timeInForce: algoRes.timeInForce || "GTC",
                             type: algoRes.orderType || params.type,
                             reduceOnly: false,
@@ -1425,7 +1474,7 @@ class BinanceExecutionClient {
                             updateTime: algoRes.updateTime || Date.now(),
                         };
                     }
-                    throw new Error(`[BinanceExecutionClient][ALGO_ORDER_FAILED] Invalid or rejected algoOrder response: code=${algoRes?.code ?? "UNKNOWN"}, msg=${algoRes?.msg ?? "Missing algoId/orderId"}`);
+                    throw new Error(`[BinanceExecutionClient][ALGO_ORDER_FAILED] Invalid or rejected algoOrder response: code=${String(algoRes.code ?? "UNKNOWN")}, msg=${algoRes.msg ?? "Missing algoId/orderId"}`);
                 }
                 const isConflictOrGteError = errMsg.includes("-4509") ||
                     errMsg.includes("4509") ||
@@ -1438,9 +1487,9 @@ class BinanceExecutionClient {
                 if (isConflictOrGteError && retryCount < 2) {
                     console.warn(`[BinanceExecutionClient][-4509/-4130 AUTO_RECOVERY] Binance rejected closePosition order on ${params.symbol} (${params.positionSide || "BOTH"} ${params.side}): ${errMsg}. Executing synchronous pre-flight annihilation and retrying...`);
                     // 1. Synchronously purge conflicting orders with State Verification Barrier
-                    await this.synchronizeAndCancelConflictingOrders(params.symbol, params.positionSide || "BOTH", signal);
+                    await this.synchronizeAndCancelConflictingOrders(params.symbol, params.positionSide ?? "BOTH", signal);
                     // 2. Generate a fresh unique clientOrderId for the retry
-                    const nextCid = params.clientOrderId ? `${params.clientOrderId}_R${retryCount + 1}` : undefined;
+                    const nextCid = params.clientOrderId ? `${params.clientOrderId}_R${String(retryCount + 1)}` : undefined;
                     return await this.placeOrder({
                         ...params,
                         clientOrderId: nextCid,
@@ -1461,11 +1510,11 @@ class BinanceExecutionClient {
                             }
                         }
                         catch (posErr) {
-                            // Ignore position risk query error in fallback
+                            console.warn(`[BinanceExecutionClient][SOTA_SL_FALLBACK] Position risk fallback query notice: ${formatRejectionReason(posErr)}`);
                         }
                     }
                     if (fallbackQty && fallbackQty > 0) {
-                        console.warn(`[BinanceExecutionClient][SOTA_SL_FALLBACK] closePosition=true rejected after retries on ${params.symbol} (${params.positionSide}). Executing deterministic Quantity-Based STOP_MARKET fallback (Qty: ${fallbackQty})...`);
+                        console.warn(`[BinanceExecutionClient][SOTA_SL_FALLBACK] closePosition=true rejected after retries on ${params.symbol} (${params.positionSide ?? "BOTH"}). Executing deterministic Quantity-Based STOP_MARKET fallback (Qty: ${String(fallbackQty)})...`);
                         const fallbackParams = {
                             ...params,
                             closePosition: false,
@@ -1482,14 +1531,14 @@ class BinanceExecutionClient {
                     const adjustedPrice = params.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
                     const newPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, adjustedPrice);
                     if (retryCount === 0 && params.timeInForce === "GTX") {
-                        console.warn(`[BinanceExecutionClient][-5022 REJECTION] POST_ONLY order for ${params.symbol} ${params.side} @ ${currentPrice} crossed spread. Shifting 1 tick away to ${newPrice} and retrying...`);
+                        console.warn(`[BinanceExecutionClient][-5022 REJECTION] POST_ONLY order for ${params.symbol} ${params.side} @ ${String(currentPrice)} crossed spread. Shifting 1 tick away to ${String(newPrice)} and retrying...`);
                         return await this.placeOrder({
                             ...params,
                             price: newPrice,
                         }, 1, signal);
                     }
                     else if (retryCount === 1) {
-                        console.warn(`[BinanceExecutionClient][-5022 FALLBACK] GTX retry failed for ${params.symbol}. Falling back to standard LIMIT (GTC) order @ ${newPrice} to safeguard position...`);
+                        console.warn(`[BinanceExecutionClient][-5022 FALLBACK] GTX retry failed for ${params.symbol}. Falling back to standard LIMIT (GTC) order @ ${String(newPrice)} to safeguard position...`);
                         return await this.placeOrder({
                             ...params,
                             price: newPrice,
@@ -1511,12 +1560,12 @@ class BinanceExecutionClient {
      * Dynamically loads batch order max limits and recvWindow from environment variables.
      */
     async placeBatchOrders(orders) {
-        if (!orders || orders.length === 0)
+        if (orders.length === 0)
             return [];
         const maxBatchLimit = parseInt(process.env.BATCH_ORDER_MAX_LIMIT || "5", 10);
         const recvWindow = parseInt(process.env.RECV_WINDOW_MS || "5000", 10);
         if (orders.length > maxBatchLimit) {
-            console.warn(`[BinanceExecutionClient] Batch order count (${orders.length}) exceeds BATCH_ORDER_MAX_LIMIT (${maxBatchLimit}). Truncating to ${maxBatchLimit}.`);
+            console.warn(`[BinanceExecutionClient] Batch order count (${String(orders.length)}) exceeds BATCH_ORDER_MAX_LIMIT (${String(maxBatchLimit)}). Truncating to ${String(maxBatchLimit)}.`);
         }
         const targetOrders = orders.slice(0, maxBatchLimit);
         const batchPayload = targetOrders.map((params) => {
@@ -1569,7 +1618,7 @@ class BinanceExecutionClient {
         return this.request("POST", "/fapi/v1/batchOrders", batchQuery, true);
     }
     async cancelBatchOrders(symbol, orderIdList) {
-        if (!orderIdList || orderIdList.length === 0)
+        if (orderIdList.length === 0)
             return [];
         const recvWindow = parseInt(process.env.RECV_WINDOW_MS || "5000", 10);
         const maxBatchLimit = parseInt(process.env.BATCH_ORDER_MAX_LIMIT || "5", 10);
@@ -1588,7 +1637,7 @@ class BinanceExecutionClient {
             ? Number.isFinite(rawOrderId) && rawOrderId > 0
             : typeof rawOrderId === "string" && /^\d+$/.test(rawOrderId.trim());
         const numOrderId = isNumericOrderId
-            ? (typeof rawOrderId === "number" ? rawOrderId : Number(String(rawOrderId).trim()))
+            ? (typeof rawOrderId === "number" ? rawOrderId : Number(rawOrderId.trim()))
             : undefined;
         const strOrigClientOrderId = !isNumericOrderId
             ? String(rawOrderId).trim()
@@ -1630,7 +1679,7 @@ class BinanceExecutionClient {
             catch (wsErr) {
                 const wsErrMsg = wsErr instanceof Error ? wsErr.message : String(wsErr);
                 this._writeWsTelemetry(targetAssetIndex, 0.0, false);
-                console.warn(`[BinanceExecutionClient][WS_CANCEL_FALLBACK] WS cancelOrder failed for ${symbol} orderId=${orderId}: ${wsErrMsg}. Falling back to REST.`);
+                console.warn(`[BinanceExecutionClient][WS_CANCEL_FALLBACK] WS cancelOrder failed for ${symbol} orderId=${String(orderId)}: ${wsErrMsg}. Falling back to REST.`);
             }
         }
         try {
@@ -1673,6 +1722,7 @@ class BinanceExecutionClient {
                     };
                 }
                 catch (algoErr) {
+                    console.warn(`[BinanceExecutionClient][ALGO_CANCEL_FALLBACK] Algo order cancel fallback failed for ${symbol} #${String(orderId)}: ${formatRejectionReason(algoErr)}`);
                     throw err;
                 }
             }
@@ -1758,18 +1808,18 @@ class BinanceExecutionClient {
         ]);
         // Strict Anti-Masking Invariant: If BOTH authoritative queries fail, throw critical consensus failure
         if (posRiskRes.status === "rejected" && accountInfoRes.status === "rejected") {
-            const posRiskErr = posRiskRes.reason;
-            const accountInfoErr = accountInfoRes.reason;
-            throw new Error(`[BinanceExecutionClient][CONSENSUS_FAILURE] Dual-source position consensus failed: positionRisk error (${posRiskErr?.message || String(posRiskErr)}), accountInfo error (${accountInfoErr?.message || String(accountInfoErr)})`);
+            const posRiskErrMsg = formatRejectionReason(posRiskRes.reason);
+            const accountInfoErrMsg = formatRejectionReason(accountInfoRes.reason);
+            throw new Error(`[BinanceExecutionClient][CONSENSUS_FAILURE] Dual-source position consensus failed: positionRisk error (${posRiskErrMsg}), accountInfo error (${accountInfoErrMsg})`);
         }
         if (posRiskRes.status === "rejected") {
-            console.warn(`[BinanceExecutionClient][CONSENSUS_DEGRADED] positionRisk query failed: ${posRiskRes.reason?.message}. Relying on accountInfo ledger.`);
+            console.warn(`[BinanceExecutionClient][CONSENSUS_DEGRADED] positionRisk query failed: ${formatRejectionReason(posRiskRes.reason)}. Relying on accountInfo ledger.`);
         }
         if (accountInfoRes.status === "rejected") {
-            console.warn(`[BinanceExecutionClient][CONSENSUS_DEGRADED] accountInfo query failed: ${accountInfoRes.reason?.message}. Relying on positionRisk stream.`);
+            console.warn(`[BinanceExecutionClient][CONSENSUS_DEGRADED] accountInfo query failed: ${formatRejectionReason(accountInfoRes.reason)}. Relying on positionRisk stream.`);
         }
         const posRiskList = posRiskRes.status === "fulfilled" && Array.isArray(posRiskRes.value) ? posRiskRes.value : [];
-        const accountPositions = accountInfoRes.status === "fulfilled" && accountInfoRes.value && Array.isArray(accountInfoRes.value.positions)
+        const accountPositions = accountInfoRes.status === "fulfilled" && Array.isArray(accountInfoRes.value.positions)
             ? accountInfoRes.value.positions
             : [];
         const mergedMap = new Map();
@@ -1824,26 +1874,26 @@ class BinanceExecutionClient {
             symbol: ao.symbol,
             status: ao.algoStatus || ao.status || "NEW",
             clientOrderId: ao.clientAlgoId || ao.clientOrderId || "",
-            price: String(ao.price || "0"),
-            avgPrice: String(ao.avgPrice || "0"),
-            origQty: String(ao.quantity || ao.origQty || "0"),
-            executedQty: String(ao.executedQty || "0"),
-            cumQuote: String(ao.cumQuote || "0"),
+            price: ao.price || "0",
+            avgPrice: ao.avgPrice || "0",
+            origQty: ao.quantity || ao.origQty || "0",
+            executedQty: ao.executedQty || "0",
+            cumQuote: ao.cumQuote || "0",
             timeInForce: ao.timeInForce || "GTC",
             type: ao.orderType || ao.type || "STOP_MARKET",
             reduceOnly: ao.reduceOnly || false,
             side: ao.side,
             positionSide: ao.positionSide || "BOTH",
-            stopPrice: String(ao.stopPrice || "0"),
+            stopPrice: ao.stopPrice || "0",
             workingType: ao.workingType || "CONTRACT_PRICE",
             updateTime: ao.updateTime || Date.now(),
         }));
         return [...(Array.isArray(standardOrders) ? standardOrders : []), ...mappedAlgoOrders];
     }
     async getAccountBalance() {
-        return this.request("GET", "/fapi/v3/account", {}, true).then((res) => (Array.isArray(res?.assets) ? res.assets : [])).catch(async () => {
+        return this.request("GET", "/fapi/v3/account", {}, true).then((res) => (Array.isArray(res.assets) ? res.assets : [])).catch(async () => {
             const v2Res = await this.request("GET", "/fapi/v2/account", {}, true);
-            return Array.isArray(v2Res?.assets) ? v2Res.assets : [];
+            return Array.isArray(v2Res.assets) ? v2Res.assets : [];
         });
     }
     async getOrder(symbol, orderId) {
@@ -1885,24 +1935,22 @@ class BinanceExecutionClient {
         }
         try {
             const accountInfo = await this.getAccountInfo();
-            if (accountInfo) {
-                const totalWallet = parseFloat(accountInfo.totalWalletBalance || "0");
-                const available = parseFloat(accountInfo.availableBalance || "0");
-                const unrealized = parseFloat(accountInfo.totalUnrealizedProfit || "0");
-                if (!isNaN(totalWallet)) {
-                    this.cachedReconciledWalletBalance = totalWallet;
-                    this.hasReconciledWalletBalance = true;
-                }
-                if (!isNaN(available))
-                    this.cachedUsdtAvailableBalance = available;
-                if (!isNaN(unrealized))
-                    this.cachedTotalUnrealizedProfit = unrealized;
-                return {
-                    totalWalletBalance: this.cachedReconciledWalletBalance,
-                    availableBalance: this.cachedUsdtAvailableBalance,
-                    unrealizedProfit: this.cachedTotalUnrealizedProfit,
-                };
+            const totalWallet = parseFloat(accountInfo.totalWalletBalance || "0");
+            const available = parseFloat(accountInfo.availableBalance || "0");
+            const unrealized = parseFloat(accountInfo.totalUnrealizedProfit || "0");
+            if (!isNaN(totalWallet)) {
+                this.cachedReconciledWalletBalance = totalWallet;
+                this.hasReconciledWalletBalance = true;
             }
+            if (!isNaN(available))
+                this.cachedUsdtAvailableBalance = available;
+            if (!isNaN(unrealized))
+                this.cachedTotalUnrealizedProfit = unrealized;
+            return {
+                totalWalletBalance: this.cachedReconciledWalletBalance,
+                availableBalance: this.cachedUsdtAvailableBalance,
+                unrealizedProfit: this.cachedTotalUnrealizedProfit,
+            };
         }
         catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
@@ -1963,8 +2011,12 @@ class BinanceExecutionClient {
         if (!this.isConfigured())
             return;
         // 1. Initial one-shot immediate reconciliation
-        this.fetchReconciledAccountBalanceAsync().catch(() => { });
-        this.syncIncomeBackground(symbols).catch(() => { });
+        this.fetchReconciledAccountBalanceAsync().catch((balErr) => {
+            console.warn(`[BinanceExecutionClient][BACKGROUND_SYNC] Balance sync notice: ${formatRejectionReason(balErr)}`);
+        });
+        this.syncIncomeBackground(symbols).catch((incErr) => {
+            console.warn(`[BinanceExecutionClient][BACKGROUND_SYNC] Income sync notice: ${formatRejectionReason(incErr)}`);
+        });
         // Polling intervals deactivated: trades and balance mutations are processed via WebSocket stream
     }
     stopBackgroundSync() {
@@ -1977,7 +2029,7 @@ class BinanceExecutionClient {
             this.userTradesSyncTimer = null;
         }
     }
-    async syncIncomeBackground(symbols) {
+    async syncIncomeBackground(_symbols) {
         const startTime = this.lastIncomeSyncTime > 0 ? this.lastIncomeSyncTime : Date.now() - 24 * 60 * 60 * 1000;
         const incomes = await this.getIncomeHistory(undefined, undefined, startTime, undefined, 100);
         if (incomes.length > 0) {

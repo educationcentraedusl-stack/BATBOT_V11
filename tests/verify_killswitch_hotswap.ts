@@ -5,9 +5,7 @@ import { BinanceExecutionClient } from "../src/execution/binance";
 import { StrategyEngine } from "../src/strategy/engine";
 import { HOTSWAP_EPOCH, SURVIVAL_PROBABILITY } from "../src/ipc/sabSchema";
 import { timeSynchronizer } from "../src/utils/timeSynchronizer";
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const nativeAddon = require("../index.js");
+import { loadAiModel } from "../index";
 
 function assert(condition: boolean, message: string): void {
   if (!condition) {
@@ -16,7 +14,7 @@ function assert(condition: boolean, message: string): void {
   }
 }
 
-async function runPhysicalVerification(): Promise<void> {
+function runPhysicalVerification(): void {
   console.log("================================================================================");
   console.log("  [PHYSICAL VERIFICATION] SOTA KILL SWITCH SPRT & SAB HOTSWAP_EPOCH (ZERO-MOCK)");
   console.log("  [AUDIT 33.0 COMPLIANT] All state transitions are ORGANIC via SAB + evaluateTick()");
@@ -32,13 +30,15 @@ async function runPhysicalVerification(): Promise<void> {
   // STAGE 1: SAB Slot 151 Allocation, Multi-Asset Stride & Type Harmonization
   // --------------------------------------------------------------------------
   console.log("[STAGE 1] Validating SAB Slot 151 Memory Allocation & Zero Collision (DEF-3.1, DEF-3.2, DEF-2.2)...");
-  assert(HOTSWAP_EPOCH === 151, `HOTSWAP_EPOCH slot constant must be 151, got ${HOTSWAP_EPOCH}`);
-  assert(SURVIVAL_PROBABILITY === 140, `SURVIVAL_PROBABILITY slot constant must be 140, got ${SURVIVAL_PROBABILITY}`);
-  assert(HOTSWAP_EPOCH !== SURVIVAL_PROBABILITY, "DEF-3.1 FATAL: HOTSWAP_EPOCH and SURVIVAL_PROBABILITY collision!");
+  const hotswapSlot: number = HOTSWAP_EPOCH;
+  const survivalSlot: number = SURVIVAL_PROBABILITY;
+  assert(hotswapSlot === 151, `HOTSWAP_EPOCH slot constant must be 151, got ${String(hotswapSlot)}`);
+  assert(survivalSlot === 140, `SURVIVAL_PROBABILITY slot constant must be 140, got ${String(survivalSlot)}`);
+  assert(hotswapSlot !== survivalSlot, "DEF-3.1 FATAL: HOTSWAP_EPOCH and SURVIVAL_PROBABILITY collision!");
 
   for (let i = 0; i < maxAssets; i++) {
     const initEpoch = client.getHotswapEpoch(i);
-    assert(initEpoch === 0, `Initial epoch for asset ${i} must be 0, got ${initEpoch}`);
+    assert(initEpoch === 0, `Initial epoch for asset ${String(i)} must be 0, got ${String(initEpoch)}`);
   }
 
   // Write survival probability to Slot 140
@@ -51,26 +51,26 @@ async function runPhysicalVerification(): Promise<void> {
 
   // Increment epoch via client (loops across all maxAssets writing Slot 151)
   const bumpedEpoch = client.incrementHotswapEpoch();
-  assert(bumpedEpoch === 1, `Bumped epoch must be 1, got ${bumpedEpoch}`);
+  assert(bumpedEpoch === 1, `Bumped epoch must be 1, got ${String(bumpedEpoch)}`);
 
   // Verify all 10 assets were atomically updated to epoch 1 in Slot 151 (DEF-2.2)
   for (let i = 0; i < maxAssets; i++) {
     const epochVal = client.getHotswapEpoch(i);
-    assert(epochVal === 1, `Asset ${i} epoch in Slot 151 must be 1, got ${epochVal}`);
+    assert(epochVal === 1, `Asset ${String(i)} epoch in Slot 151 must be 1, got ${String(epochVal)}`);
   }
 
   // Verify Slot 140 was NOT mutated or corrupted (DEF-3.1 zero memory collision)
   const survivalAfterBump = client.getSurvivalProbability(0);
   assert(
     Math.abs(survivalAfterBump - expectedSurvival) < 1e-6,
-    `DEF-3.1 COLLISION: Slot 140 survival probability corrupted after epoch bump! Expected ${expectedSurvival}, got ${survivalAfterBump}`
+    `DEF-3.1 COLLISION: Slot 140 survival probability corrupted after epoch bump! Expected ${String(expectedSurvival)}, got ${String(survivalAfterBump)}`
   );
 
   // Verify IEEE-754 64-bit float bitcast fidelity (DEF-3.2 binary type harmonization)
   const rawFloatBits = client.readAtomicFloat64Asset(0, 151);
-  assert(rawFloatBits === 1.0, `DEF-3.2: Slot 151 float representation mismatch, got ${rawFloatBits}`);
+  assert(rawFloatBits === 1.0, `DEF-3.2: Slot 151 float representation mismatch, got ${String(rawFloatBits)}`);
 
-  console.log(`  ✓ Slot 151 cleanly allocated for HOTSWAP_EPOCH across all ${maxAssets} assets`);
+  console.log(`  ✓ Slot 151 cleanly allocated for HOTSWAP_EPOCH across all ${String(maxAssets)} assets`);
   console.log(`  ✓ Slot 140 SURVIVAL_PROBABILITY remains uncorrupted (${(survivalAfterBump * 100).toFixed(2)}%)`);
   console.log(`  ✓ Binary IEEE-754 float representation synchronized between Rust and TS\n`);
 
@@ -118,7 +118,7 @@ async function runPhysicalVerification(): Promise<void> {
 
   // Prime engine on current epoch with sequence 1
   client.setSequenceNum(1n, 0);
-  await engine.evaluateTick();
+  engine.evaluateTick();
   assert(engine.getIcState() === "ALPHA_ACTIVE", `Engine must start in ALPHA_ACTIVE, got ${engine.getIcState()}`);
   console.log(`  ✓ Engine initialized in ALPHA_ACTIVE state via organic evaluateTick()`);
 
@@ -131,7 +131,7 @@ async function runPhysicalVerification(): Promise<void> {
   client.setIsModelDrifted(true, 0);     // Drift flag confirms structural break
   updateTimestamp();
 
-  await engine.evaluateTick();
+  engine.evaluateTick();
 
   // With isDriftFlagged=true, the state machine transitions DETERMINISTICALLY to MODEL_BROKEN
   // in exactly ONE tick (engine.ts line 398). No hedge assertion tolerated.
@@ -147,14 +147,14 @@ async function runPhysicalVerification(): Promise<void> {
   client.setRollingIC(-0.05, 0);
   client.setIsModelDrifted(true, 0);
   updateTimestamp();
-  const resBroken = await engine.evaluateTick();
+  const resBroken = engine.evaluateTick();
   assert(
     resBroken.signalType === "NONE",
     `Signal must be NONE when engine is MODEL_BROKEN, got ${resBroken.signalType}`
   );
   assert(
     resBroken.riskResult?.reasonCode === "IC_MODEL_BROKEN",
-    `Reason code must be IC_MODEL_BROKEN, got ${resBroken.riskResult?.reasonCode}`
+    `Reason code must be IC_MODEL_BROKEN, got ${String(resBroken.riskResult?.reasonCode)}`
   );
   assert(
     resBroken.executionPromise === undefined,
@@ -176,7 +176,7 @@ async function runPhysicalVerification(): Promise<void> {
   client.setAIPredictionDirection(0.65, 0);
   client.setAIPredictionConfidence(0.85, 0);
   updateTimestamp();
-  await engine.evaluateTick();
+  engine.evaluateTick();
 
   // SPRT Fast-Path at engine.ts:378 is deterministic: IC >= 0.10 && !drift => instant unlatch.
   // No retry loop tolerated — this is a single-tick transition.
@@ -196,7 +196,7 @@ async function runPhysicalVerification(): Promise<void> {
   client.setRollingIC(-0.08, 0);
   client.setIsModelDrifted(true, 0);
   updateTimestamp();
-  await engine.evaluateTick();
+  engine.evaluateTick();
 
   // isDriftFlagged=true with IC=-0.08 deterministically transitions to MODEL_BROKEN in one tick
   const stage4DegradedState = engine.getIcState();
@@ -211,20 +211,20 @@ async function runPhysicalVerification(): Promise<void> {
   client.setSequenceNum(50n, 0);
   updateTimestamp();
   const sabBuffer = Buffer.from(sab);
-  const swapped = nativeAddon.loadAiModel("./models/cfc_weights.safetensors", sabBuffer);
+  const swapped = loadAiModel("./models/cfc_weights.safetensors", sabBuffer);
   assert(swapped, "Rust N-API loadAiModel must successfully load weights and bump epoch");
   const newModelEpoch = client.getHotswapEpoch(0);
-  console.log(`  ✓ Background candidate model promoted via Rust N-API: HOTSWAP_EPOCH bumped to #${newModelEpoch} across all assets`);
+  console.log(`  ✓ Background candidate model promoted via Rust N-API: HOTSWAP_EPOCH bumped to #${String(newModelEpoch)} across all assets`);
 
   // Verify Rust physically cleansed Slot 101 and Slot 102 in the SharedArrayBuffer
   const cleansedIc = client.getRollingIC(0);
   const cleansedDrift = client.getIsModelDrifted(0);
-  assert(cleansedIc === 0.0, `Rust N-API failed to reset Slot 101 ROLLING_IC to 0.0, got ${cleansedIc}`);
-  assert(!cleansedDrift, `Rust N-API failed to reset Slot 102 IS_MODEL_DRIFTED to false, got ${cleansedDrift}`);
-  console.log(`  ✓ Rust N-API atomic memory cleanup verified: Slot 101 = ${cleansedIc.toFixed(4)}, Slot 102 = ${cleansedDrift}`);
+  assert(cleansedIc === 0.0, `Rust N-API failed to reset Slot 101 ROLLING_IC to 0.0, got ${String(cleansedIc)}`);
+  assert(!cleansedDrift, `Rust N-API failed to reset Slot 102 IS_MODEL_DRIFTED to false, got ${String(cleansedDrift)}`);
+  console.log(`  ✓ Rust N-API atomic memory cleanup verified: Slot 101 = ${cleansedIc.toFixed(4)}, Slot 102 = ${String(cleansedDrift)}`);
 
   // Evaluate tick: evaluateTick() must detect new epoch in Slot 151 and unlatch
-  const resRecovered = await engine.evaluateTick();
+  const resRecovered = engine.evaluateTick();
   assert(
     engine.getIcState() === "ALPHA_ACTIVE",
     `Hot-swap epoch handshake failed: engine state must unlatch to ALPHA_ACTIVE, got ${engine.getIcState()}`
@@ -233,12 +233,12 @@ async function runPhysicalVerification(): Promise<void> {
     resRecovered.riskResult?.reasonCode !== "IC_MODEL_BROKEN",
     `evaluateTick() remained blocked after epoch bump!`
   );
-  console.log(`  ✓ evaluateTick() detected new model epoch #${newModelEpoch}: physically unlatched to ${engine.getIcState()}`);
+  console.log(`  ✓ evaluateTick() detected new model epoch #${String(newModelEpoch)}: physically unlatched to ${engine.getIcState()}`);
 
   // PROVE TELEMETRY: Next tick evaluation does NOT instantly revert to MODEL_BROKEN
   client.setSequenceNum(51n, 0);
   updateTimestamp();
-  const resNextTick = await engine.evaluateTick();
+  const resNextTick = engine.evaluateTick();
   assert(
     engine.getIcState() === "ALPHA_ACTIVE",
     `DEF-35.4 RE-LATCH TRAP: evaluateTick() reverted to MODEL_BROKEN on subsequent tick! Got ${engine.getIcState()}`
@@ -256,7 +256,10 @@ async function runPhysicalVerification(): Promise<void> {
   console.log("================================================================================\n");
 }
 
-runPhysicalVerification().catch((err) => {
-  console.error(`\n❌ VERIFICATION TEST SUITE FAILED: ${err?.stack || err?.message || String(err)}\n`);
+try {
+  runPhysicalVerification();
+} catch (err: unknown) {
+  const errMsg = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  console.error(`\n❌ VERIFICATION TEST SUITE FAILED: ${errMsg}\n`);
   process.exit(1);
-});
+}

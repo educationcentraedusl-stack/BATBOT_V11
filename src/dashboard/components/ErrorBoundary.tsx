@@ -1,4 +1,5 @@
 import React, { Component, ErrorInfo, ReactNode } from "react";
+import { Button } from "@/dashboard/components/ui/button";
 
 interface Props {
   children: ReactNode;
@@ -43,14 +44,14 @@ export class ErrorBoundary extends Component<Props, State> {
           <div className="bg-slate-950 p-2.5 rounded border border-slate-800 text-[11px] text-rose-400 overflow-x-auto">
             {this.state.error?.message || "Render failure intercepted"}
           </div>
-          <button
+          <Button
             onClick={() => {
               this.setState({ hasError: false, error: null });
             }}
-            className="px-3 py-1.5 bg-yellow-600 hover:bg-yellow-500 text-slate-950 font-bold text-xs rounded uppercase tracking-wider transition"
+            className="h-auto px-3 py-1.5 bg-yellow-600 hover:bg-yellow-500 text-slate-950 font-bold text-xs rounded uppercase tracking-wider"
           >
             RESTART PANEL
-          </button>
+          </Button>
         </div>
       );
     }

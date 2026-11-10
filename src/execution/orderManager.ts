@@ -198,7 +198,8 @@ export class OrderManager {
         try {
           await this.executionClient.cancelOrder(symbol, state.activeStopLossOrderId);
         } catch (cancelErr: unknown) {
-          // Non-blocking catch for already filled / expired orders
+          const cancelMsg = cancelErr instanceof Error ? cancelErr.message : String(cancelErr);
+          console.warn(`[OrderManager] Non-blocking previous SL cancel notice for ${symbol} ${side}: ${cancelMsg}`);
         }
       }
 
@@ -223,7 +224,7 @@ export class OrderManager {
       return res;
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      console.warn(`[OrderManager] Failed to update Stop Loss for ${symbol} ${side} @ ${newStopPrice}: ${errMsg}`);
+      console.warn(`[OrderManager] Failed to update Stop Loss for ${symbol} ${side} @ ${String(newStopPrice)}: ${errMsg}`);
       return null;
     } finally {
       state.inFlightUpdate = false;
@@ -231,7 +232,10 @@ export class OrderManager {
       if (state.pendingSlTarget !== null && state.pendingSlTarget !== state.lastSyncedStopPrice) {
         const queuedTarget = state.pendingSlTarget;
         state.pendingSlTarget = null;
-        this.updateStopLossOrder(symbol, side, quantity, queuedTarget).catch(() => {});
+        this.updateStopLossOrder(symbol, side, quantity, queuedTarget).catch((queueErr: unknown) => {
+          const queueMsg = queueErr instanceof Error ? queueErr.message : String(queueErr);
+          console.warn(`[OrderManager] Queued SL ratchet update notice for ${symbol} ${side}: ${queueMsg}`);
+        });
       }
     }
   }
@@ -265,7 +269,7 @@ export class OrderManager {
       return await this.executionClient.placeOrder(params);
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      console.warn(`[OrderManager] Failed to place TP order for ${symbol} ${side} @ ${newTpPrice}: ${errMsg}`);
+      console.warn(`[OrderManager] Failed to place TP order for ${symbol} ${side} @ ${String(newTpPrice)}: ${errMsg}`);
       return null;
     }
   }
@@ -288,7 +292,8 @@ export class OrderManager {
     try {
       await this.executionClient.cancelAllOrders(symbol);
     } catch (cancelErr: unknown) {
-      // Proceed to emergency market close regardless
+      const cancelMsg = cancelErr instanceof Error ? cancelErr.message : String(cancelErr);
+      console.warn(`[OrderManager] Pre-emergency cancelAllOrders notice for ${symbol}: ${cancelMsg}`);
     }
 
     try {
@@ -315,7 +320,8 @@ export class OrderManager {
    * Ingests Binance WebSocket User Data Stream Execution Reports.
    */
   public handleExecutionReport(update: OrderTradeUpdatePayload): void {
-    if (!update || update.eventType !== "ORDER_TRADE_UPDATE") return;
+    const eventType: string = update.eventType;
+    if (eventType !== "ORDER_TRADE_UPDATE") return;
     const ord = update.order;
     const parsedCid = ClientOrderIdGenerator.parse(ord.clientOrderId);
 
@@ -386,8 +392,8 @@ export class OrderManager {
     symbol: string,
     side: "LONG" | "SHORT",
     quantity: number,
-    markPrice: number,
-    reason: string
+    _markPrice: number,
+    _reason: string
   ): void {
     const exitSide: "BUY" | "SELL" = side === "LONG" ? "SELL" : "BUY";
     const slotId = side === "LONG" ? "CORE_LONG" : "SHORT_SLOT_0";
@@ -411,7 +417,7 @@ export class OrderManager {
     symbol: string,
     side: "LONG" | "SHORT",
     quantity: number,
-    markPrice: number,
+    _markPrice: number,
     reason: string
   ): void {
     this.executeEmergencyClose(symbol, side, quantity, reason).catch((err: unknown) => {

@@ -43,38 +43,33 @@ impl AiEngine {
     }
 
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Self {
-        let path_ref = path.as_ref();
-
-        if !path_ref.exists() {
-            println!(
-                "[BATBOT_V11][AI Engine] Weights file not found at path: {}. Status: UNCALIBRATED (Bypassing inference safely).",
-                path_ref.display()
-            );
-            return Self {
-                cell: None,
-                mamba: None,
-                status: AiEngineStatus::Uncalibrated,
-                calibration_params: CalibrationParams::default(),
-            };
-        }
-
-        let device = Device::Cpu;
-        let mmaped = match unsafe { MmapedSafetensors::new(path_ref) } {
-            Ok(m) => m,
-            Err(e) => {
+        match Self::try_load_from_file(path) {
+            Ok(engine) => engine,
+            Err(err) => {
                 eprintln!(
-                    "[BATBOT_V11][AI Engine] Failed to mmap safetensors file {}: {}. Status: UNCALIBRATED (Bypassing inference safely).",
-                    path_ref.display(),
-                    e
+                    "[BATBOT_V11][AI Engine] {}. Status: UNCALIBRATED (Bypassing inference safely).",
+                    err
                 );
-                return Self {
+                Self {
                     cell: None,
                     mamba: None,
                     status: AiEngineStatus::Uncalibrated,
                     calibration_params: CalibrationParams::default(),
-                };
+                }
             }
-        };
+        }
+    }
+
+    pub fn try_load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
+        let path_ref = path.as_ref();
+
+        if !path_ref.exists() {
+            return Err(format!("Weights file not found at path: {}", path_ref.display()));
+        }
+
+        let device = Device::Cpu;
+        let mmaped = unsafe { MmapedSafetensors::new(path_ref) }
+            .map_err(|e| format!("Failed to mmap safetensors file {}: {}", path_ref.display(), e))?;
 
         // Check for SOTA Mamba-2 SSM tensors first
         let m_w_in = mmaped.load("w_in", &device).ok();
@@ -169,45 +164,41 @@ impl AiEngine {
             m_w_in, m_b_in, m_a_log, m_w_b, m_b_b, m_w_c, m_b_c, m_w_out, m_b_out, m_d_skip,
             m_w_heads, m_b_heads,
         ) {
-            let input_dim = w_in.dims()[0];
-            let d_inner = w_in.dims()[1];
-            let d_state = w_b.dims()[1];
-            match Mamba2Cell::new(
+            let (input_dim, d_inner, d_state) = match (w_in.dims(), w_b.dims()) {
+                ([in_d, inner_d], [_, state_d]) if *in_d > 0 && *inner_d > 0 && *state_d > 0 => {
+                    (*in_d, *inner_d, *state_d)
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid Mamba-2 tensor rank or zero dimension in {}: w_in={:?}, w_b={:?}",
+                        path_ref.display(),
+                        w_in.dims(),
+                        w_b.dims()
+                    ));
+                }
+            };
+            let mut mamba_cell = Mamba2Cell::new(
                 w_in, b_in, a_log, w_b, b_b, w_c, b_c, w_out, b_out, d_skip, w_heads, b_heads,
                 input_dim, d_inner, d_state,
-            ) {
-                Ok(mut mamba_cell) => {
-                    mamba_cell.set_scales(logit_scale_val as f32, meta_logit_scale_val as f32);
-                    println!(
-                        "[BATBOT_V11][AI Engine Zero-Copy] Loaded SOTA Mamba-2 SSM weights from {} via mmap. Status: CALIBRATED (Mamba-2: in={}, inner={}, state={}, logit_scale={:.4}, meta_scale={:.4}).",
-                        path_ref.display(),
-                        input_dim,
-                        d_inner,
-                        d_state,
-                        logit_scale_val,
-                        meta_logit_scale_val
-                    );
-                    Self {
-                        cell: None,
-                        mamba: Some(mamba_cell),
-                        status: AiEngineStatus::Calibrated,
-                        calibration_params,
-                    }
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[BATBOT_V11][AI Engine ERROR] Failed to construct Mamba-2 cell from {}: {:?}. Status: UNCALIBRATED.",
-                        path_ref.display(),
-                        e
-                    );
-                    Self {
-                        cell: None,
-                        mamba: None,
-                        status: AiEngineStatus::Uncalibrated,
-                        calibration_params: CalibrationParams::default(),
-                    }
-                }
-            }
+            )
+            .map_err(|e| format!("Failed to construct Mamba-2 cell from {}: {:?}", path_ref.display(), e))?;
+
+            mamba_cell.set_scales(logit_scale_val as f32, meta_logit_scale_val as f32);
+            println!(
+                "[BATBOT_V11][AI Engine Zero-Copy] Loaded SOTA Mamba-2 SSM weights from {} via mmap. Status: CALIBRATED (Mamba-2: in={}, inner={}, state={}, logit_scale={:.4}, meta_scale={:.4}).",
+                path_ref.display(),
+                input_dim,
+                d_inner,
+                d_state,
+                logit_scale_val,
+                meta_logit_scale_val
+            );
+            Ok(Self {
+                cell: None,
+                mamba: Some(mamba_cell),
+                status: AiEngineStatus::Calibrated,
+                calibration_params,
+            })
         } else if let (Some(w_a), Some(b_a), Some(w_b), Some(b_b), Some(w_o), Some(b_o)) =
             (w_alpha, b_alpha, w_beta, b_beta, w_output, b_output)
         {
@@ -219,23 +210,14 @@ impl AiEngine {
                 calibration_params.platt_offset,
                 calibration_params.temperature
             );
-            Self {
+            Ok(Self {
                 cell: Some(cell),
                 mamba: None,
                 status: AiEngineStatus::Calibrated,
                 calibration_params,
-            }
+            })
         } else {
-            eprintln!(
-                "[BATBOT_V11][AI Engine] Incomplete tensors in {}. Status: UNCALIBRATED (Bypassing inference safely).",
-                path_ref.display()
-            );
-            Self {
-                cell: None,
-                mamba: None,
-                status: AiEngineStatus::Uncalibrated,
-                calibration_params: CalibrationParams::default(),
-            }
+            Err(format!("Incomplete tensors in {}", path_ref.display()))
         }
     }
 
@@ -261,5 +243,17 @@ mod tests {
         assert!(engine.cell.is_none());
         assert!(engine.mamba.is_none());
         assert!(!engine.is_calibrated());
+    }
+
+    #[test]
+    fn test_try_load_from_file_returns_err_gracefully() {
+        let res = AiEngine::try_load_from_file("./models/non_existent_weights.safetensors");
+        assert!(res.is_err());
+
+        let temp_path = std::env::temp_dir().join("corrupt_test_weights.safetensors");
+        let _ = std::fs::write(&temp_path, b"not_valid_safetensors");
+        let bad_res = AiEngine::try_load_from_file(&temp_path);
+        assert!(bad_res.is_err());
+        let _ = std::fs::remove_file(temp_path);
     }
 }

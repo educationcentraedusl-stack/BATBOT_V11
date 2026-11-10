@@ -42,9 +42,9 @@ export class SymbolPrecisionRegistryManager {
    */
   public parseSymbolInfo(symbolInfo: BinanceSymbolInfo): SymbolPrecisionRule {
     const symbol = symbolInfo.symbol.toUpperCase();
-    let qtyDecimals = symbolInfo.quantityPrecision ?? 3;
+    let qtyDecimals = Number.isFinite(symbolInfo.quantityPrecision) ? symbolInfo.quantityPrecision : 3;
     let stepSize = Math.pow(10, -qtyDecimals);
-    let priceDecimals = symbolInfo.pricePrecision ?? 2;
+    let priceDecimals = Number.isFinite(symbolInfo.pricePrecision) ? symbolInfo.pricePrecision : 2;
     let tickSize = Math.pow(10, -priceDecimals);
     let minNotional = 5.0; // Standard Binance Futures min notional default
 
@@ -88,7 +88,7 @@ export class SymbolPrecisionRegistryManager {
     try {
       const execClient = client || new BinanceExecutionClient();
       const exchangeInfo = await execClient.fetchExchangeInfo();
-      if (exchangeInfo && Array.isArray(exchangeInfo.symbols)) {
+      if (Array.isArray(exchangeInfo.symbols)) {
         this.precisionMap.clear();
         for (const symInfo of exchangeInfo.symbols) {
           if (symInfo.symbol) {
@@ -97,12 +97,13 @@ export class SymbolPrecisionRegistryManager {
           }
         }
         this.isInitialized = true;
-        console.log(`[SymbolPrecisionRegistry] ✅ Dynamic exchangeInfo LOT_SIZE & PRICE_FILTER rules cached for ${this.precisionMap.size} symbols.`);
+        console.log(`[SymbolPrecisionRegistry] ✅ Dynamic exchangeInfo LOT_SIZE & PRICE_FILTER rules cached for ${String(this.precisionMap.size)} symbols.`);
       } else {
         throw new Error("Invalid response schema received from Binance Futures exchangeInfo endpoint.");
       }
-    } catch (err: any) {
-      console.warn(`[SymbolPrecisionRegistry] Notice fetching online Binance exchangeInfo: ${err.message}. Pre-seeding fallback precision rules.`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[SymbolPrecisionRegistry] Notice fetching online Binance exchangeInfo: ${msg}. Pre-seeding fallback precision rules.`);
       // Pre-seed default offline rules if network is offline or unconfigured
       this.preseedOfflineDefaults(["ETHUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "SUIUSDT"]);
     }
@@ -114,10 +115,14 @@ export class SymbolPrecisionRegistryManager {
    */
   public getPrecisionRule(symbol: string): SymbolPrecisionRule {
     const sym = symbol.toUpperCase();
-    let rule = this.precisionMap.get(sym);
+    const rule = this.precisionMap.get(sym);
     if (!rule) {
       this.preseedOfflineDefaults([sym]);
-      rule = this.precisionMap.get(sym)!;
+      const seededRule = this.precisionMap.get(sym);
+      if (!seededRule) {
+        throw new Error(`[SymbolPrecisionRegistry] Failed to pre-seed precision rule for symbol ${sym}`);
+      }
+      return seededRule;
     }
     return rule;
   }
@@ -181,7 +186,7 @@ export class SymbolPrecisionRegistryManager {
       let stepSize = 0.01;
       let priceDecimals = 2;
       let tickSize = 0.01;
-      let minNotional = 5.0;
+      const minNotional = 5.0;
 
       if (sym.includes("BTC") || sym.includes("ETH")) {
         qtyDecimals = 3; stepSize = 0.001; priceDecimals = 2; tickSize = 0.1;

@@ -1,8 +1,17 @@
 {
-  "extends": "./tsconfig.json",
   "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
     "noEmit": true,
-    "rootDir": ".",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
     "types": ["node", "jest"],
     "paths": {
       "@/*": ["./src/*"]
@@ -10,9 +19,13 @@
   },
   "include": [
     "tests/**/*.test.ts",
-    "src/lib/**/*.ts",
+    "tests/**/*.test.tsx",
+    "tests/verify_killswitch_hotswap.ts",
+    "src/dashboard/**/*",
+    "src/lib/**/*",
     "jest.config.ts"
   ],
-  "exclude": []
+  "exclude": [
+    "src/dashboard/telemetry.worker.ts"
+  ]
 }
-

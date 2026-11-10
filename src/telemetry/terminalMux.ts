@@ -1,9 +1,12 @@
 import { CLIDashboard } from "./dashboard";
 
+type StreamWriteCallback = (err?: Error | null) => void;
+type StreamWriteFn = NodeJS.WriteStream["write"];
+
 export class TerminalOutputMux {
   private static instance: TerminalOutputMux | null = null;
-  private originalStdoutWrite: typeof process.stdout.write | null = null;
-  private originalStderrWrite: typeof process.stderr.write | null = null;
+  private originalStdoutWrite: StreamWriteFn | null = null;
+  private originalStderrWrite: StreamWriteFn | null = null;
   private isPromptActive = false;
   private logBuffer: string[] = [];
 
@@ -26,15 +29,20 @@ export class TerminalOutputMux {
     this.originalStderrWrite = process.stderr.write.bind(process.stderr);
 
     // Override process.stdout.write to pass prompt and readline input echoes, buffering background logs
-    (process.stdout as any).write = (chunk: any, encoding?: any, callback?: any): boolean => {
-      let cb = callback;
-      let enc = encoding;
-      if (typeof encoding === "function") {
-        cb = encoding;
-        enc = undefined;
+    const muxStdoutWrite = (
+      chunk: Uint8Array | string,
+      encodingOrCallback?: BufferEncoding | StreamWriteCallback,
+      callback?: StreamWriteCallback
+    ): boolean => {
+      let cb: StreamWriteCallback | undefined = callback;
+      let enc: BufferEncoding | undefined;
+      if (typeof encodingOrCallback === "function") {
+        cb = encodingOrCallback;
+      } else {
+        enc = encodingOrCallback;
       }
 
-      const str = typeof chunk === "string" ? chunk : chunk.toString(enc || "utf8");
+      const str = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString(enc ?? "utf8");
 
       // Allow prompt text, readline control codes, and user keypress echoes to pass through
       const isPromptString =
@@ -48,29 +56,43 @@ export class TerminalOutputMux {
         str.trim() === "no";
 
       if (isPromptString && this.originalStdoutWrite) {
-        return this.originalStdoutWrite(chunk, enc, cb);
+        if (enc !== undefined) {
+          return this.originalStdoutWrite(chunk, enc, cb);
+        }
+        return this.originalStdoutWrite(chunk, cb);
       }
 
       // Buffer background logs so they don't break the CLI prompt line
       this.logBuffer.push(str);
-      if (typeof cb === "function") cb();
+      if (cb) cb();
       return true;
     };
+
+    const stdoutTarget: { write: StreamWriteFn } = process.stdout;
+    stdoutTarget.write = muxStdoutWrite;
 
     // Override process.stderr.write to buffer background error/warning logs during prompt session
-    (process.stderr as any).write = (chunk: any, encoding?: any, callback?: any): boolean => {
-      let cb = callback;
-      let enc = encoding;
-      if (typeof encoding === "function") {
-        cb = encoding;
-        enc = undefined;
+    const muxStderrWrite = (
+      chunk: Uint8Array | string,
+      encodingOrCallback?: BufferEncoding | StreamWriteCallback,
+      callback?: StreamWriteCallback
+    ): boolean => {
+      let cb: StreamWriteCallback | undefined = callback;
+      let enc: BufferEncoding | undefined;
+      if (typeof encodingOrCallback === "function") {
+        cb = encodingOrCallback;
+      } else {
+        enc = encodingOrCallback;
       }
 
-      const str = typeof chunk === "string" ? chunk : chunk.toString(enc || "utf8");
+      const str = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString(enc ?? "utf8");
       this.logBuffer.push(str);
-      if (typeof cb === "function") cb();
+      if (cb) cb();
       return true;
     };
+
+    const stderrTarget: { write: StreamWriteFn } = process.stderr;
+    stderrTarget.write = muxStderrWrite;
   }
 
   public endPromptSession(): void {

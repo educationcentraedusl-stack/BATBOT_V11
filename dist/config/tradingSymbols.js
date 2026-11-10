@@ -66,7 +66,7 @@ exports.SYMBOL_LEVERAGE_CONFIG = {
  */
 function getBaselineLeverageForSymbol(symbol) {
     const upper = symbol.toUpperCase();
-    if (exports.SYMBOL_LEVERAGE_CONFIG[upper]) {
+    if (Object.prototype.hasOwnProperty.call(exports.SYMBOL_LEVERAGE_CONFIG, upper)) {
         return exports.SYMBOL_LEVERAGE_CONFIG[upper].baselineLeverage;
     }
     if (upper.includes("BTC") || upper.includes("ETH")) {

@@ -36,7 +36,7 @@ class InteractiveKeypressEngine {
         if (this.isListening)
             return;
         if (process.stdin.isTTY) {
-            this.rawModePreviousState = process.stdin.isRaw ?? false;
+            this.rawModePreviousState = process.stdin.isRaw;
             process.stdin.setRawMode(true);
             process.stdin.resume();
             process.stdin.setEncoding("utf8");
@@ -103,10 +103,10 @@ class InteractiveKeypressEngine {
                 if (this.onAssetFocusChange) {
                     this.onAssetFocusChange(idx);
                 }
-                this.notify(`🔍 [ASSET FOCUS] Switched focused view to Asset Slot #${idx}.`);
+                this.notify(`🔍 [ASSET FOCUS] Switched focused view to Asset Slot #${String(idx)}.`);
             }
             else {
-                this.notify(`⚠️ [ASSET FOCUS] Asset Slot #${idx} out of bounds (Max: ${this.client.maxAssets - 1}).`);
+                this.notify(`⚠️ [ASSET FOCUS] Asset Slot #${String(idx)} out of bounds (Max: ${String(this.client.maxAssets - 1)}).`);
             }
             return;
         }
