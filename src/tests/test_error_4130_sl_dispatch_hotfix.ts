@@ -19,18 +19,18 @@ async function runHotfixTests(): Promise<void> {
   console.log("[TEST 1] Verifying placePositionStopLoss strict direction and payload sanitization...");
   const capturedPayloads: ReqPayload[] = [];
   class HotfixMockClient extends BinanceExecutionClient {
-    protected override request<T>(
+    protected override executeHttpRequest(
       _method: "GET" | "POST" | "DELETE" | "PUT",
       path: string,
       payload: ReqPayload = {}
-    ): Promise<T> {
-      if (path === "/fapi/v1/openOrders") {
-        return Promise.resolve([] as unknown as T);
+    ): Promise<unknown> {
+      if (path === "/fapi/v1/openOrders" || path === "/fapi/v1/openAlgoOrders") {
+        return Promise.resolve([]);
       }
       if (path === "/fapi/v1/order") {
         capturedPayloads.push({ ...payload });
       }
-      return Promise.resolve({
+      const orderRes: BinanceOrderResponse = {
         orderId: 987654321,
         symbol: typeof payload.symbol === "string" ? payload.symbol : "XRPUSDT",
         status: "NEW",
@@ -48,7 +48,8 @@ async function runHotfixTests(): Promise<void> {
         stopPrice: String(payload.stopPrice ?? "1.5164"),
         workingType: typeof payload.workingType === "string" ? payload.workingType : "CONTRACT_PRICE",
         updateTime: Date.now(),
-      } as unknown as T);
+      };
+      return Promise.resolve(orderRes);
     }
   }
   const mockClient = new HotfixMockClient();
@@ -161,11 +162,11 @@ async function runHotfixTests(): Promise<void> {
         updateTime: Date.now(),
       });
     }
-    protected override request<T>(
+    protected override executeHttpRequest(
       _method: "GET" | "POST" | "DELETE" | "PUT",
       path: string,
       payload: ReqPayload = {}
-    ): Promise<T> {
+    ): Promise<unknown> {
       if (path === "/fapi/v1/order") {
         attemptCount++;
         if (attemptCount === 1) {
@@ -173,7 +174,7 @@ async function runHotfixTests(): Promise<void> {
             new Error("Binance API Error [-4130]: An open stop or take profit order with GTE and closePosition in the direction is existing.")
           );
         }
-        return Promise.resolve({
+        const orderRes: BinanceOrderResponse = {
           orderId: 999888777,
           symbol: typeof payload.symbol === "string" ? payload.symbol : "XRPUSDT",
           status: "NEW",
@@ -191,9 +192,10 @@ async function runHotfixTests(): Promise<void> {
           stopPrice: String(payload.stopPrice ?? "1.5164"),
           workingType: "CONTRACT_PRICE",
           updateTime: Date.now(),
-        } as unknown as T);
+        };
+        return Promise.resolve(orderRes);
       }
-      return Promise.resolve({} as unknown as T);
+      return Promise.resolve({});
     }
   }
   const recoveryClient = new RecoveryMockClient();

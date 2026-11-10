@@ -186,13 +186,25 @@ class WsOrderClient {
             : undefined;
         this.requestTimeoutMs =
             options?.requestTimeoutMs ??
-                (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 5_000);
+                (envTimeout !== undefined && Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 5_000);
         this.maxReconnectAttempts =
             options?.maxReconnectAttempts ??
-                (Number.isFinite(envMaxReconnect) && envMaxReconnect >= 0 ? envMaxReconnect : 10);
+                (envMaxReconnect !== undefined && Number.isFinite(envMaxReconnect) && envMaxReconnect >= 0 ? envMaxReconnect : 10);
         if (!this.apiKey || !this.apiSecret) {
             console.error("[WsOrderClient][CRITICAL] Missing API key or secret. Order submission will fail.");
         }
+    }
+    getWsEndpoint() {
+        return this.wsEndpoint;
+    }
+    getPendingRequestCount() {
+        return this.pendingRequests.size;
+    }
+    isSocketConnected() {
+        return this.isConnected;
+    }
+    getReconnectTimer() {
+        return this.reconnectTimer;
     }
     // ─── Connection Lifecycle ────────────────────────────────────────────────────
     /**
@@ -215,6 +227,11 @@ class WsOrderClient {
             });
             this.ws = socket;
             socket.once("open", () => {
+                if (this.isShuttingDown) {
+                    socket.terminate();
+                    reject(new Error("[WsOrderClient] Client destroyed before WebSocket opened."));
+                    return;
+                }
                 this.isConnected = true;
                 this.reconnectAttempts = 0;
                 this._startHeartbeat();
@@ -256,14 +273,18 @@ class WsOrderClient {
             pending.reject(new Error("[WsOrderClient] Client destroyed — request aborted."));
         }
         if (this.ws !== null) {
+            const sock = this.ws;
+            this.ws = null;
             try {
-                this.ws.close(1000, "Client shutdown");
+                sock.close(1000, "Client shutdown");
+                if (sock instanceof ws_1.default && sock.readyState !== ws_1.default.CLOSED) {
+                    sock.terminate();
+                }
             }
             catch (closeErr) {
                 const closeMsg = closeErr instanceof Error ? closeErr.message : String(closeErr);
                 console.warn(`[WsOrderClient] Notice closing socket during destroy: ${closeMsg}`);
             }
-            this.ws = null;
         }
         this.isConnected = false;
         console.log("[WsOrderClient] Destroyed.");
@@ -504,8 +525,15 @@ class WsOrderClient {
                 timeoutHandle,
                 dispatchedAtMs,
             });
+            const socket = this.ws;
+            if (socket === null) {
+                clearTimeout(timeoutHandle);
+                this.pendingRequests.delete(id);
+                reject(new Error("[WsOrderClient] WebSocket instance cleared before dispatch."));
+                return;
+            }
             try {
-                this.ws.send(payload, (err) => {
+                socket.send(payload, (err) => {
                     if (err) {
                         clearTimeout(timeoutHandle);
                         this.pendingRequests.delete(id);
@@ -612,7 +640,7 @@ class WsOrderClient {
     _startHeartbeat() {
         this._stopHeartbeat();
         this.heartbeatTimer = setInterval(() => {
-            if (this.isReady()) {
+            if (this.isReady() && this.ws !== null) {
                 this.ws.ping();
             }
         }, WsOrderClient.HEARTBEAT_INTERVAL_MS);

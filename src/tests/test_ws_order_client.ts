@@ -36,18 +36,24 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import * as crypto from "node:crypto";
-import { WsOrderClient, WsOrderResult } from "../execution/wsOrderClient";
+import {
+  WsCancelOrderParams,
+  WsCancelReplaceParams,
+  WsOrderClient,
+  WsOrderResponse,
+  WsPlaceOrderParams,
+  WsSocketLike,
+} from "../execution/wsOrderClient";
 import { SymbolPrecisionRegistry } from "../config/symbolPrecision";
-import { BinanceExecutionClient } from "../execution/binance";
+import { BinanceExecutionClient, BinanceOrderResponse } from "../execution/binance";
 import { MarketDataClient } from "../marketDataClient";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * Minimal EventEmitter-compatible WebSocket mock.
- * Implements only the methods that WsOrderClient calls.
+ * Minimal EventEmitter-compatible WebSocket mock implementing WsSocketLike.
  */
-class MockWebSocket {
+class MockWebSocket implements WsSocketLike {
   public readyState: number = 1; // OPEN = 1
   static readonly OPEN = 1;
   public readonly sentMessages: string[] = [];
@@ -77,6 +83,10 @@ class MockWebSocket {
     return this;
   }
 
+  public removeAllListeners(): void {
+    this.listeners.clear();
+  }
+
   public emit(event: string, ...args: unknown[]): void {
     for (const h of this.listeners.get(event) ?? []) {
       h(...args);
@@ -95,6 +105,113 @@ class MockWebSocket {
   }
 }
 
+class TestWsOrderClient extends WsOrderClient {
+  public attachMockSocket(socket: WsSocketLike): void {
+    this.ws = socket;
+    this.isConnected = true;
+  }
+
+  public setShuttingDown(value: boolean): void {
+    this.isShuttingDown = value;
+  }
+
+  public setReconnectAttempts(value: number): void {
+    this.reconnectAttempts = value;
+  }
+
+  public setConnected(value: boolean): void {
+    this.isConnected = value;
+  }
+
+  public invokeOnMessage(data: Buffer | string): void {
+    this._onMessage(data);
+  }
+
+  public invokeOnClose(code: number, reason: string): void {
+    this._onClose(code, reason);
+  }
+}
+
+class StubWsOrderClient extends WsOrderClient {
+  public readyOverride: boolean = true;
+  public placeOrderHandler?: (params: WsPlaceOrderParams) => Promise<WsOrderResponse>;
+  public cancelOrderHandler?: (params: WsCancelOrderParams) => Promise<WsOrderResponse>;
+  public cancelReplaceOrderHandler?: (params: WsCancelReplaceParams) => Promise<WsOrderResponse>;
+
+  public constructor() {
+    super({ useTestnet: false, apiKey: "test_key", apiSecret: "test_secret" });
+  }
+
+  public override isReady(): boolean {
+    return this.readyOverride;
+  }
+
+  public override placeOrder(params: WsPlaceOrderParams): Promise<WsOrderResponse> {
+    if (this.placeOrderHandler) {
+      return this.placeOrderHandler(params);
+    }
+    return Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 });
+  }
+
+  public override cancelOrder(params: WsCancelOrderParams): Promise<WsOrderResponse> {
+    if (this.cancelOrderHandler) {
+      return this.cancelOrderHandler(params);
+    }
+    return Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 });
+  }
+
+  public override cancelReplaceOrder(params: WsCancelReplaceParams): Promise<WsOrderResponse> {
+    if (this.cancelReplaceOrderHandler) {
+      return this.cancelReplaceOrderHandler(params);
+    }
+    return Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 });
+  }
+}
+
+interface SabWriteEntry {
+  assetIdx: number;
+  slot: number;
+  val: number;
+}
+
+class SpyMarketDataClient extends MarketDataClient {
+  public readonly writes: SabWriteEntry[] = [];
+
+  public constructor(maxAssets: number = 10) {
+    super(new SharedArrayBuffer(maxAssets * 256 * 8), maxAssets, 256);
+  }
+
+  public override writeAtomicFloat64Asset(assetIdx: number, slot: number, value: number): void {
+    this.writes.push({ assetIdx, slot, val: value });
+    super.writeAtomicFloat64Asset(assetIdx, slot, value);
+  }
+}
+
+class StubRestExecutionClient extends BinanceExecutionClient {
+  public httpHandler?: (
+    method: "GET" | "POST" | "DELETE" | "PUT",
+    endpoint: string,
+    params: Record<string, string | number | boolean | undefined | null>
+  ) => Promise<unknown>;
+
+  protected override executeHttpRequest(
+    method: "GET" | "POST" | "DELETE" | "PUT",
+    endpoint: string,
+    params: Record<string, string | number | boolean | undefined | null> = {}
+  ): Promise<unknown> {
+    if (this.httpHandler) {
+      return this.httpHandler(method, endpoint, params);
+    }
+    return Promise.resolve({});
+  }
+}
+
+class ThrowingAssetIndexExecutionClient extends BinanceExecutionClient {
+  public override resolveAssetIndex(_symbol: string, _explicitIdx?: number): number {
+    throw new Error("Simulated pre-flight validation failure");
+  }
+}
+
 // ─── Test Suite ───────────────────────────────────────────────────────────────
 
 void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verification)", () => {
@@ -103,8 +220,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
   void it("T01: constructor resolves testnet endpoint", () => {
     process.env["USE_TESTNET"] = "true";
     const client = new WsOrderClient({ useTestnet: true, apiKey: "k", apiSecret: "s" });
-    // Access private field for white-box verification
-    const ep = (client as unknown as { wsEndpoint: string }).wsEndpoint;
+    const ep = client.getWsEndpoint();
     assert.ok(
       ep.includes("testnet.binancefuture.com"),
       `Expected testnet endpoint, got: ${ep}`
@@ -115,7 +231,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
   // ── T02: Mainnet endpoint ──────────────────────────────────────────────────
   void it("T02: constructor resolves mainnet endpoint", () => {
     const client = new WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
-    const ep = (client as unknown as { wsEndpoint: string }).wsEndpoint;
+    const ep = client.getWsEndpoint();
     assert.ok(
       ep.includes("ws-fapi.binance.com"),
       `Expected mainnet endpoint, got: ${ep}`
@@ -124,10 +240,9 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
 
   // ── T03: connect() resolves when socket opens ──────────────────────────────
   void it("T03: connect() is idempotent and respects connection state", async () => {
-    const client = new WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
+    const client = new TestWsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
     const mockSocket = new MockWebSocket();
-    (client as unknown as { isConnected: boolean; ws: unknown }).isConnected = true;
-    (client as unknown as { ws: unknown }).ws = mockSocket;
+    client.attachMockSocket(mockSocket);
 
     // Must resolve immediately without creating another connection or throwing
     await client.connect();
@@ -265,7 +380,6 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
   // ── T12: quantity formatting via SymbolPrecisionRegistry ──────────────────
   void it("T12: quantity formatted via SymbolPrecisionRegistry (3 decimal places for BTCUSDT)", () => {
     const formatted = SymbolPrecisionRegistry.formatQuantity("BTCUSDT", 0.00123456);
-    // SymbolPrecisionRegistry should truncate to exchange precision
     assert.ok(typeof formatted === "number", "Formatted quantity must be a number");
     assert.ok(formatted >= 0, "Formatted quantity must be non-negative");
   });
@@ -291,8 +405,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
       type: "MARKET",
     };
 
-    type SignFn = (params: Record<string, string | number | boolean>, rw?: number) => void;
-    (client as unknown as { _signParams: SignFn })._signParams(p, 5000);
+    client._signParams(p, 5000);
 
     assert.ok(typeof p["timestamp"] === "number", "timestamp must be a number");
     assert.ok(p["timestamp"] > 0, "timestamp must be positive");
@@ -324,17 +437,14 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
 
     client._signParams(p, 5000);
 
-    // Verify apiKey is in p
     assert.strictEqual(p["apiKey"], apiKey, "apiKey must be present in params");
     assert.strictEqual(p["recvWindow"], 5000, "recvWindow must be present in params");
     assert.ok(typeof p["timestamp"] === "number", "timestamp must be present in params");
 
-    // Independently compute expected query string with strictly sorted keys (including apiKey, excluding signature)
     const sortedKeys = Object.keys(p)
       .filter((k) => k !== "signature")
       .sort();
 
-    // Verify sortedKeys are strictly in alphabetical order
     for (let i = 0; i < sortedKeys.length - 1; i++) {
       assert.ok(
         sortedKeys[i] < sortedKeys[i + 1],
@@ -368,7 +478,6 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
       apiSecret,
     });
 
-    // Order 1: STOP_MARKET with stopPrice and workingType
     const p1: Record<string, string | number | boolean> = {
       symbol: "BTCUSDT",
       side: "SELL",
@@ -378,7 +487,6 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
     };
     client._signParams(p1, 5000);
 
-    // Order 2: Clean MARKET order (NO stopPrice, NO workingType)
     const p2: Record<string, string | number | boolean> = {
       symbol: "ETHUSDT",
       side: "BUY",
@@ -387,11 +495,9 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
     };
     client._signParams(p2, 5000);
 
-    // Verify p2 does NOT have stopPrice or workingType
     assert.strictEqual(p2["stopPrice"], undefined, "Order 2 must not inherit stopPrice from Order 1");
     assert.strictEqual(p2["workingType"], undefined, "Order 2 must not inherit workingType from Order 1");
 
-    // Independently verify Order 2 signature
     const sortedKeys2 = Object.keys(p2)
       .filter((k) => k !== "signature")
       .sort();
@@ -416,8 +522,6 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
       apiSecret,
     });
 
-    // Custom parameter 'activationPrice' comes alphabetically before 'apiKey'
-    // Custom parameter 'zetaFactor' comes alphabetically after 'workingType'
     const p: Record<string, string | number | boolean> = {
       activationPrice: 58000,
       symbol: "BTCUSDT",
@@ -452,41 +556,33 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
 
   // ── T16: _dispatch() registers pending request ────────────────────────────
   void it("T16: _dispatch() registers a pending request in the internal map", async () => {
-    const client = new WsOrderClient({
+    const client = new TestWsOrderClient({
       useTestnet: false,
       apiKey: "k",
       apiSecret: "s",
       requestTimeoutMs: 500,
     });
 
-    // Inject a mock connected socket
     const mockSocket = new MockWebSocket();
-    (client as unknown as { ws: MockWebSocket }).ws = mockSocket;
-    (client as unknown as { isConnected: boolean }).isConnected = true;
+    client.attachMockSocket(mockSocket);
 
-    const pendingMap = (client as unknown as {
-      pendingRequests: Map<string, unknown>;
-    }).pendingRequests;
-
-    // Dispatch an order that will time out (we won't send a response)
     const timeoutState = { caught: false };
     const p = client
       .placeOrder({ symbol: "BTCUSDT", side: "BUY", type: "MARKET", quantity: 0.001 })
       .catch((_err: unknown) => {
-        timeoutState.caught = true; // Expected timeout in test assertion
+        timeoutState.caught = true;
       });
 
-    // Immediately after dispatch: map must have 1 pending entry
-    assert.strictEqual(pendingMap.size, 1, "Pending map must have exactly 1 entry after dispatch");
+    assert.strictEqual(client.getPendingRequestCount(), 1, "Pending map must have exactly 1 entry after dispatch");
 
-    await p; // Wait for timeout
+    await p;
     assert.strictEqual(timeoutState.caught, true, "Pending request must reject on timeout");
-    assert.strictEqual(pendingMap.size, 0, "Pending map must be empty after timeout resolution");
+    assert.strictEqual(client.getPendingRequestCount(), 0, "Pending map must be empty after timeout resolution");
   });
 
   // ── T17: _onMessage() resolves on status 200 ──────────────────────────────
   void it("T17: _onMessage() resolves the promise on Binance status 200", async () => {
-    const client = new WsOrderClient({
+    const client = new TestWsOrderClient({
       useTestnet: false,
       apiKey: "k",
       apiSecret: "s",
@@ -494,8 +590,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
     });
 
     const mockSocket = new MockWebSocket();
-    (client as unknown as { ws: MockWebSocket }).ws = mockSocket;
-    (client as unknown as { isConnected: boolean }).isConnected = true;
+    client.attachMockSocket(mockSocket);
 
     const dispatchPromise = client.placeOrder({
       symbol: "BTCUSDT",
@@ -504,13 +599,11 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
       quantity: 0.001,
     });
 
-    // Extract the correlation ID from the sent message
     const sentRaw = mockSocket.sentMessages[0];
     assert.ok(sentRaw, "A message must have been sent over the socket");
     const sentPayload = JSON.parse(sentRaw) as { id: string };
     const id = sentPayload.id;
 
-    // Simulate Binance 200 response
     const mockResponse = {
       id,
       status: 200,
@@ -537,20 +630,18 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
       rateLimits: [],
     };
 
-    (client as unknown as {
-      _onMessage: (data: Buffer) => void;
-    })._onMessage(Buffer.from(JSON.stringify(mockResponse)));
+    client.invokeOnMessage(Buffer.from(JSON.stringify(mockResponse)));
 
     const response = await dispatchPromise;
     assert.strictEqual(response.status, 200);
-    const resultObj = response.result as WsOrderResult | null;
-    assert.strictEqual(resultObj?.orderId, 999001);
+    assert.ok(response.result !== null && "orderId" in response.result, "Expected WsOrderResult with orderId");
+    assert.strictEqual(response.result.orderId, 999001);
     assert.ok(response.rttMs >= 0, "rttMs must be non-negative");
   });
 
   // ── T18: _onMessage() rejects on non-200 ──────────────────────────────────
   void it("T18: _onMessage() rejects the promise on Binance error status", async () => {
-    const client = new WsOrderClient({
+    const client = new TestWsOrderClient({
       useTestnet: false,
       apiKey: "k",
       apiSecret: "s",
@@ -558,8 +649,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
     });
 
     const mockSocket = new MockWebSocket();
-    (client as unknown as { ws: MockWebSocket }).ws = mockSocket;
-    (client as unknown as { isConnected: boolean }).isConnected = true;
+    client.attachMockSocket(mockSocket);
 
     const dispatchPromise = client.placeOrder({
       symbol: "BTCUSDT",
@@ -581,8 +671,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
       rateLimits: [],
     };
 
-    (client as unknown as { _onMessage: (data: Buffer) => void })
-      ._onMessage(Buffer.from(JSON.stringify(errorResponse)));
+    client.invokeOnMessage(Buffer.from(JSON.stringify(errorResponse)));
 
     await assert.rejects(
       () => dispatchPromise,
@@ -595,7 +684,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
 
   // ── T19: _onMessage() ignores unknown ids ─────────────────────────────────
   void it("T19: _onMessage() silently ignores messages with unknown correlation IDs", () => {
-    const client = new WsOrderClient({
+    const client = new TestWsOrderClient({
       useTestnet: false,
       apiKey: "k",
       apiSecret: "s",
@@ -608,25 +697,22 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
       rateLimits: [],
     };
 
-    // Should not throw
     assert.doesNotThrow(() => {
-      (client as unknown as { _onMessage: (data: Buffer) => void })
-        ._onMessage(Buffer.from(JSON.stringify(unknownResponse)));
+      client.invokeOnMessage(Buffer.from(JSON.stringify(unknownResponse)));
     });
   });
 
   // ── T20: Timeout — pending request rejected after requestTimeoutMs ─────────
   void it("T20: pending request is rejected after requestTimeoutMs with timeout error", async () => {
-    const client = new WsOrderClient({
+    const client = new TestWsOrderClient({
       useTestnet: false,
       apiKey: "k",
       apiSecret: "s",
-      requestTimeoutMs: 50, // Very short timeout for test speed
+      requestTimeoutMs: 50,
     });
 
     const mockSocket = new MockWebSocket();
-    (client as unknown as { ws: MockWebSocket }).ws = mockSocket;
-    (client as unknown as { isConnected: boolean }).isConnected = true;
+    client.attachMockSocket(mockSocket);
 
     await assert.rejects(
       () =>
@@ -638,7 +724,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
 
   // ── T21: destroy() rejects all pending requests ────────────────────────────
   void it("T21: destroy() rejects all pending requests with shutdown error", async () => {
-    const client = new WsOrderClient({
+    const client = new TestWsOrderClient({
       useTestnet: false,
       apiKey: "k",
       apiSecret: "s",
@@ -646,8 +732,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
     });
 
     const mockSocket = new MockWebSocket();
-    (client as unknown as { ws: MockWebSocket }).ws = mockSocket;
-    (client as unknown as { isConnected: boolean }).isConnected = true;
+    client.attachMockSocket(mockSocket);
 
     const p1 = client
       .placeOrder({ symbol: "BTCUSDT", side: "BUY", type: "MARKET", quantity: 0.001 })
@@ -659,7 +744,6 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
       .then(() => assert.fail("Expected cancelOrder to reject on destroy"))
       .catch((e: unknown): string => (e instanceof Error ? e.message : String(e)));
 
-    // Both pending: now destroy
     client.destroy();
 
     const [msg1, msg2] = await Promise.all([p1, p2]);
@@ -669,20 +753,19 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
 
   // ── T22: destroy() closes the WebSocket ───────────────────────────────────
   void it("T22: destroy() closes the WebSocket and sets isConnected=false", () => {
-    const client = new WsOrderClient({
+    const client = new TestWsOrderClient({
       useTestnet: false,
       apiKey: "k",
       apiSecret: "s",
     });
 
     const mockSocket = new MockWebSocket();
-    (client as unknown as { ws: MockWebSocket }).ws = mockSocket;
-    (client as unknown as { isConnected: boolean }).isConnected = true;
+    client.attachMockSocket(mockSocket);
 
     client.destroy();
 
     assert.strictEqual(
-      (client as unknown as { isConnected: boolean }).isConnected,
+      client.isSocketConnected(),
       false,
       "isConnected must be false after destroy"
     );
@@ -690,52 +773,44 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
 
   // ── T23: _onClose() schedules reconnect on non-shutdown close ─────────────
   void it("T23: _onClose() schedules a reconnect timer when not shutting down", () => {
-    const client = new WsOrderClient({
+    const client = new TestWsOrderClient({
       useTestnet: false,
       apiKey: "k",
       apiSecret: "s",
     });
 
-    (client as unknown as { isShuttingDown: boolean }).isShuttingDown = false;
-    (client as unknown as { isConnected: boolean }).isConnected = true;
-    (client as unknown as { reconnectAttempts: number }).reconnectAttempts = 0;
+    client.setShuttingDown(false);
+    client.setConnected(true);
+    client.setReconnectAttempts(0);
 
-    // Invoke _onClose with non-normal code
-    (client as unknown as { _onClose: (code: number, reason: string) => void })
-      ._onClose(1006, "Abnormal closure");
+    client.invokeOnClose(1006, "Abnormal closure");
 
-    const timer = (client as unknown as { reconnectTimer: ReturnType<typeof setTimeout> | null })
-      .reconnectTimer;
-
+    const timer = client.getReconnectTimer();
     assert.notStrictEqual(timer, null, "reconnectTimer must be set after abnormal close");
 
-    // Cleanup
     if (timer !== null) clearTimeout(timer);
   });
 
   // ── T24: _onClose() does NOT reconnect when shutting down ─────────────────
   void it("T24: _onClose() does NOT schedule reconnect when isShuttingDown=true", () => {
-    const client = new WsOrderClient({
+    const client = new TestWsOrderClient({
       useTestnet: false,
       apiKey: "k",
       apiSecret: "s",
     });
 
-    (client as unknown as { isShuttingDown: boolean }).isShuttingDown = true;
-    (client as unknown as { isConnected: boolean }).isConnected = true;
+    client.setShuttingDown(true);
+    client.setConnected(true);
 
-    (client as unknown as { _onClose: (code: number, reason: string) => void })
-      ._onClose(1000, "Normal shutdown");
+    client.invokeOnClose(1000, "Normal shutdown");
 
-    const timer = (client as unknown as { reconnectTimer: ReturnType<typeof setTimeout> | null })
-      .reconnectTimer;
-
+    const timer = client.getReconnectTimer();
     assert.strictEqual(timer, null, "reconnectTimer must remain null during shutdown");
   });
 
   // ── T25: rttMs is correctly computed ──────────────────────────────────────
   void it("T25: rttMs in WsOrderResponse reflects wall-clock dispatch-to-ack latency", async () => {
-    const client = new WsOrderClient({
+    const client = new TestWsOrderClient({
       useTestnet: false,
       apiKey: "k",
       apiSecret: "s",
@@ -743,8 +818,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
     });
 
     const mockSocket = new MockWebSocket();
-    (client as unknown as { ws: MockWebSocket }).ws = mockSocket;
-    (client as unknown as { isConnected: boolean }).isConnected = true;
+    client.attachMockSocket(mockSocket);
 
     const dispatchPromise = client.placeOrder({
       symbol: "BTCUSDT",
@@ -755,7 +829,6 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
 
     const beforeAck = Date.now();
 
-    // Simulate 10ms network delay before ACK
     await new Promise<void>((r) => setTimeout(r, 10));
 
     const sentPayload = JSON.parse(mockSocket.sentMessages[0]) as { id: string };
@@ -787,8 +860,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
       rateLimits: [],
     };
 
-    (client as unknown as { _onMessage: (data: Buffer) => void })
-      ._onMessage(Buffer.from(JSON.stringify(mockResponse)));
+    client.invokeOnMessage(Buffer.from(JSON.stringify(mockResponse)));
 
     const response = await dispatchPromise;
 
@@ -806,42 +878,37 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
   void it("T26: inFlightClientOrderIds is unconditionally cleared on successful WS order execution", async () => {
     const execClient = new BinanceExecutionClient();
 
-    const mockWs = {
-      isReady: () => true,
-      placeOrder: (params: { symbol: string; newClientOrderId?: string; type: string; side: string }) =>
-        Promise.resolve({
-          id: "req-001",
-          status: 200,
-          result: {
-            orderId: 888001,
-            symbol: params.symbol,
-            status: "FILLED",
-            clientOrderId: params.newClientOrderId || "TEST_CID",
-            price: "50000",
-            avgPrice: "50000",
-            origQty: "1",
-            executedQty: "1",
-            cumQuote: "50000",
-            timeInForce: "GTC",
-            type: params.type,
-            reduceOnly: false,
-            side: params.side,
-            positionSide: "BOTH",
-            stopPrice: "0",
-            workingType: "CONTRACT_PRICE",
-            updateTime: Date.now(),
-          },
-          error: null,
-          rateLimits: [],
-          rttMs: 14.2,
-        }),
-      cancelOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-      cancelReplaceOrder: () =>
-        Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-    };
+    const mockWs = new StubWsOrderClient();
+    mockWs.placeOrderHandler = (params: WsPlaceOrderParams) =>
+      Promise.resolve({
+        id: "req-001",
+        status: 200,
+        result: {
+          orderId: 888001,
+          symbol: params.symbol,
+          status: "FILLED",
+          clientOrderId: params.newClientOrderId || "TEST_CID",
+          price: "50000",
+          avgPrice: "50000",
+          origQty: "1",
+          executedQty: "1",
+          cumQuote: "50000",
+          timeInForce: "GTC",
+          type: params.type,
+          reduceOnly: false,
+          side: params.side,
+          positionSide: "BOTH",
+          stopPrice: "0",
+          workingType: "CONTRACT_PRICE",
+          updateTime: Date.now(),
+        },
+        error: null,
+        rateLimits: [],
+        rttMs: 14.2,
+      });
 
-    const mockSab = { writeAtomicFloat64Asset: () => {} };
-    execClient.attachWsOrderClient(mockWs as unknown as WsOrderClient, mockSab as unknown as MarketDataClient, 0);
+    const mockSab = new SpyMarketDataClient();
+    execClient.attachWsOrderClient(mockWs, mockSab, 0);
 
     const testCid = "LEAK_CHECK_CID_001";
     await execClient.placeOrder({
@@ -853,64 +920,49 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
       clientOrderId: testCid,
     });
 
-    const inFlightMap = (execClient as unknown as { inFlightClientOrderIds: Set<string> }).inFlightClientOrderIds;
-    assert.strictEqual(inFlightMap.has(testCid), false, "inFlightClientOrderIds must NOT retain CID after WS success");
-    assert.strictEqual(inFlightMap.size, 0, "inFlightClientOrderIds size must be 0 (zero leak)");
+    assert.strictEqual(execClient.hasInFlightClientOrderId(testCid), false, "inFlightClientOrderIds must NOT retain CID after WS success");
+    assert.strictEqual(execClient.getInFlightClientOrderIdCount(), 0, "inFlightClientOrderIds size must be 0 (zero leak)");
   });
 
   // ── T27: Multi-asset telemetry routing & singleton attachment (Fix DEF-04) ─
   void it("T27: attachWsOrderClient is idempotent and routes telemetry to the exact assetIndex per symbol", async () => {
     const execClient = new BinanceExecutionClient();
 
-    const sabTelemetryWrites: { assetIdx: number; slot: number; val: number }[] = [];
-    const mockSab = {
-      writeAtomicFloat64Asset: (assetIdx: number, slot: number, val: number) => {
-        sabTelemetryWrites.push({ assetIdx, slot, val });
-      },
-    };
+    const mockSab = new SpyMarketDataClient();
+    const mockWs = new StubWsOrderClient();
+    mockWs.placeOrderHandler = (params: WsPlaceOrderParams) =>
+      Promise.resolve({
+        id: "req-multi",
+        status: 200,
+        result: {
+          orderId: 999111,
+          symbol: params.symbol,
+          status: "NEW",
+          clientOrderId: params.newClientOrderId || "MULTI_CID",
+          price: "100",
+          avgPrice: "0",
+          origQty: "1",
+          executedQty: "0",
+          cumQuote: "0",
+          timeInForce: "GTC",
+          type: params.type,
+          reduceOnly: false,
+          side: params.side,
+          positionSide: "BOTH",
+          stopPrice: "0",
+          workingType: "CONTRACT_PRICE",
+          updateTime: Date.now(),
+        },
+        error: null,
+        rateLimits: [],
+        rttMs: 16.5,
+      });
 
-    const mockWs = {
-      isReady: () => true,
-      placeOrder: (params: { symbol: string; newClientOrderId?: string; type: string; side: string }) =>
-        Promise.resolve({
-          id: "req-multi",
-          status: 200,
-          result: {
-            orderId: 999111,
-            symbol: params.symbol,
-            status: "NEW",
-            clientOrderId: params.newClientOrderId || "MULTI_CID",
-            price: "100",
-            avgPrice: "0",
-            origQty: "1",
-            executedQty: "0",
-            cumQuote: "0",
-            timeInForce: "GTC",
-            type: params.type,
-            reduceOnly: false,
-            side: params.side,
-            positionSide: "BOTH",
-            stopPrice: "0",
-            workingType: "CONTRACT_PRICE",
-            updateTime: Date.now(),
-          },
-          error: null,
-          rateLimits: [],
-          rttMs: 16.5,
-        }),
-      cancelOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-      cancelReplaceOrder: () =>
-        Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-    };
+    execClient.attachWsOrderClient(mockWs, mockSab, 0);
+    execClient.attachWsOrderClient(mockWs, mockSab, 1);
 
-    // Attach for Asset 0 (BTC)
-    execClient.attachWsOrderClient(mockWs as unknown as WsOrderClient, mockSab as unknown as MarketDataClient, 0);
-    // Attach for Asset 1 (ETH) - should reuse existing connection without overwrite
-    execClient.attachWsOrderClient(mockWs as unknown as WsOrderClient, mockSab as unknown as MarketDataClient, 1);
+    mockSab.writes.length = 0;
 
-    sabTelemetryWrites.length = 0; // Clear init writes
-
-    // Place order for BTC (Asset 0) with explicit assetIndex
     await execClient.placeOrder({
       symbol: "BTCUSDT",
       side: "BUY",
@@ -920,12 +972,11 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
       assetIndex: 0,
     });
 
-    const btcRttWrite = sabTelemetryWrites.find((w) => w.assetIdx === 0 && w.slot === 159);
+    const btcRttWrite = mockSab.writes.find((w) => w.assetIdx === 0 && w.slot === 159);
     assert.ok(btcRttWrite !== undefined, "BTCUSDT order must write RTT to assetIndex 0 slot 159");
     assert.strictEqual(btcRttWrite.val, 16.5);
 
-    // Place order for ETH (Asset 1) with explicit assetIndex
-    sabTelemetryWrites.length = 0;
+    mockSab.writes.length = 0;
     await execClient.placeOrder({
       symbol: "ETHUSDT",
       side: "SELL",
@@ -935,20 +986,19 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
       assetIndex: 1,
     });
 
-    const ethRttWrite = sabTelemetryWrites.find((w) => w.assetIdx === 1 && w.slot === 159);
+    const ethRttWrite = mockSab.writes.find((w) => w.assetIdx === 1 && w.slot === 159);
     assert.ok(ethRttWrite !== undefined, "ETHUSDT order must write RTT to assetIndex 1 slot 159");
     assert.strictEqual(ethRttWrite.val, 16.5);
   });
 
   // ── T28: REST Fallback routing on -1022 signature error (Fix DEF-05) ───────
   void it("T28: placeOrder cleanly falls back to REST HTTPS on -1022 signature error without crashing", async () => {
-    const execClient = new BinanceExecutionClient();
+    const execClient = new StubRestExecutionClient();
 
     let restCalled = false;
-    // Monkey-patch request() to simulate successful REST fallback
-    (execClient as unknown as { request: (...args: unknown[]) => Promise<unknown> }).request = () => {
+    execClient.httpHandler = () => {
       restCalled = true;
-      return Promise.resolve({
+      const restOrderRes: BinanceOrderResponse = {
         orderId: 555001,
         symbol: "BTCUSDT",
         status: "NEW",
@@ -966,20 +1016,16 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
         stopPrice: "0",
         workingType: "CONTRACT_PRICE",
         updateTime: Date.now(),
-      });
+      };
+      return Promise.resolve(restOrderRes);
     };
 
-    const mockFailingWs = {
-      isReady: () => true,
-      placeOrder: () =>
-        Promise.reject(new Error("[WsOrderClient] Binance WS Order API Error [-1022]: Signature for this request is not valid.")),
-      cancelOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-      cancelReplaceOrder: () =>
-        Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-    };
+    const mockFailingWs = new StubWsOrderClient();
+    mockFailingWs.placeOrderHandler = () =>
+      Promise.reject(new Error("[WsOrderClient] Binance WS Order API Error [-1022]: Signature for this request is not valid."));
 
-    const mockSab = { writeAtomicFloat64Asset: () => {} };
-    execClient.attachWsOrderClient(mockFailingWs as unknown as WsOrderClient, mockSab as unknown as MarketDataClient, 0);
+    const mockSab = new SpyMarketDataClient();
+    execClient.attachWsOrderClient(mockFailingWs, mockSab, 0);
 
     const res = await execClient.placeOrder({
       symbol: "BTCUSDT",
@@ -999,44 +1045,39 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
     const execClient = new BinanceExecutionClient();
 
     let wsCancelCalled = false;
-    const mockWs = {
-      isReady: () => true,
-      placeOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-      cancelOrder: (params: { symbol: string; orderId?: number }) => {
-        wsCancelCalled = true;
-        return Promise.resolve({
-          id: "cancel-req-1",
-          status: 200,
-          result: {
-            orderId: params.orderId || 12345,
-            symbol: params.symbol,
-            status: "CANCELED",
-            clientOrderId: "CANCEL_CID",
-            price: "0",
-            avgPrice: "0",
-            origQty: "1",
-            executedQty: "0",
-            cumQuote: "0",
-            timeInForce: "GTC",
-            type: "LIMIT",
-            reduceOnly: false,
-            side: "BUY",
-            positionSide: "BOTH",
-            stopPrice: "0",
-            workingType: "CONTRACT_PRICE",
-            updateTime: Date.now(),
-          },
-          error: null,
-          rateLimits: [],
-          rttMs: 11.8,
-        });
-      },
-      cancelReplaceOrder: () =>
-        Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+    const mockWs = new StubWsOrderClient();
+    mockWs.cancelOrderHandler = (params: WsCancelOrderParams) => {
+      wsCancelCalled = true;
+      return Promise.resolve({
+        id: "cancel-req-1",
+        status: 200,
+        result: {
+          orderId: params.orderId || 12345,
+          symbol: params.symbol,
+          status: "CANCELED",
+          clientOrderId: "CANCEL_CID",
+          price: "0",
+          avgPrice: "0",
+          origQty: "1",
+          executedQty: "0",
+          cumQuote: "0",
+          timeInForce: "GTC",
+          type: "LIMIT",
+          reduceOnly: false,
+          side: "BUY",
+          positionSide: "BOTH",
+          stopPrice: "0",
+          workingType: "CONTRACT_PRICE",
+          updateTime: Date.now(),
+        },
+        error: null,
+        rateLimits: [],
+        rttMs: 11.8,
+      });
     };
 
-    const mockSab = { writeAtomicFloat64Asset: () => {} };
-    execClient.attachWsOrderClient(mockWs as unknown as WsOrderClient, mockSab as unknown as MarketDataClient, 0);
+    const mockSab = new SpyMarketDataClient();
+    execClient.attachWsOrderClient(mockWs, mockSab, 0);
 
     const cancelRes = await execClient.cancelOrder("BTCUSDT", 12345);
     assert.strictEqual(wsCancelCalled, true, "cancelOrder must be dispatched via WebSocket");
@@ -1048,49 +1089,43 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
   void it("T29B: cancelOrder with alphanumeric string ID preserves origClientOrderId without numeric truncation", async () => {
     const execClient = new BinanceExecutionClient();
 
-    const capturedBox: { params: { symbol: string; orderId?: number; origClientOrderId?: string } | null } = {
+    const capturedBox: { params: WsCancelOrderParams | null } = {
       params: null,
     };
-    const mockWs = {
-      isReady: () => true,
-      placeOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-      cancelOrder: (params: { symbol: string; orderId?: number; origClientOrderId?: string }) => {
-        capturedBox.params = params;
-        return Promise.resolve({
-          id: "cancel-req-2",
-          status: 200,
-          result: {
-            orderId: 0,
-            symbol: params.symbol,
-            status: "CANCELED",
-            clientOrderId: params.origClientOrderId || "",
-            price: "0",
-            avgPrice: "0",
-            origQty: "1",
-            executedQty: "0",
-            cumQuote: "0",
-            timeInForce: "GTC",
-            type: "LIMIT",
-            reduceOnly: false,
-            side: "BUY",
-            positionSide: "BOTH",
-            stopPrice: "0",
-            workingType: "CONTRACT_PRICE",
-            updateTime: Date.now(),
-          },
-          error: null,
-          rateLimits: [],
-          rttMs: 8.5,
-        });
-      },
-      cancelReplaceOrder: () =>
-        Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+    const mockWs = new StubWsOrderClient();
+    mockWs.cancelOrderHandler = (params: WsCancelOrderParams) => {
+      capturedBox.params = params;
+      return Promise.resolve({
+        id: "cancel-req-2",
+        status: 200,
+        result: {
+          orderId: 0,
+          symbol: params.symbol,
+          status: "CANCELED",
+          clientOrderId: params.origClientOrderId || "",
+          price: "0",
+          avgPrice: "0",
+          origQty: "1",
+          executedQty: "0",
+          cumQuote: "0",
+          timeInForce: "GTC",
+          type: "LIMIT",
+          reduceOnly: false,
+          side: "BUY",
+          positionSide: "BOTH",
+          stopPrice: "0",
+          workingType: "CONTRACT_PRICE",
+          updateTime: Date.now(),
+        },
+        error: null,
+        rateLimits: [],
+        rttMs: 8.5,
+      });
     };
 
-    const mockSab = { writeAtomicFloat64Asset: () => {} };
-    execClient.attachWsOrderClient(mockWs as unknown as WsOrderClient, mockSab as unknown as MarketDataClient, 0);
+    const mockSab = new SpyMarketDataClient();
+    execClient.attachWsOrderClient(mockWs, mockSab, 0);
 
-    // Call with clientOrderId that starts with digits: "12345_BATBOT_SL"
     await execClient.cancelOrder("BTCUSDT", "12345_BATBOT_SL");
     const resultParams = capturedBox.params;
     assert.ok(resultParams !== null, "cancelOrder must be called");
@@ -1105,50 +1140,45 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
     let attempt = 0;
     const dispatchedPrices: number[] = [];
 
-    const mockWs = {
-      isReady: () => true,
-      placeOrder: (params: { price?: number; timeInForce?: string }) => {
-        attempt++;
-        if (params.price !== undefined) dispatchedPrices.push(params.price);
-        if (attempt === 1) {
-          return Promise.reject(
-            new Error("[WsOrderClient] Binance WS Order API Error [-5022]: Post Only order would immediately trigger.")
-          );
-        }
-        return Promise.resolve({
-          id: "req-retry",
-          status: 200,
-          result: {
-            orderId: 777123,
-            symbol: "BTCUSDT",
-            status: "NEW",
-            clientOrderId: "GTX_RETRY_CID",
-            price: String(params.price),
-            avgPrice: "0",
-            origQty: "0.1",
-            executedQty: "0",
-            cumQuote: "0",
-            timeInForce: "GTX",
-            type: "LIMIT",
-            reduceOnly: false,
-            side: "BUY",
-            positionSide: "BOTH",
-            stopPrice: "0",
-            workingType: "CONTRACT_PRICE",
-            updateTime: Date.now(),
-          },
-          error: null,
-          rateLimits: [],
-          rttMs: 12.0,
-        });
-      },
-      cancelOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-      cancelReplaceOrder: () =>
-        Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
+    const mockWs = new StubWsOrderClient();
+    mockWs.placeOrderHandler = (params: WsPlaceOrderParams) => {
+      attempt++;
+      if (params.price !== undefined) dispatchedPrices.push(params.price);
+      if (attempt === 1) {
+        return Promise.reject(
+          new Error("[WsOrderClient] Binance WS Order API Error [-5022]: Post Only order would immediately trigger.")
+        );
+      }
+      return Promise.resolve({
+        id: "req-retry",
+        status: 200,
+        result: {
+          orderId: 777123,
+          symbol: "BTCUSDT",
+          status: "NEW",
+          clientOrderId: "GTX_RETRY_CID",
+          price: String(params.price),
+          avgPrice: "0",
+          origQty: "0.1",
+          executedQty: "0",
+          cumQuote: "0",
+          timeInForce: "GTX",
+          type: "LIMIT",
+          reduceOnly: false,
+          side: "BUY",
+          positionSide: "BOTH",
+          stopPrice: "0",
+          workingType: "CONTRACT_PRICE",
+          updateTime: Date.now(),
+        },
+        error: null,
+        rateLimits: [],
+        rttMs: 12.0,
+      });
     };
 
-    const mockSab = { writeAtomicFloat64Asset: () => {} };
-    execClient.attachWsOrderClient(mockWs as unknown as WsOrderClient, mockSab as unknown as MarketDataClient, 0);
+    const mockSab = new SpyMarketDataClient();
+    execClient.attachWsOrderClient(mockWs, mockSab, 0);
 
     const res = await execClient.placeOrder({
       symbol: "BTCUSDT",
@@ -1170,18 +1200,15 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
   void it("T31: ensureWsOrderClient returns exact same singleton across 10 concurrent asset calls", async () => {
     const execClient = new BinanceExecutionClient();
 
-    const mockSab = { writeAtomicFloat64Asset: () => {} };
-    const mockWs = new WsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
+    const mockSab = new SpyMarketDataClient();
+    const mockWs = new TestWsOrderClient({ useTestnet: false, apiKey: "k", apiSecret: "s" });
     const mockSocket = new MockWebSocket();
-    (mockWs as unknown as { ws: unknown; isConnected: boolean }).ws = mockSocket;
-    (mockWs as unknown as { isConnected: boolean }).isConnected = true;
+    mockWs.attachMockSocket(mockSocket);
 
-    // Attach singleton
-    execClient.attachWsOrderClient(mockWs, mockSab as unknown as MarketDataClient, 0);
+    execClient.attachWsOrderClient(mockWs, mockSab, 0);
 
-    // Call ensureWsOrderClient concurrently for 10 assets
     const promises = Array.from({ length: 10 }, (_, i) =>
-      execClient.ensureWsOrderClient(mockSab as unknown as MarketDataClient, i, `ASSET_${String(i)}`)
+      execClient.ensureWsOrderClient(mockSab, i, `ASSET_${String(i)}`)
     );
 
     const clients = await Promise.all(promises);
@@ -1192,36 +1219,50 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
 
   // ── T32: cancelReplaceOrder partial failure does NOT issue redundant REST cancel (Fix DEF-08) ──
   void it("T32: cancelReplaceOrder throws WS_CANCEL_REPLACE_PARTIAL and halts when cancel succeeded but new order failed", async () => {
-    const execClient = new BinanceExecutionClient();
+    const execClient = new StubRestExecutionClient();
 
     let restPutCalled = false;
-    (execClient as unknown as { request: (...args: unknown[]) => Promise<unknown> }).request = () => {
+    execClient.httpHandler = () => {
       restPutCalled = true;
       return Promise.resolve({ orderId: 999 });
     };
 
-    const mockWs = {
-      isReady: () => true,
-      placeOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-      cancelOrder: () => Promise.resolve({ id: "1", status: 200, result: null, error: null, rateLimits: [], rttMs: 5 }),
-      cancelReplaceOrder: () =>
-        Promise.resolve({
-          id: "cr-part-1",
-          status: 200,
-          result: {
-            cancelResult: "SUCCESS",
-            newOrderResult: "FAILURE",
-            cancelResponse: { orderId: 111222, status: "CANCELED" },
-            newOrderResponse: { code: -2010, msg: "Account has insufficient balance for new order" },
+    const mockWs = new StubWsOrderClient();
+    mockWs.cancelReplaceOrderHandler = () =>
+      Promise.resolve({
+        id: "cr-part-1",
+        status: 200,
+        result: {
+          cancelResult: "SUCCESS",
+          newOrderResult: "FAILURE",
+          cancelResponse: {
+            orderId: 111222,
+            symbol: "BTCUSDT",
+            status: "CANCELED",
+            clientOrderId: "",
+            price: "50000",
+            avgPrice: "0",
+            origQty: "1",
+            executedQty: "0",
+            cumQuote: "0",
+            timeInForce: "GTC",
+            type: "LIMIT",
+            reduceOnly: false,
+            side: "BUY",
+            positionSide: "BOTH",
+            stopPrice: "0",
+            workingType: "CONTRACT_PRICE",
+            updateTime: Date.now(),
           },
-          error: null,
-          rateLimits: [],
-          rttMs: 14.0,
-        }),
-    };
+          newOrderResponse: { code: -2010, msg: "Account has insufficient balance for new order" },
+        },
+        error: null,
+        rateLimits: [],
+        rttMs: 14.0,
+      });
 
-    const mockSab = { writeAtomicFloat64Asset: () => {} };
-    execClient.attachWsOrderClient(mockWs as unknown as WsOrderClient, mockSab as unknown as MarketDataClient, 0);
+    const mockSab = new SpyMarketDataClient();
+    execClient.attachWsOrderClient(mockWs, mockSab, 0);
 
     await assert.rejects(
       () =>
@@ -1244,12 +1285,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
 
   // ── T33: inFlightClientOrderIds is cleaned up even if pre-flight throws (Fix DEF-05) ──
   void it("T33: inFlightClientOrderIds is cleaned up in finally block even if pre-flight checks throw", async () => {
-    const execClient = new BinanceExecutionClient();
-
-    // Make resolveAssetIndex throw intentionally
-    (execClient as unknown as { resolveAssetIndex: () => number }).resolveAssetIndex = () => {
-      throw new Error("Simulated pre-flight validation failure");
-    };
+    const execClient = new ThrowingAssetIndexExecutionClient();
 
     const testCid = "PREFLIGHT_FAIL_CID";
     await assert.rejects(
@@ -1264,9 +1300,8 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
       /Simulated pre-flight validation failure/
     );
 
-    const inFlightMap = (execClient as unknown as { inFlightClientOrderIds: Set<string> }).inFlightClientOrderIds;
     assert.strictEqual(
-      inFlightMap.has(testCid),
+      execClient.hasInFlightClientOrderId(testCid),
       false,
       "inFlightClientOrderIds must be cleared in finally block after pre-flight exception"
     );
@@ -1274,7 +1309,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
 
   // ── T34: _dispatch() handles cb(null) as successful transmission without throwing TypeError ──
   void it("T34: _dispatch() handles cb(null) as successful transmission without throwing TypeError", async () => {
-    const client = new WsOrderClient({
+    const client = new TestWsOrderClient({
       useTestnet: false,
       apiKey: "test_key",
       apiSecret: "test_secret",
@@ -1291,10 +1326,8 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
       }
     };
 
-    (client as unknown as { ws: MockWebSocket }).ws = mockSocket;
-    (client as unknown as { isConnected: boolean }).isConnected = true;
+    client.attachMockSocket(mockSocket);
 
-    // Dispatch order and immediately simulate response to resolve it
     const orderPromise = client.placeOrder({
       symbol: "ETHUSDT",
       side: "SELL",
@@ -1309,8 +1342,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
     assert.ok(sentRaw, "Payload must be sent over mock socket");
     const sentPayload = JSON.parse(sentRaw) as { id: string };
 
-    // Emit 200 response
-    (client as unknown as { _onMessage: (data: string) => void })._onMessage(
+    client.invokeOnMessage(
       JSON.stringify({
         id: sentPayload.id,
         status: 200,
@@ -1343,7 +1375,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
 
   // ── T35: _dispatch() intercepts synchronous ws.send exception and rejects promise cleanly ──
   void it("T35: _dispatch() intercepts synchronous ws.send exception and rejects promise cleanly", async () => {
-    const client = new WsOrderClient({
+    const client = new TestWsOrderClient({
       useTestnet: false,
       apiKey: "test_key",
       apiSecret: "test_secret",
@@ -1355,8 +1387,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
       throw new Error("WebSocket is not open: readyState 2 (CLOSING)");
     };
 
-    (client as unknown as { ws: MockWebSocket }).ws = mockSocket;
-    (client as unknown as { isConnected: boolean }).isConnected = true;
+    client.attachMockSocket(mockSocket);
 
     await assert.rejects(
       () =>

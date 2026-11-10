@@ -130,14 +130,27 @@ export function initTelemetryWorker(wsUrl: string = "ws://localhost:8080"): void
         const frame = msg.frame;
         latestFrameSnapshot = frame;
 
-        const nowSec = (frame.timestamp > 0 ? frame.timestamp : Date.now()) / 1000;
-        const price = frame.bidPrice > 0 ? frame.bidPrice : frame.askPrice;
+        const hasValidTs = Number.isFinite(frame.timestamp) && frame.timestamp > 0;
+        const price =
+          Number.isFinite(frame.bidPrice) && frame.bidPrice > 0
+            ? frame.bidPrice
+            : frame.askPrice;
         const obi = frame.obi;
         const cvd = frame.cvd;
         const pnl = frame.stats.realizedPnl;
         const stateNorm = Math.abs(frame.aiDirection) * 1.5 + frame.aiConfidence * 0.5;
 
-        pushHistoryPoint(nowSec, price, obi, cvd, pnl, stateNorm);
+        if (
+          hasValidTs &&
+          Number.isFinite(price) &&
+          price > 0 &&
+          Number.isFinite(obi) &&
+          Number.isFinite(cvd) &&
+          Number.isFinite(pnl) &&
+          Number.isFinite(stateNorm)
+        ) {
+          pushHistoryPoint(frame.timestamp / 1000, price, obi, cvd, pnl, stateNorm);
+        }
 
         const newActive = frame.isEngineActive;
         const isEngineActiveChanged = newActive !== currentState.isEngineActive;
@@ -148,33 +161,53 @@ export function initTelemetryWorker(wsUrl: string = "ws://localhost:8080"): void
 
         let newExecutions = currentState.executions;
         if (hasNewExecution) {
-          const execSide: "BUY" | "SELL" =
+          const trimmedSymbol = frame.symbol.trim();
+          const execSide: "BUY" | "SELL" | null =
             frame.lastSignal === "SELL" || frame.lastSignal === "BUY"
               ? frame.lastSignal
               : frame.stats.positionSide === "SHORT"
                 ? "SELL"
-                : "BUY";
+                : frame.stats.positionSide === "LONG"
+                  ? "BUY"
+                  : null;
 
-          const execQty = frame.stats.netQuantity > 0 ? frame.stats.netQuantity : 0.001;
+          const execQty = frame.stats.netQuantity;
+          const rawPrice =
+            execSide === "BUY"
+              ? Number.isFinite(frame.askPrice) && frame.askPrice > 0
+                ? frame.askPrice
+                : frame.bidPrice
+              : Number.isFinite(frame.bidPrice) && frame.bidPrice > 0
+                ? frame.bidPrice
+                : frame.askPrice;
 
-          const newExec: SystemExecution = {
-            id: `EXEC-${frame.sequenceNum}-${Date.now().toString().slice(-4)}`,
-            timestamp: frame.timestamp > 0 ? frame.timestamp : Date.now(),
-            symbol: frame.symbol.length > 0 ? frame.symbol : "BTCUSDT",
-            side: execSide,
-            price:
-              execSide === "BUY"
-                ? frame.askPrice > 0
-                  ? frame.askPrice
-                  : frame.bidPrice
-                : frame.bidPrice > 0
-                  ? frame.bidPrice
-                  : frame.askPrice,
-            qty: execQty,
-            realizedPnl: frame.stats.realizedPnl,
-            fee: frame.stats.totalFees,
-          };
-          newExecutions = [newExec, ...currentState.executions].slice(0, 200);
+          if (
+            trimmedSymbol.length === 0 ||
+            execSide === null ||
+            !hasValidTs ||
+            !Number.isFinite(execQty) ||
+            execQty < 0 ||
+            !Number.isFinite(rawPrice) ||
+            rawPrice <= 0 ||
+            !Number.isFinite(frame.stats.realizedPnl) ||
+            !Number.isFinite(frame.stats.totalFees)
+          ) {
+            console.error(
+              `[store] Ignoring malformed execution telemetry frame (seq=${frame.sequenceNum}, symbol="${frame.symbol}", qty=${String(execQty)}, price=${String(rawPrice)}, ts=${String(frame.timestamp)})`
+            );
+          } else {
+            const newExec: SystemExecution = {
+              id: `EXEC-${frame.sequenceNum}-${String(frame.timestamp)}`,
+              timestamp: frame.timestamp,
+              symbol: trimmedSymbol,
+              side: execSide,
+              price: rawPrice,
+              qty: execQty,
+              realizedPnl: frame.stats.realizedPnl,
+              fee: frame.stats.totalFees,
+            };
+            newExecutions = [newExec, ...currentState.executions].slice(0, 200);
+          }
         }
 
         if (isEngineActiveChanged || hasNewExecution) {

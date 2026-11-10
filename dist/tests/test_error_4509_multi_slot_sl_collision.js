@@ -91,7 +91,8 @@ async function runError4509MultiSlotVerification() {
     assert_1.default.strictEqual(placedOrders.length, 1, "Stage 1: Exactly 1 order must be placed");
     assert_1.default.strictEqual(placedOrders[0].side, "BUY", "Stage 1: Short SL must be BUY order");
     assert_1.default.strictEqual(placedOrders[0].positionSide, "SHORT", "Stage 1: Short SL must have positionSide SHORT");
-    assert_1.default.strictEqual(placedOrders[0].closePosition, true, "Stage 1: Short SL must have closePosition true");
+    assert_1.default.strictEqual(placedOrders[0].closePosition, false, "Stage 1: Quantity-based SL must have closePosition false");
+    assert_1.default.strictEqual(placedOrders[0].quantity, 100, "Stage 1: Quantity-based SL must protect exact quantity 100");
     console.log(`  ✅ SHORT_SLOT_0 Occupied: 100 DOT @ $5.00 | Sovereign SL #${String(slId1)} active @ $${String(placedOrders[0].stopPrice)}`);
     // 2. Scale-in: Enter SHORT_SLOT_1 (100 DOT @ $5.20) -> Aggregated: 200 DOT @ VWAP $5.10, New SL: $5.1765
     ledger.occupyShortSlot(1, 100, 5.20, 3.0, 1.5);
@@ -161,7 +162,7 @@ async function runError4509MultiSlotVerification() {
                 updateTime: Date.now(),
             });
         }
-        request(_method, _endpoint, payload = {}) {
+        executeHttpRequest(_method, _endpoint, payload = {}) {
             attemptCount++;
             if (attemptCount === 1) {
                 return Promise.reject(new Error("Binance API Error [-4509]: Time in Force (TIF) GTE can only be used with open positions."));
@@ -171,7 +172,7 @@ async function runError4509MultiSlotVerification() {
                 : typeof payload.clientOrderId === "string"
                     ? payload.clientOrderId
                     : "RECOVERED_SL";
-            return Promise.resolve({
+            const response = {
                 orderId: 999111,
                 symbol: typeof payload.symbol === "string" ? payload.symbol : symbol,
                 status: "NEW",
@@ -189,7 +190,8 @@ async function runError4509MultiSlotVerification() {
                 stopPrice: String(payload.stopPrice || "0"),
                 workingType: "CONTRACT_PRICE",
                 updateTime: Date.now(),
-            });
+            };
+            return Promise.resolve(response);
         }
     }
     const recoveryClient = new Stage2RecoveryClient();
@@ -235,14 +237,14 @@ async function runError4509MultiSlotVerification() {
                 },
             ]);
         }
-        request(_method, _endpoint, payload = {}) {
+        executeHttpRequest(_method, _endpoint, payload = {}) {
             this.persistentAttempts++;
             if (payload.closePosition === "true" || payload.closePosition === true) {
                 return Promise.reject(new Error("Binance API Error [-4509]: Time in Force (TIF) GTE can only be used with open positions."));
             }
             this.fallbackExecuted = true;
             this.fallbackOrderParams = payload;
-            return Promise.resolve({
+            const response = {
                 orderId: 999333,
                 symbol: typeof payload.symbol === "string" ? payload.symbol : symbol,
                 status: "NEW",
@@ -260,7 +262,8 @@ async function runError4509MultiSlotVerification() {
                 stopPrice: String(payload.stopPrice || "0"),
                 workingType: "CONTRACT_PRICE",
                 updateTime: Date.now(),
-            });
+            };
+            return Promise.resolve(response);
         }
     }
     const persistentFailureClient = new PersistentFailureClient();
@@ -304,6 +307,9 @@ async function runError4509MultiSlotVerification() {
     // STAGE 5: Long Position & Step-Collar Ratchet Non-Regression
     // ------------------------------------------------------------------------------------------
     console.log("[STAGE 5] Testing Long Position & Step-Collar Ratchet Non-Regression...");
+    // Release Stage 1/4 SHORT slots to satisfy the Unidirectional Asset Mutex before opening LONG
+    ledger.releaseShortSlot(0);
+    ledger.releaseShortSlot(1);
     ledger.occupyCoreLong(100, 5.00, 3.0, 1.5);
     const longSummary = ledger.getAggregatedSideSummary("LONG");
     await engine.syncExchangeStopLossOrder("LONG", longSummary.totalQuantity, longSummary.stopLossPrice);
@@ -319,6 +325,7 @@ async function runError4509MultiSlotVerification() {
     console.log(`  ✅ Core Long Position: 100 DOT @ $5.00 | SL #${String(longSlId1)} placed`);
     console.log(`  ✅ Ratchet Synced: SL updated to #${String(longSlId2)} @ $5.05`);
     console.log("  ✅ STAGE 5 PASSED: Long Position & Ratchet verified with zero regressions!\n");
+    engine.destroy();
     console.log("==========================================================================================");
     console.log("  ALL TESTS PASSED (5/5) - ERROR -4509 & MULTI-SLOT SL ARCHITECTURE IS 100% PRODUCTION READY");
     console.log("==========================================================================================");

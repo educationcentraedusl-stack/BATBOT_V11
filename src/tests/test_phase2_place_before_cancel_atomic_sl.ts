@@ -239,13 +239,13 @@ async function runPhase2AtomicStopLossTests(): Promise<void> {
   class InterceptingExecutionClient extends BinanceExecutionClient {
     public interceptedPayload: InterceptedPayload | undefined;
 
-    protected override request<T>(
+    protected override executeHttpRequest(
       _method: "GET" | "POST" | "DELETE" | "PUT",
       _endpoint: string,
       payload: InterceptedPayload = {}
-    ): Promise<T> {
+    ): Promise<unknown> {
       this.interceptedPayload = payload;
-      return Promise.resolve({
+      const response: BinanceOrderResponse = {
         orderId: 999888,
         symbol: "ETHUSDT",
         status: "NEW",
@@ -263,7 +263,8 @@ async function runPhase2AtomicStopLossTests(): Promise<void> {
         stopPrice: String(payload.stopPrice ?? "0"),
         workingType: "CONTRACT_PRICE",
         updateTime: Date.now(),
-      } as unknown as T);
+      };
+      return Promise.resolve(response);
     }
   }
   const realClient = new InterceptingExecutionClient();

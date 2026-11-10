@@ -90,10 +90,11 @@ async function runLocalAiAndTuiIntegrationTests() {
     // Capture stdout write by intercepting process.stdout.write
     let capturedOutput = "";
     const originalWrite = process.stdout.write.bind(process.stdout);
-    process.stdout.write = (chunk) => {
+    const writeInterceptor = (chunk) => {
         capturedOutput += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
         return true;
     };
+    process.stdout.write = writeInterceptor;
     try {
         dashboard.render();
     }

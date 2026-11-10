@@ -111,7 +111,8 @@ async function runError4509MultiSlotVerification(): Promise<void> {
   assert.strictEqual<number>(placedOrders.length, 1, "Stage 1: Exactly 1 order must be placed");
   assert.strictEqual(placedOrders[0].side, "BUY", "Stage 1: Short SL must be BUY order");
   assert.strictEqual(placedOrders[0].positionSide, "SHORT", "Stage 1: Short SL must have positionSide SHORT");
-  assert.strictEqual(placedOrders[0].closePosition, true, "Stage 1: Short SL must have closePosition true");
+  assert.strictEqual(placedOrders[0].closePosition, false, "Stage 1: Quantity-based SL must have closePosition false");
+  assert.strictEqual(placedOrders[0].quantity, 100, "Stage 1: Quantity-based SL must protect exact quantity 100");
 
   console.log(`  ✅ SHORT_SLOT_0 Occupied: 100 DOT @ $5.00 | Sovereign SL #${String(slId1)} active @ $${String(placedOrders[0].stopPrice)}`);
 
@@ -188,11 +189,11 @@ async function runError4509MultiSlotVerification(): Promise<void> {
         updateTime: Date.now(),
       });
     }
-    protected override request<T>(
+    protected override executeHttpRequest(
       _method: "GET" | "POST" | "DELETE" | "PUT",
       _endpoint: string,
       payload: ReqPayload = {}
-    ): Promise<T> {
+    ): Promise<unknown> {
       attemptCount++;
       if (attemptCount === 1) {
         return Promise.reject(
@@ -205,7 +206,7 @@ async function runError4509MultiSlotVerification(): Promise<void> {
           : typeof payload.clientOrderId === "string"
             ? payload.clientOrderId
             : "RECOVERED_SL";
-      return Promise.resolve({
+      const response: BinanceOrderResponse = {
         orderId: 999111,
         symbol: typeof payload.symbol === "string" ? payload.symbol : symbol,
         status: "NEW",
@@ -223,7 +224,8 @@ async function runError4509MultiSlotVerification(): Promise<void> {
         stopPrice: String(payload.stopPrice || "0"),
         workingType: "CONTRACT_PRICE",
         updateTime: Date.now(),
-      } as unknown as T);
+      };
+      return Promise.resolve(response);
     }
   }
   const recoveryClient = new Stage2RecoveryClient();
@@ -273,11 +275,11 @@ async function runError4509MultiSlotVerification(): Promise<void> {
         },
       ]);
     }
-    protected override request<T>(
+    protected override executeHttpRequest(
       _method: "GET" | "POST" | "DELETE" | "PUT",
       _endpoint: string,
       payload: ReqPayload = {}
-    ): Promise<T> {
+    ): Promise<unknown> {
       this.persistentAttempts++;
       if (payload.closePosition === "true" || payload.closePosition === true) {
         return Promise.reject(
@@ -286,7 +288,7 @@ async function runError4509MultiSlotVerification(): Promise<void> {
       }
       this.fallbackExecuted = true;
       this.fallbackOrderParams = payload;
-      return Promise.resolve({
+      const response: BinanceOrderResponse = {
         orderId: 999333,
         symbol: typeof payload.symbol === "string" ? payload.symbol : symbol,
         status: "NEW",
@@ -304,7 +306,8 @@ async function runError4509MultiSlotVerification(): Promise<void> {
         stopPrice: String(payload.stopPrice || "0"),
         workingType: "CONTRACT_PRICE",
         updateTime: Date.now(),
-      } as unknown as T);
+      };
+      return Promise.resolve(response);
     }
   }
   const persistentFailureClient = new PersistentFailureClient();
@@ -360,6 +363,10 @@ async function runError4509MultiSlotVerification(): Promise<void> {
   // ------------------------------------------------------------------------------------------
   console.log("[STAGE 5] Testing Long Position & Step-Collar Ratchet Non-Regression...");
 
+  // Release Stage 1/4 SHORT slots to satisfy the Unidirectional Asset Mutex before opening LONG
+  ledger.releaseShortSlot(0);
+  ledger.releaseShortSlot(1);
+
   ledger.occupyCoreLong(100, 5.00, 3.0, 1.5);
   const longSummary = ledger.getAggregatedSideSummary("LONG");
   await engine.syncExchangeStopLossOrder("LONG", longSummary.totalQuantity, longSummary.stopLossPrice);
@@ -377,6 +384,8 @@ async function runError4509MultiSlotVerification(): Promise<void> {
   console.log(`  ✅ Core Long Position: 100 DOT @ $5.00 | SL #${String(longSlId1)} placed`);
   console.log(`  ✅ Ratchet Synced: SL updated to #${String(longSlId2)} @ $5.05`);
   console.log("  ✅ STAGE 5 PASSED: Long Position & Ratchet verified with zero regressions!\n");
+
+  engine.destroy();
 
   console.log("==========================================================================================");
   console.log("  ALL TESTS PASSED (5/5) - ERROR -4509 & MULTI-SLOT SL ARCHITECTURE IS 100% PRODUCTION READY");

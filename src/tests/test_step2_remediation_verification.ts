@@ -116,8 +116,7 @@ function runStep2RemediationTests(): void {
   // Even with 0 samples, updateICKillSwitchState should NOT auto-unlatch from DEGRADED to ALPHA_ACTIVE
   const now = Date.now();
   // Force state to DEGRADED
-  const enginePriv = engine as unknown as { icState: "ALPHA_ACTIVE" | "DEGRADED" | "MODEL_BROKEN" };
-  enginePriv.icState = "DEGRADED";
+  assert(Reflect.set(engine, "icState", "DEGRADED"), "Failed to set internal icState to DEGRADED");
   assert(engine.getIcState() === "DEGRADED", "Engine state should be DEGRADED");
 
   // Call updateICKillSwitchState with safeIC=0.00 and no drift, sampleCount=0
@@ -131,7 +130,7 @@ function runStep2RemediationTests(): void {
   assert(client.getIsModelDrifted(0), "SAB Slot 102 must read true");
 
   // Even if engine was in ALPHA_ACTIVE or DEGRADED, and sample count is 0:
-  enginePriv.icState = "ALPHA_ACTIVE";
+  assert(Reflect.set(engine, "icState", "ALPHA_ACTIVE"), "Failed to reset internal icState to ALPHA_ACTIVE");
   engine.updateICKillSwitchState(0.02, true, now);
   assert(engine.getIcState() === "MODEL_BROKEN", "SAB Slot 102 Drift flag must strictly latch engine to MODEL_BROKEN!");
   console.log("  ✓ Strict drift latching verified: SAB Slot 102=1.0 latched engine to MODEL_BROKEN");

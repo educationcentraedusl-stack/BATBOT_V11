@@ -215,13 +215,50 @@ async function runVerificationTests() {
   type RequestParams = Record<string, string | number | boolean | undefined | null>;
   class PayloadInspectingClient extends BinanceExecutionClient {
     public lastPayload: RequestParams | null = null;
-    protected override request<T>(
+    protected override executeHttpRequest(
       _method: "GET" | "POST" | "DELETE" | "PUT",
       _endpoint: string,
       params: RequestParams = {}
-    ): Promise<T> {
+    ): Promise<unknown> {
       this.lastPayload = params;
-      return Promise.resolve({ orderId: 12345, status: "FILLED" } as unknown as T);
+      const response: {
+        orderId: number;
+        symbol: string;
+        status: string;
+        clientOrderId: string;
+        price: string;
+        avgPrice: string;
+        origQty: string;
+        executedQty: string;
+        cumQuote: string;
+        timeInForce: string;
+        type: string;
+        reduceOnly: boolean;
+        side: string;
+        positionSide: string;
+        stopPrice: string;
+        workingType: string;
+        updateTime: number;
+      } = {
+        orderId: 12345,
+        symbol: typeof params.symbol === "string" ? params.symbol : "BTCUSDT",
+        status: "FILLED",
+        clientOrderId: "",
+        price: "0",
+        avgPrice: "0",
+        origQty: String(params.quantity ?? "0"),
+        executedQty: String(params.quantity ?? "0"),
+        cumQuote: "0",
+        timeInForce: typeof params.timeInForce === "string" ? params.timeInForce : "GTC",
+        type: typeof params.type === "string" ? params.type : "MARKET",
+        reduceOnly: false,
+        side: typeof params.side === "string" ? params.side : "BUY",
+        positionSide: "BOTH",
+        stopPrice: "0",
+        workingType: "CONTRACT_PRICE",
+        updateTime: Date.now(),
+      };
+      return Promise.resolve(response);
     }
   }
   const mockClient = new PayloadInspectingClient({ apiKey: "key", apiSecret: "secret" });

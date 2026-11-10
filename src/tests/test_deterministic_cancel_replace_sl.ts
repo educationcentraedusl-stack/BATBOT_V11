@@ -115,11 +115,11 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
         updateTime: Date.now(),
       });
     }
-    protected override request<T>(
+    protected override executeHttpRequest(
       _method: "GET" | "POST" | "DELETE" | "PUT",
       path: string,
       payload: ReqPayload = {}
-    ): Promise<T> {
+    ): Promise<unknown> {
       if (path === "/fapi/v1/order") {
         submittedOrders.push({ ...payload });
         const activeSl = openOrdersList.filter((o) => o.type === "STOP_MARKET" && o.positionSide === "SHORT");
@@ -128,7 +128,7 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
           0,
           "Exchange MUST have 0 resting STOP_MARKET orders when new closePosition order arrives"
         );
-        return Promise.resolve({
+        const orderRes: BinanceOrderResponse = {
           orderId: 555666,
           symbol: typeof payload.symbol === "string" ? payload.symbol : "BTCUSDT",
           status: "NEW",
@@ -146,9 +146,10 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
           stopPrice: String(payload.stopPrice ?? "0"),
           workingType: "CONTRACT_PRICE",
           updateTime: Date.now(),
-        } as unknown as T);
+        };
+        return Promise.resolve(orderRes);
       }
-      return Promise.resolve({} as unknown as T);
+      return Promise.resolve({});
     }
   }
   const mockClient = new Stage1Client();
@@ -215,15 +216,15 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
         updateTime: Date.now(),
       });
     }
-    protected override request<T>(
+    protected override executeHttpRequest(
       _method: "GET" | "POST" | "DELETE" | "PUT",
       path: string,
       payload: ReqPayload = {}
-    ): Promise<T> {
+    ): Promise<unknown> {
       if (path === "/fapi/v1/order") {
         assert.ok(probeCount >= 3, `State Verification Barrier must poll until clean (probes: ${String(probeCount)})`);
         assert.strictEqual(simulatedLagOrders.length, 0, "Orders list must be completely empty when order is placed");
-        return Promise.resolve({
+        const orderRes: BinanceOrderResponse = {
           orderId: 777888,
           symbol: "DOGEUSDT",
           status: "NEW",
@@ -241,9 +242,10 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
           stopPrice: "0.09312",
           workingType: "CONTRACT_PRICE",
           updateTime: Date.now(),
-        } as unknown as T);
+        };
+        return Promise.resolve(orderRes);
       }
-      return Promise.resolve({} as unknown as T);
+      return Promise.resolve({});
     }
   }
   const delayedClient = new Stage2Client();
@@ -258,14 +260,14 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
   console.log("\n[STAGE 3] Testing Native Cancel-Replace (PUT /fapi/v1/order)...");
   class Stage3Client extends BinanceExecutionClient {
     public capturedPutPayload: ReqPayload | undefined;
-    protected override request<T>(
+    protected override executeHttpRequest(
       method: "GET" | "POST" | "DELETE" | "PUT",
       path: string,
       payload: ReqPayload = {}
-    ): Promise<T> {
+    ): Promise<unknown> {
       if (method === "PUT" && path === "/fapi/v1/order") {
         this.capturedPutPayload = { ...payload };
-        return Promise.resolve({
+        const orderRes: BinanceOrderResponse = {
           orderId: 999111,
           symbol: typeof payload.symbol === "string" ? payload.symbol : "SOLUSDT",
           status: "NEW",
@@ -283,9 +285,10 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
           stopPrice: String(payload.stopPrice ?? "0"),
           workingType: "CONTRACT_PRICE",
           updateTime: Date.now(),
-        } as unknown as T);
+        };
+        return Promise.resolve(orderRes);
       }
-      return Promise.resolve({} as unknown as T);
+      return Promise.resolve({});
     }
   }
   const nativeClient = new Stage3Client();
@@ -335,11 +338,11 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
         }),
       ]);
     }
-    protected override request<T>(
+    protected override executeHttpRequest(
       _method: "GET" | "POST" | "DELETE" | "PUT",
       path: string,
       payload: ReqPayload = {}
-    ): Promise<T> {
+    ): Promise<unknown> {
       if (path === "/fapi/v1/order") {
         this.attempt++;
         if (payload.closePosition === "true") {
@@ -348,7 +351,7 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
           );
         }
         this.fallbackCapturedPayload = { ...payload };
-        return Promise.resolve({
+        const orderRes: BinanceOrderResponse = {
           orderId: 333444,
           symbol: typeof payload.symbol === "string" ? payload.symbol : "ETHUSDT",
           status: "NEW",
@@ -366,9 +369,10 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
           stopPrice: String(payload.stopPrice ?? "0"),
           workingType: "CONTRACT_PRICE",
           updateTime: Date.now(),
-        } as unknown as T);
+        };
+        return Promise.resolve(orderRes);
       }
-      return Promise.resolve({} as unknown as T);
+      return Promise.resolve({});
     }
   }
   const fallbackClient = new Stage4Client();
@@ -421,12 +425,12 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
         updateTime: Date.now(),
       });
     }
-    protected override request<T>(
+    protected override executeHttpRequest(
       _m: "GET" | "POST" | "DELETE" | "PUT",
       _p: string,
       payload: ReqPayload = {}
-    ): Promise<T> {
-      return Promise.resolve({
+    ): Promise<unknown> {
+      const orderRes: BinanceOrderResponse = {
         orderId: ++this.liveOrderIdSeq,
         symbol: "BTCUSDT",
         status: "NEW",
@@ -444,7 +448,8 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
         stopPrice: String(payload.stopPrice ?? "77890.0"),
         workingType: "CONTRACT_PRICE",
         updateTime: Date.now(),
-      } as unknown as T);
+      };
+      return Promise.resolve(orderRes);
     }
   }
   const engineClient = new Stage5Client();

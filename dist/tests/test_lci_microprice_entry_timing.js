@@ -199,11 +199,13 @@ async function runLCIMicropriceTimingTestSuite() {
     assert(tick0Signal.signalType === "NONE", `Tick 0 uninitialized state must produce NONE, got ${tick0Signal.signalType}`);
     console.log("  ✓ Tick 0 initialization guard verified: baseline established with LCI = 0.50 without spurious signal\n");
     // --------------------------------------------------------------------------
-    // STAGE 1: Initiation Phase (Breakout Building -> LCI >= 0.55 Approves Entry)
+    // STAGE 1: Initiation Phase (Breakout Building -> Dynamic LCI >= 0.505-0.530 Approves Entry)
     // --------------------------------------------------------------------------
     console.log("[STAGE 1] Testing Initiation Phase (Microprice Shift & Surging OBI Velocity)...");
-    // Tick 1: Sudden strong bid injection: Bid Qty = 25.0, Ask Qty = 2.0 (OBI = +0.85, microprice shifts up)
-    await new Promise((r) => setTimeout(r, 10));
+    // Tick 1: Sudden strong bid injection after 100ms consolidation: Bid Qty = 25.0, Ask Qty = 2.0 (OBI = +0.85)
+    // Using dt1 ≈ 100ms keeps EWMA prevOBIVelocity realistic (~+2.55/s) instead of infinite microsecond spike,
+    // while still clearing the dynamic LCI threshold (0.505-0.530) with margin.
+    await new Promise((r) => setTimeout(r, 100));
     nowMs = timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs();
     Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
     client.setSequenceNum(1n, 0);
@@ -231,12 +233,13 @@ async function runLCIMicropriceTimingTestSuite() {
     assert(initiationSignal.signalType === "BUY", `Initiation phase must trigger BUY, got ${initiationSignal.signalType}`);
     console.log("  ✓ Initiation phase correctly confirmed by LCI (BUY triggered at initiation)\n");
     // --------------------------------------------------------------------------
-    // STAGE 2: Micro-Top Exhaustion Phase (Nominally High OBI, but Negative Velocity)
+    // STAGE 2: Micro-Top Exhaustion Phase (Nominally High OBI, Negative Velocity < 0.505 Floor)
     // --------------------------------------------------------------------------
     console.log("[STAGE 2] Testing Micro-Top Exhaustion Phase (Decelerating / Retreating OBI)...");
     // Tick 2: At the local top, OBI is still positive (+0.25, looks bullish to lagging indicators),
-    // but bid quantity is evaporating (was 25, now 3) and ask quantity is creeping in (now 15).
-    // Microprice deviates downward and OBI velocity/acceleration are negative.
+    // but bid quantity sharply evaporates in ~10ms (was 25, now 3) and ask quantity climbs to 15.
+    // Microprice deviates downward and smoothed EWMA OBI velocity + acceleration drop decisively below
+    // even the relaxed low-volatility dynamic LCI threshold floor (0.505).
     await new Promise((r) => setTimeout(r, 10));
     nowMs = timeSynchronizer_1.timeSynchronizer.getAdjustedNowMs();
     Atomics.store(bigIntView, 0, BigInt(nowMs) * 1000000n);
@@ -245,7 +248,7 @@ async function runLCIMicropriceTimingTestSuite() {
     client.setBestBidQuantity(3.0, 0);
     client.setBestAskPrice(60000.5, 0);
     client.setBestAskQuantity(15.0, 0);
-    client.setOBI(0.25, 0); // Still positive, but retreating
+    client.setOBI(0.25, 0); // Still positive, but retreating sharply
     client.setCVD(100.0, 0);
     // Physical native AI inference execution
     const inf2Ok = nativeAddon.runAiInferenceAssetNapi(Buffer.from(sab), 0);
@@ -255,7 +258,7 @@ async function runLCIMicropriceTimingTestSuite() {
         await exhaustionSignal.executionPromise;
     }
     console.log(`  Exhaustion Signal Type: ${exhaustionSignal.signalType}`);
-    assert(exhaustionSignal.signalType === "NONE", `Exhaustion micro-top must be BLOCKED by LCI, got ${exhaustionSignal.signalType}`);
+    assert(exhaustionSignal.signalType === "NONE", `Exhaustion micro-top must be BLOCKED by dynamic LCI threshold (0.505-0.530), got ${exhaustionSignal.signalType}`);
     console.log("  ✓ Micro-top exhaustion correctly blocked by LCI despite nominally high OBI (+0.25)\n");
     // --------------------------------------------------------------------------
     // STAGE 3: Symmetric Breakdown Initiation (SELL Confirmation)

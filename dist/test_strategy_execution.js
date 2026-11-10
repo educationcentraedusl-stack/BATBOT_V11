@@ -177,9 +177,28 @@ async function runVerificationTests() {
     console.log("  ✓ MARKET order query string is 100% free of timeInForce.");
     class PayloadInspectingClient extends binance_1.BinanceExecutionClient {
         lastPayload = null;
-        request(_method, _endpoint, params = {}) {
+        executeHttpRequest(_method, _endpoint, params = {}) {
             this.lastPayload = params;
-            return Promise.resolve({ orderId: 12345, status: "FILLED" });
+            const response = {
+                orderId: 12345,
+                symbol: typeof params.symbol === "string" ? params.symbol : "BTCUSDT",
+                status: "FILLED",
+                clientOrderId: "",
+                price: "0",
+                avgPrice: "0",
+                origQty: String(params.quantity ?? "0"),
+                executedQty: String(params.quantity ?? "0"),
+                cumQuote: "0",
+                timeInForce: typeof params.timeInForce === "string" ? params.timeInForce : "GTC",
+                type: typeof params.type === "string" ? params.type : "MARKET",
+                reduceOnly: false,
+                side: typeof params.side === "string" ? params.side : "BUY",
+                positionSide: "BOTH",
+                stopPrice: "0",
+                workingType: "CONTRACT_PRICE",
+                updateTime: Date.now(),
+            };
+            return Promise.resolve(response);
         }
     }
     const mockClient = new PayloadInspectingClient({ apiKey: "key", apiSecret: "secret" });

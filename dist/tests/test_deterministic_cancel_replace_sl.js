@@ -100,12 +100,12 @@ async function runDeterministicCancelReplaceTests() {
                 updateTime: Date.now(),
             });
         }
-        request(_method, path, payload = {}) {
+        executeHttpRequest(_method, path, payload = {}) {
             if (path === "/fapi/v1/order") {
                 submittedOrders.push({ ...payload });
                 const activeSl = openOrdersList.filter((o) => o.type === "STOP_MARKET" && o.positionSide === "SHORT");
                 assert_1.default.strictEqual(activeSl.length, 0, "Exchange MUST have 0 resting STOP_MARKET orders when new closePosition order arrives");
-                return Promise.resolve({
+                const orderRes = {
                     orderId: 555666,
                     symbol: typeof payload.symbol === "string" ? payload.symbol : "BTCUSDT",
                     status: "NEW",
@@ -123,7 +123,8 @@ async function runDeterministicCancelReplaceTests() {
                     stopPrice: String(payload.stopPrice ?? "0"),
                     workingType: "CONTRACT_PRICE",
                     updateTime: Date.now(),
-                });
+                };
+                return Promise.resolve(orderRes);
             }
             return Promise.resolve({});
         }
@@ -189,11 +190,11 @@ async function runDeterministicCancelReplaceTests() {
                 updateTime: Date.now(),
             });
         }
-        request(_method, path, payload = {}) {
+        executeHttpRequest(_method, path, payload = {}) {
             if (path === "/fapi/v1/order") {
                 assert_1.default.ok(probeCount >= 3, `State Verification Barrier must poll until clean (probes: ${String(probeCount)})`);
                 assert_1.default.strictEqual(simulatedLagOrders.length, 0, "Orders list must be completely empty when order is placed");
-                return Promise.resolve({
+                const orderRes = {
                     orderId: 777888,
                     symbol: "DOGEUSDT",
                     status: "NEW",
@@ -211,7 +212,8 @@ async function runDeterministicCancelReplaceTests() {
                     stopPrice: "0.09312",
                     workingType: "CONTRACT_PRICE",
                     updateTime: Date.now(),
-                });
+                };
+                return Promise.resolve(orderRes);
             }
             return Promise.resolve({});
         }
@@ -226,10 +228,10 @@ async function runDeterministicCancelReplaceTests() {
     console.log("\n[STAGE 3] Testing Native Cancel-Replace (PUT /fapi/v1/order)...");
     class Stage3Client extends binance_1.BinanceExecutionClient {
         capturedPutPayload;
-        request(method, path, payload = {}) {
+        executeHttpRequest(method, path, payload = {}) {
             if (method === "PUT" && path === "/fapi/v1/order") {
                 this.capturedPutPayload = { ...payload };
-                return Promise.resolve({
+                const orderRes = {
                     orderId: 999111,
                     symbol: typeof payload.symbol === "string" ? payload.symbol : "SOLUSDT",
                     status: "NEW",
@@ -247,7 +249,8 @@ async function runDeterministicCancelReplaceTests() {
                     stopPrice: String(payload.stopPrice ?? "0"),
                     workingType: "CONTRACT_PRICE",
                     updateTime: Date.now(),
-                });
+                };
+                return Promise.resolve(orderRes);
             }
             return Promise.resolve({});
         }
@@ -296,14 +299,14 @@ async function runDeterministicCancelReplaceTests() {
                 }),
             ]);
         }
-        request(_method, path, payload = {}) {
+        executeHttpRequest(_method, path, payload = {}) {
             if (path === "/fapi/v1/order") {
                 this.attempt++;
                 if (payload.closePosition === "true") {
                     return Promise.reject(new Error("Binance API Error [-4130]: An open closePosition in the direction is existing"));
                 }
                 this.fallbackCapturedPayload = { ...payload };
-                return Promise.resolve({
+                const orderRes = {
                     orderId: 333444,
                     symbol: typeof payload.symbol === "string" ? payload.symbol : "ETHUSDT",
                     status: "NEW",
@@ -321,7 +324,8 @@ async function runDeterministicCancelReplaceTests() {
                     stopPrice: String(payload.stopPrice ?? "0"),
                     workingType: "CONTRACT_PRICE",
                     updateTime: Date.now(),
-                });
+                };
+                return Promise.resolve(orderRes);
             }
             return Promise.resolve({});
         }
@@ -372,8 +376,8 @@ async function runDeterministicCancelReplaceTests() {
                 updateTime: Date.now(),
             });
         }
-        request(_m, _p, payload = {}) {
-            return Promise.resolve({
+        executeHttpRequest(_m, _p, payload = {}) {
+            const orderRes = {
                 orderId: ++this.liveOrderIdSeq,
                 symbol: "BTCUSDT",
                 status: "NEW",
@@ -391,7 +395,8 @@ async function runDeterministicCancelReplaceTests() {
                 stopPrice: String(payload.stopPrice ?? "77890.0"),
                 workingType: "CONTRACT_PRICE",
                 updateTime: Date.now(),
-            });
+            };
+            return Promise.resolve(orderRes);
         }
     }
     const engineClient = new Stage5Client();

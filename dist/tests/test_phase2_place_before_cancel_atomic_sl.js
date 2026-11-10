@@ -163,9 +163,9 @@ async function runPhase2AtomicStopLossTests() {
     console.log("[STAGE 5] Testing Exact-Quantity Conditional Order Precision & Bypass of -4130/-4509...");
     class InterceptingExecutionClient extends binance_1.BinanceExecutionClient {
         interceptedPayload;
-        request(_method, _endpoint, payload = {}) {
+        executeHttpRequest(_method, _endpoint, payload = {}) {
             this.interceptedPayload = payload;
-            return Promise.resolve({
+            const response = {
                 orderId: 999888,
                 symbol: "ETHUSDT",
                 status: "NEW",
@@ -183,7 +183,8 @@ async function runPhase2AtomicStopLossTests() {
                 stopPrice: String(payload.stopPrice ?? "0"),
                 workingType: "CONTRACT_PRICE",
                 updateTime: Date.now(),
-            });
+            };
+            return Promise.resolve(response);
         }
     }
     const realClient = new InterceptingExecutionClient();

@@ -444,9 +444,9 @@ async function runStateReconciliationConsensusTest() {
     console.log("[Test 10/12] Verifying Audit 3.0 Loophole 1 (Undefined buyer on BUY side must NOT settle LONG)...");
     // Re-occupy doge long position
     dogeEngine.getHedgeLedger().occupyCoreLong(644.0, 0.06950, 2.5, 1.5);
-    // Simulate a trade payload where buyer is undefined, but side is "BUY"
-    executionClient.userTradesHandler = () => Promise.resolve([
-        {
+    // Simulate a trade payload where buyer is omitted/undefined, while side is "BUY"
+    executionClient.userTradesHandler = () => {
+        const malformedTrade = {
             id: 999333,
             symbol: "DOGEUSDT",
             orderId: 111444,
@@ -460,10 +460,12 @@ async function runStateReconciliationConsensusTest() {
             commissionAsset: "USDT",
             time: Date.now(),
             positionSide: "LONG",
-            buyer: undefined, // Buyer property omitted / undefined in malformed payload
+            buyer: true,
             maker: true,
-        },
-    ]);
+        };
+        Reflect.deleteProperty(malformedTrade, "buyer");
+        return Promise.resolve([malformedTrade]);
+    };
     await dogeEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
     const dogeSummaryAfterUndefBuyer = dogeEngine.getHedgeLedger().getSummary(0.06987);
     console.log(`  - DOGEUSDT Long Qty After Undefined Buyer Check: ${String(dogeSummaryAfterUndefBuyer.longQuantity)} (Expected: 644)`);

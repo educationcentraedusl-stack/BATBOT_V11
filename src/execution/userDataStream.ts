@@ -17,7 +17,7 @@ export interface OrderTradeUpdatePayload {
     averagePrice: number;
     stopPrice: number;
     executionType: string; // "NEW", "CANCELED", "CALCULATED", "EXPIRED", "TRADE"
-    orderStatus: "NEW" | "PARTIALLY_FILLED" | "FILLED" | "CANCELED" | "EXPIRED";
+    orderStatus: "NEW" | "PARTIALLY_FILLED" | "FILLED" | "CANCELED" | "EXPIRED" | "REJECTED";
     orderId: number;
     lastFilledQuantity: number;
     cumulativeFilledQuantity: number;
@@ -92,9 +92,35 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function readString(obj: Record<string, unknown>, key: string, fallback: string): string {
+function requireNonEmptyString(
+  obj: Record<string, unknown>,
+  key: string,
+  context: string
+): string {
   const value = obj[key];
-  return typeof value === "string" ? value : fallback;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(
+      `[BinanceUserDataStream] Missing or empty string field "${key}" in ${context}`
+    );
+  }
+  return value;
+}
+
+function readOptionalString(
+  obj: Record<string, unknown>,
+  key: string,
+  context: string
+): string {
+  const value = obj[key];
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (typeof value !== "string") {
+    throw new Error(
+      `[BinanceUserDataStream] Expected string for optional field "${key}" in ${context}`
+    );
+  }
+  return value;
 }
 
 function requireFiniteNumber(
@@ -111,60 +137,179 @@ function requireFiniteNumber(
   return value;
 }
 
-function parseFloatField(obj: Record<string, unknown>, key: string): number {
-  const value = obj[key];
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : 0;
+function parseStrictNumericString(
+  raw: string,
+  fieldName: string,
+  context: string
+): number {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    throw new Error(
+      `[BinanceUserDataStream] Empty numeric string for "${fieldName}" in ${context}`
+    );
   }
-  if (typeof value === "string" && value.length > 0) {
-    const parsed = parseFloat(value);
-    return Number.isFinite(parsed) ? parsed : 0;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(
+      `[BinanceUserDataStream] Malformed numeric string "${raw}" for "${fieldName}" in ${context}`
+    );
   }
-  return 0;
+  return parsed;
 }
 
-function parseOrderSide(value: unknown): "BUY" | "SELL" {
-  return value === "SELL" ? "SELL" : "BUY";
+function requireNumericField(
+  obj: Record<string, unknown>,
+  key: string,
+  context: string
+): number {
+  const value = obj[key];
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(
+        `[BinanceUserDataStream] Non-finite number for "${key}" in ${context}`
+      );
+    }
+    return value;
+  }
+  if (typeof value === "string") {
+    return parseStrictNumericString(value, key, context);
+  }
+  throw new Error(
+    `[BinanceUserDataStream] Missing or invalid numeric field "${key}" in ${context}`
+  );
+}
+
+function parseOptionalNumericField(
+  obj: Record<string, unknown>,
+  key: string,
+  context: string
+): number | undefined {
+  const value = obj[key];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(
+        `[BinanceUserDataStream] Non-finite number for optional "${key}" in ${context}`
+      );
+    }
+    return value;
+  }
+  if (typeof value === "string") {
+    return parseStrictNumericString(value, key, context);
+  }
+  throw new Error(
+    `[BinanceUserDataStream] Invalid type for optional numeric field "${key}" in ${context}`
+  );
+}
+
+function requireNumericStringField(
+  obj: Record<string, unknown>,
+  key: string,
+  context: string
+): string {
+  const raw = obj[key];
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw)) {
+      throw new Error(
+        `[BinanceUserDataStream] Non-finite number for "${key}" in ${context}`
+      );
+    }
+    return String(raw);
+  }
+  if (typeof raw === "string") {
+    parseStrictNumericString(raw, key, context);
+    return raw.trim();
+  }
+  throw new Error(
+    `[BinanceUserDataStream] Missing or invalid numeric string field "${key}" in ${context}`
+  );
+}
+
+function describeUnknownValue(value: unknown): string {
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "[unserializable]";
+  }
+}
+
+function parseOrderSide(value: unknown, context: string): "BUY" | "SELL" {
+  if (value === "BUY" || value === "SELL") {
+    return value;
+  }
+  throw new Error(
+    `[BinanceUserDataStream] Invalid order side "${describeUnknownValue(value)}" in ${context}`
+  );
 }
 
 function parseOrderStatus(
-  value: unknown
+  value: unknown,
+  context: string
 ): OrderTradeUpdatePayload["order"]["orderStatus"] {
   switch (value) {
+    case "NEW":
     case "PARTIALLY_FILLED":
     case "FILLED":
     case "CANCELED":
     case "EXPIRED":
+    case "REJECTED":
       return value;
     default:
-      return "NEW";
+      throw new Error(
+        `[BinanceUserDataStream] Invalid orderStatus "${describeUnknownValue(value)}" in ${context}`
+      );
   }
 }
 
-function parsePositionSide(value: unknown): "LONG" | "SHORT" | "BOTH" {
-  if (value === "LONG" || value === "SHORT") {
+function parsePositionSide(
+  value: unknown,
+  context: string
+): "LONG" | "SHORT" | "BOTH" {
+  if (value === undefined || value === null) {
+    return "BOTH";
+  }
+  if (value === "LONG" || value === "SHORT" || value === "BOTH") {
     return value;
   }
-  return "BOTH";
+  throw new Error(
+    `[BinanceUserDataStream] Invalid positionSide "${describeUnknownValue(value)}" in ${context}`
+  );
 }
 
-function toRawPositionPayload(item: Record<string, unknown>): RawWsPositionPayload {
+function toRawPositionPayload(item: unknown): RawWsPositionPayload {
+  if (!isRecord(item)) {
+    throw new Error("[BinanceUserDataStream] Malformed position entry in ACCOUNT_UPDATE.a.P");
+  }
   return {
-    s: readString(item, "s", ""),
-    pa: readString(item, "pa", "0"),
-    ep: readString(item, "ep", "0"),
-    cr: readString(item, "cr", "0"),
-    up: readString(item, "up", "0"),
-    ps: parsePositionSide(item["ps"]),
+    s: requireNonEmptyString(item, "s", "ACCOUNT_UPDATE.a.P"),
+    pa: requireNumericStringField(item, "pa", "ACCOUNT_UPDATE.a.P"),
+    ep: requireNumericStringField(item, "ep", "ACCOUNT_UPDATE.a.P"),
+    cr: requireNumericStringField(item, "cr", "ACCOUNT_UPDATE.a.P"),
+    up: requireNumericStringField(item, "up", "ACCOUNT_UPDATE.a.P"),
+    ps: parsePositionSide(item["ps"], "ACCOUNT_UPDATE.a.P"),
   };
 }
 
-function toRawBalancePayload(item: Record<string, unknown>): RawWsBalancePayload {
+function toRawBalancePayload(item: unknown): RawWsBalancePayload {
+  if (!isRecord(item)) {
+    throw new Error("[BinanceUserDataStream] Malformed balance entry in ACCOUNT_UPDATE.a.B");
+  }
   return {
-    a: readString(item, "a", ""),
-    wb: readString(item, "wb", "0"),
-    cw: readString(item, "cw", "0"),
-    bc: readString(item, "bc", "0"),
+    a: requireNonEmptyString(item, "a", "ACCOUNT_UPDATE.a.B"),
+    wb: requireNumericStringField(item, "wb", "ACCOUNT_UPDATE.a.B"),
+    cw: requireNumericStringField(item, "cw", "ACCOUNT_UPDATE.a.B"),
+    bc: requireNumericStringField(item, "bc", "ACCOUNT_UPDATE.a.B"),
   };
 }
 
@@ -254,124 +399,7 @@ export class BinanceUserDataStream {
       this.ws.on("message", (data: WebSocket.RawData) => {
         if (this.isDisposed) return;
         try {
-          const payload: unknown = JSON.parse(rawDataToString(data));
-          if (!isRecord(payload)) return;
-
-          const eventType = readString(payload, "e", "");
-          if (eventType === "ORDER_TRADE_UPDATE" && isRecord(payload["o"])) {
-            const ord = payload["o"];
-            const parsedUpdate: OrderTradeUpdatePayload = {
-              eventType,
-              eventTime: requireFiniteNumber(payload, "E", "ORDER_TRADE_UPDATE"),
-              transactionTime: requireFiniteNumber(payload, "T", "ORDER_TRADE_UPDATE"),
-              order: {
-                symbol: readString(ord, "s", ""),
-                clientOrderId: readString(ord, "c", ""),
-                side: parseOrderSide(ord["S"]),
-                orderType: readString(ord, "o", ""),
-                timeInForce: readString(ord, "f", ""),
-                originalQuantity: parseFloatField(ord, "q"),
-                originalPrice: parseFloatField(ord, "p"),
-                averagePrice: parseFloatField(ord, "ap"),
-                stopPrice: parseFloatField(ord, "sp"),
-                executionType: readString(ord, "x", ""),
-                orderStatus: parseOrderStatus(ord["X"]),
-                orderId: requireFiniteNumber(ord, "i", "ORDER_TRADE_UPDATE.o"),
-                lastFilledQuantity: parseFloatField(ord, "l"),
-                cumulativeFilledQuantity: parseFloatField(ord, "z"),
-                lastFilledPrice: parseFloatField(ord, "L"),
-                commissionAsset: readString(ord, "N", ""),
-                commissionAmount: parseFloatField(ord, "n"),
-                tradeTime: requireFiniteNumber(ord, "T", "ORDER_TRADE_UPDATE.o"),
-                tradeId: requireFiniteNumber(ord, "t", "ORDER_TRADE_UPDATE.o"),
-                bidsNotional: parseFloatField(ord, "b"),
-                isMaker: ord["m"] === true,
-                positionSide: parsePositionSide(ord["ps"]),
-                realizedPnl: parseFloatField(ord, "rp"),
-                reduceOnly: ord["R"] === true,
-              },
-            };
-
-            for (const cb of this.orderCallbacks) {
-              try {
-                cb(parsedUpdate);
-              } catch (err: unknown) {
-                const msg = err instanceof Error ? err.message : String(err);
-                console.error(`[BinanceUserDataStream] Error in order callback handler: ${msg}`);
-              }
-            }
-          } else if (eventType === "ACCOUNT_UPDATE" && isRecord(payload["a"])) {
-            const acct = payload["a"];
-            const rawPositions: RawWsPositionPayload[] = Array.isArray(acct["P"])
-              ? acct["P"].filter(isRecord).map(toRawPositionPayload)
-              : [];
-            const positions: AccountPositionUpdatePayload[] = rawPositions.map((p) => {
-              const amt = parseFloat(p.pa);
-              const ep = parseFloat(p.ep);
-              const cr = parseFloat(p.cr);
-              const up = parseFloat(p.up);
-              return {
-                symbol: p.s,
-                positionAmt: Number.isFinite(amt) ? amt : 0,
-                entryPrice: Number.isFinite(ep) ? ep : 0,
-                accumulatedRealized: Number.isFinite(cr) ? cr : 0,
-                unrealizedPnl: Number.isFinite(up) ? up : 0,
-                positionSide: p.ps ?? "BOTH",
-              };
-            });
-
-            const rawBalances: RawWsBalancePayload[] = Array.isArray(acct["B"])
-              ? acct["B"].filter(isRecord).map(toRawBalancePayload)
-              : [];
-            const balances: AccountBalanceUpdatePayload[] = rawBalances.map((b) => {
-              const wb = parseFloat(b.wb);
-              const cw = parseFloat(b.cw);
-              const bc = parseFloat(b.bc);
-              return {
-                asset: b.a,
-                walletBalance: Number.isFinite(wb) ? wb : 0,
-                crossWalletBalance: Number.isFinite(cw) ? cw : 0,
-                balanceChange: Number.isFinite(bc) ? bc : 0,
-              };
-            });
-
-            // CRITICAL FIX: The Binance ACCOUNT_UPDATE WebSocket event (payload.a.B) carries ONLY
-            // `wb` (walletBalance) and `cw` (crossWalletBalance). It does NOT emit a true
-            // `availableBalance` field. crossWalletBalance != availableBalance — it does not
-            // account for open-order margin reservations. Using it as available balance causes
-            // a systematic overstatement (wallet > available whenever orders are open).
-            //
-            // Correct strategy:
-            //   1. Update the cached walletBalance from `wb` for bookkeeping.
-            //   2. Schedule a single debounced REST call to GET /fapi/v2/balance which is the
-            //      authoritative source of `availableBalance` — updated by Binance after each
-            //      account state mutation (trade fill, fee deduction, margin change).
-            const usdtItem = balances.find((b) => b.asset === "USDT");
-            if (usdtItem && Number.isFinite(usdtItem.walletBalance)) {
-              this.client.updateWalletBalanceFromWs(usdtItem.walletBalance);
-            }
-            // Trigger an async REST fetch for the authoritative availableBalance.
-            this.client.scheduleAvailableBalanceRefetch();
-
-            const rawReason = readString(acct, "m", "");
-            const accountUpdate: AccountUpdatePayload = {
-              eventType,
-              eventTime: requireFiniteNumber(payload, "E", "ACCOUNT_UPDATE"),
-              transactionTime: requireFiniteNumber(payload, "T", "ACCOUNT_UPDATE"),
-              reasonType: rawReason.length > 0 ? rawReason : "ORDER",
-              positions,
-              balances,
-            };
-
-            for (const cb of this.accountCallbacks) {
-              try {
-                cb(accountUpdate);
-              } catch (err: unknown) {
-                const msg = err instanceof Error ? err.message : String(err);
-                console.error(`[BinanceUserDataStream] Error in account callback handler: ${msg}`);
-              }
-            }
-          }
+          this.processWsMessage(rawDataToString(data));
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
           console.error(`[BinanceUserDataStream] Failed to parse WebSocket message: ${msg}`);
@@ -393,6 +421,135 @@ export class BinanceUserDataStream {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[BinanceUserDataStream] Failed to initiate WebSocket: ${msg}`);
+    }
+  }
+
+  public processWsMessage(rawText: string): void {
+    const payload: unknown = JSON.parse(rawText);
+    if (!isRecord(payload)) {
+      throw new Error("[BinanceUserDataStream] Expected WebSocket JSON object payload");
+    }
+
+    const eventType = requireNonEmptyString(payload, "e", "WebSocket message");
+    if (eventType === "ORDER_TRADE_UPDATE") {
+      if (!isRecord(payload["o"])) {
+        throw new Error("[BinanceUserDataStream] Missing order payload \"o\" in ORDER_TRADE_UPDATE");
+      }
+      const ord = payload["o"];
+      const executionType = requireNonEmptyString(ord, "x", "ORDER_TRADE_UPDATE.o");
+      const commissionAmountOpt = parseOptionalNumericField(ord, "n", "ORDER_TRADE_UPDATE.o");
+      if (executionType === "TRADE" && commissionAmountOpt === undefined) {
+        throw new Error(
+          "[BinanceUserDataStream] Missing required commission amount \"n\" for TRADE execution in ORDER_TRADE_UPDATE.o"
+        );
+      }
+
+      const parsedUpdate: OrderTradeUpdatePayload = {
+        eventType,
+        eventTime: requireFiniteNumber(payload, "E", "ORDER_TRADE_UPDATE"),
+        transactionTime: requireFiniteNumber(payload, "T", "ORDER_TRADE_UPDATE"),
+        order: {
+          symbol: requireNonEmptyString(ord, "s", "ORDER_TRADE_UPDATE.o"),
+          clientOrderId: readOptionalString(ord, "c", "ORDER_TRADE_UPDATE.o"),
+          side: parseOrderSide(ord["S"], "ORDER_TRADE_UPDATE.o"),
+          orderType: requireNonEmptyString(ord, "o", "ORDER_TRADE_UPDATE.o"),
+          timeInForce: requireNonEmptyString(ord, "f", "ORDER_TRADE_UPDATE.o"),
+          originalQuantity: requireNumericField(ord, "q", "ORDER_TRADE_UPDATE.o"),
+          originalPrice: requireNumericField(ord, "p", "ORDER_TRADE_UPDATE.o"),
+          averagePrice: requireNumericField(ord, "ap", "ORDER_TRADE_UPDATE.o"),
+          stopPrice: requireNumericField(ord, "sp", "ORDER_TRADE_UPDATE.o"),
+          executionType,
+          orderStatus: parseOrderStatus(ord["X"], "ORDER_TRADE_UPDATE.o"),
+          orderId: requireFiniteNumber(ord, "i", "ORDER_TRADE_UPDATE.o"),
+          lastFilledQuantity: requireNumericField(ord, "l", "ORDER_TRADE_UPDATE.o"),
+          cumulativeFilledQuantity: requireNumericField(ord, "z", "ORDER_TRADE_UPDATE.o"),
+          lastFilledPrice: requireNumericField(ord, "L", "ORDER_TRADE_UPDATE.o"),
+          commissionAsset: readOptionalString(ord, "N", "ORDER_TRADE_UPDATE.o"),
+          commissionAmount: commissionAmountOpt ?? 0,
+          tradeTime: requireFiniteNumber(ord, "T", "ORDER_TRADE_UPDATE.o"),
+          tradeId: requireFiniteNumber(ord, "t", "ORDER_TRADE_UPDATE.o"),
+          bidsNotional: requireNumericField(ord, "b", "ORDER_TRADE_UPDATE.o"),
+          isMaker: ord["m"] === true,
+          positionSide: parsePositionSide(ord["ps"], "ORDER_TRADE_UPDATE.o"),
+          realizedPnl: requireNumericField(ord, "rp", "ORDER_TRADE_UPDATE.o"),
+          reduceOnly: ord["R"] === true,
+        },
+      };
+
+      for (const cb of this.orderCallbacks) {
+        try {
+          cb(parsedUpdate);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[BinanceUserDataStream] Error in order callback handler: ${msg}`);
+        }
+      }
+      return;
+    }
+
+    if (eventType === "ACCOUNT_UPDATE") {
+      if (!isRecord(payload["a"])) {
+        throw new Error("[BinanceUserDataStream] Missing account payload \"a\" in ACCOUNT_UPDATE");
+      }
+      const acct = payload["a"];
+
+      if (acct["P"] !== undefined && !Array.isArray(acct["P"])) {
+        throw new Error("[BinanceUserDataStream] Expected array for \"P\" in ACCOUNT_UPDATE.a");
+      }
+      const rawPositions: RawWsPositionPayload[] = Array.isArray(acct["P"])
+        ? acct["P"].map(toRawPositionPayload)
+        : [];
+      const positions: AccountPositionUpdatePayload[] = rawPositions.map((p) => ({
+        symbol: p.s,
+        positionAmt: parseStrictNumericString(p.pa, "pa", "ACCOUNT_UPDATE.a.P"),
+        entryPrice: parseStrictNumericString(p.ep, "ep", "ACCOUNT_UPDATE.a.P"),
+        accumulatedRealized: parseStrictNumericString(p.cr, "cr", "ACCOUNT_UPDATE.a.P"),
+        unrealizedPnl: parseStrictNumericString(p.up, "up", "ACCOUNT_UPDATE.a.P"),
+        positionSide: p.ps ?? "BOTH",
+      }));
+
+      if (acct["B"] !== undefined && !Array.isArray(acct["B"])) {
+        throw new Error("[BinanceUserDataStream] Expected array for \"B\" in ACCOUNT_UPDATE.a");
+      }
+      const rawBalances: RawWsBalancePayload[] = Array.isArray(acct["B"])
+        ? acct["B"].map(toRawBalancePayload)
+        : [];
+      const balances: AccountBalanceUpdatePayload[] = rawBalances.map((b) => ({
+        asset: b.a,
+        walletBalance: parseStrictNumericString(b.wb, "wb", "ACCOUNT_UPDATE.a.B"),
+        crossWalletBalance: parseStrictNumericString(b.cw, "cw", "ACCOUNT_UPDATE.a.B"),
+        balanceChange: parseStrictNumericString(b.bc, "bc", "ACCOUNT_UPDATE.a.B"),
+      }));
+
+      // CRITICAL FIX: The Binance ACCOUNT_UPDATE WebSocket event (payload.a.B) carries ONLY
+      // `wb` (walletBalance) and `cw` (crossWalletBalance). It does NOT emit a true
+      // `availableBalance` field. crossWalletBalance != availableBalance — it does not
+      // account for open-order margin reservations.
+      const usdtItem = balances.find((b) => b.asset === "USDT");
+      if (usdtItem && Number.isFinite(usdtItem.walletBalance)) {
+        this.client.updateWalletBalanceFromWs(usdtItem.walletBalance);
+      }
+      // Trigger an async REST fetch for the authoritative availableBalance.
+      this.client.scheduleAvailableBalanceRefetch();
+
+      const reasonType = requireNonEmptyString(acct, "m", "ACCOUNT_UPDATE.a");
+      const accountUpdate: AccountUpdatePayload = {
+        eventType,
+        eventTime: requireFiniteNumber(payload, "E", "ACCOUNT_UPDATE"),
+        transactionTime: requireFiniteNumber(payload, "T", "ACCOUNT_UPDATE"),
+        reasonType,
+        positions,
+        balances,
+      };
+
+      for (const cb of this.accountCallbacks) {
+        try {
+          cb(accountUpdate);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[BinanceUserDataStream] Error in account callback handler: ${msg}`);
+        }
+      }
     }
   }
 
@@ -465,8 +622,14 @@ export class BinanceUserDataStream {
       this.keepAliveTimer = null;
     }
     if (this.ws) {
-      this.ws.removeAllListeners();
-      this.ws.close();
+      const sock = this.ws;
+      sock.removeAllListeners();
+      sock.on("error", (teardownErr: Error) => {
+        if (!teardownErr.message.includes("closed before the connection was established")) {
+          console.warn(`[BinanceUserDataStream] Socket teardown warning: ${teardownErr.message}`);
+        }
+      });
+      sock.close();
       this.ws = null;
     }
     this.isConnected = false;

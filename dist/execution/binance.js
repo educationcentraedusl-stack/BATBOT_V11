@@ -55,6 +55,32 @@ function isRecord(value) {
 function formatRejectionReason(reason) {
     return reason instanceof Error ? reason.message : String(reason);
 }
+function isClosePositionResponse(ord) {
+    return (ord.closePosition === true ||
+        (typeof ord.closePosition === "string" && ord.closePosition.toLowerCase() === "true"));
+}
+function parseOptionalAlgoDecimalString(val, fieldName, context) {
+    if (val === undefined) {
+        return "";
+    }
+    const trimmed = val.trim();
+    if (trimmed.length === 0 || !Number.isFinite(Number(trimmed))) {
+        throw new Error(`[BinanceExecutionClient] Malformed numeric string "${trimmed}" for "${fieldName}" in ${context}`);
+    }
+    return trimmed;
+}
+function requireValidAdjustPrice(params, pathLabel) {
+    if (typeof params.price !== "number" || !Number.isFinite(params.price) || params.price <= 0) {
+        throw new Error(`[BinanceExecutionClient][-5022_INVALID_PRICE] Missing or non-positive params.price (${String(params.price)}) during ${pathLabel} retry for ${params.symbol} ${params.side}`);
+    }
+    return params.price;
+}
+function requirePositiveQuantity(params) {
+    if (typeof params.quantity !== "number" || !Number.isFinite(params.quantity) || params.quantity <= 0) {
+        throw new Error(`[BinanceExecutionClient][INVALID_QUANTITY] Missing or non-positive quantity (${String(params.quantity)}) for non-closePosition ${params.type} order on ${params.symbol}`);
+    }
+    return symbolPrecision_1.SymbolPrecisionRegistry.formatQuantity(params.symbol, params.quantity);
+}
 class BinanceRateLimiter {
     static MAX_WEIGHT_1M = 2400;
     static MAX_ORDERS_10S = 300;
@@ -198,7 +224,9 @@ class BinanceExecutionClient {
     // updated atomically via MarketDataClient.writeAtomicFloat64Asset() after
     // every WS acknowledgement or fallback event per asset.
     wsOrderClient = null;
+    pendingWsOrderClient = null;
     wsOrderClientInitPromise = null;
+    isDestroyed = false;
     sabClient = null;
     symbolAssetIndexMap = new Map();
     // ─── Phase 5 HFT Overhaul: Live Perpetual Funding Rate Telemetry ──────────────
@@ -238,11 +266,23 @@ class BinanceExecutionClient {
     hasWsOrderClient() {
         return this.wsOrderClient !== null;
     }
+    hasInFlightClientOrderId(clientOrderId) {
+        return this.inFlightClientOrderIds.has(clientOrderId);
+    }
+    getInFlightClientOrderIdCount() {
+        return this.inFlightClientOrderIds.size;
+    }
+    hasBeenDestroyed() {
+        return this.isDestroyed;
+    }
     /**
      * Guarantees a single, shared WsOrderClient connection across all assets and engine instances.
      * Completely eliminates the startup race condition when multiple engines initialize concurrently.
      */
     async ensureWsOrderClient(sabClient, assetIndex = 0, symbol) {
+        if (this.hasBeenDestroyed()) {
+            throw new Error("[BinanceExecutionClient] Execution client destroyed; skipping WsOrderClient startup.");
+        }
         if (symbol) {
             this.symbolAssetIndexMap.set(symbol.toUpperCase(), assetIndex);
         }
@@ -252,10 +292,14 @@ class BinanceExecutionClient {
         }
         if (this.wsOrderClientInitPromise !== null) {
             const client = await this.wsOrderClientInitPromise;
+            if (this.hasBeenDestroyed()) {
+                throw new Error("[BinanceExecutionClient] Execution client destroyed while awaiting WsOrderClient.");
+            }
             sabClient.writeAtomicFloat64Asset(assetIndex, sabSchema_1.SAB_SLOTS.WS_ORDER_STREAM_HEALTH, 1.0);
             return client;
         }
         this.wsOrderClientInitPromise = (async () => {
+            let wsClient = null;
             try {
                 const envTimeout = process.env.WS_ORDER_REQUEST_TIMEOUT_MS
                     ? parseInt(process.env.WS_ORDER_REQUEST_TIMEOUT_MS, 10)
@@ -263,7 +307,7 @@ class BinanceExecutionClient {
                 const envMaxReconnect = process.env.WS_ORDER_MAX_RECONNECT_ATTEMPTS
                     ? parseInt(process.env.WS_ORDER_MAX_RECONNECT_ATTEMPTS, 10)
                     : undefined;
-                const wsClient = new wsOrderClient_1.WsOrderClient({
+                wsClient = new wsOrderClient_1.WsOrderClient({
                     useTestnet: this.testnet,
                     apiKey: this.apiKey,
                     apiSecret: this.apiSecret,
@@ -272,11 +316,23 @@ class BinanceExecutionClient {
                         ? envMaxReconnect
                         : undefined,
                 });
+                this.pendingWsOrderClient = wsClient;
                 await wsClient.connect();
+                if (this.isDestroyed) {
+                    wsClient.destroy();
+                    throw new Error("[BinanceExecutionClient] Execution client destroyed during WsOrderClient handshake.");
+                }
                 this.attachWsOrderClient(wsClient, sabClient, assetIndex);
                 return wsClient;
             }
+            catch (initErr) {
+                if (wsClient !== null) {
+                    wsClient.destroy();
+                }
+                throw initErr;
+            }
             finally {
+                this.pendingWsOrderClient = null;
                 this.wsOrderClientInitPromise = null;
             }
         })();
@@ -489,7 +545,7 @@ class BinanceExecutionClient {
      * 4. Starts periodic background polling fallback (every 30s).
      */
     async ensureFundingRateStream(client, assetIndex, symbol) {
-        if (process.env.NODE_ENV === "test")
+        if (process.env.NODE_ENV === "test" || this.isDestroyed)
             return;
         const sym = symbol ? symbol.toUpperCase() : "BTCUSDT";
         this.registeredFundingSymbols.set(sym, { client, assetIndex });
@@ -497,17 +553,25 @@ class BinanceExecutionClient {
         // 1. Immediate REST hydration to guarantee SAB Slot 168 is populated right away
         try {
             const initialRate = await this.fetchFundingRate(sym);
+            if (this.hasBeenDestroyed())
+                return;
             client.setFundingRate(initialRate, assetIndex);
         }
         catch (err) {
+            if (this.hasBeenDestroyed())
+                return;
             const msg = err instanceof Error ? err.message : String(err);
             console.warn(`[BinanceExecutionClient] Initial funding rate fetch notice for ${sym}: ${msg}`);
         }
+        if (this.hasBeenDestroyed())
+            return;
         // 2. Start or update real-time WebSocket stream
         this.startOrUpdateFundingRateWs();
         // 3. Ensure periodic background poll timer is active
         if (!this.fundingRatePollTimer) {
             this.fundingRatePollTimer = setInterval(() => {
+                if (this.isDestroyed)
+                    return;
                 this.syncAllFundingRates(client).catch((pollErr) => {
                     console.warn(`[BinanceExecutionClient][FUNDING_POLL] Poll sync notice: ${formatRejectionReason(pollErr)}`);
                 });
@@ -520,7 +584,7 @@ class BinanceExecutionClient {
      * across all registered trading symbols.
      */
     startOrUpdateFundingRateWs() {
-        if (this.registeredFundingSymbols.size === 0)
+        if (this.isDestroyed || this.registeredFundingSymbols.size === 0)
             return;
         const streams = Array.from(this.registeredFundingSymbols.keys())
             .map((s) => `${s.toLowerCase()}@markPrice@1s`)
@@ -535,8 +599,14 @@ class BinanceExecutionClient {
         try {
             if (this.fundingRateWs) {
                 try {
-                    this.fundingRateWs.removeAllListeners();
-                    this.fundingRateWs.terminate();
+                    const oldWs = this.fundingRateWs;
+                    oldWs.removeAllListeners();
+                    oldWs.on("error", (teardownErr) => {
+                        if (!teardownErr.message.includes("closed before the connection was established")) {
+                            console.warn(`[BinanceExecutionClient][FUNDING_WS] Existing socket teardown error: ${teardownErr.message}`);
+                        }
+                    });
+                    oldWs.terminate();
                 }
                 catch (termErr) {
                     console.warn(`[BinanceExecutionClient][FUNDING_WS] Existing socket terminate notice: ${formatRejectionReason(termErr)}`);
@@ -547,9 +617,15 @@ class BinanceExecutionClient {
             this.fundingRateWs = ws;
             ws.on("open", () => {
                 this.isFundingRateConnecting = false;
+                if (this.isDestroyed) {
+                    ws.terminate();
+                    return;
+                }
                 console.log(`[BinanceExecutionClient][FUNDING_WS] Live Perpetual Funding Rate stream connected (${String(this.registeredFundingSymbols.size)} symbols).`);
             });
             ws.on("message", (raw) => {
+                if (this.isDestroyed)
+                    return;
                 try {
                     const msgStr = Buffer.isBuffer(raw)
                         ? raw.toString("utf8")
@@ -585,11 +661,18 @@ class BinanceExecutionClient {
             });
             ws.on("error", (err) => {
                 this.isFundingRateConnecting = false;
-                console.warn(`[BinanceExecutionClient][FUNDING_WS] WebSocket warning: ${err.message}. REST poller remains active.`);
+                if (!this.isDestroyed) {
+                    console.warn(`[BinanceExecutionClient][FUNDING_WS] WebSocket warning: ${err.message}. REST poller remains active.`);
+                }
             });
             ws.on("close", () => {
                 this.isFundingRateConnecting = false;
-                this.fundingRateWs = null;
+                if (this.fundingRateWs === ws) {
+                    this.fundingRateWs = null;
+                }
+                if (this.isDestroyed) {
+                    return;
+                }
                 if (this.fundingRateReconnectTimer)
                     clearTimeout(this.fundingRateReconnectTimer);
                 this.fundingRateReconnectTimer = setTimeout(() => {
@@ -608,10 +691,26 @@ class BinanceExecutionClient {
      * Destroys all background timers and sockets associated with this execution client.
      */
     destroy() {
+        this.isDestroyed = true;
+        if (this.pendingWsOrderClient !== null) {
+            try {
+                this.pendingWsOrderClient.destroy();
+            }
+            catch (pendingErr) {
+                console.warn(`[BinanceExecutionClient][WS_ORDER_CLIENT] Pending client destroy notice: ${formatRejectionReason(pendingErr)}`);
+            }
+            this.pendingWsOrderClient = null;
+        }
         if (this.fundingRateWs) {
             try {
-                this.fundingRateWs.removeAllListeners();
-                this.fundingRateWs.terminate();
+                const sock = this.fundingRateWs;
+                sock.removeAllListeners();
+                sock.on("error", (teardownErr) => {
+                    if (!teardownErr.message.includes("closed before the connection was established")) {
+                        console.warn(`[BinanceExecutionClient][FUNDING_WS] Destroy socket teardown error: ${teardownErr.message}`);
+                    }
+                });
+                sock.terminate();
             }
             catch (destroyErr) {
                 console.warn(`[BinanceExecutionClient][FUNDING_WS] Destroy terminate notice: ${formatRejectionReason(destroyErr)}`);
@@ -625,6 +724,10 @@ class BinanceExecutionClient {
         if (this.fundingRateReconnectTimer) {
             clearTimeout(this.fundingRateReconnectTimer);
             this.fundingRateReconnectTimer = null;
+        }
+        if (this._availableBalanceRefetchTimer !== null) {
+            clearTimeout(this._availableBalanceRefetchTimer);
+            this._availableBalanceRefetchTimer = null;
         }
         this.detachWsOrderClient();
     }
@@ -747,7 +850,7 @@ class BinanceExecutionClient {
     getRateLimiter() {
         return this.rateLimiter;
     }
-    async request(method, endpoint, params = {}, signed = true, isRetryAfterSync = false, signal) {
+    async executeHttpRequest(method, endpoint, params = {}, signed = true, isRetryAfterSync = false, signal) {
         if (signed && !this.isConfigured()) {
             throw new Error("BinanceExecutionClient is not configured with API key and secret. Cannot execute signed request.");
         }
@@ -826,7 +929,7 @@ class BinanceExecutionClient {
                                     console.warn(`[BinanceExecutionClient] Timestamp error -1021 detected. Resynchronizing server time and retrying request...`);
                                     await this.syncServerTime();
                                     try {
-                                        const retryRes = await this.request(method, endpoint, params, signed, true, signal);
+                                        const retryRes = await this.executeHttpRequest(method, endpoint, params, signed, true, signal);
                                         isSettled = true;
                                         resolve(retryRes);
                                         return;
@@ -886,6 +989,10 @@ class BinanceExecutionClient {
             req.end();
         });
     }
+    async request(method, endpoint, params = {}, signed = true, isRetryAfterSync = false, signal) {
+        const data = await this.executeHttpRequest(method, endpoint, params, signed, isRetryAfterSync, signal);
+        return data;
+    }
     async setHedgeMode(enable) {
         if (!this.isConfigured())
             return false;
@@ -936,8 +1043,7 @@ class BinanceExecutionClient {
                     ord.type === "TAKE_PROFIT_MARKET" ||
                     ord.type === "STOP" ||
                     ord.type === "TAKE_PROFIT" ||
-                    ord.closePosition === true ||
-                    String(ord.closePosition).toLowerCase() === "true";
+                    isClosePositionResponse(ord);
                 return matchesPosSide && isConditionalOrClose;
             });
             if (conflictingOrders.length > 0) {
@@ -970,8 +1076,7 @@ class BinanceExecutionClient {
                                 ord.type === "TAKE_PROFIT_MARKET" ||
                                 ord.type === "STOP" ||
                                 ord.type === "TAKE_PROFIT" ||
-                                ord.closePosition === true ||
-                                String(ord.closePosition).toLowerCase() === "true";
+                                isClosePositionResponse(ord);
                             return matchesPosSide && isConditionalOrClose;
                         });
                         remainingConflicts = stillActive.length;
@@ -1090,7 +1195,7 @@ class BinanceExecutionClient {
             }
         }
         const isClosePosition = params.closePosition === true || String(params.closePosition).toLowerCase() === "true";
-        const formattedQty = params.quantity !== undefined ? symbolPrecision_1.SymbolPrecisionRegistry.formatQuantity(params.symbol, params.quantity) : 0;
+        const formattedQty = !isClosePosition ? requirePositiveQuantity(params) : undefined;
         const cid = (params.clientOrderId || "").trim();
         const payload = {
             symbol: params.symbol,
@@ -1102,7 +1207,7 @@ class BinanceExecutionClient {
             payload.cancelOrderId = params.cancelOrderId;
         if (params.cancelOrigClientOrderId !== undefined)
             payload.cancelOrigClientOrderId = params.cancelOrigClientOrderId;
-        if (!isClosePosition) {
+        if (!isClosePosition && formattedQty !== undefined) {
             payload.quantity = formattedQty;
         }
         if (params.price !== undefined)
@@ -1336,7 +1441,7 @@ class BinanceExecutionClient {
                         if ((wsErrMsg.includes("-5022") || wsErrMsg.includes("5022")) && retryCount < 2) {
                             this._writeWsTelemetry(targetAssetIndex, 0.0, true);
                             const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(params.symbol);
-                            const currentPrice = typeof params.price === "number" && Number.isFinite(params.price) ? params.price : 0;
+                            const currentPrice = requireValidAdjustPrice(params, "WS");
                             const adjustedPrice = params.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
                             const newPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, adjustedPrice);
                             if (retryCount === 0 && params.timeInForce === "GTX") {
@@ -1385,13 +1490,13 @@ class BinanceExecutionClient {
             }
             // ────────────────────────────────────────────────────────────────────────────
             const isClosePosition = params.closePosition === true || String(params.closePosition).toLowerCase() === "true";
-            const formattedQty = params.quantity !== undefined ? symbolPrecision_1.SymbolPrecisionRegistry.formatQuantity(params.symbol, params.quantity) : 0;
+            const formattedQty = !isClosePosition ? requirePositiveQuantity(params) : undefined;
             const payload = {
                 symbol: params.symbol,
                 side: params.side,
                 type: params.type,
             };
-            if (!isClosePosition) {
+            if (!isClosePosition && formattedQty !== undefined) {
                 payload.quantity = formattedQty;
             }
             if (params.price !== undefined)
@@ -1453,28 +1558,64 @@ class BinanceExecutionClient {
                     }
                     delete algoPayload.reduceOnly;
                     const algoRes = await this.request("POST", "/fapi/v1/algoOrder", algoPayload, true, false, signal);
-                    if (algoRes.algoId || algoRes.orderId) {
-                        return {
-                            orderId: Number(algoRes.algoId || algoRes.orderId),
-                            symbol: algoRes.symbol || params.symbol,
-                            status: algoRes.algoStatus || algoRes.status || "NEW",
-                            clientOrderId: algoRes.clientAlgoId || algoRes.clientOrderId || "",
-                            price: algoRes.price || "0",
-                            avgPrice: algoRes.avgPrice || "0",
-                            origQty: algoRes.quantity || String(formattedQty),
-                            executedQty: algoRes.executedQty || "0",
-                            cumQuote: algoRes.cumQuote || "0",
-                            timeInForce: algoRes.timeInForce || "GTC",
-                            type: algoRes.orderType || params.type,
-                            reduceOnly: false,
-                            side: algoRes.side || params.side,
-                            positionSide: algoRes.positionSide || params.positionSide || "BOTH",
-                            stopPrice: String(algoRes.triggerPrice || params.stopPrice || "0"),
-                            workingType: algoRes.workingType || params.workingType || "CONTRACT_PRICE",
-                            updateTime: algoRes.updateTime || Date.now(),
-                        };
+                    const resolvedAlgoId = typeof algoRes.algoId === "number" && Number.isFinite(algoRes.algoId) && algoRes.algoId > 0
+                        ? algoRes.algoId
+                        : typeof algoRes.orderId === "number" && Number.isFinite(algoRes.orderId) && algoRes.orderId > 0
+                            ? algoRes.orderId
+                            : null;
+                    if (resolvedAlgoId === null) {
+                        throw new Error(`[BinanceExecutionClient][ALGO_ORDER_FAILED] Invalid or rejected algoOrder response: code=${String(algoRes.code ?? "UNKNOWN")}, msg=${algoRes.msg ?? "Missing algoId/orderId"}`);
                     }
-                    throw new Error(`[BinanceExecutionClient][ALGO_ORDER_FAILED] Invalid or rejected algoOrder response: code=${String(algoRes.code ?? "UNKNOWN")}, msg=${algoRes.msg ?? "Missing algoId/orderId"}`);
+                    const algoContext = `/fapi/v1/algoOrder (${params.symbol} #${String(resolvedAlgoId)})`;
+                    const algoStatus = (algoRes.algoStatus ?? algoRes.status ?? "").trim();
+                    if (algoStatus.length === 0) {
+                        throw new Error(`[BinanceExecutionClient][ALGO_ORDER_FAILED] Missing algoStatus/status in ${algoContext}`);
+                    }
+                    const resolvedStopPrice = algoRes.triggerPrice !== undefined
+                        ? parseOptionalAlgoDecimalString(algoRes.triggerPrice, "triggerPrice", algoContext)
+                        : algoRes.stopPrice !== undefined
+                            ? parseOptionalAlgoDecimalString(algoRes.stopPrice, "stopPrice", algoContext)
+                            : params.stopPrice !== undefined
+                                ? String(symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice))
+                                : "";
+                    if (resolvedStopPrice.length === 0) {
+                        throw new Error(`[BinanceExecutionClient][ALGO_ORDER_FAILED] Missing triggerPrice/stopPrice in ${algoContext}`);
+                    }
+                    const resolvedUpdateTime = typeof algoRes.updateTime === "number" && Number.isFinite(algoRes.updateTime) && algoRes.updateTime > 0
+                        ? algoRes.updateTime
+                        : typeof algoRes.createTime === "number" && Number.isFinite(algoRes.createTime) && algoRes.createTime > 0
+                            ? algoRes.createTime
+                            : null;
+                    if (resolvedUpdateTime === null) {
+                        throw new Error(`[BinanceExecutionClient][ALGO_ORDER_FAILED] Missing valid updateTime/createTime in ${algoContext}`);
+                    }
+                    const resolvedOrigQty = algoRes.quantity !== undefined
+                        ? parseOptionalAlgoDecimalString(algoRes.quantity, "quantity", algoContext)
+                        : algoRes.origQty !== undefined
+                            ? parseOptionalAlgoDecimalString(algoRes.origQty, "origQty", algoContext)
+                            : formattedQty !== undefined
+                                ? String(formattedQty)
+                                : "";
+                    return {
+                        orderId: resolvedAlgoId,
+                        symbol: algoRes.symbol ?? params.symbol,
+                        status: algoStatus,
+                        clientOrderId: algoRes.clientAlgoId ?? algoRes.clientOrderId ?? cid,
+                        price: parseOptionalAlgoDecimalString(algoRes.price, "price", algoContext),
+                        avgPrice: parseOptionalAlgoDecimalString(algoRes.avgPrice, "avgPrice", algoContext),
+                        origQty: resolvedOrigQty,
+                        executedQty: parseOptionalAlgoDecimalString(algoRes.executedQty, "executedQty", algoContext),
+                        cumQuote: parseOptionalAlgoDecimalString(algoRes.cumQuote, "cumQuote", algoContext),
+                        timeInForce: algoRes.timeInForce ?? "GTC",
+                        type: algoRes.orderType ?? algoRes.type ?? params.type,
+                        reduceOnly: algoRes.reduceOnly === true,
+                        closePosition: isClosePosition,
+                        side: algoRes.side ?? params.side,
+                        positionSide: algoRes.positionSide ?? params.positionSide ?? "BOTH",
+                        stopPrice: resolvedStopPrice,
+                        workingType: algoRes.workingType ?? params.workingType ?? "CONTRACT_PRICE",
+                        updateTime: resolvedUpdateTime,
+                    };
                 }
                 const isConflictOrGteError = errMsg.includes("-4509") ||
                     errMsg.includes("4509") ||
@@ -1526,7 +1667,7 @@ class BinanceExecutionClient {
                 }
                 if ((errMsg.includes("-5022") || errMsg.includes("5022")) && retryCount < 2) {
                     const tickSize = symbolPrecision_1.SymbolPrecisionRegistry.getTickSize(params.symbol);
-                    const currentPrice = typeof params.price === "number" && Number.isFinite(params.price) ? params.price : 0;
+                    const currentPrice = requireValidAdjustPrice(params, "REST");
                     // Shift 1 tick away from spread to guarantee Maker placement
                     const adjustedPrice = params.side === "BUY" ? currentPrice - tickSize : currentPrice + tickSize;
                     const newPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, adjustedPrice);
@@ -1571,13 +1712,13 @@ class BinanceExecutionClient {
         const batchPayload = targetOrders.map((params) => {
             const cid = params.clientOrderId || "";
             const isClosePosition = params.closePosition === true || String(params.closePosition).toLowerCase() === "true";
-            const formattedQty = params.quantity !== undefined ? symbolPrecision_1.SymbolPrecisionRegistry.formatQuantity(params.symbol, params.quantity) : 0;
+            const formattedQty = !isClosePosition ? requirePositiveQuantity(params) : undefined;
             const payload = {
                 symbol: params.symbol,
                 side: params.side,
                 type: params.type,
             };
-            if (!isClosePosition) {
+            if (!isClosePosition && formattedQty !== undefined) {
                 payload.quantity = formattedQty;
             }
             if (params.price !== undefined)
@@ -1700,25 +1841,54 @@ class BinanceExecutionClient {
             if (errMsg.includes("-2011") || errMsg.includes("-4120") || errMsg.includes("Unknown order") || errMsg.includes("not found")) {
                 // Fallback to /fapi/v1/algoOrder cancellation
                 try {
-                    const algoCancel = await this.request("DELETE", "/fapi/v1/algoOrder", { symbol, algoId: orderId }, true, false, signal);
+                    const algoCancelPayload = { symbol };
+                    if (numOrderId !== undefined) {
+                        algoCancelPayload["algoId"] = numOrderId;
+                    }
+                    else if (strOrigClientOrderId !== undefined && strOrigClientOrderId.length > 0) {
+                        algoCancelPayload["clientAlgoId"] = strOrigClientOrderId;
+                    }
+                    else {
+                        throw new Error(`[BinanceExecutionClient][ALGO_CANCEL_FAILED] Invalid orderId (${String(orderId)}) for ${symbol}`);
+                    }
+                    const algoCancel = await this.request("DELETE", "/fapi/v1/algoOrder", algoCancelPayload, true, false, signal);
+                    if (algoCancel.code !== undefined && algoCancel.code !== 200 && algoCancel.code !== "200") {
+                        throw new Error(`[BinanceExecutionClient][ALGO_CANCEL_FAILED] code=${String(algoCancel.code)} msg=${algoCancel.msg ?? "Algo cancel rejected"}`);
+                    }
+                    const resolvedAlgoId = typeof algoCancel.algoId === "number" && Number.isFinite(algoCancel.algoId) && algoCancel.algoId > 0
+                        ? algoCancel.algoId
+                        : typeof algoCancel.orderId === "number" && Number.isFinite(algoCancel.orderId) && algoCancel.orderId > 0
+                            ? algoCancel.orderId
+                            : numOrderId;
+                    if (resolvedAlgoId === undefined || !Number.isFinite(resolvedAlgoId) || resolvedAlgoId <= 0) {
+                        throw new Error(`[BinanceExecutionClient][ALGO_CANCEL_FAILED] Missing valid algoId/orderId in cancel response for ${symbol}`);
+                    }
+                    const resolvedStatus = (algoCancel.algoStatus ??
+                        algoCancel.status ??
+                        (algoCancel.code === 200 || algoCancel.code === "200" ? "CANCELED" : "")).trim();
+                    if (resolvedStatus.length === 0) {
+                        throw new Error(`[BinanceExecutionClient][ALGO_CANCEL_FAILED] Missing algoStatus/status in cancel response for ${symbol} #${String(resolvedAlgoId)}`);
+                    }
                     return {
-                        orderId: Number(orderId),
-                        symbol,
-                        status: algoCancel.algoStatus || algoCancel.status || "CANCELED",
-                        clientOrderId: algoCancel.clientAlgoId || algoCancel.clientOrderId || "",
-                        price: "0",
-                        avgPrice: "0",
-                        origQty: "0",
-                        executedQty: "0",
-                        cumQuote: "0",
+                        orderId: resolvedAlgoId,
+                        symbol: algoCancel.symbol ?? symbol,
+                        status: resolvedStatus,
+                        clientOrderId: algoCancel.clientAlgoId ?? algoCancel.clientOrderId ?? strOrigClientOrderId ?? "",
+                        price: "",
+                        avgPrice: "",
+                        origQty: "",
+                        executedQty: "",
+                        cumQuote: "",
                         timeInForce: "GTC",
                         type: "STOP_MARKET",
                         reduceOnly: false,
                         side: "SELL",
                         positionSide: "BOTH",
-                        stopPrice: "0",
+                        stopPrice: "",
                         workingType: "CONTRACT_PRICE",
-                        updateTime: Date.now(),
+                        updateTime: typeof algoCancel.updateTime === "number" && Number.isFinite(algoCancel.updateTime) && algoCancel.updateTime > 0
+                            ? algoCancel.updateTime
+                            : Date.now(),
                     };
                 }
                 catch (algoErr) {
@@ -1848,9 +2018,13 @@ class BinanceExecutionClient {
                 }
                 else if (apQty > 0 && existingQty > 0) {
                     // Both non-zero, take latest updateTime
-                    const apUpdateTime = Number.isFinite(ap.updateTime) ? ap.updateTime : 0;
-                    const existingUpdateTime = Number.isFinite(existing.updateTime) ? existing.updateTime : 0;
-                    if (apUpdateTime >= existingUpdateTime) {
+                    if (typeof ap.updateTime !== "number" || !Number.isFinite(ap.updateTime)) {
+                        throw new Error(`[BinanceExecutionClient][INVALID_POSITION_RISK] Missing or non-finite accountInfo updateTime for ${ap.symbol}:${ap.positionSide || "BOTH"} (value=${String(ap.updateTime)})`);
+                    }
+                    if (typeof existing.updateTime !== "number" || !Number.isFinite(existing.updateTime)) {
+                        throw new Error(`[BinanceExecutionClient][INVALID_POSITION_RISK] Missing or non-finite positionRisk updateTime for ${existing.symbol}:${existing.positionSide || "BOTH"} (value=${String(existing.updateTime)})`);
+                    }
+                    if (ap.updateTime >= existing.updateTime) {
                         mergedMap.set(key, { ...existing, ...ap });
                     }
                 }
@@ -1872,31 +2046,63 @@ class BinanceExecutionClient {
             throw err;
         });
         const mappedAlgoOrders = (Array.isArray(algoOrders) ? algoOrders : []).map((ao) => {
-            const resolvedOrderId = typeof ao.algoId === "number" && Number.isFinite(ao.algoId) && ao.algoId > 0
-                ? ao.algoId
-                : typeof ao.orderId === "number" && Number.isFinite(ao.orderId)
-                    ? ao.orderId
-                    : 0;
+            if (typeof ao.symbol !== "string" || ao.symbol.trim().length === 0) {
+                throw new Error("[BinanceExecutionClient][INVALID_ALGO_ORDER] openAlgoOrders entry missing symbol");
+            }
+            let resolvedOrderId;
+            if (typeof ao.algoId === "number" && Number.isFinite(ao.algoId) && ao.algoId > 0) {
+                resolvedOrderId = ao.algoId;
+            }
+            else if (typeof ao.orderId === "number" && Number.isFinite(ao.orderId) && ao.orderId > 0) {
+                resolvedOrderId = ao.orderId;
+            }
+            else {
+                throw new Error(`[BinanceExecutionClient][INVALID_ALGO_ORDER] openAlgoOrders entry for ${ao.symbol} missing valid positive algoId/orderId`);
+            }
+            if (ao.side !== "BUY" && ao.side !== "SELL") {
+                throw new Error(`[BinanceExecutionClient][INVALID_ALGO_ORDER] openAlgoOrders entry ${ao.symbol} (#${String(resolvedOrderId)}) has invalid side: ${String(ao.side)}`);
+            }
+            const resolvedStatus = ao.algoStatus ?? ao.status;
+            if (typeof resolvedStatus !== "string" || resolvedStatus.trim().length === 0) {
+                throw new Error(`[BinanceExecutionClient][INVALID_ALGO_ORDER] openAlgoOrders entry ${ao.symbol} (#${String(resolvedOrderId)}) missing algoStatus/status`);
+            }
+            const resolvedType = ao.orderType ?? ao.type;
+            if (typeof resolvedType !== "string" || resolvedType.trim().length === 0) {
+                throw new Error(`[BinanceExecutionClient][INVALID_ALGO_ORDER] openAlgoOrders entry ${ao.symbol} (#${String(resolvedOrderId)}) missing orderType/type`);
+            }
+            const rawStopPrice = ao.triggerPrice ?? ao.stopPrice;
+            if (typeof rawStopPrice !== "string" || rawStopPrice.trim().length === 0 || !Number.isFinite(Number(rawStopPrice))) {
+                throw new Error(`[BinanceExecutionClient][INVALID_ALGO_ORDER] openAlgoOrders entry ${ao.symbol} (#${String(resolvedOrderId)}) missing valid triggerPrice/stopPrice (${String(rawStopPrice)})`);
+            }
+            let resolvedUpdateTime;
+            if (typeof ao.updateTime === "number" && Number.isFinite(ao.updateTime) && ao.updateTime > 0) {
+                resolvedUpdateTime = ao.updateTime;
+            }
+            else if (typeof ao.createTime === "number" && Number.isFinite(ao.createTime) && ao.createTime > 0) {
+                resolvedUpdateTime = ao.createTime;
+            }
+            else {
+                throw new Error(`[BinanceExecutionClient][INVALID_ALGO_ORDER] openAlgoOrders entry ${ao.symbol} (#${String(resolvedOrderId)}) missing positive updateTime/createTime`);
+            }
+            const algoContext = `/fapi/v1/openAlgoOrders (${ao.symbol} #${String(resolvedOrderId)})`;
             return {
                 orderId: resolvedOrderId,
                 symbol: ao.symbol,
-                status: ao.algoStatus || ao.status || "NEW",
-                clientOrderId: ao.clientAlgoId || ao.clientOrderId || "",
-                price: ao.price || "0",
-                avgPrice: ao.avgPrice || "0",
-                origQty: ao.quantity || ao.origQty || "0",
-                executedQty: ao.executedQty || "0",
-                cumQuote: ao.cumQuote || "0",
-                timeInForce: ao.timeInForce || "GTC",
-                type: ao.orderType || ao.type || "STOP_MARKET",
-                reduceOnly: ao.reduceOnly || false,
+                status: resolvedStatus,
+                clientOrderId: ao.clientAlgoId ?? ao.clientOrderId ?? "",
+                price: parseOptionalAlgoDecimalString(ao.price, "price", algoContext),
+                avgPrice: parseOptionalAlgoDecimalString(ao.avgPrice, "avgPrice", algoContext),
+                origQty: parseOptionalAlgoDecimalString(ao.quantity ?? ao.origQty, "origQty", algoContext),
+                executedQty: parseOptionalAlgoDecimalString(ao.executedQty, "executedQty", algoContext),
+                cumQuote: parseOptionalAlgoDecimalString(ao.cumQuote, "cumQuote", algoContext),
+                timeInForce: ao.timeInForce ?? "",
+                type: resolvedType,
+                reduceOnly: ao.reduceOnly === true,
                 side: ao.side,
-                positionSide: ao.positionSide || "BOTH",
-                stopPrice: ao.stopPrice || "0",
-                workingType: ao.workingType || "CONTRACT_PRICE",
-                updateTime: typeof ao.updateTime === "number" && Number.isFinite(ao.updateTime) && ao.updateTime > 0
-                    ? ao.updateTime
-                    : Date.now(),
+                positionSide: ao.positionSide ?? "BOTH",
+                stopPrice: rawStopPrice.trim(),
+                workingType: ao.workingType ?? "CONTRACT_PRICE",
+                updateTime: resolvedUpdateTime,
             };
         });
         return [...(Array.isArray(standardOrders) ? standardOrders : []), ...mappedAlgoOrders];

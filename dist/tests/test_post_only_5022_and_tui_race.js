@@ -3,9 +3,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const binance_1 = require("../execution/binance");
 const symbolPrecision_1 = require("../config/symbolPrecision");
 const multiAssetDashboard_1 = require("../telemetry/multiAssetDashboard");
+const marketDataClient_1 = require("../marketDataClient");
 class PostOnlyMockExecutionClient extends binance_1.BinanceExecutionClient {
     handler = null;
-    request(_method, _endpoint, payload = {}) {
+    executeHttpRequest(_method, _endpoint, payload = {}) {
         if (!this.handler) {
             return Promise.reject(new Error("Mock request handler not set"));
         }
@@ -117,37 +118,24 @@ async function runPostOnlyAndTuiTests() {
     console.log("  ✅ Test 3 Passed: Fallback to GTC limit order on repeated -5022 rejections verified.\n");
     // Test 4: TUI Console Interception and Circular Notification Buffer
     console.log("[TEST 4] Testing TUI MultiAssetCLIDashboard console interception & circular log buffer...");
-    const mockMarketClient = {
-        maxAssets: 2,
-        getKillSwitchFlag: () => 0,
-        getCloseAllPositionsFlag: () => 0,
-        getEnginePausedFlag: () => 0,
-        getTriggerRecalibrationFlag: () => 0,
-        getSequenceNum: () => 100n,
-        getAvailableBalance: () => 5000.0,
-        getOmsUnrealizedPnl: () => 0,
-        getOmsRealizedPnl: () => 0,
-        getOmsTotalTrades: () => 0n,
-        getOmsWinningTrades: () => 0n,
-        getOmsLosingTrades: () => 0n,
-        getOmsPositionQty: () => 0,
-        getBestBidPrice: () => 60000.0,
-        getBestAskPrice: () => 60000.1,
-        getOBI: () => 0,
-        getCVD: () => 0,
-        getHawkesIntensity: () => 0,
-        getGarmanKlassRV: () => 0,
-        getAIPredictionDirection: () => 0,
-        getAIPredictionConfidence: () => 0.99,
-        getFinalizedSignal: () => 0,
-        fillTopBids: () => { },
-        fillTopAsks: () => { },
-        getVPIN: () => 0,
-        getHurstExponent: () => 0,
-        getAIInferenceLatencyNs: () => 1000n,
-        getHJBReservationPrice: () => 60000.0,
-        getSurvivalProbability: () => 1.0,
-    };
+    class TestMockMarketDataClient extends marketDataClient_1.MarketDataClient {
+        constructor() {
+            super(new SharedArrayBuffer(2 * 256 * 8), 2, 256);
+            this.setAvailableBalance(5000.0);
+            this.setBestBidPrice(60000.0, 0);
+            this.setBestAskPrice(60000.1, 0);
+            this.setAIPredictionConfidence(0.99, 0);
+            this.setHJBReservationPrice(60000.0, 0);
+            this.setSurvivalProbability(1.0, 0);
+        }
+        getSequenceNum() {
+            return 100n;
+        }
+        getAIInferenceLatencyNs(_assetIndex = 0) {
+            return 1000n;
+        }
+    }
+    const mockMarketClient = new TestMockMarketDataClient();
     const dashboard = new multiAssetDashboard_1.MultiAssetCLIDashboard(mockMarketClient, true, ["BTCUSDT", "ETHUSDT"]);
     // Intercept standard console messages
     console.log("[TestLog] Message 1: System Online");

@@ -2,7 +2,7 @@ import React from "react";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, jest } from "@jest/globals";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { LazyMotion, domAnimation } from "framer-motion";
-import { initTelemetryWorker } from "@/dashboard/store";
+import { initTelemetryWorker, getTelemetrySnapshot } from "@/dashboard/store";
 import { App } from "@/dashboard/App";
 import { ControlCenter } from "@/dashboard/components/ControlCenter";
 import { ExecutionView } from "@/dashboard/components/ExecutionView";
@@ -340,6 +340,25 @@ describe("Phase 0 Tooling & Shadcn/Framer Governance (Real JSDOM Rendering)", ()
     expect(redBar instanceof HTMLElement ? redBar.style.width : "").toBe("25%");
     expect(screen.getByText("+0.5000")).toBeTruthy();
     expect(screen.getByText("$42.50")).toBeTruthy();
+
+    const beforeMalformedCount = getTelemetrySnapshot().executions.length;
+    await act(async () => {
+      worker.dispatchInbound({
+        type: "FRAME_BATCH",
+        frame: makeSampleFrame({
+          sequenceNum: "43",
+          symbol: "",
+          stats: {
+            ...makeSampleFrame().stats,
+            netQuantity: Number.NaN,
+            totalExecutionsLogged: 2,
+          },
+        }),
+        recentCount: 1,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    });
+    expect(getTelemetrySnapshot().executions.length).toBe(beforeMalformedCount);
   });
 
   it("renders Shadcn <Button> inside <ErrorBoundary /> and recovers child component on click", () => {

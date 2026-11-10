@@ -404,7 +404,7 @@ async function runPhase3SovereignOrderStateMachineTests(): Promise<void> {
   const wsRejectUpdate: BinanceWsOrderUpdate = {
     ...wsCancelUpdate,
     orderId: currentSlBeforeReject,
-    orderStatus: "REJECTED" as unknown as BinanceWsOrderUpdate["orderStatus"],
+    orderStatus: "REJECTED",
     executionType: "REJECTED",
   };
 

@@ -4,6 +4,9 @@ const marketDataClient_1 = require("./marketDataClient");
 const risk_1 = require("./strategy/risk");
 const binance_1 = require("./execution/binance");
 const engine_1 = require("./strategy/engine");
+function isObjectRecord(value) {
+    return typeof value === "object" && value !== null;
+}
 async function runDefect1Test() {
     console.log("=================================================");
     console.log("DEFECT 1 REMEDIATION VERIFICATION SUITE");
@@ -31,45 +34,51 @@ async function runDefect1Test() {
         tradeSizeUsdt: 60,
         minNotionalUsdt: 5,
     });
-    console.log("\n[STEP 1] Evaluating tick to trigger entry order signal under API failure simulation...");
-    const signalResult = engine.evaluateTick();
-    if (signalResult.signalType !== "BUY") {
-        throw new Error(`FAIL: Expected BUY signal, got ${signalResult.signalType}`);
-    }
-    if (!signalResult.executionPromise) {
-        throw new Error("FAIL: Execution promise was not created.");
-    }
-    console.log("  ✓ Signal triggered: BUY order submitted to placeOrder.");
-    console.log("  ✓ executionPromise generated. Awaiting resolution...");
-    // Await the executionPromise. It should resolve to null (handled error) without throwing an exception!
-    let res = undefined;
-    let uncaughtError = null;
     try {
-        res = await signalResult.executionPromise;
+        console.log("\n[STEP 1] Evaluating tick to trigger entry order signal under API failure simulation...");
+        const signalResult = engine.evaluateTick();
+        if (signalResult.signalType !== "BUY") {
+            throw new Error(`FAIL: Expected BUY signal, got ${signalResult.signalType}`);
+        }
+        if (!signalResult.executionPromise) {
+            throw new Error("FAIL: Execution promise was not created.");
+        }
+        console.log("  ✓ Signal triggered: BUY order submitted to placeOrder.");
+        console.log("  ✓ executionPromise generated. Awaiting resolution...");
+        // Await the executionPromise. It should resolve to null (handled error) without throwing an exception!
+        let res = undefined;
+        let uncaughtError = null;
+        try {
+            res = await signalResult.executionPromise;
+        }
+        catch (err) {
+            uncaughtError = err;
+        }
+        if (uncaughtError !== null) {
+            console.error("  ❌ FAIL: Execution promise threw an uncaught error!", uncaughtError);
+            process.exit(1);
+        }
+        if (res !== null) {
+            console.error(`  ❌ FAIL: Expected executionPromise to resolve to null, but got:`, res);
+            process.exit(1);
+        }
+        console.log("  ✓ executionPromise resolved to null gracefully without throwing an exception.");
+        // Verify that isOrderInFlight is reset to false
+        const engineView = engine;
+        const inFlight = isObjectRecord(engineView) ? engineView["isOrderInFlight"] : undefined;
+        if (inFlight !== false) {
+            console.error(`  ❌ FAIL: Expected isOrderInFlight to be false, got ${String(inFlight)}`);
+            process.exit(1);
+        }
+        console.log("  ✓ Engine state 'isOrderInFlight' successfully reset to false in finally block.");
+        console.log("\n=================================================");
+        console.log("✅ DEFECT 1 VERIFICATION SUCCESSFUL:");
+        console.log("Node.js process survived severe API rejection cleanly without UnhandledPromiseRejection!");
+        console.log("=================================================");
     }
-    catch (err) {
-        uncaughtError = err;
+    finally {
+        engine.destroy();
     }
-    if (uncaughtError !== null) {
-        console.error("  ❌ FAIL: Execution promise threw an uncaught error!", uncaughtError);
-        process.exit(1);
-    }
-    if (res !== null) {
-        console.error(`  ❌ FAIL: Expected executionPromise to resolve to null, but got:`, res);
-        process.exit(1);
-    }
-    console.log("  ✓ executionPromise resolved to null gracefully without throwing an exception.");
-    // Verify that isOrderInFlight is reset to false
-    const inFlight = engine.isOrderInFlight;
-    if (inFlight) {
-        console.error(`  ❌ FAIL: Expected isOrderInFlight to be false, got ${String(inFlight)}`);
-        process.exit(1);
-    }
-    console.log("  ✓ Engine state 'isOrderInFlight' successfully reset to false in finally block.");
-    console.log("\n=================================================");
-    console.log("✅ DEFECT 1 VERIFICATION SUCCESSFUL:");
-    console.log("Node.js process survived severe API rejection cleanly without UnhandledPromiseRejection!");
-    console.log("=================================================");
 }
 runDefect1Test().catch((err) => {
     console.error("Fatal test runner error:", err);

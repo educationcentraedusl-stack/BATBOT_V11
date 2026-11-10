@@ -80,31 +80,84 @@ async function runOptimisticLedgerMutexTestSuite() {
     // TEST 4: BinanceExecutionClient In-Flight CID Deduplication
     // -----------------------------------------------------------------------------------------
     console.log("\n[TEST 4] Testing BinanceExecutionClient In-Flight ClientOrderId Deduplication Barrier...");
-    const client = new binance_1.BinanceExecutionClient();
-    const testCid = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(symbol, "CORE_LONG", "EN");
-    // Simulate mock dispatch: placeOrder should register CID in inFlightClientOrderIds
-    const inFlightSet = client.inFlightClientOrderIds;
-    inFlightSet.add(testCid);
-    let caughtDeduplicationError = false;
-    try {
-        await client.placeOrder({
-            symbol,
-            side: "BUY",
-            type: "LIMIT",
-            quantity: 0.05,
-            price: 2600.0,
-            positionSide: "LONG",
-            clientOrderId: testCid,
-        });
-    }
-    catch (err) {
-        if (err instanceof Error && err.message.includes("DEDUPLICATION_BARRIER")) {
-            caughtDeduplicationError = true;
+    class DeferredExecutionClient extends binance_1.BinanceExecutionClient {
+        releaseFirstRequest = null;
+        async executeHttpRequest(_method, endpoint, params = {}) {
+            if (endpoint === "/fapi/v1/order") {
+                await new Promise((resolve) => {
+                    this.releaseFirstRequest = resolve;
+                });
+                const orderRes = {
+                    orderId: 900101,
+                    symbol: typeof params.symbol === "string" ? params.symbol : symbol,
+                    status: "NEW",
+                    clientOrderId: typeof params.newClientOrderId === "string" ? params.newClientOrderId : "",
+                    price: String(params.price ?? "2600.0"),
+                    avgPrice: "0",
+                    origQty: String(params.quantity ?? "0.05"),
+                    executedQty: "0",
+                    cumQuote: "0",
+                    timeInForce: typeof params.timeInForce === "string" ? params.timeInForce : "GTC",
+                    type: typeof params.type === "string" ? params.type : "LIMIT",
+                    reduceOnly: false,
+                    side: typeof params.side === "string" ? params.side : "BUY",
+                    positionSide: typeof params.positionSide === "string" ? params.positionSide : "LONG",
+                    stopPrice: "0",
+                    workingType: "CONTRACT_PRICE",
+                    updateTime: Date.now(),
+                };
+                return orderRes;
+            }
+            return {};
+        }
+        releaseInFlightOrder() {
+            if (this.releaseFirstRequest !== null) {
+                this.releaseFirstRequest();
+                this.releaseFirstRequest = null;
+            }
         }
     }
-    assert(caughtDeduplicationError, "placeOrder with duplicate in-flight CID must be blocked by DEDUPLICATION_BARRIER");
-    console.log("  ✓ BinanceExecutionClient correctly rejected duplicate in-flight ClientOrderId dispatch");
-    inFlightSet.delete(testCid);
+    const client = new DeferredExecutionClient();
+    const testCid = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(symbol, "CORE_LONG", "EN");
+    const firstOrderPromise = client.placeOrder({
+        symbol,
+        side: "BUY",
+        type: "LIMIT",
+        quantity: 0.05,
+        price: 2600.0,
+        positionSide: "LONG",
+        clientOrderId: testCid,
+    });
+    try {
+        assert(client.hasInFlightClientOrderId(testCid), "first placeOrder call must register CID as in-flight");
+        let caughtDeduplicationError = false;
+        try {
+            await client.placeOrder({
+                symbol,
+                side: "BUY",
+                type: "LIMIT",
+                quantity: 0.05,
+                price: 2600.0,
+                positionSide: "LONG",
+                clientOrderId: testCid,
+            });
+        }
+        catch (err) {
+            if (err instanceof Error && err.message.includes("DEDUPLICATION_BARRIER")) {
+                caughtDeduplicationError = true;
+            }
+        }
+        assert(caughtDeduplicationError, "placeOrder with duplicate in-flight CID must be blocked by DEDUPLICATION_BARRIER");
+        console.log("  ✓ BinanceExecutionClient correctly rejected duplicate in-flight ClientOrderId dispatch");
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        client.releaseInFlightOrder();
+        const settledOrder = await firstOrderPromise;
+        assert(settledOrder.orderId === 900101, "In-flight order must resolve once HTTP dispatch finishes");
+        assert(!client.hasInFlightClientOrderId(testCid), "inFlightClientOrderIds must clear CID after placeOrder completes");
+    }
+    finally {
+        client.releaseInFlightOrder();
+    }
     console.log("\n================================================================================");
     console.log("ALL TESTS PASSED: OPTIMISTIC MUTEX & RACE CONDITION DEFENSE VERIFIED 100%");
     console.log("================================================================================");

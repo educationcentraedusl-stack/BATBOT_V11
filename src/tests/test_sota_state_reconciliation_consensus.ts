@@ -540,27 +540,28 @@ async function runStateReconciliationConsensusTest(): Promise<void> {
   // Re-occupy doge long position
   dogeEngine.getHedgeLedger().occupyCoreLong(644.0, 0.06950, 2.5, 1.5);
 
-  // Simulate a trade payload where buyer is undefined, but side is "BUY"
-  executionClient.userTradesHandler = () =>
-    Promise.resolve([
-      {
-        id: 999333,
-        symbol: "DOGEUSDT",
-        orderId: 111444,
-        side: "BUY",
-        price: "0.06950",
-        qty: "644.0",
-        realizedPnl: "0",
-        marginAsset: "USDT",
-        quoteQty: "44.758",
-        commission: "0.018",
-        commissionAsset: "USDT",
-        time: Date.now(),
-        positionSide: "LONG",
-        buyer: undefined as unknown as boolean, // Buyer property omitted / undefined in malformed payload
-        maker: true,
-      },
-    ]);
+  // Simulate a trade payload where buyer is omitted/undefined, while side is "BUY"
+  executionClient.userTradesHandler = () => {
+    const malformedTrade: BinanceUserTrade = {
+      id: 999333,
+      symbol: "DOGEUSDT",
+      orderId: 111444,
+      side: "BUY",
+      price: "0.06950",
+      qty: "644.0",
+      realizedPnl: "0",
+      marginAsset: "USDT",
+      quoteQty: "44.758",
+      commission: "0.018",
+      commissionAsset: "USDT",
+      time: Date.now(),
+      positionSide: "LONG",
+      buyer: true,
+      maker: true,
+    };
+    Reflect.deleteProperty(malformedTrade, "buyer");
+    return Promise.resolve([malformedTrade]);
+  };
 
   await dogeEngine.reconcileFlatPositionWithUserTrades("LONG", 0);
 

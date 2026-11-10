@@ -127,9 +127,15 @@ export interface WsOrderClientOptions {
   maxReconnectAttempts?: number;
 }
 
-// ─── Internal Types ─────────────────────────────────────────────────────────────
+export interface WsSocketLike {
+  readyState: number;
+  send(data: string, cb?: (err?: Error | null) => void): void;
+  ping(): void;
+  close(code?: number, reason?: string): void;
+  removeAllListeners(): void;
+}
 
-interface PendingRequest {
+export interface PendingRequest {
   resolve: (response: WsOrderResponse) => void;
   reject: (error: Error) => void;
   timeoutHandle: ReturnType<typeof setTimeout>;
@@ -230,24 +236,24 @@ export const KNOWN_SORTED_KEYS = [
 ] as const;
 
 export class WsOrderClient {
-  private ws: WebSocket | null = null;
-  private readonly wsEndpoint: string;
+  protected ws: WsSocketLike | null = null;
+  protected readonly wsEndpoint: string;
   private readonly apiKey: string;
   private readonly apiSecret: string;
   private readonly requestTimeoutMs: number;
   private readonly maxReconnectAttempts: number;
 
   // Multiplexed request correlation map: id → PendingRequest
-  private readonly pendingRequests: Map<string, PendingRequest> = new Map();
+  protected readonly pendingRequests: Map<string, PendingRequest> = new Map();
 
   // Reconnection state
-  private reconnectAttempts: number = 0;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private isShuttingDown: boolean = false;
-  private isConnected: boolean = false;
+  protected reconnectAttempts: number = 0;
+  protected reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  protected isShuttingDown: boolean = false;
+  protected isConnected: boolean = false;
 
   // Heartbeat ping to keep the WS connection alive (20s interval)
-  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  protected heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private static readonly HEARTBEAT_INTERVAL_MS = 20_000;
 
   // Exponential backoff base (doubles per retry, caps at 60s)
@@ -288,16 +294,32 @@ export class WsOrderClient {
 
     this.requestTimeoutMs =
       options?.requestTimeoutMs ??
-      (Number.isFinite(envTimeout) && (envTimeout as number) > 0 ? (envTimeout as number) : 5_000);
+      (envTimeout !== undefined && Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 5_000);
     this.maxReconnectAttempts =
       options?.maxReconnectAttempts ??
-      (Number.isFinite(envMaxReconnect) && (envMaxReconnect as number) >= 0 ? (envMaxReconnect as number) : 10);
+      (envMaxReconnect !== undefined && Number.isFinite(envMaxReconnect) && envMaxReconnect >= 0 ? envMaxReconnect : 10);
 
     if (!this.apiKey || !this.apiSecret) {
       console.error(
         "[WsOrderClient][CRITICAL] Missing API key or secret. Order submission will fail."
       );
     }
+  }
+
+  public getWsEndpoint(): string {
+    return this.wsEndpoint;
+  }
+
+  public getPendingRequestCount(): number {
+    return this.pendingRequests.size;
+  }
+
+  public isSocketConnected(): boolean {
+    return this.isConnected;
+  }
+
+  public getReconnectTimer(): ReturnType<typeof setTimeout> | null {
+    return this.reconnectTimer;
   }
 
   // ─── Connection Lifecycle ────────────────────────────────────────────────────
@@ -325,6 +347,11 @@ export class WsOrderClient {
       this.ws = socket;
 
       socket.once("open", () => {
+        if (this.isShuttingDown) {
+          socket.terminate();
+          reject(new Error("[WsOrderClient] Client destroyed before WebSocket opened."));
+          return;
+        }
         this.isConnected = true;
         this.reconnectAttempts = 0;
         this._startHeartbeat();
@@ -378,13 +405,17 @@ export class WsOrderClient {
     }
 
     if (this.ws !== null) {
+      const sock = this.ws;
+      this.ws = null;
       try {
-        this.ws.close(1000, "Client shutdown");
+        sock.close(1000, "Client shutdown");
+        if (sock instanceof WebSocket && sock.readyState !== WebSocket.CLOSED) {
+          sock.terminate();
+        }
       } catch (closeErr: unknown) {
         const closeMsg = closeErr instanceof Error ? closeErr.message : String(closeErr);
         console.warn(`[WsOrderClient] Notice closing socket during destroy: ${closeMsg}`);
       }
-      this.ws = null;
     }
 
     this.isConnected = false;
@@ -691,7 +722,7 @@ export class WsOrderClient {
    * @returns Promise<WsOrderResponse> that resolves when Binance acknowledges.
    * @throws Error if the connection is not ready.
    */
-  private _dispatch(id: string, payload: string): Promise<WsOrderResponse> {
+  protected _dispatch(id: string, payload: string): Promise<WsOrderResponse> {
     if (!this.isReady()) {
       return Promise.reject(
         new Error(
@@ -719,8 +750,18 @@ export class WsOrderClient {
         dispatchedAtMs,
       });
 
+      const socket = this.ws;
+      if (socket === null) {
+        clearTimeout(timeoutHandle);
+        this.pendingRequests.delete(id);
+        reject(
+          new Error("[WsOrderClient] WebSocket instance cleared before dispatch.")
+        );
+        return;
+      }
+
       try {
-        (this.ws as WebSocket).send(payload, (err?: Error | null) => {
+        socket.send(payload, (err?: Error | null) => {
           if (err) {
             clearTimeout(timeoutHandle);
             this.pendingRequests.delete(id);
@@ -752,7 +793,7 @@ export class WsOrderClient {
    * Zero-GC invariant: `JSON.parse` is unavoidable here (deserialization of network data).
    * No additional object construction beyond what the protocol requires.
    */
-  private _onMessage(data: WebSocket.RawData | string): void {
+  protected _onMessage(data: WebSocket.RawData | string): void {
     let raw: RawWsResponse;
     try {
       const parsed: unknown = JSON.parse(rawDataToString(data));
@@ -806,7 +847,7 @@ export class WsOrderClient {
 
   // ─── Reconnection ────────────────────────────────────────────────────────────
 
-  private _onClose(code: number, reason: string): void {
+  protected _onClose(code: number, reason: string): void {
     this.isConnected = false;
     this._stopHeartbeat();
 
@@ -868,17 +909,17 @@ export class WsOrderClient {
 
   // ─── Heartbeat ───────────────────────────────────────────────────────────────
 
-  private _startHeartbeat(): void {
+  protected _startHeartbeat(): void {
     this._stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
-      if (this.isReady()) {
-        (this.ws as WebSocket).ping();
+      if (this.isReady() && this.ws !== null) {
+        this.ws.ping();
       }
     }, WsOrderClient.HEARTBEAT_INTERVAL_MS);
     this.heartbeatTimer.unref();
   }
 
-  private _stopHeartbeat(): void {
+  protected _stopHeartbeat(): void {
     if (this.heartbeatTimer !== null) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
