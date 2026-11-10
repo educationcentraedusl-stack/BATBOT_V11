@@ -36,7 +36,7 @@ export class MarketDataClient {
 
     if (sab.byteLength < this.requiredBytes) {
       throw new Error(
-        `SharedArrayBuffer must be at least ${this.requiredBytes} bytes for MAX_CONCURRENT_ASSETS=${maxAssets} and SAB_SLOTS_PER_ASSET=${slotsPerAsset} (received ${sab.byteLength} bytes)`
+        `SharedArrayBuffer must be at least ${String(this.requiredBytes)} bytes for MAX_CONCURRENT_ASSETS=${String(maxAssets)} and SAB_SLOTS_PER_ASSET=${String(slotsPerAsset)} (received ${String(sab.byteLength)} bytes)`
       );
     }
     this.bigIntView = new BigInt64Array(sab);
@@ -64,14 +64,14 @@ export class MarketDataClient {
    */
   private getGlobalSlot(assetIdx: number, slot: number): number {
     if (assetIdx < 0 || assetIdx >= this.maxAssets) {
-      throw new RangeError(`assetIdx ${assetIdx} out of bounds (maxAssets: ${this.maxAssets})`);
+      throw new RangeError(`assetIdx ${String(assetIdx)} out of bounds (maxAssets: ${String(this.maxAssets)})`);
     }
     if (slot < 0 || slot >= this.slotsPerAsset) {
-      throw new RangeError(`slot ${slot} out of bounds (slotsPerAsset: ${this.slotsPerAsset})`);
+      throw new RangeError(`slot ${String(slot)} out of bounds (slotsPerAsset: ${String(this.slotsPerAsset)})`);
     }
     const globalSlot = assetIdx * this.slotsPerAsset + slot;
     if (globalSlot >= this.totalSlots) {
-      throw new RangeError(`globalSlot ${globalSlot} out of bounds (totalSlots: ${this.totalSlots})`);
+      throw new RangeError(`globalSlot ${String(globalSlot)} out of bounds (totalSlots: ${String(this.totalSlots)})`);
     }
     return globalSlot;
   }

@@ -177,7 +177,7 @@ export class MultiAssetBacktestEngine {
 
     this.assetStats = Array.from({ length: this.config.maxAssets }, (_, i) => ({
       assetIdx: i,
-      symbol: `ASSET_${i}`,
+      symbol: `ASSET_${String(i)}`,
       totalTrades: 0,
       winningTrades: 0,
       losingTrades: 0,
@@ -531,7 +531,7 @@ export class MultiAssetBacktestEngine {
       if (parts.length < 5) continue;
 
       const assetIdx = parseInt(parts[0], 10);
-      const symbol = parts[1] || `ASSET_${assetIdx}`;
+      const symbol = parts[1] || `ASSET_${String(assetIdx)}`;
       const timestamp = parseFloat(parts[2]);
       const bidPrice = parseFloat(parts[3]);
       const askPrice = parseFloat(parts[4]);
@@ -615,7 +615,7 @@ export class MultiAssetBacktestEngine {
     sheet += ` Total Ticks Evaluated     : ${result.totalTicksEvaluated.toLocaleString()}\n`;
     sheet += ` Total Signals Generated   : ${result.totalSignalsGenerated.toLocaleString()}\n`;
     sheet += ` Order Fills / Execution Legs : ${result.totalOrderLegs.toLocaleString()}\n`;
-    sheet += ` Completed Round-Trip Trades  : ${result.totalTradesExecuted.toLocaleString()} (Winning: ${green}${result.winningTrades}${reset} / Losing: ${red}${result.losingTrades}${reset})\n`;
+    sheet += ` Completed Round-Trip Trades  : ${result.totalTradesExecuted.toLocaleString()} (Winning: ${green}${String(result.winningTrades)}${reset} / Losing: ${red}${String(result.losingTrades)}${reset})\n`;
     sheet += ` Round-Trip Win Rate          : ${yellow}${bold}${result.winRatePercent.toFixed(2)}%${reset}\n`;
 
     sheet += `------------------------------------------------------------------------------------------------------\n`;
@@ -639,7 +639,7 @@ export class MultiAssetBacktestEngine {
       const fee = `$${asset.feeDragUsd.toFixed(2)}`.padEnd(12);
       const slip = `$${asset.slippageDragUsd.toFixed(2)}`.padEnd(17);
 
-      sheet += `| #${asset.assetIdx}   | ${sym} | ${trades} | ${winRate} | ${pnlC}${pnl}${reset} | ${fee} | ${slip} |\n`;
+      sheet += `| #${String(asset.assetIdx)}   | ${sym} | ${trades} | ${winRate} | ${pnlC}${pnl}${reset} | ${fee} | ${slip} |\n`;
     }
     sheet += `+------+----------+--------------+-----------------+---------------+--------------+-------------------+\n`;
     sheet += `${cyan}${bold}======================================================================================================${reset}\n`;

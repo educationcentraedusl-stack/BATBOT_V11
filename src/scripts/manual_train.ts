@@ -38,7 +38,7 @@ function runCommand(command: string, args: string[], cwd: string): Promise<void>
       if (code === 0) {
         resolve();
       } else {
-        reject(new Error(`Process exited with code ${code ?? "null"} (signal: ${signal ?? "none"})`));
+        reject(new Error(`Process exited with code ${code !== null ? String(code) : "null"} (signal: ${signal ?? "none"})`));
       }
     });
   });

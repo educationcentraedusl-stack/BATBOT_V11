@@ -1,16 +1,23 @@
 import "dotenv/config";
 import {
   startMultiAssetOmsNapi,
-  submitMultiAssetIntentNapi,
   submitMultiAssetIntentBytesNapi,
   applyMultiAssetFillNapi,
   getMultiAssetOmsMetricsNapi,
-  popNextIntentPacketNapi,
   popNextIntentPacketBytesNapi,
   syncMultiOmsSabNapi,
 } from "../../index";
 import { BinanceExecutionClient, BinanceClientOptions } from "./binance";
 import { BinanceUserDataStream, OrderTradeUpdatePayload } from "./userDataStream";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readMetricNumber(obj: Record<string, unknown>, key: string, fallback: number): number {
+  const val = obj[key];
+  return typeof val === "number" && Number.isFinite(val) ? val : fallback;
+}
 
 export interface MultiAssetExecutorConfig {
   initialBalanceUsd: number;
@@ -206,7 +213,7 @@ export class MultiAssetExecutor {
       }
 
       let parsedSlices: OrderIntentSlice[] | null = null;
-      const self = this;
+      const parseSlice = (offset: number): OrderIntentSlice => this.parsePacketFromBuffer(resBuf, offset);
       return {
         status: "SUBMITTED",
         get slices(): OrderIntentSlice[] {
@@ -214,7 +221,7 @@ export class MultiAssetExecutor {
             const numSlices = Math.floor(resBuf.length / 128);
             parsedSlices = [];
             for (let i = 0; i < numSlices; i++) {
-              parsedSlices.push(self.parsePacketFromBuffer(resBuf, i * 128));
+              parsedSlices.push(parseSlice(i * 128));
             }
           }
           return parsedSlices;
@@ -285,19 +292,22 @@ export class MultiAssetExecutor {
     const assetIdx = this.getAssetIndex(symbol);
     const metricsStr = getMultiAssetOmsMetricsNapi(assetIdx);
     try {
-      const raw = JSON.parse(metricsStr) as Record<string, number>;
+      const raw: unknown = JSON.parse(metricsStr);
+      if (!isRecord(raw)) {
+        throw new Error("Expected JSON object payload from native OMS metrics");
+      }
       return {
-        assetIdx: raw.asset_idx ?? assetIdx,
+        assetIdx: readMetricNumber(raw, "asset_idx", assetIdx),
         symbol,
-        totalOrdersSubmitted: raw.total_orders_submitted ?? 0,
-        totalOrdersFilled: raw.total_orders_filled ?? 0,
-        totalOrdersCanceled: raw.total_orders_canceled ?? 0,
-        totalOrdersRejected: raw.total_orders_rejected ?? 0,
-        totalVolumeUsd: raw.total_volume_usd ?? 0,
-        realizedPnlUsd: raw.realized_pnl_usd ?? 0,
-        unrealizedPnlUsd: raw.unrealized_pnl_usd ?? 0,
-        currentPositionSize: raw.current_position_size ?? 0,
-        avgEntryPrice: raw.avg_entry_price ?? 0,
+        totalOrdersSubmitted: readMetricNumber(raw, "total_orders_submitted", 0),
+        totalOrdersFilled: readMetricNumber(raw, "total_orders_filled", 0),
+        totalOrdersCanceled: readMetricNumber(raw, "total_orders_canceled", 0),
+        totalOrdersRejected: readMetricNumber(raw, "total_orders_rejected", 0),
+        totalVolumeUsd: readMetricNumber(raw, "total_volume_usd", 0),
+        realizedPnlUsd: readMetricNumber(raw, "realized_pnl_usd", 0),
+        unrealizedPnlUsd: readMetricNumber(raw, "unrealized_pnl_usd", 0),
+        currentPositionSize: readMetricNumber(raw, "current_position_size", 0),
+        avgEntryPrice: readMetricNumber(raw, "avg_entry_price", 0),
       };
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -306,7 +316,7 @@ export class MultiAssetExecutor {
   }
 
   private handleUserStreamUpdate(update: OrderTradeUpdatePayload): void {
-    if (!update || update.eventType !== "ORDER_TRADE_UPDATE") return;
+    if (update.eventType !== "ORDER_TRADE_UPDATE") return;
     try {
       const ord = update.order;
       const assetIdx = this.getAssetIndex(ord.symbol);

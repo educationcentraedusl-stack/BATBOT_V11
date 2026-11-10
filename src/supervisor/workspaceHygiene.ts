@@ -42,7 +42,7 @@ export class WorkspaceHygiene {
 
     if (purged.length > 0) {
       process.stdout.write(
-        `\x1b[32m[WORKSPACE_HYGIENE]\x1b[0m Purged ${purged.length} stale artifact(s): ${purged.join(", ")}\n`
+        `\x1b[32m[WORKSPACE_HYGIENE]\x1b[0m Purged ${String(purged.length)} stale artifact(s): ${purged.join(", ")}\n`
       );
     }
 
@@ -68,21 +68,30 @@ export class WorkspaceHygiene {
             try {
               process.kill(pid, "SIGTERM");
               process.stdout.write(
-                `\x1b[32m[WORKSPACE_HYGIENE]\x1b[0m Terminated orphaned Python trainer PID: ${pid}\n`
+                `\x1b[32m[WORKSPACE_HYGIENE]\x1b[0m Terminated orphaned Python trainer PID: ${String(pid)}\n`
               );
-            } catch {
-              // Ignore if already dead
+            } catch (killErr: unknown) {
+              const killMsg = killErr instanceof Error ? killErr.message : String(killErr);
+              process.stderr.write(
+                `\x1b[33m[WORKSPACE_HYGIENE_WARN]\x1b[0m Could not terminate orphaned PID ${String(pid)}: ${killMsg}\n`
+              );
             }
           }
         }
-      } catch {
-        // WMIC query might fail if no matching processes exist or on restricted permissions; non-fatal
+      } catch (wmicErr: unknown) {
+        const wmicMsg = wmicErr instanceof Error ? wmicErr.message : String(wmicErr);
+        process.stderr.write(
+          `\x1b[33m[WORKSPACE_HYGIENE_NOTICE]\x1b[0m Win32 orphan trainer scan skipped: ${wmicMsg}\n`
+        );
       }
     } else {
       try {
         execSync("pkill -f local_async_trainer.py || true", { stdio: "ignore" });
-      } catch {
-        // Safe no-op
+      } catch (pkillErr: unknown) {
+        const pkillMsg = pkillErr instanceof Error ? pkillErr.message : String(pkillErr);
+        process.stderr.write(
+          `\x1b[33m[WORKSPACE_HYGIENE_NOTICE]\x1b[0m POSIX orphan trainer scan skipped: ${pkillMsg}\n`
+        );
       }
     }
   }

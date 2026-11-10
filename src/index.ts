@@ -1,5 +1,4 @@
 import "dotenv/config";
-import * as path from "path";
 import { MarketDataClient } from "./marketDataClient";
 import { StrategyEngine } from "./strategy/engine";
 import { RiskGuard } from "./strategy/risk";
@@ -177,9 +176,8 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
 
   // Try loading native Rust N-API module and starting zero-copy data ingestion
   try {
-    const nativePath = path.resolve(__dirname, "../index.js");
-    const native = require(nativePath) as { startIngestion?: (sabBuffer: Buffer, symbols?: string[]) => boolean } | null;
-    if (native && typeof native.startIngestion === "function") {
+    const native: Partial<typeof import("../index")> = await import("../index");
+    if (typeof native.startIngestion === "function") {
       const started = native.startIngestion(Buffer.from(sab));
       if (started) {
         process.stdout.write("[BATBOT_V11] Rust zero-copy ingestion worker started.\n");
@@ -346,15 +344,26 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
 if (require.main === module) {
   (async () => {
     const system = await initializeSystem();
+    let isShuttingDown = false;
 
-    const handleShutdown = async () => {
-      await system.stop();
-      process.exit(0);
+    const handleShutdown = (): void => {
+      if (isShuttingDown) return;
+      isShuttingDown = true;
+      void system
+        .stop()
+        .then(() => {
+          process.exit(0);
+        })
+        .catch((stopErr: unknown) => {
+          const msg = stopErr instanceof Error ? stopErr.message : String(stopErr);
+          console.error(`[BATBOT_V11] Error during shutdown: ${msg}`);
+          process.exit(1);
+        });
     };
 
     process.on("SIGINT", handleShutdown);
     process.on("SIGTERM", handleShutdown);
-  })().catch((err) => {
+  })().catch((err: unknown) => {
     console.error("[BATBOT_V11] Critical startup initialization error:", err);
     process.exit(1);
   });

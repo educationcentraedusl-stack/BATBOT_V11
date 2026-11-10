@@ -78,6 +78,87 @@ export interface AccountUpdatePayload {
 export type OrderTradeUpdateCallback = (update: OrderTradeUpdatePayload) => void;
 export type AccountUpdateCallback = (update: AccountUpdatePayload) => void;
 
+function rawDataToString(data: WebSocket.RawData): string {
+  if (Buffer.isBuffer(data)) {
+    return data.toString("utf8");
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  return Buffer.from(data).toString("utf8");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readString(obj: Record<string, unknown>, key: string, fallback: string): string {
+  const value = obj[key];
+  return typeof value === "string" ? value : fallback;
+}
+
+function readNumber(obj: Record<string, unknown>, key: string, fallback: number): number {
+  const value = obj[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function parseFloatField(obj: Record<string, unknown>, key: string): number {
+  const value = obj[key];
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+  if (typeof value === "string" && value.length > 0) {
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function parseOrderSide(value: unknown): "BUY" | "SELL" {
+  return value === "SELL" ? "SELL" : "BUY";
+}
+
+function parseOrderStatus(
+  value: unknown
+): OrderTradeUpdatePayload["order"]["orderStatus"] {
+  switch (value) {
+    case "PARTIALLY_FILLED":
+    case "FILLED":
+    case "CANCELED":
+    case "EXPIRED":
+      return value;
+    default:
+      return "NEW";
+  }
+}
+
+function parsePositionSide(value: unknown): "LONG" | "SHORT" | "BOTH" {
+  if (value === "LONG" || value === "SHORT") {
+    return value;
+  }
+  return "BOTH";
+}
+
+function toRawPositionPayload(item: Record<string, unknown>): RawWsPositionPayload {
+  return {
+    s: readString(item, "s", ""),
+    pa: readString(item, "pa", "0"),
+    ep: readString(item, "ep", "0"),
+    cr: readString(item, "cr", "0"),
+    up: readString(item, "up", "0"),
+    ps: parsePositionSide(item["ps"]),
+  };
+}
+
+function toRawBalancePayload(item: Record<string, unknown>): RawWsBalancePayload {
+  return {
+    a: readString(item, "a", ""),
+    wb: readString(item, "wb", "0"),
+    cw: readString(item, "cw", "0"),
+    bc: readString(item, "bc", "0"),
+  };
+}
+
 export class BinanceUserDataStream {
   private client: BinanceExecutionClient;
   private ws: WebSocket | null = null;
@@ -164,39 +245,41 @@ export class BinanceUserDataStream {
       this.ws.on("message", (data: WebSocket.RawData) => {
         if (this.isDisposed) return;
         try {
-          const payload = JSON.parse(data.toString());
-          if (!payload) return;
+          const payload: unknown = JSON.parse(rawDataToString(data));
+          if (!isRecord(payload)) return;
 
-          if (payload.e === "ORDER_TRADE_UPDATE" && payload.o) {
+          const eventType = readString(payload, "e", "");
+          if (eventType === "ORDER_TRADE_UPDATE" && isRecord(payload["o"])) {
+            const ord = payload["o"];
             const parsedUpdate: OrderTradeUpdatePayload = {
-              eventType: payload.e,
-              eventTime: payload.E,
-              transactionTime: payload.T,
+              eventType,
+              eventTime: readNumber(payload, "E", 0),
+              transactionTime: readNumber(payload, "T", 0),
               order: {
-                symbol: payload.o.s,
-                clientOrderId: payload.o.c,
-                side: payload.o.S,
-                orderType: payload.o.o,
-                timeInForce: payload.o.f,
-                originalQuantity: parseFloat(payload.o.q || "0"),
-                originalPrice: parseFloat(payload.o.p || "0"),
-                averagePrice: parseFloat(payload.o.ap || "0"),
-                stopPrice: parseFloat(payload.o.sp || "0"),
-                executionType: payload.o.x,
-                orderStatus: payload.o.X,
-                orderId: payload.o.i,
-                lastFilledQuantity: parseFloat(payload.o.l || "0"),
-                cumulativeFilledQuantity: parseFloat(payload.o.z || "0"),
-                lastFilledPrice: parseFloat(payload.o.L || "0"),
-                commissionAsset: payload.o.N || "",
-                commissionAmount: parseFloat(payload.o.n || "0"),
-                tradeTime: payload.o.T,
-                tradeId: payload.o.t,
-                bidsNotional: parseFloat(payload.o.b || "0"),
-                isMaker: payload.o.m === true,
-                positionSide: payload.o.ps || "BOTH",
-                realizedPnl: parseFloat(payload.o.rp || "0"),
-                reduceOnly: payload.o.R === true,
+                symbol: readString(ord, "s", ""),
+                clientOrderId: readString(ord, "c", ""),
+                side: parseOrderSide(ord["S"]),
+                orderType: readString(ord, "o", ""),
+                timeInForce: readString(ord, "f", ""),
+                originalQuantity: parseFloatField(ord, "q"),
+                originalPrice: parseFloatField(ord, "p"),
+                averagePrice: parseFloatField(ord, "ap"),
+                stopPrice: parseFloatField(ord, "sp"),
+                executionType: readString(ord, "x", ""),
+                orderStatus: parseOrderStatus(ord["X"]),
+                orderId: readNumber(ord, "i", 0),
+                lastFilledQuantity: parseFloatField(ord, "l"),
+                cumulativeFilledQuantity: parseFloatField(ord, "z"),
+                lastFilledPrice: parseFloatField(ord, "L"),
+                commissionAsset: readString(ord, "N", ""),
+                commissionAmount: parseFloatField(ord, "n"),
+                tradeTime: readNumber(ord, "T", 0),
+                tradeId: readNumber(ord, "t", 0),
+                bidsNotional: parseFloatField(ord, "b"),
+                isMaker: ord["m"] === true,
+                positionSide: parsePositionSide(ord["ps"]),
+                realizedPnl: parseFloatField(ord, "rp"),
+                reduceOnly: ord["R"] === true,
               },
             };
 
@@ -208,24 +291,40 @@ export class BinanceUserDataStream {
                 console.error(`[BinanceUserDataStream] Error in order callback handler: ${msg}`);
               }
             }
-          } else if (payload.e === "ACCOUNT_UPDATE" && payload.a) {
-            const rawPositions: RawWsPositionPayload[] = Array.isArray(payload.a.P) ? payload.a.P : [];
-            const positions: AccountPositionUpdatePayload[] = rawPositions.map((p: RawWsPositionPayload) => ({
-              symbol: p.s,
-              positionAmt: parseFloat(p.pa || "0"),
-              entryPrice: parseFloat(p.ep || "0"),
-              accumulatedRealized: parseFloat(p.cr || "0"),
-              unrealizedPnl: parseFloat(p.up || "0"),
-              positionSide: p.ps || "BOTH",
-            }));
+          } else if (eventType === "ACCOUNT_UPDATE" && isRecord(payload["a"])) {
+            const acct = payload["a"];
+            const rawPositions: RawWsPositionPayload[] = Array.isArray(acct["P"])
+              ? acct["P"].filter(isRecord).map(toRawPositionPayload)
+              : [];
+            const positions: AccountPositionUpdatePayload[] = rawPositions.map((p) => {
+              const amt = parseFloat(p.pa);
+              const ep = parseFloat(p.ep);
+              const cr = parseFloat(p.cr);
+              const up = parseFloat(p.up);
+              return {
+                symbol: p.s,
+                positionAmt: Number.isFinite(amt) ? amt : 0,
+                entryPrice: Number.isFinite(ep) ? ep : 0,
+                accumulatedRealized: Number.isFinite(cr) ? cr : 0,
+                unrealizedPnl: Number.isFinite(up) ? up : 0,
+                positionSide: p.ps ?? "BOTH",
+              };
+            });
 
-            const rawBalances: RawWsBalancePayload[] = Array.isArray(payload.a.B) ? payload.a.B : [];
-            const balances: AccountBalanceUpdatePayload[] = rawBalances.map((b: RawWsBalancePayload) => ({
-              asset: b.a,
-              walletBalance: parseFloat(b.wb || "0"),
-              crossWalletBalance: parseFloat(b.cw || "0"),
-              balanceChange: parseFloat(b.bc || "0"),
-            }));
+            const rawBalances: RawWsBalancePayload[] = Array.isArray(acct["B"])
+              ? acct["B"].filter(isRecord).map(toRawBalancePayload)
+              : [];
+            const balances: AccountBalanceUpdatePayload[] = rawBalances.map((b) => {
+              const wb = parseFloat(b.wb);
+              const cw = parseFloat(b.cw);
+              const bc = parseFloat(b.bc);
+              return {
+                asset: b.a,
+                walletBalance: Number.isFinite(wb) ? wb : 0,
+                crossWalletBalance: Number.isFinite(cw) ? cw : 0,
+                balanceChange: Number.isFinite(bc) ? bc : 0,
+              };
+            });
 
             // CRITICAL FIX: The Binance ACCOUNT_UPDATE WebSocket event (payload.a.B) carries ONLY
             // `wb` (walletBalance) and `cw` (crossWalletBalance). It does NOT emit a true
@@ -245,11 +344,12 @@ export class BinanceUserDataStream {
             // Trigger an async REST fetch for the authoritative availableBalance.
             this.client.scheduleAvailableBalanceRefetch();
 
+            const rawReason = readString(acct, "m", "");
             const accountUpdate: AccountUpdatePayload = {
-              eventType: payload.e,
-              eventTime: payload.E,
-              transactionTime: payload.T,
-              reasonType: payload.a.m || "ORDER",
+              eventType,
+              eventTime: readNumber(payload, "E", 0),
+              transactionTime: readNumber(payload, "T", 0),
+              reasonType: rawReason.length > 0 ? rawReason : "ORDER",
               positions,
               balances,
             };
@@ -274,17 +374,43 @@ export class BinanceUserDataStream {
         console.error(`[BinanceUserDataStream] WebSocket Error: ${err.message}`);
       });
 
-      this.ws.on("close", (code: number, reason: Buffer) => {
+      this.ws.on("close", (code: number, reason?: Buffer) => {
         this.isConnected = false;
         if (this.isDisposed) return;
-        console.warn(`[BinanceUserDataStream] WebSocket closed [Code: ${code}, Reason: ${reason.toString()}]`);
+        const reasonStr = reason ? reason.toString("utf8") : "";
+        console.warn(`[BinanceUserDataStream] WebSocket closed [Code: ${String(code)}, Reason: ${reasonStr}]`);
         this.handleReconnect();
       });
     } catch (err: unknown) {
-      if (!this.isDisposed) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[BinanceUserDataStream] Failed to initiate WebSocket: ${msg}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[BinanceUserDataStream] Failed to initiate WebSocket: ${msg}`);
+    }
+  }
+
+  private async reconnectWithFreshListenKey(): Promise<void> {
+    if (this.isDisposed) return;
+    try {
+      this.listenKey = await this.client.createListenKey();
+      const wsBase = this.client.getWsUrl();
+      const wsUrl = `${wsBase}/ws/${this.listenKey}`;
+      this.connectWebSocket(wsUrl);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[BinanceUserDataStream] Failed to renew listenKey on reconnect: ${msg}`);
+      this.handleReconnect();
+    }
+  }
+
+  private async sendKeepAlivePing(): Promise<void> {
+    if (this.isDisposed) return;
+    try {
+      if (this.listenKey) {
+        await this.client.keepAliveListenKey();
+        console.log(`[BinanceUserDataStream] Sent listenKey keep-alive ping.`);
       }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[BinanceUserDataStream] Keep-alive ping failed: ${msg}`);
     }
   }
 
@@ -292,7 +418,7 @@ export class BinanceUserDataStream {
     if (this.isDisposed) return;
 
     if (this.reconnectAttempts >= this.maxReconnectRetries) {
-      console.error(`[BinanceUserDataStream] Exceeded max reconnect attempts (${this.maxReconnectRetries}). User Data Stream halted.`);
+      console.error(`[BinanceUserDataStream] Exceeded max reconnect attempts (${String(this.maxReconnectRetries)}). User Data Stream halted.`);
       return;
     }
 
@@ -303,36 +429,19 @@ export class BinanceUserDataStream {
 
     this.reconnectAttempts++;
     const backoffMs = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-    console.log(`[BinanceUserDataStream] Reconnecting in ${backoffMs}ms (Attempt ${this.reconnectAttempts}/${this.maxReconnectRetries})...`);
+    console.log(
+      `[BinanceUserDataStream] Reconnecting in ${String(backoffMs)}ms (Attempt ${String(this.reconnectAttempts)}/${String(this.maxReconnectRetries)})...`
+    );
 
-    this.reconnectTimer = setTimeout(async () => {
-      if (this.isDisposed) return;
-      try {
-        this.listenKey = await this.client.createListenKey();
-        const wsBase = this.client.getWsUrl();
-        const wsUrl = `${wsBase}/ws/${this.listenKey}`;
-        this.connectWebSocket(wsUrl);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[BinanceUserDataStream] Failed to renew listenKey on reconnect: ${msg}`);
-        this.handleReconnect();
-      }
+    this.reconnectTimer = setTimeout(() => {
+      void this.reconnectWithFreshListenKey();
     }, backoffMs);
   }
 
   private startKeepAliveTimer(): void {
     if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
-    this.keepAliveTimer = setInterval(async () => {
-      if (this.isDisposed) return;
-      try {
-        if (this.listenKey) {
-          await this.client.keepAliveListenKey();
-          console.log(`[BinanceUserDataStream] Sent listenKey keep-alive ping.`);
-        }
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[BinanceUserDataStream] Keep-alive ping failed: ${msg}`);
-      }
+    this.keepAliveTimer = setInterval(() => {
+      void this.sendKeepAlivePing();
     }, this.keepAliveIntervalMs);
   }
 

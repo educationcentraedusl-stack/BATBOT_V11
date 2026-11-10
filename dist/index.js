@@ -37,7 +37,6 @@ exports.TelemetryWSServer = exports.CLIDashboard = exports.CsvTradeLogger = expo
 exports.syncStateOnStartup = syncStateOnStartup;
 exports.initializeSystem = initializeSystem;
 require("dotenv/config");
-const path = __importStar(require("path"));
 const marketDataClient_1 = require("./marketDataClient");
 Object.defineProperty(exports, "MarketDataClient", { enumerable: true, get: function () { return marketDataClient_1.MarketDataClient; } });
 const engine_1 = require("./strategy/engine");
@@ -181,9 +180,8 @@ async function initializeSystem() {
     });
     // Try loading native Rust N-API module and starting zero-copy data ingestion
     try {
-        const nativePath = path.resolve(__dirname, "../index.js");
-        const native = require(nativePath);
-        if (native && typeof native.startIngestion === "function") {
+        const native = await Promise.resolve().then(() => __importStar(require("../index")));
+        if (typeof native.startIngestion === "function") {
             const started = native.startIngestion(Buffer.from(sab));
             if (started) {
                 process.stdout.write("[BATBOT_V11] Rust zero-copy ingestion worker started.\n");
@@ -320,9 +318,21 @@ async function initializeSystem() {
 if (require.main === module) {
     (async () => {
         const system = await initializeSystem();
-        const handleShutdown = async () => {
-            await system.stop();
-            process.exit(0);
+        let isShuttingDown = false;
+        const handleShutdown = () => {
+            if (isShuttingDown)
+                return;
+            isShuttingDown = true;
+            void system
+                .stop()
+                .then(() => {
+                process.exit(0);
+            })
+                .catch((stopErr) => {
+                const msg = stopErr instanceof Error ? stopErr.message : String(stopErr);
+                console.error(`[BATBOT_V11] Error during shutdown: ${msg}`);
+                process.exit(1);
+            });
         };
         process.on("SIGINT", handleShutdown);
         process.on("SIGTERM", handleShutdown);

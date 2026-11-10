@@ -145,6 +145,58 @@ interface RawWsResponse {
   rateLimits?: WsRateLimit[];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function rawDataToString(data: WebSocket.RawData | string): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString("utf8");
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  return Buffer.from(data).toString("utf8");
+}
+
+function isWsRateLimit(item: unknown): item is WsRateLimit {
+  return (
+    isRecord(item) &&
+    typeof item["rateLimitType"] === "string" &&
+    typeof item["interval"] === "string" &&
+    typeof item["intervalNum"] === "number" &&
+    typeof item["limit"] === "number" &&
+    typeof item["count"] === "number"
+  );
+}
+
+function isWsResultPayload(val: unknown): val is WsOrderResult | WsCancelReplaceResult {
+  if (!isRecord(val)) {
+    return false;
+  }
+  return typeof val["orderId"] === "number" || typeof val["cancelResult"] === "string";
+}
+
+function parseRawWsResponse(obj: Record<string, unknown>): RawWsResponse {
+  const errorObj = isRecord(obj["error"]) ? obj["error"] : undefined;
+  const rawLimits = Array.isArray(obj["rateLimits"])
+    ? obj["rateLimits"].filter(isWsRateLimit)
+    : undefined;
+  return {
+    id: typeof obj["id"] === "string" ? obj["id"] : "",
+    status: typeof obj["status"] === "number" ? obj["status"] : 0,
+    result: obj["result"],
+    error:
+      errorObj && typeof errorObj["code"] === "number" && typeof errorObj["msg"] === "string"
+        ? { code: errorObj["code"], msg: errorObj["msg"] }
+        : undefined,
+    rateLimits: rawLimits,
+  };
+}
+
 // ─── Implementation ─────────────────────────────────────────────────────────────
 
 /**
@@ -293,7 +345,7 @@ export class WsOrderClient {
         this._onMessage(data);
       });
 
-      socket.on("close", (code: number, reason: Buffer) => {
+      socket.on("close", (code: number, reason?: Buffer) => {
         this._onClose(code, reason ? reason.toString() : "");
       });
 
@@ -328,8 +380,9 @@ export class WsOrderClient {
     if (this.ws !== null) {
       try {
         this.ws.close(1000, "Client shutdown");
-      } catch (_) {
-        // Socket may already be closed — swallow
+      } catch (closeErr: unknown) {
+        const closeMsg = closeErr instanceof Error ? closeErr.message : String(closeErr);
+        console.warn(`[WsOrderClient] Notice closing socket during destroy: ${closeMsg}`);
       }
       this.ws = null;
     }
@@ -593,8 +646,8 @@ export class WsOrderClient {
 
     for (let i = 0; i < KNOWN_SORTED_KEYS.length; i++) {
       const key = KNOWN_SORTED_KEYS[i];
-      const value = p[key];
-      if (value !== undefined) {
+      if (Object.hasOwn(p, key)) {
+        const value = p[key];
         matchedKeysCount++;
         if (!first) queryString += "&";
         queryString += key + "=" + encodeURIComponent(String(value));
@@ -615,11 +668,9 @@ export class WsOrderClient {
       for (let i = 0; i < sortedKeys.length; i++) {
         const key = sortedKeys[i];
         const value = p[key];
-        if (value !== undefined) {
-          if (!first) queryString += "&";
-          queryString += encodeURIComponent(key) + "=" + encodeURIComponent(String(value));
-          first = false;
-        }
+        if (!first) queryString += "&";
+        queryString += encodeURIComponent(key) + "=" + encodeURIComponent(String(value));
+        first = false;
       }
     }
 
@@ -656,7 +707,7 @@ export class WsOrderClient {
         this.pendingRequests.delete(id);
         reject(
           new Error(
-            `[WsOrderClient] Request ${id} timed out after ${this.requestTimeoutMs}ms.`
+            `[WsOrderClient] Request ${id} timed out after ${String(this.requestTimeoutMs)}ms.`
           )
         );
       }, this.requestTimeoutMs);
@@ -701,12 +752,14 @@ export class WsOrderClient {
    * Zero-GC invariant: `JSON.parse` is unavoidable here (deserialization of network data).
    * No additional object construction beyond what the protocol requires.
    */
-  private _onMessage(data: WebSocket.RawData): void {
+  private _onMessage(data: WebSocket.RawData | string): void {
     let raw: RawWsResponse;
     try {
-      raw = JSON.parse(
-        data instanceof Buffer ? data.toString() : String(data)
-      ) as RawWsResponse;
+      const parsed: unknown = JSON.parse(rawDataToString(data));
+      if (!isRecord(parsed)) {
+        return;
+      }
+      raw = parseRawWsResponse(parsed);
     } catch (parseErr: unknown) {
       console.error(
         `[WsOrderClient] Failed to parse WS message: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`
@@ -731,21 +784,21 @@ export class WsOrderClient {
 
     const rttMs = Date.now() - pending.dispatchedAtMs;
 
-    if (raw.status >= 200 && raw.status < 300 && raw.result !== undefined) {
+    if (raw.status >= 200 && raw.status < 300 && isWsResultPayload(raw.result)) {
       pending.resolve({
         id,
         status: raw.status,
-        result: raw.result as WsOrderResult | WsCancelReplaceResult,
+        result: raw.result,
         error: null,
         rateLimits: raw.rateLimits ?? [],
         rttMs,
       });
     } else {
       const errCode = raw.error?.code ?? raw.status;
-      const errMsg = raw.error?.msg ?? `HTTP ${raw.status}`;
+      const errMsg = raw.error?.msg ?? `HTTP ${String(raw.status)}`;
       pending.reject(
         new Error(
-          `[WsOrderClient] Binance WS Order API Error [${errCode}]: ${errMsg} (request: ${id})`
+          `[WsOrderClient] Binance WS Order API Error [${String(errCode)}]: ${errMsg} (request: ${id})`
         )
       );
     }
@@ -760,7 +813,10 @@ export class WsOrderClient {
     if (this.ws !== null) {
       try {
         this.ws.removeAllListeners();
-      } catch (_) {}
+      } catch (cleanupErr: unknown) {
+        const cleanupMsg = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+        console.warn(`[WsOrderClient] Notice removing socket listeners on close: ${cleanupMsg}`);
+      }
       this.ws = null;
     }
 
@@ -771,7 +827,7 @@ export class WsOrderClient {
       clearTimeout(pending.timeoutHandle);
       pending.reject(
         new Error(
-          `[WsOrderClient] Connection closed (code=${code}, reason=${reason}) — request ${id} aborted.`
+          `[WsOrderClient] Connection closed (code=${String(code)}, reason=${reason}) — request ${id} aborted.`
         )
       );
     }
@@ -782,7 +838,7 @@ export class WsOrderClient {
 
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.error(
-        `[WsOrderClient] Max reconnect attempts (${this.maxReconnectAttempts}) exceeded. Halting reconnection.`
+        `[WsOrderClient] Max reconnect attempts (${String(this.maxReconnectAttempts)}) exceeded. Halting reconnection.`
       );
       return;
     }
@@ -794,15 +850,15 @@ export class WsOrderClient {
     );
 
     console.warn(
-      `[WsOrderClient] Connection closed (code=${code}). ` +
-        `Reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${backoffMs}ms...`
+      `[WsOrderClient] Connection closed (code=${String(code)}). ` +
+        `Reconnect attempt ${String(this.reconnectAttempts)}/${String(this.maxReconnectAttempts)} in ${String(backoffMs)}ms...`
     );
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect().catch((err: unknown) => {
         console.error(
-          `[WsOrderClient] Reconnect attempt ${this.reconnectAttempts} failed: ${
+          `[WsOrderClient] Reconnect attempt ${String(this.reconnectAttempts)} failed: ${
             err instanceof Error ? err.message : String(err)
           }`
         );
@@ -819,9 +875,7 @@ export class WsOrderClient {
         (this.ws as WebSocket).ping();
       }
     }, WsOrderClient.HEARTBEAT_INTERVAL_MS);
-    if (this.heartbeatTimer && typeof this.heartbeatTimer.unref === "function") {
-      this.heartbeatTimer.unref();
-    }
+    this.heartbeatTimer.unref();
   }
 
   private _stopHeartbeat(): void {

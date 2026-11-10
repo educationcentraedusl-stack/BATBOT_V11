@@ -134,7 +134,7 @@ class MultiAssetBacktestEngine {
         this.lastTickTimestampMs = 0;
         this.assetStats = Array.from({ length: this.config.maxAssets }, (_, i) => ({
             assetIdx: i,
-            symbol: `ASSET_${i}`,
+            symbol: `ASSET_${String(i)}`,
             totalTrades: 0,
             winningTrades: 0,
             losingTrades: 0,
@@ -436,7 +436,7 @@ class MultiAssetBacktestEngine {
             if (parts.length < 5)
                 continue;
             const assetIdx = parseInt(parts[0], 10);
-            const symbol = parts[1] || `ASSET_${assetIdx}`;
+            const symbol = parts[1] || `ASSET_${String(assetIdx)}`;
             const timestamp = parseFloat(parts[2]);
             const bidPrice = parseFloat(parts[3]);
             const askPrice = parseFloat(parts[4]);
@@ -510,7 +510,7 @@ class MultiAssetBacktestEngine {
         sheet += ` Total Ticks Evaluated     : ${result.totalTicksEvaluated.toLocaleString()}\n`;
         sheet += ` Total Signals Generated   : ${result.totalSignalsGenerated.toLocaleString()}\n`;
         sheet += ` Order Fills / Execution Legs : ${result.totalOrderLegs.toLocaleString()}\n`;
-        sheet += ` Completed Round-Trip Trades  : ${result.totalTradesExecuted.toLocaleString()} (Winning: ${green}${result.winningTrades}${reset} / Losing: ${red}${result.losingTrades}${reset})\n`;
+        sheet += ` Completed Round-Trip Trades  : ${result.totalTradesExecuted.toLocaleString()} (Winning: ${green}${String(result.winningTrades)}${reset} / Losing: ${red}${String(result.losingTrades)}${reset})\n`;
         sheet += ` Round-Trip Win Rate          : ${yellow}${bold}${result.winRatePercent.toFixed(2)}%${reset}\n`;
         sheet += `------------------------------------------------------------------------------------------------------\n`;
         sheet += ` Total Fee Drag (0.04% Taker): ${red}$${result.totalFeeDragUsd.toFixed(2)}${reset}\n`;
@@ -530,7 +530,7 @@ class MultiAssetBacktestEngine {
             const pnl = `${asset.realizedPnlUsd >= 0 ? "+" : ""}$${asset.realizedPnlUsd.toFixed(2)}`.padEnd(13);
             const fee = `$${asset.feeDragUsd.toFixed(2)}`.padEnd(12);
             const slip = `$${asset.slippageDragUsd.toFixed(2)}`.padEnd(17);
-            sheet += `| #${asset.assetIdx}   | ${sym} | ${trades} | ${winRate} | ${pnlC}${pnl}${reset} | ${fee} | ${slip} |\n`;
+            sheet += `| #${String(asset.assetIdx)}   | ${sym} | ${trades} | ${winRate} | ${pnlC}${pnl}${reset} | ${fee} | ${slip} |\n`;
         }
         sheet += `+------+----------+--------------+-----------------+---------------+--------------+-------------------+\n`;
         sheet += `${cyan}${bold}======================================================================================================${reset}\n`;

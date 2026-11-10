@@ -85,7 +85,7 @@ class ProcessGuardian {
      * Starts the Guardian supervision loop.
      */
     start() {
-        process.stdout.write(`\x1b[1m\x1b[32m[BATBOT_GUARDIAN_INIT]\x1b[0m Root Process Guardian online (Kernel PID: ${process.pid}).\n` +
+        process.stdout.write(`\x1b[1m\x1b[32m[BATBOT_GUARDIAN_INIT]\x1b[0m Root Process Guardian online (Kernel PID: ${String(process.pid)}).\n` +
             `  - Supervised Target: ${path.relative(process.cwd(), this.config.workerScriptPath)}\n` +
             `  - Resilience Mode: Zero-Touch Autonomous Self-Healing Active.\n\n`);
         this.spawnNextGeneration();
@@ -102,7 +102,7 @@ class ProcessGuardian {
         this.hygiene.decontaminate(this.config.lockfilePaths);
         // 2. Terminal Sanitization
         terminalSanitizer_1.TerminalSanitizer.resetAttributes();
-        process.stdout.write(`\x1b[35m[BATBOT_GUARDIAN]\x1b[0m Spawning Worker Generation #${this.generation}...\n`);
+        process.stdout.write(`\x1b[35m[BATBOT_GUARDIAN]\x1b[0m Spawning Worker Generation #${String(this.generation)}...\n`);
         // 3. Spawn child with stdio: [0: inherit, 1: inherit, 2: inherit, 3: ipc]
         // Inherited stdio guarantees 100% native TTY fidelity, raw mode input, and 60 FPS double-buffered TUI.
         const isTargetFromCli = process.argv[2] && path.resolve(process.cwd(), process.argv[2]) === this.config.workerScriptPath;
@@ -140,7 +140,7 @@ class ProcessGuardian {
             switch (payload.type) {
                 case "HANDSHAKE_INIT": {
                     this.lastHeartbeatTs = Date.now();
-                    process.stdout.write(`\x1b[32m[BATBOT_GUARDIAN]\x1b[0m Handshake confirmed with Worker (PID: ${payload.workerPid}, v${payload.version}).\n`);
+                    process.stdout.write(`\x1b[32m[BATBOT_GUARDIAN]\x1b[0m Handshake confirmed with Worker (PID: ${String(payload.workerPid)}, v${payload.version}).\n`);
                     break;
                 }
                 case "HEARTBEAT_PING": {
@@ -150,7 +150,7 @@ class ProcessGuardian {
                         ackSeq: payload.seq,
                         timestamp: Date.now()
                     };
-                    if (worker.send) {
+                    if (worker.connected) {
                         worker.send(response);
                     }
                     break;
@@ -158,14 +158,14 @@ class ProcessGuardian {
                 case "INTENTIONAL_RESURRECT": {
                     process.stdout.write(`\n\x1b[33m\x1b[1m[BATBOT_GUARDIAN]\x1b[0m Intentional auto-resurrection requested by worker.\n` +
                         `  Reason: ${payload.reason}\n` +
-                        `  Consecutive Failures: ${payload.consecutiveFailures}\n` +
-                        `  Cooldown: ${payload.cooldownMs}ms\n`);
+                        `  Consecutive Failures: ${String(payload.consecutiveFailures)}\n` +
+                        `  Cooldown: ${String(payload.cooldownMs)}ms\n`);
                     this.pendingIntentionalResurrectCooldownMs = Math.max(1000, payload.cooldownMs);
                     break;
                 }
                 case "USER_SHUTDOWN": {
                     this.isUserShutdownRequested = true;
-                    process.stdout.write(`\x1b[36m[BATBOT_GUARDIAN]\x1b[0m User intentional shutdown flagged (Exit code: ${payload.exitCode}).\n`);
+                    process.stdout.write(`\x1b[36m[BATBOT_GUARDIAN]\x1b[0m User intentional shutdown flagged (Exit code: ${String(payload.exitCode)}).\n`);
                     break;
                 }
                 case "WORKER_TELEMETRY": {
@@ -189,13 +189,14 @@ class ProcessGuardian {
                 return;
             const elapsed = Date.now() - this.lastHeartbeatTs;
             if (elapsed > this.config.heartbeatTimeoutMs) {
-                process.stderr.write(`\n\x1b[31m\x1b[1m[BATBOT_GUARDIAN_DEADLOCK_ALARM]\x1b[0m Worker unresponsive for ${elapsed}ms! ` +
-                    `Event loop freeze detected. Terminating PID: ${worker.pid}...\n`);
+                process.stderr.write(`\n\x1b[31m\x1b[1m[BATBOT_GUARDIAN_DEADLOCK_ALARM]\x1b[0m Worker unresponsive for ${String(elapsed)}ms! ` +
+                    `Event loop freeze detected. Terminating PID: ${String(worker.pid ?? "unknown")}...\n`);
                 try {
                     worker.kill("SIGKILL");
                 }
-                catch {
-                    // Ignore if process already died
+                catch (killErr) {
+                    const msg = killErr instanceof Error ? killErr.message : String(killErr);
+                    process.stderr.write(`[BATBOT_GUARDIAN_WARN] Failed sending SIGKILL to unresponsive worker: ${msg}\n`);
                 }
             }
         }, this.config.heartbeatIntervalMs);
@@ -215,7 +216,7 @@ class ProcessGuardian {
         terminalSanitizer_1.TerminalSanitizer.performFullSanitization(false);
         // Check if shutdown was requested cleanly by user ('q' or exit code 0)
         if (this.isUserShutdownRequested || code === 0) {
-            process.stdout.write(`\x1b[32m[BATBOT_GUARDIAN]\x1b[0m Worker terminated cleanly (Code: ${code}, Signal: ${signal}). ` +
+            process.stdout.write(`\x1b[32m[BATBOT_GUARDIAN]\x1b[0m Worker terminated cleanly (Code: ${String(code ?? "null")}, Signal: ${signal ?? "none"}). ` +
                 `Shutting down Guardian Kernel.\n`);
             process.exit(0);
             return;
@@ -235,8 +236,8 @@ class ProcessGuardian {
         const isIntentional = this.pendingIntentionalResurrectCooldownMs > 0;
         // Crash Loop Protection Check
         if (!isIntentional && this.consecutiveCrashes > this.config.maxCrashThreshold) {
-            process.stderr.write(`\n\x1b[31m\x1b[1m[BATBOT_GUARDIAN_EMERGENCY_HALT]\x1b[0m Exceeded ${this.config.maxCrashThreshold} ` +
-                `unhandled crashes within ${this.config.crashWindowMs / 1000}s! Host protection engaged. Halting.\n`);
+            process.stderr.write(`\n\x1b[31m\x1b[1m[BATBOT_GUARDIAN_EMERGENCY_HALT]\x1b[0m Exceeded ${String(this.config.maxCrashThreshold)} ` +
+                `unhandled crashes within ${String(this.config.crashWindowMs / 1000)}s! Host protection engaged. Halting.\n`);
             process.exit(1);
             return;
         }
@@ -262,9 +263,9 @@ class ProcessGuardian {
             backoffAppliedMs: backoffDelayMs,
             totalUptimeMs: uptimeMs
         };
-        process.stdout.write(`\x1b[33m[BATBOT_GUARDIAN]\x1b[0m Worker Gen #${report.generation} exited ` +
-            `(Code: ${report.exitCode}, Signal: ${report.signal}, Reason: ${report.reason}).\n` +
-            `  - Zero-Touch Self-Healing: Resurrecting Generation #${this.generation + 1} ` +
+        process.stdout.write(`\x1b[33m[BATBOT_GUARDIAN]\x1b[0m Worker Gen #${String(report.generation)} exited ` +
+            `(Code: ${String(report.exitCode ?? "null")}, Signal: ${report.signal ?? "none"}, Reason: ${report.reason}).\n` +
+            `  - Zero-Touch Self-Healing: Resurrecting Generation #${String(this.generation + 1)} ` +
             `in ${(backoffDelayMs / 1000).toFixed(1)}s...\n\n`);
         setTimeout(() => {
             this.spawnNextGeneration();
@@ -280,8 +281,9 @@ class ProcessGuardian {
                 try {
                     this.activeWorker.kill(sig);
                 }
-                catch {
-                    // Ignore
+                catch (signalErr) {
+                    const msg = signalErr instanceof Error ? signalErr.message : String(signalErr);
+                    process.stderr.write(`[BATBOT_GUARDIAN_WARN] Signal forward (${sig}) notice: ${msg}\n`);
                 }
             }
             setTimeout(() => {
@@ -289,10 +291,16 @@ class ProcessGuardian {
                 process.exit(0);
             }, 500);
         };
-        process.once("SIGINT", () => handleSignal("SIGINT"));
-        process.once("SIGTERM", () => handleSignal("SIGTERM"));
+        process.once("SIGINT", () => {
+            handleSignal("SIGINT");
+        });
+        process.once("SIGTERM", () => {
+            handleSignal("SIGTERM");
+        });
         if (process.platform === "win32") {
-            process.once("SIGBREAK", () => handleSignal("SIGBREAK"));
+            process.once("SIGBREAK", () => {
+                handleSignal("SIGBREAK");
+            });
         }
     }
 }

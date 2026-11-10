@@ -43,7 +43,7 @@ class StepCollarRiskEngine {
      */
     registerPosition(symbol, side, entryPrice, quantity, initialStopLossPrice, targetTakeProfitPrice) {
         if (entryPrice <= 0 || quantity <= 0) {
-            throw new Error(`[StepCollarRiskEngine] Invalid position params: ${symbol} ${side} Qty=${quantity} Entry=${entryPrice}`);
+            throw new Error(`[StepCollarRiskEngine] Invalid position params: ${symbol} ${side} Qty=${String(quantity)} Entry=${String(entryPrice)}`);
         }
         const key = this.getPositionKey(symbol, side);
         const existing = this.positions.get(key);

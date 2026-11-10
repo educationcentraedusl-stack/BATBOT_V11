@@ -8,67 +8,80 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TerminalSanitizer = void 0;
-class TerminalSanitizer {
-    /**
-     * Unhides cursor and resets graphics rendition mode (colors, bold, underline).
-     */
-    static resetAttributes() {
-        try {
-            if (process.stdout.isTTY) {
-                // \x1b[?25h -> Show Cursor
-                // \x1b[0m   -> Reset Graphics Rendition (Colors/Styles)
-                process.stdout.write("\x1b[?25h\x1b[0m");
-            }
-        }
-        catch {
-            // Safe no-op if stdout is closed or detached
+exports.resetTerminalAttributes = resetTerminalAttributes;
+exports.clearAndHomeTerminal = clearAndHomeTerminal;
+exports.restoreTerminalStdin = restoreTerminalStdin;
+exports.performFullTerminalSanitization = performFullTerminalSanitization;
+function reportSanitizerNotice(context, err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (process.stderr.writable && !process.stderr.destroyed) {
+        process.stderr.write(`[TERMINAL_SANITIZER_WARN] ${context}: ${msg}\n`);
+    }
+}
+/**
+ * Unhides cursor and resets graphics rendition mode (colors, bold, underline).
+ */
+function resetTerminalAttributes() {
+    try {
+        if (process.stdout.isTTY) {
+            // \x1b[?25h -> Show Cursor
+            // \x1b[0m   -> Reset Graphics Rendition (Colors/Styles)
+            process.stdout.write("\x1b[?25h\x1b[0m");
         }
     }
-    /**
-     * Resets styling, clears the terminal screen buffer, and homes the cursor to (0,0).
-     */
-    static clearAndHome() {
-        try {
-            if (process.stdout.isTTY) {
-                // \x1b[?25h -> Show Cursor
-                // \x1b[0m   -> Reset Styling
-                // \x1b[2J   -> Clear Entire Screen
-                // \x1b[H    -> Move Cursor to Row 1, Column 1
-                process.stdout.write("\x1b[?25h\x1b[0m\x1b[2J\x1b[H");
-            }
-        }
-        catch {
-            // Safe no-op
+    catch (err) {
+        reportSanitizerNotice("resetAttributes", err);
+    }
+}
+/**
+ * Resets styling, clears the terminal screen buffer, and homes the cursor to (0,0).
+ */
+function clearAndHomeTerminal() {
+    try {
+        if (process.stdout.isTTY) {
+            // \x1b[?25h -> Show Cursor
+            // \x1b[0m   -> Reset Styling
+            // \x1b[2J   -> Clear Entire Screen
+            // \x1b[H    -> Move Cursor to Row 1, Column 1
+            process.stdout.write("\x1b[?25h\x1b[0m\x1b[2J\x1b[H");
         }
     }
-    /**
-     * Restores normal raw-mode input state on process.stdin if it was left hijacked.
-     */
-    static restoreStdin() {
-        try {
-            if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
-                process.stdin.setRawMode(false);
-                process.stdin.pause();
-            }
-        }
-        catch {
-            // Safe no-op
+    catch (err) {
+        reportSanitizerNotice("clearAndHome", err);
+    }
+}
+/**
+ * Restores normal raw-mode input state on process.stdin if it was left hijacked.
+ */
+function restoreTerminalStdin() {
+    try {
+        if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
+            process.stdin.setRawMode(false);
+            process.stdin.pause();
         }
     }
-    /**
-     * Performs full deterministic sanitization sweep before spawning a resurrected generation.
-     */
-    static performFullSanitization(emitNotice = true) {
-        this.restoreStdin();
-        this.resetAttributes();
-        if (emitNotice) {
-            try {
-                process.stdout.write("\n\x1b[36m[TERMINAL_SANITIZER]\x1b[0m Terminal state decontaminated. ANSI cursor restored.\n");
-            }
-            catch {
-                // Ignore
-            }
+    catch (err) {
+        reportSanitizerNotice("restoreStdin", err);
+    }
+}
+/**
+ * Performs full deterministic sanitization sweep before spawning a resurrected generation.
+ */
+function performFullTerminalSanitization(emitNotice = true) {
+    restoreTerminalStdin();
+    resetTerminalAttributes();
+    if (emitNotice) {
+        try {
+            process.stdout.write("\n\x1b[36m[TERMINAL_SANITIZER]\x1b[0m Terminal state decontaminated. ANSI cursor restored.\n");
+        }
+        catch (err) {
+            reportSanitizerNotice("performFullSanitization", err);
         }
     }
 }
-exports.TerminalSanitizer = TerminalSanitizer;
+exports.TerminalSanitizer = {
+    resetAttributes: resetTerminalAttributes,
+    clearAndHome: clearAndHomeTerminal,
+    restoreStdin: restoreTerminalStdin,
+    performFullSanitization: performFullTerminalSanitization,
+};

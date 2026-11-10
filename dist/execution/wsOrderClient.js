@@ -64,6 +64,50 @@ const crypto = __importStar(require("node:crypto"));
 const ws_1 = __importDefault(require("ws"));
 const timeSynchronizer_1 = require("../utils/timeSynchronizer");
 const symbolPrecision_1 = require("../config/symbolPrecision");
+function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function rawDataToString(data) {
+    if (typeof data === "string") {
+        return data;
+    }
+    if (Buffer.isBuffer(data)) {
+        return data.toString("utf8");
+    }
+    if (Array.isArray(data)) {
+        return Buffer.concat(data).toString("utf8");
+    }
+    return Buffer.from(data).toString("utf8");
+}
+function isWsRateLimit(item) {
+    return (isRecord(item) &&
+        typeof item["rateLimitType"] === "string" &&
+        typeof item["interval"] === "string" &&
+        typeof item["intervalNum"] === "number" &&
+        typeof item["limit"] === "number" &&
+        typeof item["count"] === "number");
+}
+function isWsResultPayload(val) {
+    if (!isRecord(val)) {
+        return false;
+    }
+    return typeof val["orderId"] === "number" || typeof val["cancelResult"] === "string";
+}
+function parseRawWsResponse(obj) {
+    const errorObj = isRecord(obj["error"]) ? obj["error"] : undefined;
+    const rawLimits = Array.isArray(obj["rateLimits"])
+        ? obj["rateLimits"].filter(isWsRateLimit)
+        : undefined;
+    return {
+        id: typeof obj["id"] === "string" ? obj["id"] : "",
+        status: typeof obj["status"] === "number" ? obj["status"] : 0,
+        result: obj["result"],
+        error: errorObj && typeof errorObj["code"] === "number" && typeof errorObj["msg"] === "string"
+            ? { code: errorObj["code"], msg: errorObj["msg"] }
+            : undefined,
+        rateLimits: rawLimits,
+    };
+}
 // ─── Implementation ─────────────────────────────────────────────────────────────
 /**
  * Pre-sorted canonical keys for Binance Futures WebSocket API order methods.
@@ -215,8 +259,9 @@ class WsOrderClient {
             try {
                 this.ws.close(1000, "Client shutdown");
             }
-            catch (_) {
-                // Socket may already be closed — swallow
+            catch (closeErr) {
+                const closeMsg = closeErr instanceof Error ? closeErr.message : String(closeErr);
+                console.warn(`[WsOrderClient] Notice closing socket during destroy: ${closeMsg}`);
             }
             this.ws = null;
         }
@@ -401,8 +446,8 @@ class WsOrderClient {
         let matchedKeysCount = 0;
         for (let i = 0; i < exports.KNOWN_SORTED_KEYS.length; i++) {
             const key = exports.KNOWN_SORTED_KEYS[i];
-            const value = p[key];
-            if (value !== undefined) {
+            if (Object.hasOwn(p, key)) {
+                const value = p[key];
                 matchedKeysCount++;
                 if (!first)
                     queryString += "&";
@@ -423,12 +468,10 @@ class WsOrderClient {
             for (let i = 0; i < sortedKeys.length; i++) {
                 const key = sortedKeys[i];
                 const value = p[key];
-                if (value !== undefined) {
-                    if (!first)
-                        queryString += "&";
-                    queryString += encodeURIComponent(key) + "=" + encodeURIComponent(String(value));
-                    first = false;
-                }
+                if (!first)
+                    queryString += "&";
+                queryString += encodeURIComponent(key) + "=" + encodeURIComponent(String(value));
+                first = false;
             }
         }
         const signature = crypto
@@ -453,7 +496,7 @@ class WsOrderClient {
             const dispatchedAtMs = Date.now();
             const timeoutHandle = setTimeout(() => {
                 this.pendingRequests.delete(id);
-                reject(new Error(`[WsOrderClient] Request ${id} timed out after ${this.requestTimeoutMs}ms.`));
+                reject(new Error(`[WsOrderClient] Request ${id} timed out after ${String(this.requestTimeoutMs)}ms.`));
             }, this.requestTimeoutMs);
             this.pendingRequests.set(id, {
                 resolve,
@@ -487,7 +530,11 @@ class WsOrderClient {
     _onMessage(data) {
         let raw;
         try {
-            raw = JSON.parse(data instanceof Buffer ? data.toString() : String(data));
+            const parsed = JSON.parse(rawDataToString(data));
+            if (!isRecord(parsed)) {
+                return;
+            }
+            raw = parseRawWsResponse(parsed);
         }
         catch (parseErr) {
             console.error(`[WsOrderClient] Failed to parse WS message: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`);
@@ -506,7 +553,7 @@ class WsOrderClient {
         clearTimeout(pending.timeoutHandle);
         this.pendingRequests.delete(id);
         const rttMs = Date.now() - pending.dispatchedAtMs;
-        if (raw.status >= 200 && raw.status < 300 && raw.result !== undefined) {
+        if (raw.status >= 200 && raw.status < 300 && isWsResultPayload(raw.result)) {
             pending.resolve({
                 id,
                 status: raw.status,
@@ -518,8 +565,8 @@ class WsOrderClient {
         }
         else {
             const errCode = raw.error?.code ?? raw.status;
-            const errMsg = raw.error?.msg ?? `HTTP ${raw.status}`;
-            pending.reject(new Error(`[WsOrderClient] Binance WS Order API Error [${errCode}]: ${errMsg} (request: ${id})`));
+            const errMsg = raw.error?.msg ?? `HTTP ${String(raw.status)}`;
+            pending.reject(new Error(`[WsOrderClient] Binance WS Order API Error [${String(errCode)}]: ${errMsg} (request: ${id})`));
         }
     }
     // ─── Reconnection ────────────────────────────────────────────────────────────
@@ -530,7 +577,10 @@ class WsOrderClient {
             try {
                 this.ws.removeAllListeners();
             }
-            catch (_) { }
+            catch (cleanupErr) {
+                const cleanupMsg = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+                console.warn(`[WsOrderClient] Notice removing socket listeners on close: ${cleanupMsg}`);
+            }
             this.ws = null;
         }
         // Reject all pending requests with a connection-lost error
@@ -538,23 +588,23 @@ class WsOrderClient {
         this.pendingRequests.clear();
         for (const [id, pending] of pendingEntries) {
             clearTimeout(pending.timeoutHandle);
-            pending.reject(new Error(`[WsOrderClient] Connection closed (code=${code}, reason=${reason}) — request ${id} aborted.`));
+            pending.reject(new Error(`[WsOrderClient] Connection closed (code=${String(code)}, reason=${reason}) — request ${id} aborted.`));
         }
         if (this.isShuttingDown) {
             return;
         }
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-            console.error(`[WsOrderClient] Max reconnect attempts (${this.maxReconnectAttempts}) exceeded. Halting reconnection.`);
+            console.error(`[WsOrderClient] Max reconnect attempts (${String(this.maxReconnectAttempts)}) exceeded. Halting reconnection.`);
             return;
         }
         this.reconnectAttempts++;
         const backoffMs = Math.min(WsOrderClient.BACKOFF_BASE_MS * Math.pow(2, this.reconnectAttempts - 1), WsOrderClient.BACKOFF_MAX_MS);
-        console.warn(`[WsOrderClient] Connection closed (code=${code}). ` +
-            `Reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${backoffMs}ms...`);
+        console.warn(`[WsOrderClient] Connection closed (code=${String(code)}). ` +
+            `Reconnect attempt ${String(this.reconnectAttempts)}/${String(this.maxReconnectAttempts)} in ${String(backoffMs)}ms...`);
         this.reconnectTimer = setTimeout(() => {
             this.reconnectTimer = null;
             this.connect().catch((err) => {
-                console.error(`[WsOrderClient] Reconnect attempt ${this.reconnectAttempts} failed: ${err instanceof Error ? err.message : String(err)}`);
+                console.error(`[WsOrderClient] Reconnect attempt ${String(this.reconnectAttempts)} failed: ${err instanceof Error ? err.message : String(err)}`);
             });
         }, backoffMs);
     }
@@ -566,9 +616,7 @@ class WsOrderClient {
                 this.ws.ping();
             }
         }, WsOrderClient.HEARTBEAT_INTERVAL_MS);
-        if (this.heartbeatTimer && typeof this.heartbeatTimer.unref === "function") {
-            this.heartbeatTimer.unref();
-        }
+        this.heartbeatTimer.unref();
     }
     _stopHeartbeat() {
         if (this.heartbeatTimer !== null) {

@@ -21,10 +21,13 @@ import {
 } from "../supervisor/types";
 
 export interface NativeIngestionModule {
-  startIngestion?: (sabBuffer: Buffer, symbols?: string[]) => boolean;
-  initCore?: (symbol: string, balance: number) => boolean;
+  startIngestion?: (sabBuffer: Buffer, symbols?: Array<string> | null) => boolean;
+  initCore?: () => string;
   getIcStatus?: () => string;
-  [key: string]: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export async function runProductionTuiLauncher(): Promise<void> {
@@ -45,10 +48,10 @@ export async function runProductionTuiLauncher(): Promise<void> {
   const slotsPerAsset = Number.isFinite(parsedSlotsPerAsset) && parsedSlotsPerAsset > 0 ? parsedSlotsPerAsset : 256;
 
   const totalSABBytes = maxAssets * slotsPerAsset * 8;
-  console.log(`  - Active Trading Symbols (${activeSymbols.length}): ${activeSymbols.join(", ")}`);
-  console.log(`  - Concurrency Capacity: ${maxAssets} Asset Slots`);
-  console.log(`  - Slots Per Asset: ${slotsPerAsset}`);
-  console.log(`  - SharedArrayBuffer Size: ${totalSABBytes} bytes`);
+  console.log(`  - Active Trading Symbols (${String(activeSymbols.length)}): ${activeSymbols.join(", ")}`);
+  console.log(`  - Concurrency Capacity: ${String(maxAssets)} Asset Slots`);
+  console.log(`  - Slots Per Asset: ${String(slotsPerAsset)}`);
+  console.log(`  - SharedArrayBuffer Size: ${String(totalSABBytes)} bytes`);
 
   console.log("\n[Pre-Flight 2/3] Verifying Native Rust N-API Binary Module...");
   let platformBinary: string;
@@ -71,11 +74,9 @@ export async function runProductionTuiLauncher(): Promise<void> {
 
   if (fs.existsSync(nativeIndexPath)) {
     try {
-      nativeModule = require(nativeIndexPath) as NativeIngestionModule;
-      if (
-        nativeModule &&
-        (typeof nativeModule.startIngestion === "function" || typeof nativeModule.initCore === "function")
-      ) {
+      const loaded: NativeIngestionModule = await import("../../index");
+      nativeModule = loaded;
+      if (typeof loaded.startIngestion === "function" || typeof loaded.initCore === "function") {
         isNativeVerified = true;
         console.log(`  ✅ Native Rust N-API binary verified online (Zero-Copy IPC Ready: ${platformBinary}).`);
       } else {
@@ -107,7 +108,7 @@ export async function runProductionTuiLauncher(): Promise<void> {
     try {
       const started = nativeModule.startIngestion(Buffer.from(sab), activeSymbols);
       if (started) {
-        console.log(`  ✅ Rust Zero-Copy Multi-Asset Ingestion Workers Started (${activeSymbols.length} Coins Streaming).`);
+        console.log(`  ✅ Rust Zero-Copy Multi-Asset Ingestion Workers Started (${String(activeSymbols.length)} Coins Streaming).`);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -157,7 +158,7 @@ export async function runProductionTuiLauncher(): Promise<void> {
     // Startup State Synchronization & SL/TP Bracket Injection
     syncStateOnStartup(binanceClient, multiEngine, riskGuard)
       .then(() => {
-        dashboard.pushNotification(`✅ Multi-Asset state synchronized with Binance API for ${activeSymbols.length} coins.`);
+        dashboard.pushNotification(`✅ Multi-Asset state synchronized with Binance API for ${String(activeSymbols.length)} coins.`);
         // SOTA Passive 60-Second Continuous Reconciliation Heartbeat (Anti-Orphan Guard)
         multiEngine.startContinuousReconciliation(60000);
         dashboard.pushNotification("✅ 60-Second Passive Continuous Reconciliation Heartbeat active.");
@@ -172,8 +173,8 @@ export async function runProductionTuiLauncher(): Promise<void> {
   }
 
   dashboard.pushNotification("BATBOT_V11 Production Launch Sequence Complete.");
-  dashboard.pushNotification(`${maxAssets}-Asset SharedArrayBuffer Active (${totalSABBytes} bytes).`);
-  dashboard.pushNotification(`Multi-Asset Engine Live across ${activeSymbols.length} coins (10ms Parallel Tick Loop).`);
+  dashboard.pushNotification(`${String(maxAssets)}-Asset SharedArrayBuffer Active (${String(totalSABBytes)} bytes).`);
+  dashboard.pushNotification(`Multi-Asset Engine Live across ${String(activeSymbols.length)} coins (10ms Parallel Tick Loop).`);
   dashboard.pushNotification("Keyboard active: 0-9 = Focus Asset, K = Kill, P = Pause, C = Close All, Q = Quit.");
 
   keyEngine.setAssetFocusCallback((idx: number) => {
@@ -262,7 +263,7 @@ export async function runProductionTuiLauncher(): Promise<void> {
         const lastReason = recalStatus.lastFailureReason ?? "UNKNOWN";
         const msg =
           `[WATCHDOG_HARD_RESTART] CIRCUIT BREAKER TRIPPED: ` +
-          `${consecutiveFailures}/${WATCHDOG_CIRCUIT_BREAKER_MAX} consecutive recalibration failures ` +
+          `${String(consecutiveFailures)}/${String(WATCHDOG_CIRCUIT_BREAKER_MAX)} consecutive recalibration failures ` +
           `(Last reason: ${lastReason}). Soft pipeline is unrecoverable. ` +
           `Executing process.exit(1) for clean PM2/Nodemon/Guardian reboot...`;
 
@@ -306,19 +307,20 @@ export async function runProductionTuiLauncher(): Promise<void> {
 
       dashboard.pushNotification(
         `\x1b[31m\x1b[1m[WATCHDOG_AUTO_RESTART] CONF_FLATLINE DEADLOCK DETECTED (Assets: ${flatlinedAssets.join(",")}, Elapsed: ${elapsedMin}m >= 5.0m). ` +
-        `Forcing recalibration pipeline bypass (Attempt ${attemptNum}/${WATCHDOG_CIRCUIT_BREAKER_MAX} — circuit breaker trips on ${WATCHDOG_CIRCUIT_BREAKER_MAX} failures)...\x1b[0m`
+        `Forcing recalibration pipeline bypass (Attempt ${String(attemptNum)}/${String(WATCHDOG_CIRCUIT_BREAKER_MAX)} — circuit breaker trips on ${String(WATCHDOG_CIRCUIT_BREAKER_MAX)} failures)...\x1b[0m`
       );
 
       let currentIc = client.getRollingIC();
       if (nativeModule && typeof nativeModule.getIcStatus === "function") {
         try {
           const rawJson = nativeModule.getIcStatus();
-          const parsed = JSON.parse(rawJson) as Record<string, unknown>;
-          if (typeof parsed.ic === "number" && Number.isFinite(parsed.ic)) {
-            currentIc = parsed.ic;
+          const parsed: unknown = JSON.parse(rawJson);
+          if (isRecord(parsed) && typeof parsed["ic"] === "number" && Number.isFinite(parsed["ic"])) {
+            currentIc = parsed["ic"];
           }
-        } catch (_e) {
-          // Non-blocking fallback to SAB IC
+        } catch (parseErr: unknown) {
+          const parseMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+          dashboard.pushNotification(`⚠️ [WATCHDOG] IC status JSON parse notice: ${parseMsg}`);
         }
       }
 
@@ -338,12 +340,12 @@ export async function runProductionTuiLauncher(): Promise<void> {
             if (remaining > 0) {
               dashboard.pushNotification(
                 `\x1b[33m[WATCHDOG_AUTO_RESTART] Forced recalibration FAILED: ${reasonStr}. ` +
-                `Failures: ${newFailCount}/${WATCHDOG_CIRCUIT_BREAKER_MAX}. ` +
-                `${remaining} attempt(s) remaining before HARD RESTART (process.exit(1)).\x1b[0m`
+                `Failures: ${String(newFailCount)}/${String(WATCHDOG_CIRCUIT_BREAKER_MAX)}. ` +
+                `${String(remaining)} attempt(s) remaining before HARD RESTART (process.exit(1)).\x1b[0m`
               );
             } else {
               dashboard.pushNotification(
-                `\x1b[31m\x1b[1m[WATCHDOG_AUTO_RESTART] Circuit breaker limit reached (${newFailCount}/${WATCHDOG_CIRCUIT_BREAKER_MAX}). ` +
+                `\x1b[31m\x1b[1m[WATCHDOG_AUTO_RESTART] Circuit breaker limit reached (${String(newFailCount)}/${String(WATCHDOG_CIRCUIT_BREAKER_MAX)}). ` +
                 `HARD RESTART will fire on next watchdog tick.\x1b[0m`
               );
             }
@@ -373,15 +375,20 @@ export async function runProductionTuiLauncher(): Promise<void> {
       if (nativeModule && typeof nativeModule.getIcStatus === "function") {
         try {
           const rawJson = nativeModule.getIcStatus();
-          const parsed = JSON.parse(rawJson) as Record<string, unknown>;
-          if (parsed && typeof parsed.ic === "number" && Number.isFinite(parsed.ic)) {
-            rollingIc = parsed.ic;
-          }
-          if (parsed && typeof parsed.is_drifted === "boolean") {
-            isDrifted = parsed.is_drifted;
-          }
-          if (parsed && typeof parsed.sample_count === "number" && Number.isFinite(parsed.sample_count)) {
-            sampleCount = parsed.sample_count;
+          const parsed: unknown = JSON.parse(rawJson);
+          if (isRecord(parsed)) {
+            const icVal = parsed["ic"];
+            if (typeof icVal === "number" && Number.isFinite(icVal)) {
+              rollingIc = icVal;
+            }
+            const driftedVal = parsed["is_drifted"];
+            if (typeof driftedVal === "boolean") {
+              isDrifted = driftedVal;
+            }
+            const sampleVal = parsed["sample_count"];
+            if (typeof sampleVal === "number" && Number.isFinite(sampleVal)) {
+              sampleCount = sampleVal;
+            }
           }
         } catch (err: unknown) {
           const now = Date.now();
@@ -435,7 +442,7 @@ export async function runProductionTuiLauncher(): Promise<void> {
       for (const [symbol, result] of batch.results.entries()) {
         if (result.signalType !== "NONE") {
           dashboard.pushNotification(
-            `[STRATEGY_SIGNAL] ${result.signalType} | Sym: ${symbol} | Seq #${result.sequenceNum} | Bid: $${result.bidPrice.toFixed(2)} / Ask: $${result.askPrice.toFixed(2)}`
+            `[STRATEGY_SIGNAL] ${result.signalType} | Sym: ${symbol} | Seq #${String(result.sequenceNum)} | Bid: $${result.bidPrice.toFixed(2)} / Ask: $${result.askPrice.toFixed(2)}`
           );
 
           if (result.riskResult && !result.riskResult.passed) {
@@ -459,11 +466,11 @@ export async function runProductionTuiLauncher(): Promise<void> {
                   const isFilled = res.status === "FILLED" || parseFloat(res.executedQty || "0") > 0;
                   if (isFilled) {
                     dashboard.pushNotification(
-                      `[ORDER_FILLED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${rawQty} @ $${displayPrice.toFixed(priceDecimals)}`
+                      `[ORDER_FILLED] ${res.side} ${res.symbol} | OrderID #${String(res.orderId)} | Qty: ${rawQty} @ $${displayPrice.toFixed(priceDecimals)}`
                     );
                   } else {
                     dashboard.pushNotification(
-                      `[ORDER_SUBMITTED] ${res.side} ${res.symbol} | OrderID #${res.orderId} | Qty: ${rawQty} @ $${displayPrice.toFixed(priceDecimals)} (${res.timeInForce || "POST_ONLY"})`
+                      `[ORDER_SUBMITTED] ${res.side} ${res.symbol} | OrderID #${String(res.orderId)} | Qty: ${rawQty} @ $${displayPrice.toFixed(priceDecimals)} (${res.timeInForce || "POST_ONLY"})`
                     );
                   }
                 }
@@ -518,8 +525,9 @@ export async function runProductionTuiLauncher(): Promise<void> {
       };
       try {
         process.send(shutdownPayload);
-      } catch {
-        // Ignore
+      } catch (ipcErr: unknown) {
+        const ipcMsg = ipcErr instanceof Error ? ipcErr.message : String(ipcErr);
+        process.stderr.write(`[BATBOT_V11] Shutdown IPC send notice: ${ipcMsg}\n`);
       }
     }
 
@@ -540,8 +548,12 @@ export async function runProductionTuiLauncher(): Promise<void> {
     handleShutdown("KEYBOARD_QUIT");
   });
 
-  process.on("SIGINT", () => handleShutdown("SIGINT"));
-  process.on("SIGTERM", () => handleShutdown("SIGTERM"));
+  process.on("SIGINT", () => {
+    handleShutdown("SIGINT");
+  });
+  process.on("SIGTERM", () => {
+    handleShutdown("SIGTERM");
+  });
 }
 
 if (require.main === module) {

@@ -5,6 +5,13 @@ require("dotenv/config");
 const index_1 = require("../../index");
 const binance_1 = require("./binance");
 const userDataStream_1 = require("./userDataStream");
+function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function readMetricNumber(obj, key, fallback) {
+    const val = obj[key];
+    return typeof val === "number" && Number.isFinite(val) ? val : fallback;
+}
 class MultiAssetExecutor {
     initialBalanceUsd;
     activeSymbols;
@@ -113,7 +120,7 @@ class MultiAssetExecutor {
                 return { status: "REJECTED", reason: reasonMap[reasonCode] || "REJECTED_UNKNOWN" };
             }
             let parsedSlices = null;
-            const self = this;
+            const parseSlice = (offset) => this.parsePacketFromBuffer(resBuf, offset);
             return {
                 status: "SUBMITTED",
                 get slices() {
@@ -121,7 +128,7 @@ class MultiAssetExecutor {
                         const numSlices = Math.floor(resBuf.length / 128);
                         parsedSlices = [];
                         for (let i = 0; i < numSlices; i++) {
-                            parsedSlices.push(self.parsePacketFromBuffer(resBuf, i * 128));
+                            parsedSlices.push(parseSlice(i * 128));
                         }
                     }
                     return parsedSlices;
@@ -189,18 +196,21 @@ class MultiAssetExecutor {
         const metricsStr = (0, index_1.getMultiAssetOmsMetricsNapi)(assetIdx);
         try {
             const raw = JSON.parse(metricsStr);
+            if (!isRecord(raw)) {
+                throw new Error("Expected JSON object payload from native OMS metrics");
+            }
             return {
-                assetIdx: raw.asset_idx ?? assetIdx,
+                assetIdx: readMetricNumber(raw, "asset_idx", assetIdx),
                 symbol,
-                totalOrdersSubmitted: raw.total_orders_submitted ?? 0,
-                totalOrdersFilled: raw.total_orders_filled ?? 0,
-                totalOrdersCanceled: raw.total_orders_canceled ?? 0,
-                totalOrdersRejected: raw.total_orders_rejected ?? 0,
-                totalVolumeUsd: raw.total_volume_usd ?? 0,
-                realizedPnlUsd: raw.realized_pnl_usd ?? 0,
-                unrealizedPnlUsd: raw.unrealized_pnl_usd ?? 0,
-                currentPositionSize: raw.current_position_size ?? 0,
-                avgEntryPrice: raw.avg_entry_price ?? 0,
+                totalOrdersSubmitted: readMetricNumber(raw, "total_orders_submitted", 0),
+                totalOrdersFilled: readMetricNumber(raw, "total_orders_filled", 0),
+                totalOrdersCanceled: readMetricNumber(raw, "total_orders_canceled", 0),
+                totalOrdersRejected: readMetricNumber(raw, "total_orders_rejected", 0),
+                totalVolumeUsd: readMetricNumber(raw, "total_volume_usd", 0),
+                realizedPnlUsd: readMetricNumber(raw, "realized_pnl_usd", 0),
+                unrealizedPnlUsd: readMetricNumber(raw, "unrealized_pnl_usd", 0),
+                currentPositionSize: readMetricNumber(raw, "current_position_size", 0),
+                avgEntryPrice: readMetricNumber(raw, "avg_entry_price", 0),
             };
         }
         catch (err) {
@@ -209,7 +219,7 @@ class MultiAssetExecutor {
         }
     }
     handleUserStreamUpdate(update) {
-        if (!update || update.eventType !== "ORDER_TRADE_UPDATE")
+        if (update.eventType !== "ORDER_TRADE_UPDATE")
             return;
         try {
             const ord = update.order;

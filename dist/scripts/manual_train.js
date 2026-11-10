@@ -68,7 +68,7 @@ function runCommand(command, args, cwd) {
                 resolve();
             }
             else {
-                reject(new Error(`Process exited with code ${code ?? "null"} (signal: ${signal ?? "none"})`));
+                reject(new Error(`Process exited with code ${code !== null ? String(code) : "null"} (signal: ${signal ?? "none"})`));
             }
         });
     });
