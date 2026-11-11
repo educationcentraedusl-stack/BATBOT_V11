@@ -45,7 +45,7 @@ async function runHotfixTests(): Promise<void> {
         reduceOnly: false,
         side: typeof payload.side === "string" ? payload.side : "BUY",
         positionSide: typeof payload.positionSide === "string" ? payload.positionSide : "SHORT",
-        stopPrice: String(payload.stopPrice ?? "1.5164"),
+        stopPrice: typeof payload.stopPrice === "string" || typeof payload.stopPrice === "number" ? String(payload.stopPrice) : "1.5164",
         workingType: typeof payload.workingType === "string" ? payload.workingType : "CONTRACT_PRICE",
         updateTime: Date.now(),
       };
@@ -53,6 +53,10 @@ async function runHotfixTests(): Promise<void> {
     }
   }
   const mockClient = new HotfixMockClient();
+  let engine: StrategyEngine | null = null;
+  let recoveryClient: BinanceExecutionClient | null = null;
+
+  try {
 
   // 1a: SHORT Position SL -> MUST be BUY order
   const shortSlRes = await mockClient.placePositionStopLoss("XRPUSDT", "BUY", "SHORT", 1.5164);
@@ -93,7 +97,7 @@ async function runHotfixTests(): Promise<void> {
   const mdClient = new MarketDataClient(sab, 10, 256);
   const riskGuard = new RiskGuard();
   const hedgeLedger = new HedgePositionLedger("XRPUSDT");
-  const engine = new StrategyEngine(
+  engine = new StrategyEngine(
     mdClient,
     riskGuard,
     mockClient,
@@ -189,7 +193,7 @@ async function runHotfixTests(): Promise<void> {
           reduceOnly: false,
           side: "BUY",
           positionSide: "SHORT",
-          stopPrice: String(payload.stopPrice ?? "1.5164"),
+          stopPrice: typeof payload.stopPrice === "string" || typeof payload.stopPrice === "number" ? String(payload.stopPrice) : "1.5164",
           workingType: "CONTRACT_PRICE",
           updateTime: Date.now(),
         };
@@ -198,7 +202,7 @@ async function runHotfixTests(): Promise<void> {
       return Promise.resolve({});
     }
   }
-  const recoveryClient = new RecoveryMockClient();
+  recoveryClient = new RecoveryMockClient();
 
   const recoveredRes = await recoveryClient.placePositionStopLoss("XRPUSDT", "BUY", "SHORT", 1.5164, "BAT_TEST_SL_001");
   assert.strictEqual(attemptCount, 2, "placeOrder must have retried after catching -4130");
@@ -210,6 +214,11 @@ async function runHotfixTests(): Promise<void> {
   console.log("\n=========================================================================");
   console.log("  ALL TESTS PASSED: ERROR -4130 PERMANENTLY ERADICATED & VERIFIED!        ");
   console.log("=========================================================================\n");
+  } finally {
+    engine?.destroy();
+    recoveryClient?.destroy();
+    mockClient.destroy();
+  }
 }
 
 runHotfixTests().catch((err: unknown) => {

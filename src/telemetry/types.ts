@@ -56,6 +56,7 @@ export interface TelemetryFrame {
   rttMs?: number;
   latencyPenalty?: number;
   slippageTicks?: number;
+  timestamp?: number;
   activeTrades?: TelemetryActiveTradeSlot[];
 }
 

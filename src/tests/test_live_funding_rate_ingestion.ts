@@ -39,6 +39,9 @@ async function runVerificationSuite(): Promise<void> {
   const client = new MarketDataClient(sab, maxAssets, slotsPerAsset);
   const riskGuard = new RiskGuard();
   const executionClient = new BinanceExecutionClient();
+  let engine: StrategyEngine | null = null;
+
+  try {
 
   // STAGE 1: Binance REST /fapi/v1/premiumIndex Ingestion
   console.log("\n--- STAGE 1: Live Binance REST /fapi/v1/premiumIndex Telemetry ---");
@@ -61,7 +64,7 @@ async function runVerificationSuite(): Promise<void> {
 
   // STAGE 3: StrategyEngine Real-Time Telemetry & Filtering
   console.log("\n--- STAGE 3: StrategyEngine Integration & Tick Filter Activation ---");
-  const engine = new StrategyEngine(client, riskGuard, executionClient, { symbol: "BTCUSDT", assetIndex: 0 });
+  engine = new StrategyEngine(client, riskGuard, executionClient, { symbol: "BTCUSDT", assetIndex: 0 });
 
   const syncedRate = await engine.syncFundingRate();
   console.log(`  [ENGINE] engine.syncFundingRate() returned: ${String(syncedRate)}`);
@@ -125,9 +128,12 @@ async function runVerificationSuite(): Promise<void> {
   console.log("================================================================================");
 
   if (totalFailed > 0) {
-    process.exit(1);
+    throw new Error(`Verification suite failed with ${String(totalFailed)} assertion failure(s).`);
   }
-  process.exit(0);
+  } finally {
+    engine?.destroy();
+    executionClient.destroy();
+  }
 }
 
 runVerificationSuite().catch((err: unknown) => {

@@ -99,22 +99,72 @@ async function runClockSyncAndStalenessTests() {
     useTestnet: true,
   });
 
+  mockExecClient.getOpenOrders = () => Promise.resolve([]);
+  mockExecClient.cancelBatchOrders = () => Promise.resolve([]);
+  mockExecClient.cancelOrder = (symbol, orderId) =>
+    Promise.resolve({
+      orderId: Number(orderId),
+      symbol,
+      status: "CANCELED",
+      clientOrderId: "test_cancel",
+      price: "0",
+      avgPrice: "0",
+      origQty: "0",
+      executedQty: "0",
+      cumQuote: "0",
+      timeInForce: "GTC",
+      type: "STOP_MARKET",
+      reduceOnly: false,
+      side: "SELL",
+      positionSide: "LONG",
+      stopPrice: "0",
+      workingType: "CONTRACT_PRICE",
+      updateTime: timeSynchronizer.getAdjustedNowMs(),
+    });
+  mockExecClient.placeQuantityStopLoss = (symbol, side, positionSide, stopPrice, quantity) =>
+    Promise.resolve({
+      orderId: 888222,
+      symbol,
+      status: "NEW",
+      clientOrderId: "test_sl",
+      price: "0",
+      avgPrice: "0",
+      origQty: String(quantity),
+      executedQty: "0",
+      cumQuote: "0",
+      timeInForce: "GTC",
+      type: "STOP_MARKET",
+      reduceOnly: false,
+      side,
+      positionSide,
+      stopPrice: String(stopPrice),
+      workingType: "CONTRACT_PRICE",
+      updateTime: timeSynchronizer.getAdjustedNowMs(),
+    });
+  mockExecClient.placeBatchOrders = () => Promise.resolve([]);
+
   mockExecClient.placeOrder = (params): Promise<BinanceOrderResponse> => {
+    const pxStr = typeof params.price === "number" && Number.isFinite(params.price) ? String(params.price) : "60000";
+    const qtyStr = typeof params.quantity === "number" && Number.isFinite(params.quantity) ? String(params.quantity) : "0.001";
+    const posSide =
+      params.positionSide === "LONG" || params.positionSide === "SHORT" || params.positionSide === "BOTH"
+        ? params.positionSide
+        : "LONG";
     return Promise.resolve({
       orderId: 888111,
       symbol: params.symbol,
       status: "FILLED",
-      clientOrderId: params.clientOrderId || "test_cid",
-      price: String(params.price || "60000"),
-      avgPrice: String(params.price || "60000"),
-      origQty: String(params.quantity || "0.001"),
-      executedQty: String(params.quantity || "0.001"),
+      clientOrderId: typeof params.clientOrderId === "string" && params.clientOrderId.length > 0 ? params.clientOrderId : "test_cid",
+      price: pxStr,
+      avgPrice: pxStr,
+      origQty: qtyStr,
+      executedQty: qtyStr,
       cumQuote: "60",
       timeInForce: "GTC",
       type: params.type,
       reduceOnly: false,
       side: params.side,
-      positionSide: params.positionSide || "LONG",
+      positionSide: posSide,
       stopPrice: "0",
       workingType: "CONTRACT_PRICE",
       updateTime: timeSynchronizer.getAdjustedNowMs(),
@@ -141,29 +191,54 @@ async function runClockSyncAndStalenessTests() {
     ledger
   );
 
-  // Setup orderbook state in SAB (Asset 0)
-  storeAtomicFloat(bigIntView, 4, 60000.0); // Best bid price
-  storeAtomicFloat(bigIntView, 5, 1.5);     // Best bid qty
-  storeAtomicFloat(bigIntView, 6, 60000.5); // Best ask price
-  storeAtomicFloat(bigIntView, 7, 2.0);     // Best ask qty
-  storeAtomicFloat(bigIntView, 1, 0.35);    // OBI
-  storeAtomicFloat(bigIntView, 2, 100.0);   // CVD
-  storeAtomicFloat(bigIntView, 93, 0.85);   // AI Direction
-  storeAtomicFloat(bigIntView, 94, 0.88);   // AI Confidence
+  try {
+    // Seed regime/IC metrics and establish Tick 0 neutral LCI baseline (Seq 0) before BUY trigger (Seq 1)
+    client.setRollingIC(0.05, 0);
+    client.setHawkesIntensity(1.0, 0);
+    client.setHurstExponent(0.65, 0);
+    client.setLOBEntropy(0.50, 0);
+    client.setGarmanKlassRV(0.0001, 0);
+    storeAtomicFloat(bigIntView, 4, 60000.0);
+    storeAtomicFloat(bigIntView, 5, 5.0);
+    storeAtomicFloat(bigIntView, 6, 60000.5);
+    storeAtomicFloat(bigIntView, 7, 5.0);
+    storeAtomicFloat(bigIntView, 1, 0.0);
+    storeAtomicFloat(bigIntView, 2, 0.0);
+    storeAtomicFloat(bigIntView, 93, 0.0);
+    storeAtomicFloat(bigIntView, 94, 0.5);
+    Atomics.store(bigIntView, 0, BigInt(timeSynchronizer.getAdjustedNowMs() - 15) * 1000000n);
+    Atomics.store(bigIntView, 92, 0n);
+    engine.evaluateTick();
 
-  // Simulate Binance emitting a fresh packet at Exchange Time T_exchange (which is AdjustedNow - 15ms true network latency)
-  const exchangeServerTimeMs = timeSynchronizer.getAdjustedNowMs() - 15;
-  const exchangePacketTimestampNs = BigInt(exchangeServerTimeMs) * 1000000n;
-  Atomics.store(bigIntView, 0, exchangePacketTimestampNs);
-  Atomics.store(bigIntView, 92, 1n); // Seq
+    await new Promise<void>((resolve) => setTimeout(resolve, 15));
 
-  // Evaluate tick with TimeSynchronizer active
-  const result = engine.evaluateTick();
-  console.log(`  Tick Evaluation Result: Signal=${result.signalType}, RiskPassed=${String(result.riskResult?.passed)}, Reason=${result.riskResult?.reasonCode || "NONE"}`);
+    // Setup bullish orderbook state in SAB (Asset 0) for Seq 1
+    storeAtomicFloat(bigIntView, 4, 60000.0); // Best bid price
+    storeAtomicFloat(bigIntView, 5, 25.0);    // Best bid qty
+    storeAtomicFloat(bigIntView, 6, 60000.5); // Best ask price
+    storeAtomicFloat(bigIntView, 7, 2.0);     // Best ask qty
+    storeAtomicFloat(bigIntView, 1, 0.85);    // OBI
+    storeAtomicFloat(bigIntView, 2, 100.0);   // CVD
+    storeAtomicFloat(bigIntView, 93, 0.85);   // AI Direction
+    storeAtomicFloat(bigIntView, 94, 0.88);   // AI Confidence
 
-  if (result.executionPromise) {
-    await result.executionPromise;
-  }
+    // Simulate Binance emitting a fresh packet at Exchange Time T_exchange (AdjustedNow - 15ms network latency)
+    const exchangeServerTimeMs = timeSynchronizer.getAdjustedNowMs() - 15;
+    const exchangePacketTimestampNs = BigInt(exchangeServerTimeMs) * 1000000n;
+    Atomics.store(bigIntView, 0, exchangePacketTimestampNs);
+    Atomics.store(bigIntView, 92, 1n); // Seq
+
+    // Evaluate tick with TimeSynchronizer active
+    const result = engine.evaluateTick();
+    console.log(`  Tick Evaluation Result: Signal=${result.signalType}, RiskPassed=${String(result.riskResult?.passed)}, Reason=${result.riskResult?.reasonCode || "NONE"}`);
+
+    if (result.executionPromise) {
+      await result.executionPromise;
+    }
+
+    if (result.signalType !== "BUY") {
+      throw new Error(`FAIL: Expected BUY signal to lock cooldown, got ${result.signalType}`);
+    }
 
   if (result.riskResult?.reasonCode === "REJECTED_STALE_ORDERBOOK") {
     throw new Error("FAIL: Fresh packet was falsely rejected by Staleness Guard!");
@@ -258,7 +333,11 @@ async function runClockSyncAndStalenessTests() {
   console.log("[STAGE 5] Testing BinanceExecutionClient REST Signature & Falsy Trap Fix (DEF-1402)...");
   const queryString = mockExecClient.signQuery({ symbol: "BTCUSDT", side: "BUY" });
   const params = new URLSearchParams(queryString);
-  const queryTimestamp = parseInt(params.get("timestamp") || "0", 10);
+  const rawTimestamp = params.get("timestamp");
+  if (!rawTimestamp) {
+    throw new Error("FAIL: Signed query missing timestamp parameter!");
+  }
+  const queryTimestamp = parseInt(rawTimestamp, 10);
   const expectedTimestamp = timeSynchronizer.getAdjustedNowMs();
   const signatureTimeDiff = Math.abs(queryTimestamp - expectedTimestamp);
 
@@ -287,6 +366,10 @@ async function runClockSyncAndStalenessTests() {
   console.log("==========================================================================================");
   console.log("  🎉 ALL 5 STAGES OF AUDIT 14.0 DEFECT REMEDIATION & TEMPORAL ENGINE PASSED 100%!");
   console.log("==========================================================================================");
+  } finally {
+    engine.destroy();
+    mockExecClient.destroy();
+  }
 }
 
 runClockSyncAndStalenessTests().catch((err: unknown) => {

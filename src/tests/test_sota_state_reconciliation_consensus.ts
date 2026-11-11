@@ -117,9 +117,11 @@ async function runStateReconciliationConsensusTest(): Promise<void> {
   const client = new MarketDataClient(sab, maxAssets, slotsPerAsset);
   const riskGuard = new MultiAssetRiskGuard();
   const executionClient = new MockConsensusExecutionClient();
+  let testExecClient: MockConsensusExecutionClient | null = null;
 
   const multiEngine = new MultiAssetStrategyEngine(client, riskGuard, executionClient, symbols);
 
+  try {
   // --------------------------------------------------------------------------------------
   // TEST 1: Dual-Source Consensus Merge Logic (V3 positionRisk + V3 account)
   // --------------------------------------------------------------------------------------
@@ -369,7 +371,7 @@ async function runStateReconciliationConsensusTest(): Promise<void> {
   // --------------------------------------------------------------------------------------
   console.log("[Test 6/7] Verifying Dual-Consensus Failure Error Propagation...");
 
-  const testExecClient = new MockConsensusExecutionClient({ apiKey: "test_key", apiSecret: "test_secret" });
+  testExecClient = new MockConsensusExecutionClient({ apiKey: "test_key", apiSecret: "test_secret" });
   testExecClient.positionRiskHandler = () => Promise.reject(new Error("HTTP 500: Binance Internal Server Error"));
   testExecClient.accountInfoHandler = () => Promise.reject(new Error("HTTP 503: Service Temporarily Unavailable"));
 
@@ -556,10 +558,8 @@ async function runStateReconciliationConsensusTest(): Promise<void> {
       commissionAsset: "USDT",
       time: Date.now(),
       positionSide: "LONG",
-      buyer: true,
       maker: true,
     };
-    Reflect.deleteProperty(malformedTrade, "buyer");
     return Promise.resolve([malformedTrade]);
   };
 
@@ -578,9 +578,17 @@ async function runStateReconciliationConsensusTest(): Promise<void> {
   // --------------------------------------------------------------------------------------
   console.log("[Test 11/12] Verifying Audit 3.0 Loophole 2 (1-Hour Bounded Fallback Window on openTime === 0)...");
 
-  // Force slot openTime to 0 to simulate unrecorded/adopted slot
-  if (!Reflect.set(dogeEngine.getHedgeLedger().getCoreLong(), "openTime", 0)) {
-    throw new Error("Test 11 Setup Failed: Unable to update coreLong openTime");
+  // Re-occupy slot under deterministic clock=0 to simulate an unrecorded/adopted slot with openTime === 0
+  const originalDateNow = Date.now;
+  Date.now = (): number => 0;
+  try {
+    dogeEngine.getHedgeLedger().clearSlots();
+    dogeEngine.getHedgeLedger().occupyCoreLong(644.0, 0.06950, 2.5, 1.5);
+  } finally {
+    Date.now = originalDateNow;
+  }
+  if (dogeEngine.getHedgeLedger().getCoreLong().openTime !== 0) {
+    throw new Error("Test 11 Setup Failed: Expected coreLong openTime to be 0");
   }
 
   // Mock a historical trade from 5 hours ago (older than 1-hour fallback window)
@@ -627,15 +635,32 @@ async function runStateReconciliationConsensusTest(): Promise<void> {
   };
 
   const now = Date.now();
-  if (!Reflect.set(dogeEngine.getHedgeLedger().getCoreLong(), "openTime", now - 60000)) {
-    throw new Error("Test 12 Setup Failed: Unable to update coreLong openTime");
-  } // Long opened 1 min ago
-  dogeEngine.getHedgeLedger().occupyShortSlot(0, 500, 0.0700, 2.5, 1.5);
-  dogeEngine.getHedgeLedger().getShortSlots()[0].openTime = now - 600000; // Short opened 10 min ago
+  const longOpenTime = now - 60000; // Long opened 1 min ago
+  const shortOpenTime = now - 600000; // Short opened 10 min ago
+  dogeEngine.getHedgeLedger().syncStartupPositions(
+    [
+      {
+        side: "LONG",
+        quantity: 644.0,
+        entryPrice: 0.06950,
+        originalOpenTime: longOpenTime,
+      },
+      {
+        side: "SHORT",
+        quantity: 500.0,
+        entryPrice: 0.07000,
+        originalOpenTime: shortOpenTime,
+      },
+    ],
+    2.5,
+    1.5,
+    2.5,
+    1.5
+  );
 
   await dogeEngine.reconcileFlatPositionWithUserTrades("BOTH", 0);
 
-  const expectedMinTime = now - 600000;
+  const expectedMinTime = shortOpenTime;
   const requestedStartTime = startTimeBox.value;
   console.log(`  - BOTH Mode Requested startTime: ${String(requestedStartTime)} (Expected <= ${String(expectedMinTime)})`);
 
@@ -647,10 +672,20 @@ async function runStateReconciliationConsensusTest(): Promise<void> {
   console.log("=========================================================================");
   console.log("  ALL 12 STAGES OF AUDIT 3.0 REMEDIATION VERIFIED (100%)                 ");
   console.log("=========================================================================\n");
+  } finally {
+    multiEngine.stopContinuousReconciliation();
+    for (const eng of multiEngine.getAllEngines().values()) {
+      eng.destroy();
+    }
+    executionClient.destroy();
+    if (testExecClient !== null) {
+      testExecClient.destroy();
+    }
+  }
 }
 
 runStateReconciliationConsensusTest().catch((err: unknown) => {
-  const msg = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
+  const msg = err instanceof Error ? `${err.message}${err.stack ? `\n${err.stack}` : ""}` : String(err);
   console.error(`[FATAL TEST ERROR] ${msg}`);
   process.exit(1);
 });

@@ -69,7 +69,12 @@ ctx().onmessage = (e: MessageEvent<unknown>): void => {
   if (!msg) return;
 
   if (msg.type === "CONNECT") {
-    connectWebSocket(msg.url ?? "ws://localhost:8080");
+    if (typeof msg.url !== "string" || msg.url.trim().length === 0) {
+      console.error("[telemetry.worker] Rejected CONNECT request without a valid WebSocket URL.");
+      postOutbound({ type: "STATUS", status: "ERROR" });
+      return;
+    }
+    connectWebSocket(msg.url);
   } else if (msg.type === "SEND_COMMAND") {
     if (socket && socket.readyState === WebSocket.OPEN && msg.command) {
       const binaryCmd = encodeControlCommand(msg.command);
@@ -120,14 +125,14 @@ function connectWebSocket(url: string): void {
         const workerFrame: WorkerFrameData = {
           ...decodedFrame,
           sequenceNum: decodedFrame.sequenceNum.toString(),
-          aiInferenceLatencyNs: (decodedFrame.aiInferenceLatencyNs ?? 0n).toString(),
-          aiDirection: decodedFrame.aiDirection ?? 0,
-          aiConfidence: decodedFrame.aiConfidence ?? 0,
-          rollingIc: decodedFrame.rollingIc ?? 0,
-          rttMs: decodedFrame.rttMs ?? 0,
-          latencyPenalty: decodedFrame.latencyPenalty ?? 1.0,
-          slippageTicks: decodedFrame.slippageTicks ?? 2,
-          timestamp: Date.now(),
+          aiInferenceLatencyNs: decodedFrame.aiInferenceLatencyNs.toString(),
+          aiDirection: decodedFrame.aiDirection,
+          aiConfidence: decodedFrame.aiConfidence,
+          rollingIc: decodedFrame.rollingIc,
+          rttMs: decodedFrame.rttMs,
+          latencyPenalty: decodedFrame.latencyPenalty,
+          slippageTicks: decodedFrame.slippageTicks,
+          timestamp: decodedFrame.timestamp,
         };
 
         latestFrame = workerFrame;

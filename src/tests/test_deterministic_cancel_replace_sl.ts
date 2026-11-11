@@ -41,6 +41,10 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
 
   SymbolPrecisionRegistry.preseedOfflineDefaults(["BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT"]);
 
+  const cleanupTargets: Array<{ destroy(): void }> = [];
+
+  try {
+
   // =========================================================================
   // STAGE 1: Synchronous Pre-Flight Annihilation & Clean State Verification
   // =========================================================================
@@ -143,7 +147,7 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
           reduceOnly: false,
           side: typeof payload.side === "string" ? payload.side : "BUY",
           positionSide: typeof payload.positionSide === "string" ? payload.positionSide : "SHORT",
-          stopPrice: String(payload.stopPrice ?? "0"),
+          stopPrice: typeof payload.stopPrice === "string" || typeof payload.stopPrice === "number" ? String(payload.stopPrice) : "0",
           workingType: "CONTRACT_PRICE",
           updateTime: Date.now(),
         };
@@ -153,6 +157,7 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
     }
   }
   const mockClient = new Stage1Client();
+  cleanupTargets.push(mockClient);
 
   const res1 = await mockClient.placePositionStopLoss("BTCUSDT", "BUY", "SHORT", 77890.2);
   assert.strictEqual(res1.orderId, 555666, "New SL order must be successfully placed");
@@ -249,6 +254,7 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
     }
   }
   const delayedClient = new Stage2Client();
+  cleanupTargets.push(delayedClient);
 
   const res2 = await delayedClient.placePositionStopLoss("DOGEUSDT", "BUY", "SHORT", 0.09312);
   assert.strictEqual(res2.orderId, 777888, "Order must succeed after barrier polling completes");
@@ -282,7 +288,7 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
           reduceOnly: false,
           side: typeof payload.side === "string" ? payload.side : "BUY",
           positionSide: typeof payload.positionSide === "string" ? payload.positionSide : "SHORT",
-          stopPrice: String(payload.stopPrice ?? "0"),
+          stopPrice: typeof payload.stopPrice === "string" || typeof payload.stopPrice === "number" ? String(payload.stopPrice) : "0",
           workingType: "CONTRACT_PRICE",
           updateTime: Date.now(),
         };
@@ -292,6 +298,7 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
     }
   }
   const nativeClient = new Stage3Client();
+  cleanupTargets.push(nativeClient);
 
   const putRes = await nativeClient.cancelReplaceOrder({
     symbol: "SOLUSDT",
@@ -358,7 +365,7 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
           clientOrderId: typeof payload.newClientOrderId === "string" ? payload.newClientOrderId : "",
           price: "0",
           avgPrice: "0",
-          origQty: String(payload.quantity ?? "0"),
+          origQty: typeof payload.quantity === "string" || typeof payload.quantity === "number" ? String(payload.quantity) : "0",
           executedQty: "0",
           cumQuote: "0",
           timeInForce: "GTC",
@@ -366,7 +373,7 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
           reduceOnly: false,
           side: typeof payload.side === "string" ? payload.side : "BUY",
           positionSide: typeof payload.positionSide === "string" ? payload.positionSide : "SHORT",
-          stopPrice: String(payload.stopPrice ?? "0"),
+          stopPrice: typeof payload.stopPrice === "string" || typeof payload.stopPrice === "number" ? String(payload.stopPrice) : "0",
           workingType: "CONTRACT_PRICE",
           updateTime: Date.now(),
         };
@@ -376,6 +383,7 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
     }
   }
   const fallbackClient = new Stage4Client();
+  cleanupTargets.push(fallbackClient);
 
   const fallbackRes = await fallbackClient.placePositionStopLoss("ETHUSDT", "BUY", "SHORT", 2500.0);
   const fallbackCapturedPayload = fallbackClient.fallbackCapturedPayload;
@@ -445,7 +453,7 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
         reduceOnly: false,
         side: "BUY",
         positionSide: "SHORT",
-        stopPrice: String(payload.stopPrice ?? "77890.0"),
+        stopPrice: typeof payload.stopPrice === "string" || typeof payload.stopPrice === "number" ? String(payload.stopPrice) : "77890.0",
         workingType: "CONTRACT_PRICE",
         updateTime: Date.now(),
       };
@@ -453,6 +461,7 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
     }
   }
   const engineClient = new Stage5Client();
+  cleanupTargets.push(engineClient);
 
   const engine = new StrategyEngine(
     mdClient,
@@ -462,6 +471,7 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
     undefined,
     hedgeLedger
   );
+  cleanupTargets.push(engine);
 
   // Dispatch 10 rapid concurrent SL ratchet updates
   const ratchetPromises: Promise<void>[] = [];
@@ -479,6 +489,11 @@ async function runDeterministicCancelReplaceTests(): Promise<void> {
   console.log("\n=========================================================================");
   console.log("  ALL 5 STAGES PASSED: DETERMINISTIC CANCEL-REPLACE 100% QA VERIFIED!     ");
   console.log("=========================================================================\n");
+  } finally {
+    for (let i = cleanupTargets.length - 1; i >= 0; i--) {
+      cleanupTargets[i].destroy();
+    }
+  }
 }
 
 runDeterministicCancelReplaceTests().catch((err: unknown) => {

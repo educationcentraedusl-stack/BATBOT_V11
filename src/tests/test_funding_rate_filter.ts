@@ -194,7 +194,10 @@ executionClient.placeOrder = (params: BinanceOrderParams): Promise<BinanceOrderR
     type: params.type,
     reduceOnly: false,
     side: params.side,
-    positionSide: params.positionSide || "BOTH",
+    positionSide:
+      params.positionSide === "LONG" || params.positionSide === "SHORT" || params.positionSide === "BOTH"
+        ? params.positionSide
+        : "BOTH",
     stopPrice: params.stopPrice ? String(params.stopPrice) : "0",
     workingType: "CONTRACT_PRICE",
     updateTime: Date.now(),
@@ -532,14 +535,17 @@ async function runStage3AndBeyond(): Promise<void> {
 
   if (totalFailed === 0) {
     console.log("✅ ALL PHASE 5 PERPETUAL FUNDING RATE FILTER TESTS PASSED (100% SUCCESS)!\n");
-    process.exit(0);
   } else {
-    console.error("❌ PHASE 5 PERPETUAL FUNDING RATE FILTER TESTS FAILED!\n");
-    process.exit(1);
+    throw new Error(`PHASE 5 PERPETUAL FUNDING RATE FILTER TESTS FAILED (${String(totalFailed)} failures)`);
   }
 }
 
-runStage3AndBeyond().catch((err: unknown) => {
+runStage3AndBeyond()
+  .finally(() => {
+    engine.destroy();
+    executionClient.destroy();
+  })
+  .catch((err: unknown) => {
   console.error("Fatal error in test suite:", err);
   process.exit(1);
 });

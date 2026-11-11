@@ -19,20 +19,25 @@ async function runVerificationTests() {
   console.log("BATBOT_V11 PHASE 4 VERIFICATION SUITE");
   console.log("=================================================");
 
-  // -------------------------------------------------------------------
-  // TEST 1: Binance Signature & Configuration
-  // -------------------------------------------------------------------
-  console.log("\n[TEST 1] Testing Binance Execution Client...");
-  const unconfiguredClient = new BinanceExecutionClient({ apiKey: "", apiSecret: "" });
-  if (unconfiguredClient.isConfigured()) {
-    throw new Error("FAIL: Client should report unconfigured when keys are empty.");
-  }
-  console.log("  ✓ Unconfigured client detected correctly without panicking.");
+  const cleanupTargets: Array<{ destroy(): void }> = [];
 
-  const configuredClient = new BinanceExecutionClient({
-    apiKey: "test_api_key_12345",
-    apiSecret: "test_api_secret_67890",
-  });
+  try {
+    // -------------------------------------------------------------------
+    // TEST 1: Binance Signature & Configuration
+    // -------------------------------------------------------------------
+    console.log("\n[TEST 1] Testing Binance Execution Client...");
+    const unconfiguredClient = new BinanceExecutionClient({ apiKey: "", apiSecret: "" });
+    cleanupTargets.push(unconfiguredClient);
+    if (unconfiguredClient.isConfigured()) {
+      throw new Error("FAIL: Client should report unconfigured when keys are empty.");
+    }
+    console.log("  ✓ Unconfigured client detected correctly without panicking.");
+
+    const configuredClient = new BinanceExecutionClient({
+      apiKey: "test_api_key_12345",
+      apiSecret: "test_api_secret_67890",
+    });
+    cleanupTargets.push(configuredClient);
   if (!configuredClient.isConfigured()) {
     throw new Error("FAIL: Client should report configured when valid keys are provided.");
   }
@@ -98,26 +103,59 @@ async function runVerificationTests() {
   // TEST 3: Strategy Engine Hot-Path Signal Generation
   // -------------------------------------------------------------------
   console.log("\n[TEST 3] Testing Strategy Engine Zero-GC Hot-Path Signal Loop...");
+  class OfflineExecutionClient extends BinanceExecutionClient {
+    public override ensureFundingRateStream(): Promise<void> {
+      return Promise.resolve();
+    }
+    protected override executeHttpRequest(): Promise<unknown> {
+      return Promise.reject(new Error("OFFLINE_TEST_STUB_NO_NETWORK"));
+    }
+  }
+  const offlineClient = new OfflineExecutionClient({
+    apiKey: "test_api_key_12345",
+    apiSecret: "test_api_secret_67890",
+  });
+  cleanupTargets.push(offlineClient);
+
   const sab = new SharedArrayBuffer(20480);
   const bigIntView = new BigInt64Array(sab);
   const client = new MarketDataClient(sab);
   const testRiskGuard = new RiskGuard({ minCooldownMs: 0 }); // zero cooldown for test loop
-  const engine = new StrategyEngine(client, testRiskGuard, configuredClient, { symbol: "BTCUSDT", orderQuantity: 0.001 });
+  const engine = new StrategyEngine(client, testRiskGuard, offlineClient, { symbol: "BTCUSDT", orderQuantity: 0.001, cooldownMs: 0 });
+  cleanupTargets.push(engine);
 
-  // Setup initial SAB metrics
-  Atomics.store(bigIntView, 0, 1000n); // Timestamp
-  storeAtomicFloat64(bigIntView, 1, 0.45); // OBI > 0.25 (Buy signal threshold)
-  storeAtomicFloat64(bigIntView, 2, 75.0); // CVD > 50 (Buy signal threshold)
+  // Tick 0: Establish neutral LCI baseline with live nanosecond timestamp and valid trend regime
+  Atomics.store(bigIntView, 0, BigInt(Date.now()) * 1000000n);
+  storeAtomicFloat64(bigIntView, 1, 0.0); // OBI neutral
+  storeAtomicFloat64(bigIntView, 2, 0.0); // CVD neutral
   storeAtomicFloat64(bigIntView, 3, 0.02); // Spread Velocity < 0.1
   storeAtomicFloat64(bigIntView, 4, 65000.0); // Best Bid Price
   storeAtomicFloat64(bigIntView, 5, 5.0); // Best Bid Qty
   storeAtomicFloat64(bigIntView, 6, 65001.0); // Best Ask Price
-  storeAtomicFloat64(bigIntView, 7, 3.0); // Best Ask Qty
-  storeAtomicFloat64(bigIntView, 93, 0.8); // AI Direction (+0.8 Bullish)
-  storeAtomicFloat64(bigIntView, 94, 0.9); // AI Confidence (90% > 60% threshold)
+  storeAtomicFloat64(bigIntView, 7, 5.0); // Best Ask Qty
+  storeAtomicFloat64(bigIntView, 93, 0.0); // AI Direction neutral
+  storeAtomicFloat64(bigIntView, 94, 0.5); // AI Confidence
   storeAtomicFloat64(bigIntView, 99, 1.0); // Latency penalty = 1.0
   storeAtomicFloat64(bigIntView, 100, 0.0); // Slippage ticks = 0
+  client.setRollingIC(0.05, 0);
+  client.setHawkesIntensity(1.0, 0);
+  client.setHurstExponent(0.65, 0);
+  client.setLOBEntropy(0.50, 0);
+  client.setGarmanKlassRV(0.0001, 0);
   Atomics.store(bigIntView, 92, 1n); // Sequence Num = 1
+  engine.evaluateTick();
+
+  await new Promise((r) => setTimeout(r, 15));
+
+  // Tick 1: Bullish surge -> should trigger BUY signal
+  Atomics.store(bigIntView, 0, BigInt(Date.now()) * 1000000n);
+  storeAtomicFloat64(bigIntView, 1, 0.45); // OBI > 0.25 (Buy signal threshold)
+  storeAtomicFloat64(bigIntView, 2, 75.0); // CVD > 50 (Buy signal threshold)
+  storeAtomicFloat64(bigIntView, 5, 25.0); // Strong Best Bid Qty
+  storeAtomicFloat64(bigIntView, 7, 2.0); // Thin Best Ask Qty
+  storeAtomicFloat64(bigIntView, 93, 0.8); // AI Direction (+0.8 Bullish)
+  storeAtomicFloat64(bigIntView, 94, 0.9); // AI Confidence (90% > 60% threshold)
+  Atomics.store(bigIntView, 92, 2n); // Sequence Num = 2
 
   // Evaluate tick 1: Should trigger BUY signal
   const eval1 = engine.evaluateTick();
@@ -139,12 +177,33 @@ async function runVerificationTests() {
   }
   console.log("  ✓ Sequence deduplication verified.");
 
+  // Isolate stage and establish neutral LCI baseline before SELL breakdown
+  engine.annihilateRestingEntryOrders("STAGE_ISOLATION");
+  engine.getHedgeLedger().clearSlots();
+  client.setLongCooldownLock(0, 0);
+  client.setShortCooldownLock(0, 0);
+  engine.resetLciBaseline();
+
+  Atomics.store(bigIntView, 0, BigInt(Date.now()) * 1000000n);
+  storeAtomicFloat64(bigIntView, 1, 0.0);
+  storeAtomicFloat64(bigIntView, 2, 0.0);
+  storeAtomicFloat64(bigIntView, 5, 5.0);
+  storeAtomicFloat64(bigIntView, 7, 5.0);
+  storeAtomicFloat64(bigIntView, 93, 0.0);
+  Atomics.store(bigIntView, 92, 3n);
+  engine.evaluateTick();
+
+  await new Promise((r) => setTimeout(r, 15));
+
   // Setup SELL signal parameters
+  Atomics.store(bigIntView, 0, BigInt(Date.now()) * 1000000n);
   storeAtomicFloat64(bigIntView, 1, -0.45); // OBI < -0.25
   storeAtomicFloat64(bigIntView, 2, -75.0); // CVD < -50
+  storeAtomicFloat64(bigIntView, 5, 2.0); // Thin Best Bid Qty
+  storeAtomicFloat64(bigIntView, 7, 35.0); // Heavy Best Ask Qty
   storeAtomicFloat64(bigIntView, 93, -0.8); // AI Direction (-0.8 Bearish)
   storeAtomicFloat64(bigIntView, 94, 0.9); // AI Confidence (90%)
-  Atomics.store(bigIntView, 92, 2n); // Sequence Num = 2
+  Atomics.store(bigIntView, 92, 4n); // Sequence Num = 4
 
   const eval3 = engine.evaluateTick();
   if (eval3.signalType !== "SELL" || !eval3.riskResult?.passed) {
@@ -168,6 +227,7 @@ async function runVerificationTests() {
 
   const benchRiskGuard = new RiskGuard({ minCooldownMs: 0 });
   const benchEngine = new StrategyEngine(client, benchRiskGuard, unconfiguredClient);
+  cleanupTargets.push(benchEngine);
 
   const iterations = 100000;
   const startTime = process.hrtime.bigint();
@@ -246,8 +306,8 @@ async function runVerificationTests() {
         clientOrderId: "",
         price: "0",
         avgPrice: "0",
-        origQty: String(params.quantity ?? "0"),
-        executedQty: String(params.quantity ?? "0"),
+        origQty: typeof params.quantity === "string" || typeof params.quantity === "number" ? String(params.quantity) : "0",
+        executedQty: typeof params.quantity === "string" || typeof params.quantity === "number" ? String(params.quantity) : "0",
         cumQuote: "0",
         timeInForce: typeof params.timeInForce === "string" ? params.timeInForce : "GTC",
         type: typeof params.type === "string" ? params.type : "MARKET",
@@ -262,6 +322,7 @@ async function runVerificationTests() {
     }
   }
   const mockClient = new PayloadInspectingClient({ apiKey: "key", apiSecret: "secret" });
+  cleanupTargets.push(mockClient);
 
   // Test 5a: MARKET order
   await mockClient.placeOrder({
@@ -322,6 +383,11 @@ async function runVerificationTests() {
   console.log("\n=================================================");
   console.log("ALL PHASE 4 VERIFICATION TESTS PASSED SUCCESSFULLY!");
   console.log("=================================================");
+  } finally {
+    for (let i = cleanupTargets.length - 1; i >= 0; i--) {
+      cleanupTargets[i].destroy();
+    }
+  }
 }
 
 runVerificationTests().catch((err: unknown) => {

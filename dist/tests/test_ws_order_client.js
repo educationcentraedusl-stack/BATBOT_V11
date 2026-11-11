@@ -905,7 +905,7 @@ void (0, node_test_1.describe)("WsOrderClient — Phase 1 HFT Test Suite (Full T
                     orderId: 0,
                     symbol: params.symbol,
                     status: "CANCELED",
-                    clientOrderId: params.origClientOrderId || "",
+                    clientOrderId: typeof params.origClientOrderId === "string" ? params.origClientOrderId : "",
                     price: "0",
                     avgPrice: "0",
                     origQty: "1",

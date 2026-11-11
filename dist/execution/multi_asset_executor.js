@@ -8,9 +8,12 @@ const userDataStream_1 = require("./userDataStream");
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function readMetricNumber(obj, key, fallback) {
+function requireMetricNumber(obj, key, context) {
     const val = obj[key];
-    return typeof val === "number" && Number.isFinite(val) ? val : fallback;
+    if (typeof val !== "number" || !Number.isFinite(val)) {
+        throw new Error(`[MultiAssetExecutor] Missing or non-finite metric "${key}" in ${context}`);
+    }
+    return val;
 }
 class MultiAssetExecutor {
     initialBalanceUsd;
@@ -199,18 +202,19 @@ class MultiAssetExecutor {
             if (!isRecord(raw)) {
                 throw new Error("Expected JSON object payload from native OMS metrics");
             }
+            const metricsCtx = `native OMS metrics (${symbol})`;
             return {
-                assetIdx: readMetricNumber(raw, "asset_idx", assetIdx),
+                assetIdx: requireMetricNumber(raw, "asset_idx", metricsCtx),
                 symbol,
-                totalOrdersSubmitted: readMetricNumber(raw, "total_orders_submitted", 0),
-                totalOrdersFilled: readMetricNumber(raw, "total_orders_filled", 0),
-                totalOrdersCanceled: readMetricNumber(raw, "total_orders_canceled", 0),
-                totalOrdersRejected: readMetricNumber(raw, "total_orders_rejected", 0),
-                totalVolumeUsd: readMetricNumber(raw, "total_volume_usd", 0),
-                realizedPnlUsd: readMetricNumber(raw, "realized_pnl_usd", 0),
-                unrealizedPnlUsd: readMetricNumber(raw, "unrealized_pnl_usd", 0),
-                currentPositionSize: readMetricNumber(raw, "current_position_size", 0),
-                avgEntryPrice: readMetricNumber(raw, "avg_entry_price", 0),
+                totalOrdersSubmitted: requireMetricNumber(raw, "total_orders_submitted", metricsCtx),
+                totalOrdersFilled: requireMetricNumber(raw, "total_orders_filled", metricsCtx),
+                totalOrdersCanceled: requireMetricNumber(raw, "total_orders_canceled", metricsCtx),
+                totalOrdersRejected: requireMetricNumber(raw, "total_orders_rejected", metricsCtx),
+                totalVolumeUsd: requireMetricNumber(raw, "total_volume_usd", metricsCtx),
+                realizedPnlUsd: requireMetricNumber(raw, "realized_pnl_usd", metricsCtx),
+                unrealizedPnlUsd: requireMetricNumber(raw, "unrealized_pnl_usd", metricsCtx),
+                currentPositionSize: requireMetricNumber(raw, "current_position_size", metricsCtx),
+                avgEntryPrice: requireMetricNumber(raw, "avg_entry_price", metricsCtx),
             };
         }
         catch (err) {
@@ -224,6 +228,13 @@ class MultiAssetExecutor {
         try {
             const ord = update.order;
             const assetIdx = this.getAssetIndex(ord.symbol);
+            const isFillEvent = ord.orderStatus === "FILLED" || ord.orderStatus === "PARTIALLY_FILLED";
+            if (isFillEvent && (typeof ord.commissionAmount !== "number" || !Number.isFinite(ord.commissionAmount))) {
+                throw new Error(`Missing or non-finite commissionAmount for ${ord.orderStatus} execution on ${ord.symbol} #${String(ord.orderId)}`);
+            }
+            const commission = typeof ord.commissionAmount === "number" && Number.isFinite(ord.commissionAmount)
+                ? ord.commissionAmount
+                : 0;
             const reportJson = JSON.stringify({
                 client_order_id: ord.clientOrderId,
                 order_id: ord.orderId,
@@ -235,7 +246,7 @@ class MultiAssetExecutor {
                 last_filled_price: ord.lastFilledPrice,
                 cum_filled_qty: ord.cumulativeFilledQuantity,
                 avg_price: ord.averagePrice,
-                commission: ord.commissionAmount,
+                commission,
                 commission_asset: ord.commissionAsset,
                 trade_id: ord.tradeId,
                 event_time_ns: ord.tradeTime * 1_000_000,

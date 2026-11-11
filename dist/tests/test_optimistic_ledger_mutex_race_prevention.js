@@ -63,6 +63,8 @@ async function runOptimisticLedgerMutexTestSuite() {
     // TEST 3: SHORT_SLOTS Dispersion & PENDING_ENTRY Collision Defense
     // -----------------------------------------------------------------------------------------
     console.log("\n[TEST 3] Testing SHORT Slots Dynamic Dispersion & Mutex Reservation...");
+    // Release CORE_LONG from TEST 2 first to satisfy the Unidirectional Asset Mutex before short slot entry
+    ledger.releaseCoreLong(2601.0);
     const shortCid0 = clientOrderIdGenerator_1.ClientOrderIdGenerator.generate(symbol, "SHORT_SLOT_0", "EN");
     const shortRes0 = ledger.reserveShortSlotPending(0, shortCid0, 2600.0, 0.05);
     assert(shortRes0, "SHORT_SLOT_0 reservation must succeed");
@@ -157,6 +159,7 @@ async function runOptimisticLedgerMutexTestSuite() {
     }
     finally {
         client.releaseInFlightOrder();
+        client.destroy();
     }
     console.log("\n================================================================================");
     console.log("ALL TESTS PASSED: OPTIMISTIC MUTEX & RACE CONDITION DEFENSE VERIFIED 100%");

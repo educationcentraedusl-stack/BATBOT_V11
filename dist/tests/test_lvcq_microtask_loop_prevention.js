@@ -146,6 +146,7 @@ async function runLvcqMicrotaskLoopTest() {
     }
     finally {
         engine.destroy();
+        mockExecClient.destroy();
     }
 }
 runLvcqMicrotaskLoopTest().catch((err) => {

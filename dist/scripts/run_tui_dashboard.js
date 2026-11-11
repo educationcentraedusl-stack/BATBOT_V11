@@ -428,19 +428,38 @@ async function runProductionTuiLauncher() {
                         result.executionPromise
                             .then((res) => {
                             if (res && res.orderId) {
-                                const rawQty = parseFloat(res.executedQty || "0") > 0 ? res.executedQty : (res.origQty || "0");
-                                const avgPx = parseFloat(res.avgPrice || "0");
-                                const px = parseFloat(res.price || "0");
-                                const cumQuote = parseFloat(res.cumQuote || "0");
-                                const qtyNum = parseFloat(rawQty);
-                                const displayPrice = avgPx > 0 ? avgPx : (px > 0 ? px : (cumQuote > 0 && qtyNum > 0 ? cumQuote / qtyNum : (result.bidPrice || result.askPrice)));
+                                const parseOptionalPositiveDecimal = (raw) => {
+                                    if (typeof raw !== "string")
+                                        return null;
+                                    const trimmed = raw.trim();
+                                    if (trimmed.length === 0)
+                                        return null;
+                                    const parsed = Number(trimmed);
+                                    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+                                };
+                                const execQtyNum = parseOptionalPositiveDecimal(res.executedQty);
+                                const origQtyNum = parseOptionalPositiveDecimal(res.origQty);
+                                const qtyNum = execQtyNum ?? origQtyNum;
+                                if (qtyNum === null) {
+                                    throw new Error(`[run_tui_dashboard] Missing valid executedQty/origQty on order ${String(res.orderId)}`);
+                                }
+                                const rawQty = execQtyNum !== null ? res.executedQty : res.origQty;
+                                const avgPx = parseOptionalPositiveDecimal(res.avgPrice);
+                                const px = parseOptionalPositiveDecimal(res.price);
+                                const cumQuote = parseOptionalPositiveDecimal(res.cumQuote);
+                                const quotePx = cumQuote !== null ? cumQuote / qtyNum : null;
+                                const displayPrice = avgPx ??
+                                    px ??
+                                    quotePx ??
+                                    (result.bidPrice > 0 ? result.bidPrice : result.askPrice);
                                 const priceDecimals = symbolPrecision_1.SymbolPrecisionRegistry.getPrecisionRule(res.symbol).priceDecimals;
-                                const isFilled = res.status === "FILLED" || parseFloat(res.executedQty || "0") > 0;
+                                const isFilled = res.status === "FILLED" || execQtyNum !== null;
+                                const tifLabel = res.timeInForce.trim().length > 0 ? res.timeInForce : "UNSPECIFIED";
                                 if (isFilled) {
                                     dashboard.pushNotification(`[ORDER_FILLED] ${res.side} ${res.symbol} | OrderID #${String(res.orderId)} | Qty: ${rawQty} @ $${displayPrice.toFixed(priceDecimals)}`);
                                 }
                                 else {
-                                    dashboard.pushNotification(`[ORDER_SUBMITTED] ${res.side} ${res.symbol} | OrderID #${String(res.orderId)} | Qty: ${rawQty} @ $${displayPrice.toFixed(priceDecimals)} (${res.timeInForce || "POST_ONLY"})`);
+                                    dashboard.pushNotification(`[ORDER_SUBMITTED] ${res.side} ${res.symbol} | OrderID #${String(res.orderId)} | Qty: ${rawQty} @ $${displayPrice.toFixed(priceDecimals)} (${tifLabel})`);
                                 }
                             }
                         })

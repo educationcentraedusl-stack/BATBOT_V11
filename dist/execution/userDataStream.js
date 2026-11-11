@@ -131,9 +131,6 @@ function parseOrderStatus(value, context) {
     }
 }
 function parsePositionSide(value, context) {
-    if (value === undefined || value === null) {
-        return "BOTH";
-    }
     if (value === "LONG" || value === "SHORT" || value === "BOTH") {
         return value;
     }
@@ -300,7 +297,7 @@ class BinanceUserDataStream {
                     cumulativeFilledQuantity: requireNumericField(ord, "z", "ORDER_TRADE_UPDATE.o"),
                     lastFilledPrice: requireNumericField(ord, "L", "ORDER_TRADE_UPDATE.o"),
                     commissionAsset: readOptionalString(ord, "N", "ORDER_TRADE_UPDATE.o"),
-                    commissionAmount: commissionAmountOpt ?? 0,
+                    commissionAmount: commissionAmountOpt,
                     tradeTime: requireFiniteNumber(ord, "T", "ORDER_TRADE_UPDATE.o"),
                     tradeId: requireFiniteNumber(ord, "t", "ORDER_TRADE_UPDATE.o"),
                     bidsNotional: requireNumericField(ord, "b", "ORDER_TRADE_UPDATE.o"),
@@ -338,7 +335,7 @@ class BinanceUserDataStream {
                 entryPrice: parseStrictNumericString(p.ep, "ep", "ACCOUNT_UPDATE.a.P"),
                 accumulatedRealized: parseStrictNumericString(p.cr, "cr", "ACCOUNT_UPDATE.a.P"),
                 unrealizedPnl: parseStrictNumericString(p.up, "up", "ACCOUNT_UPDATE.a.P"),
-                positionSide: p.ps ?? "BOTH",
+                positionSide: p.ps,
             }));
             if (acct["B"] !== undefined && !Array.isArray(acct["B"])) {
                 throw new Error("[BinanceUserDataStream] Expected array for \"B\" in ACCOUNT_UPDATE.a");

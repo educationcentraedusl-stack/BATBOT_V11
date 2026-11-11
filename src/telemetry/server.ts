@@ -76,7 +76,7 @@ export class TelemetryWSServer {
           if (isJson) {
             ws.send(JSON.stringify({ success: res.success, action: cmd.action, message: res.message, timestamp: Date.now() }));
           } else {
-            const responseBuf = encodeControlResponse(res.success, cmd.action, res.message);
+            const responseBuf = encodeControlResponse(res.success, cmd.action, res.message, Date.now());
             ws.send(responseBuf);
           }
         }

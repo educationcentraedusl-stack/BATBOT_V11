@@ -38,7 +38,10 @@ function getTradingSymbols(maxCount) {
     if (symbols.length === 0) {
         symbols = [...exports.DEFAULT_TRADING_SYMBOLS];
     }
-    const envMaxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || "", 10);
+    const rawMaxAssets = process.env.MAX_CONCURRENT_ASSETS;
+    const envMaxAssets = typeof rawMaxAssets === "string" && rawMaxAssets.trim().length > 0
+        ? parseInt(rawMaxAssets, 10)
+        : Number.NaN;
     const cap = maxCount ?? (Number.isFinite(envMaxAssets) && envMaxAssets > 0 ? envMaxAssets : symbols.length);
     return symbols.slice(0, cap);
 }

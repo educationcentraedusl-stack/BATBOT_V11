@@ -55,6 +55,7 @@ const server_1 = require("./telemetry/server");
 Object.defineProperty(exports, "TelemetryWSServer", { enumerable: true, get: function () { return server_1.TelemetryWSServer; } });
 const recalibrationWorker_1 = require("./ai/recalibrationWorker");
 const symbolPrecision_1 = require("./config/symbolPrecision");
+const tradingSymbols_1 = require("./config/tradingSymbols");
 const multiEngine_1 = require("./strategy/multiEngine");
 Object.defineProperty(exports, "MultiAssetStrategyEngine", { enumerable: true, get: function () { return multiEngine_1.MultiAssetStrategyEngine; } });
 const risk_2 = require("./strategy/risk");
@@ -130,7 +131,11 @@ async function initializeSystem() {
     client.flushTelemetry();
     const riskGuard = new risk_1.RiskGuard();
     const executionClient = new binance_1.BinanceExecutionClient();
-    const symbol = process.env.SYMBOL ?? "BTCUSDT";
+    const envSymbol = process.env.SYMBOL?.trim();
+    const symbol = envSymbol && envSymbol.length > 0 ? envSymbol.toUpperCase() : (0, tradingSymbols_1.getTradingSymbols)(1)[0];
+    if (!symbol) {
+        throw new Error("[initializeSystem] Unable to resolve primary trading symbol from SYMBOL or configuration");
+    }
     const strategyEngine = new engine_1.StrategyEngine(client, riskGuard, executionClient, { symbol });
     const logger = new logger_1.TradeLogger("data");
     const csvLogger = new csvLogger_1.CsvTradeLogger("data", "trade_history.csv");
@@ -170,8 +175,10 @@ async function initializeSystem() {
                     }
                 }
                 return { success: true, message: "EMERGENCY KILL EXECUTED: Engine Halted & Position Flattened" };
-            case "AI_HOT_SWAP":
-                return { success: true, message: `Model Hot-Swap Triggered for: ${cmd.modelPath || "default"}` };
+            case "AI_HOT_SWAP": {
+                const requestedModel = cmd.modelPath && cmd.modelPath.trim().length > 0 ? cmd.modelPath : "UNSPECIFIED";
+                return { success: true, message: `Model Hot-Swap Triggered for: ${requestedModel}` };
+            }
             default: {
                 const unknownAction = typeof cmd.action === "string" ? cmd.action : "UNKNOWN";
                 return { success: false, message: `Unknown command action: ${unknownAction}` };
@@ -218,15 +225,30 @@ async function initializeSystem() {
             tickResult.executionPromise
                 .then((orderRes) => {
                 if (orderRes) {
-                    const execQty = parseFloat(orderRes.executedQty || "0");
-                    const origQty = parseFloat(orderRes.origQty || "0");
-                    const finalQty = execQty > 0 ? execQty : (origQty > 0 ? origQty : strategyEngine.getConfig().orderQuantity);
-                    const px = parseFloat(orderRes.price || orderRes.avgPrice || "0") || (tickResult.signalType === "BUY" ? tickResult.askPrice : tickResult.bidPrice);
-                    const fee = (px * finalQty) * exports.DEFAULT_TAKER_FEE_RATE;
-                    const fillSide = orderRes.side === "BUY" || orderRes.side === "SELL" ? orderRes.side : (tickResult.signalType === "BUY" || tickResult.signalType === "SELL" ? tickResult.signalType : "BUY");
-                    const symbol = orderRes.symbol || strategyEngine.getConfig().symbol;
+                    const parsePositiveDecimal = (raw) => {
+                        if (typeof raw !== "string")
+                            return null;
+                        const trimmed = raw.trim();
+                        if (trimmed.length === 0)
+                            return null;
+                        const parsed = Number(trimmed);
+                        return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+                    };
+                    const execQty = parsePositiveDecimal(orderRes.executedQty);
+                    const origQty = parsePositiveDecimal(orderRes.origQty);
+                    const finalQty = execQty ?? origQty ?? strategyEngine.getConfig().orderQuantity;
+                    const parsedOrderPrice = parsePositiveDecimal(orderRes.price) ?? parsePositiveDecimal(orderRes.avgPrice);
+                    const px = parsedOrderPrice ??
+                        (tickResult.signalType === "BUY" ? tickResult.askPrice : tickResult.bidPrice);
+                    const fee = px * finalQty * exports.DEFAULT_TAKER_FEE_RATE;
+                    const fillSide = orderRes.side === "BUY" || orderRes.side === "SELL"
+                        ? orderRes.side
+                        : tickResult.signalType === "BUY" || tickResult.signalType === "SELL"
+                            ? tickResult.signalType
+                            : "BUY";
+                    const fillSymbol = orderRes.symbol.trim().length > 0 ? orderRes.symbol : strategyEngine.getConfig().symbol;
                     // Route fill execution through zero-GC PositionLedger FIFO engine
-                    const ledgerResult = positionLedger.processFill(symbol, fillSide, px, finalQty, fee, tickResult.exitReason);
+                    const ledgerResult = positionLedger.processFill(fillSymbol, fillSide, px, finalQty, fee, tickResult.exitReason);
                     // Log closed trade to CSV asynchronously (non-blocking) when a position is completely closed
                     if (ledgerResult.closedTrade) {
                         csvLogger.logClosedTrade(ledgerResult.closedTrade);
@@ -234,7 +256,7 @@ async function initializeSystem() {
                     // Update RiskGuard position state & record realized PnL
                     riskGuard.recordRealizedPnl(ledgerResult.realizedPnl);
                     riskGuard.updatePositionNotional(ledgerResult.netQuantityAfterFill * ledgerResult.averageEntryPriceAfterFill);
-                    logger.logExecution(symbol, fillSide, px, finalQty, ledgerResult.realizedPnl, fee, 0);
+                    logger.logExecution(fillSymbol, fillSide, px, finalQty, ledgerResult.realizedPnl, fee, 0);
                 }
             })
                 .catch((err) => {

@@ -174,18 +174,32 @@ assert(!trig2.some((t) => t.reason.startsWith("CADME_ALPHA_DECAY_EXIT")), "Latch
 const slTriggers = ledger.evaluateSotaDynamicExits(59000.0, 59000.0, undefined, undefined, undefined, testLongSlot.openTime + 246000, 0.50);
 assert(slTriggers.some((t) => t.reason.includes("STOP_LOSS") || t.reason.includes("TRAILING_STOP")), "Hard stop-loss protection remains 100% active while CADME maker exit rests on book");
 // Test 7C: Multi-Slot SAB 158 Aggregation (No Clobbering by Secondary Inactive Slots)
-// Occupy Short Slot 0 while Core Long is in cadmeState = 2
-ledger.occupyShortSlot(0, 0.05, 60000.0, 1.0, 1.0);
+// Release CORE_LONG first to comply with the Unidirectional Asset Mutex before short slot allocation
+ledger.releaseCoreLong(60000.0, 0.0002, "TEST_7B_CLOSE");
+assert(mdClient.getVegamCadmeState(assetIndex) === 0.0, `Releasing CORE_LONG clears SAB Slot 158 prior to short multi-slot check (got ${String(mdClient.getVegamCadmeState(assetIndex))})`);
+mdClient.setRollingIC(0.050, assetIndex);
+const short0Occupied = ledger.occupyShortSlot(0, 0.05, 60000.0, 1.0, 1.0);
+assert(short0Occupied, "SHORT_SLOT_0 occupied after CORE_LONG release");
 const testShortSlot0 = ledger.getShortSlots()[0];
-assert(testShortSlot0.cadmeState === 0, "Newly occupied Short Slot 0 starts in cadmeState = 0");
-// Evaluate dynamic exits: Short Slot 0 is healthy (state 0), Core Long is latched (state 2)
-ledger.evaluateSotaDynamicExits(60000.0, 60000.0, undefined, undefined, undefined, testLongSlot.openTime + 247000, 0.50);
+assert(testShortSlot0.isOccupied && testShortSlot0.cadmeState === 0, "SHORT_SLOT_0 starts occupied in cadmeState = 0");
+// Advance SHORT_SLOT_0 into cadmeState = 2 (EXIT_TRIGGERED)
+mdClient.setRollingIC(0.010, assetIndex);
+ledger.evaluateSotaDynamicExits(60000.0, 60000.0, undefined, undefined, undefined, testShortSlot0.openTime + 240000, 0.50);
+assert(testShortSlot0.cadmeState === 2, `SHORT_SLOT_0 advances to cadmeState = 2 (got ${String(testShortSlot0.cadmeState)})`);
+// Restore healthy IC and scale in a secondary same-side slot (SHORT_SLOT_1 starts in cadmeState = 0)
+mdClient.setRollingIC(0.050, assetIndex);
+const short1Occupied = ledger.occupyShortSlot(1, 0.05, 60500.0, 1.0, 1.0);
+assert(short1Occupied, "Secondary same-side SHORT_SLOT_1 occupied cleanly");
+const testShortSlot1 = ledger.getShortSlots()[1];
+assert(testShortSlot1.isOccupied && testShortSlot1.cadmeState === 0, "Newly occupied SHORT_SLOT_1 starts in cadmeState = 0");
+// Evaluate dynamic exits: SHORT_SLOT_1 is healthy (state 0), SHORT_SLOT_0 is latched (state 2)
+ledger.evaluateSotaDynamicExits(60000.0, 60000.0, undefined, undefined, undefined, testShortSlot0.openTime + 247000, 0.50);
 assert(mdClient.getVegamCadmeState(assetIndex) === 2.0, `SAB Slot 158 preserves maximum active state (2.0) across all occupied slots (got ${String(mdClient.getVegamCadmeState(assetIndex))})`);
-// Release Short Slot 0: Core Long is still in state 2, so SAB Slot 158 must remain 2.0
-ledger.releaseShortSlot(0, 60000.0, 0.0002, "TEST_CLOSE");
+// Release secondary SHORT_SLOT_1: SHORT_SLOT_0 is still in state 2, so SAB Slot 158 must remain 2.0
+ledger.releaseShortSlot(1, 60000.0, 0.0002, "TEST_CLOSE");
 assert(mdClient.getVegamCadmeState(assetIndex) === 2.0, `Releasing secondary slot does NOT clobber active urgent alert in SAB Slot 158 (got ${String(mdClient.getVegamCadmeState(assetIndex))})`);
-// Clean release Core Long
-ledger.releaseCoreLong(60000.0, 0.0002, "TEST_CLOSE");
+// Clean release final SHORT_SLOT_0
+ledger.releaseShortSlot(0, 60000.0, 0.0002, "TEST_CLOSE");
 assert(mdClient.getVegamCadmeState(assetIndex) === 0.0, `Releasing final slot clears SAB Slot 158 to 0.0 (got ${String(mdClient.getVegamCadmeState(assetIndex))})`);
 // Test 7D: CADME Pre-Warning Tier (cadmeState = 1)
 // Duration: 0.60 * icAtEntry <= alphaDecay < 0.75 * icAtEntry

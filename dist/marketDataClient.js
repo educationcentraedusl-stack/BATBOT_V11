@@ -7,7 +7,10 @@ const tradingSymbols_1 = require("./config/tradingSymbols");
 const BITCAST_BUF = new ArrayBuffer(8);
 const BITCAST_BIGINT = new BigInt64Array(BITCAST_BUF);
 const BITCAST_FLOAT = new Float64Array(BITCAST_BUF);
-const parsedDefaultMaxAssets = parseInt(process.env.MAX_CONCURRENT_ASSETS || "", 10);
+const rawDefaultMaxAssets = process.env.MAX_CONCURRENT_ASSETS;
+const parsedDefaultMaxAssets = typeof rawDefaultMaxAssets === "string" && rawDefaultMaxAssets.trim().length > 0
+    ? parseInt(rawDefaultMaxAssets, 10)
+    : Number.NaN;
 const DEFAULT_MAX_CONCURRENT_ASSETS = Number.isFinite(parsedDefaultMaxAssets) && parsedDefaultMaxAssets > 0
     ? Math.max(parsedDefaultMaxAssets, (0, tradingSymbols_1.getTradingSymbols)().length)
     : (0, tradingSymbols_1.getTradingSymbols)().length;

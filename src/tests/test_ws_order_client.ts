@@ -1102,7 +1102,7 @@ void describe("WsOrderClient — Phase 1 HFT Test Suite (Full Tier-1 Verificatio
           orderId: 0,
           symbol: params.symbol,
           status: "CANCELED",
-          clientOrderId: params.origClientOrderId || "",
+          clientOrderId: typeof params.origClientOrderId === "string" ? params.origClientOrderId : "",
           price: "0",
           avgPrice: "0",
           origQty: "1",

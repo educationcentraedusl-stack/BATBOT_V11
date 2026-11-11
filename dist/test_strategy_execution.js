@@ -17,244 +17,304 @@ async function runVerificationTests() {
     console.log("=================================================");
     console.log("BATBOT_V11 PHASE 4 VERIFICATION SUITE");
     console.log("=================================================");
-    // -------------------------------------------------------------------
-    // TEST 1: Binance Signature & Configuration
-    // -------------------------------------------------------------------
-    console.log("\n[TEST 1] Testing Binance Execution Client...");
-    const unconfiguredClient = new binance_1.BinanceExecutionClient({ apiKey: "", apiSecret: "" });
-    if (unconfiguredClient.isConfigured()) {
-        throw new Error("FAIL: Client should report unconfigured when keys are empty.");
-    }
-    console.log("  ✓ Unconfigured client detected correctly without panicking.");
-    const configuredClient = new binance_1.BinanceExecutionClient({
-        apiKey: "test_api_key_12345",
-        apiSecret: "test_api_secret_67890",
-    });
-    if (!configuredClient.isConfigured()) {
-        throw new Error("FAIL: Client should report configured when valid keys are provided.");
-    }
-    const signedQuery = configuredClient.signQuery({ symbol: "BTCUSDT", side: "BUY", quantity: 0.001 });
-    if (!signedQuery.includes("signature=") || !signedQuery.includes("timestamp=")) {
-        throw new Error("FAIL: HMAC SHA256 query signing failed to format signature and timestamp.");
-    }
-    console.log("  ✓ HMAC SHA256 Query Signing verified successfully.");
-    // -------------------------------------------------------------------
-    // TEST 2: Impenetrable Risk Guard Validation
-    // -------------------------------------------------------------------
-    console.log("\n[TEST 2] Testing Risk Guard Validation Rules...");
-    const riskGuard = new risk_1.RiskGuard({
-        maxPositionSizeUsdt: 500.0,
-        minCooldownMs: 1000,
-        maxDailyLossUsdt: 100.0,
-    });
-    // Check unconfigured rejection
-    const unconfiguredCheck = riskGuard.validateOrder({ symbol: "BTCUSDT", side: "BUY", quantity: 0.01, price: 65000 }, false);
-    if (unconfiguredCheck.passed || unconfiguredCheck.reasonCode !== "UNCONFIGURED_CREDENTIALS") {
-        throw new Error("FAIL: Risk Guard did not reject order with UNCONFIGURED_CREDENTIALS.");
-    }
-    console.log("  ✓ Unconfigured execution rejection verified.");
-    // Check position size limit rejection
-    const positionLimitCheck = riskGuard.validateOrder({ symbol: "BTCUSDT", side: "BUY", quantity: 0.1, price: 65000 }, // $6500 > $500 max
-    true);
-    if (positionLimitCheck.passed || positionLimitCheck.reasonCode !== "EXCEEDS_MAX_POSITION") {
-        throw new Error("FAIL: Risk Guard failed to reject order exceeding max position size.");
-    }
-    console.log("  ✓ Max Position Size enforcement verified.");
-    // Check valid order pass
-    const validCheck = riskGuard.validateOrder({ symbol: "BTCUSDT", side: "BUY", quantity: 0.001, price: 65000 }, // $65 < $500
-    true);
-    if (!validCheck.passed) {
-        throw new Error(`FAIL: Risk Guard rejected valid order: ${validCheck.message}`);
-    }
-    console.log("  ✓ Valid order authorization verified.");
-    // Record execution to test cooldown enforcement
-    riskGuard.recordExecutionSuccess(65.0);
-    const cooldownCheck = riskGuard.validateOrder({ symbol: "BTCUSDT", side: "BUY", quantity: 0.001, price: 65000 }, true);
-    if (cooldownCheck.passed || cooldownCheck.reasonCode !== "COOLDOWN_ACTIVE") {
-        throw new Error("FAIL: Risk Guard failed to enforce cooldown window.");
-    }
-    console.log("  ✓ Cooldown enforcement window verified.");
-    // -------------------------------------------------------------------
-    // TEST 3: Strategy Engine Hot-Path Signal Generation
-    // -------------------------------------------------------------------
-    console.log("\n[TEST 3] Testing Strategy Engine Zero-GC Hot-Path Signal Loop...");
-    const sab = new SharedArrayBuffer(20480);
-    const bigIntView = new BigInt64Array(sab);
-    const client = new marketDataClient_1.MarketDataClient(sab);
-    const testRiskGuard = new risk_1.RiskGuard({ minCooldownMs: 0 }); // zero cooldown for test loop
-    const engine = new engine_1.StrategyEngine(client, testRiskGuard, configuredClient, { symbol: "BTCUSDT", orderQuantity: 0.001 });
-    // Setup initial SAB metrics
-    Atomics.store(bigIntView, 0, 1000n); // Timestamp
-    storeAtomicFloat64(bigIntView, 1, 0.45); // OBI > 0.25 (Buy signal threshold)
-    storeAtomicFloat64(bigIntView, 2, 75.0); // CVD > 50 (Buy signal threshold)
-    storeAtomicFloat64(bigIntView, 3, 0.02); // Spread Velocity < 0.1
-    storeAtomicFloat64(bigIntView, 4, 65000.0); // Best Bid Price
-    storeAtomicFloat64(bigIntView, 5, 5.0); // Best Bid Qty
-    storeAtomicFloat64(bigIntView, 6, 65001.0); // Best Ask Price
-    storeAtomicFloat64(bigIntView, 7, 3.0); // Best Ask Qty
-    storeAtomicFloat64(bigIntView, 93, 0.8); // AI Direction (+0.8 Bullish)
-    storeAtomicFloat64(bigIntView, 94, 0.9); // AI Confidence (90% > 60% threshold)
-    storeAtomicFloat64(bigIntView, 99, 1.0); // Latency penalty = 1.0
-    storeAtomicFloat64(bigIntView, 100, 0.0); // Slippage ticks = 0
-    Atomics.store(bigIntView, 92, 1n); // Sequence Num = 1
-    // Evaluate tick 1: Should trigger BUY signal
-    const eval1 = engine.evaluateTick();
-    if (eval1.signalType !== "BUY" || !eval1.riskResult?.passed) {
-        throw new Error(`FAIL: Strategy Engine failed to generate BUY signal on high OBI/CVD (got ${eval1.signalType}, riskResult: ${JSON.stringify(eval1.riskResult)}).`);
-    }
-    console.log("  ✓ BUY signal generation on high OBI/CVD + AI Bullish prediction verified.");
-    if (eval1.executionPromise) {
-        await eval1.executionPromise.catch((err) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.log(`  ℹ️ Expected offline execution rejection (eval1): ${msg}`);
+    const cleanupTargets = [];
+    try {
+        // -------------------------------------------------------------------
+        // TEST 1: Binance Signature & Configuration
+        // -------------------------------------------------------------------
+        console.log("\n[TEST 1] Testing Binance Execution Client...");
+        const unconfiguredClient = new binance_1.BinanceExecutionClient({ apiKey: "", apiSecret: "" });
+        cleanupTargets.push(unconfiguredClient);
+        if (unconfiguredClient.isConfigured()) {
+            throw new Error("FAIL: Client should report unconfigured when keys are empty.");
+        }
+        console.log("  ✓ Unconfigured client detected correctly without panicking.");
+        const configuredClient = new binance_1.BinanceExecutionClient({
+            apiKey: "test_api_key_12345",
+            apiSecret: "test_api_secret_67890",
         });
-    }
-    // Evaluate tick 2 without sequence change: Should yield NONE
-    const eval2 = engine.evaluateTick();
-    if (eval2.signalType !== "NONE") {
-        throw new Error("FAIL: Strategy Engine did not deduplicate unchanged sequence number.");
-    }
-    console.log("  ✓ Sequence deduplication verified.");
-    // Setup SELL signal parameters
-    storeAtomicFloat64(bigIntView, 1, -0.45); // OBI < -0.25
-    storeAtomicFloat64(bigIntView, 2, -75.0); // CVD < -50
-    storeAtomicFloat64(bigIntView, 93, -0.8); // AI Direction (-0.8 Bearish)
-    storeAtomicFloat64(bigIntView, 94, 0.9); // AI Confidence (90%)
-    Atomics.store(bigIntView, 92, 2n); // Sequence Num = 2
-    const eval3 = engine.evaluateTick();
-    if (eval3.signalType !== "SELL" || !eval3.riskResult?.passed) {
-        throw new Error(`FAIL: Strategy Engine failed to generate SELL signal on negative OBI/CVD (got ${eval3.signalType}).`);
-    }
-    console.log("  ✓ SELL signal generation on negative OBI/CVD + AI Bearish prediction verified.");
-    if (eval3.executionPromise) {
-        await eval3.executionPromise.catch((err) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.log(`  ℹ️ Expected offline execution rejection (eval3): ${msg}`);
+        cleanupTargets.push(configuredClient);
+        if (!configuredClient.isConfigured()) {
+            throw new Error("FAIL: Client should report configured when valid keys are provided.");
+        }
+        const signedQuery = configuredClient.signQuery({ symbol: "BTCUSDT", side: "BUY", quantity: 0.001 });
+        if (!signedQuery.includes("signature=") || !signedQuery.includes("timestamp=")) {
+            throw new Error("FAIL: HMAC SHA256 query signing failed to format signature and timestamp.");
+        }
+        console.log("  ✓ HMAC SHA256 Query Signing verified successfully.");
+        // -------------------------------------------------------------------
+        // TEST 2: Impenetrable Risk Guard Validation
+        // -------------------------------------------------------------------
+        console.log("\n[TEST 2] Testing Risk Guard Validation Rules...");
+        const riskGuard = new risk_1.RiskGuard({
+            maxPositionSizeUsdt: 500.0,
+            minCooldownMs: 1000,
+            maxDailyLossUsdt: 100.0,
         });
+        // Check unconfigured rejection
+        const unconfiguredCheck = riskGuard.validateOrder({ symbol: "BTCUSDT", side: "BUY", quantity: 0.01, price: 65000 }, false);
+        if (unconfiguredCheck.passed || unconfiguredCheck.reasonCode !== "UNCONFIGURED_CREDENTIALS") {
+            throw new Error("FAIL: Risk Guard did not reject order with UNCONFIGURED_CREDENTIALS.");
+        }
+        console.log("  ✓ Unconfigured execution rejection verified.");
+        // Check position size limit rejection
+        const positionLimitCheck = riskGuard.validateOrder({ symbol: "BTCUSDT", side: "BUY", quantity: 0.1, price: 65000 }, // $6500 > $500 max
+        true);
+        if (positionLimitCheck.passed || positionLimitCheck.reasonCode !== "EXCEEDS_MAX_POSITION") {
+            throw new Error("FAIL: Risk Guard failed to reject order exceeding max position size.");
+        }
+        console.log("  ✓ Max Position Size enforcement verified.");
+        // Check valid order pass
+        const validCheck = riskGuard.validateOrder({ symbol: "BTCUSDT", side: "BUY", quantity: 0.001, price: 65000 }, // $65 < $500
+        true);
+        if (!validCheck.passed) {
+            throw new Error(`FAIL: Risk Guard rejected valid order: ${validCheck.message}`);
+        }
+        console.log("  ✓ Valid order authorization verified.");
+        // Record execution to test cooldown enforcement
+        riskGuard.recordExecutionSuccess(65.0);
+        const cooldownCheck = riskGuard.validateOrder({ symbol: "BTCUSDT", side: "BUY", quantity: 0.001, price: 65000 }, true);
+        if (cooldownCheck.passed || cooldownCheck.reasonCode !== "COOLDOWN_ACTIVE") {
+            throw new Error("FAIL: Risk Guard failed to enforce cooldown window.");
+        }
+        console.log("  ✓ Cooldown enforcement window verified.");
+        // -------------------------------------------------------------------
+        // TEST 3: Strategy Engine Hot-Path Signal Generation
+        // -------------------------------------------------------------------
+        console.log("\n[TEST 3] Testing Strategy Engine Zero-GC Hot-Path Signal Loop...");
+        class OfflineExecutionClient extends binance_1.BinanceExecutionClient {
+            ensureFundingRateStream() {
+                return Promise.resolve();
+            }
+            executeHttpRequest() {
+                return Promise.reject(new Error("OFFLINE_TEST_STUB_NO_NETWORK"));
+            }
+        }
+        const offlineClient = new OfflineExecutionClient({
+            apiKey: "test_api_key_12345",
+            apiSecret: "test_api_secret_67890",
+        });
+        cleanupTargets.push(offlineClient);
+        const sab = new SharedArrayBuffer(20480);
+        const bigIntView = new BigInt64Array(sab);
+        const client = new marketDataClient_1.MarketDataClient(sab);
+        const testRiskGuard = new risk_1.RiskGuard({ minCooldownMs: 0 }); // zero cooldown for test loop
+        const engine = new engine_1.StrategyEngine(client, testRiskGuard, offlineClient, { symbol: "BTCUSDT", orderQuantity: 0.001, cooldownMs: 0 });
+        cleanupTargets.push(engine);
+        // Tick 0: Establish neutral LCI baseline with live nanosecond timestamp and valid trend regime
+        Atomics.store(bigIntView, 0, BigInt(Date.now()) * 1000000n);
+        storeAtomicFloat64(bigIntView, 1, 0.0); // OBI neutral
+        storeAtomicFloat64(bigIntView, 2, 0.0); // CVD neutral
+        storeAtomicFloat64(bigIntView, 3, 0.02); // Spread Velocity < 0.1
+        storeAtomicFloat64(bigIntView, 4, 65000.0); // Best Bid Price
+        storeAtomicFloat64(bigIntView, 5, 5.0); // Best Bid Qty
+        storeAtomicFloat64(bigIntView, 6, 65001.0); // Best Ask Price
+        storeAtomicFloat64(bigIntView, 7, 5.0); // Best Ask Qty
+        storeAtomicFloat64(bigIntView, 93, 0.0); // AI Direction neutral
+        storeAtomicFloat64(bigIntView, 94, 0.5); // AI Confidence
+        storeAtomicFloat64(bigIntView, 99, 1.0); // Latency penalty = 1.0
+        storeAtomicFloat64(bigIntView, 100, 0.0); // Slippage ticks = 0
+        client.setRollingIC(0.05, 0);
+        client.setHawkesIntensity(1.0, 0);
+        client.setHurstExponent(0.65, 0);
+        client.setLOBEntropy(0.50, 0);
+        client.setGarmanKlassRV(0.0001, 0);
+        Atomics.store(bigIntView, 92, 1n); // Sequence Num = 1
+        engine.evaluateTick();
+        await new Promise((r) => setTimeout(r, 15));
+        // Tick 1: Bullish surge -> should trigger BUY signal
+        Atomics.store(bigIntView, 0, BigInt(Date.now()) * 1000000n);
+        storeAtomicFloat64(bigIntView, 1, 0.45); // OBI > 0.25 (Buy signal threshold)
+        storeAtomicFloat64(bigIntView, 2, 75.0); // CVD > 50 (Buy signal threshold)
+        storeAtomicFloat64(bigIntView, 5, 25.0); // Strong Best Bid Qty
+        storeAtomicFloat64(bigIntView, 7, 2.0); // Thin Best Ask Qty
+        storeAtomicFloat64(bigIntView, 93, 0.8); // AI Direction (+0.8 Bullish)
+        storeAtomicFloat64(bigIntView, 94, 0.9); // AI Confidence (90% > 60% threshold)
+        Atomics.store(bigIntView, 92, 2n); // Sequence Num = 2
+        // Evaluate tick 1: Should trigger BUY signal
+        const eval1 = engine.evaluateTick();
+        if (eval1.signalType !== "BUY" || !eval1.riskResult?.passed) {
+            throw new Error(`FAIL: Strategy Engine failed to generate BUY signal on high OBI/CVD (got ${eval1.signalType}, riskResult: ${JSON.stringify(eval1.riskResult)}).`);
+        }
+        console.log("  ✓ BUY signal generation on high OBI/CVD + AI Bullish prediction verified.");
+        if (eval1.executionPromise) {
+            await eval1.executionPromise.catch((err) => {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.log(`  ℹ️ Expected offline execution rejection (eval1): ${msg}`);
+            });
+        }
+        // Evaluate tick 2 without sequence change: Should yield NONE
+        const eval2 = engine.evaluateTick();
+        if (eval2.signalType !== "NONE") {
+            throw new Error("FAIL: Strategy Engine did not deduplicate unchanged sequence number.");
+        }
+        console.log("  ✓ Sequence deduplication verified.");
+        // Isolate stage and establish neutral LCI baseline before SELL breakdown
+        engine.annihilateRestingEntryOrders("STAGE_ISOLATION");
+        engine.getHedgeLedger().clearSlots();
+        client.setLongCooldownLock(0, 0);
+        client.setShortCooldownLock(0, 0);
+        engine.resetLciBaseline();
+        Atomics.store(bigIntView, 0, BigInt(Date.now()) * 1000000n);
+        storeAtomicFloat64(bigIntView, 1, 0.0);
+        storeAtomicFloat64(bigIntView, 2, 0.0);
+        storeAtomicFloat64(bigIntView, 5, 5.0);
+        storeAtomicFloat64(bigIntView, 7, 5.0);
+        storeAtomicFloat64(bigIntView, 93, 0.0);
+        Atomics.store(bigIntView, 92, 3n);
+        engine.evaluateTick();
+        await new Promise((r) => setTimeout(r, 15));
+        // Setup SELL signal parameters
+        Atomics.store(bigIntView, 0, BigInt(Date.now()) * 1000000n);
+        storeAtomicFloat64(bigIntView, 1, -0.45); // OBI < -0.25
+        storeAtomicFloat64(bigIntView, 2, -75.0); // CVD < -50
+        storeAtomicFloat64(bigIntView, 5, 2.0); // Thin Best Bid Qty
+        storeAtomicFloat64(bigIntView, 7, 35.0); // Heavy Best Ask Qty
+        storeAtomicFloat64(bigIntView, 93, -0.8); // AI Direction (-0.8 Bearish)
+        storeAtomicFloat64(bigIntView, 94, 0.9); // AI Confidence (90%)
+        Atomics.store(bigIntView, 92, 4n); // Sequence Num = 4
+        const eval3 = engine.evaluateTick();
+        if (eval3.signalType !== "SELL" || !eval3.riskResult?.passed) {
+            throw new Error(`FAIL: Strategy Engine failed to generate SELL signal on negative OBI/CVD (got ${eval3.signalType}).`);
+        }
+        console.log("  ✓ SELL signal generation on negative OBI/CVD + AI Bearish prediction verified.");
+        if (eval3.executionPromise) {
+            await eval3.executionPromise.catch((err) => {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.log(`  ℹ️ Expected offline execution rejection (eval3): ${msg}`);
+            });
+        }
+        // -------------------------------------------------------------------
+        // TEST 4: Hot-Path Performance & Allocation Stress Test
+        // -------------------------------------------------------------------
+        console.log("\n[TEST 4] Benchmarking 100,000 Strategy Engine Tick Evaluations...");
+        // Set metrics to normal range so ticks yield NONE and evaluate hot path latency
+        storeAtomicFloat64(bigIntView, 1, 0.05); // OBI normal
+        storeAtomicFloat64(bigIntView, 2, 5.0); // CVD normal
+        const benchRiskGuard = new risk_1.RiskGuard({ minCooldownMs: 0 });
+        const benchEngine = new engine_1.StrategyEngine(client, benchRiskGuard, unconfiguredClient);
+        cleanupTargets.push(benchEngine);
+        const iterations = 100000;
+        const startTime = process.hrtime.bigint();
+        for (let i = 0; i < iterations; i++) {
+            Atomics.store(bigIntView, 92, BigInt(i + 10)); // increment sequence
+            benchEngine.evaluateTick();
+        }
+        const endTime = process.hrtime.bigint();
+        const totalNs = Number(endTime - startTime);
+        const avgNsPerTick = totalNs / iterations;
+        const avgUsPerTick = avgNsPerTick / 1000;
+        console.log(`  ✓ Processed ${iterations.toLocaleString()} ticks in ${(totalNs / 1e6).toFixed(2)} ms`);
+        console.log(`  ✓ Average Latency per Tick Evaluation: ${avgUsPerTick.toFixed(3)} µs`);
+        if (avgUsPerTick > 1.5) {
+            console.warn(`  ⚠️ Note: Average tick evaluation latency is ${avgUsPerTick.toFixed(3)} µs (V8 benchmark overhead).`);
+        }
+        else {
+            console.log(`  ✓ Sub-1.5µs Latency Target Achieved!`);
+        }
+        // -------------------------------------------------------------------
+        // TEST 5: Strict Omission Audit for Binance Order Parameters (Error -1106 Guard)
+        // -------------------------------------------------------------------
+        console.log("\n[TEST 5] Testing Strict Omission of timeInForce for Non-LIMIT Orders...");
+        // We can test placeOrder indirectly or signQuery directly
+        const marketOrderParams = {
+            symbol: "BTCUSDT",
+            side: "BUY",
+            type: "MARKET",
+            quantity: 0.001,
+        };
+        const signedMarketQuery = configuredClient.signQuery(marketOrderParams);
+        if (signedMarketQuery.includes("timeInForce")) {
+            throw new Error("FAIL: timeInForce parameter was serialized for MARKET order query string!");
+        }
+        console.log("  ✓ MARKET order query string is 100% free of timeInForce.");
+        class PayloadInspectingClient extends binance_1.BinanceExecutionClient {
+            lastPayload = null;
+            executeHttpRequest(_method, _endpoint, params = {}) {
+                this.lastPayload = params;
+                const response = {
+                    orderId: 12345,
+                    symbol: typeof params.symbol === "string" ? params.symbol : "BTCUSDT",
+                    status: "FILLED",
+                    clientOrderId: "",
+                    price: "0",
+                    avgPrice: "0",
+                    origQty: typeof params.quantity === "string" || typeof params.quantity === "number" ? String(params.quantity) : "0",
+                    executedQty: typeof params.quantity === "string" || typeof params.quantity === "number" ? String(params.quantity) : "0",
+                    cumQuote: "0",
+                    timeInForce: typeof params.timeInForce === "string" ? params.timeInForce : "GTC",
+                    type: typeof params.type === "string" ? params.type : "MARKET",
+                    reduceOnly: false,
+                    side: typeof params.side === "string" ? params.side : "BUY",
+                    positionSide: "BOTH",
+                    stopPrice: "0",
+                    workingType: "CONTRACT_PRICE",
+                    updateTime: Date.now(),
+                };
+                return Promise.resolve(response);
+            }
+        }
+        const mockClient = new PayloadInspectingClient({ apiKey: "key", apiSecret: "secret" });
+        cleanupTargets.push(mockClient);
+        // Test 5a: MARKET order
+        await mockClient.placeOrder({
+            symbol: "BTCUSDT",
+            side: "BUY",
+            type: "MARKET",
+            quantity: 0.001,
+            timeInForce: undefined, // pass undefined explicitly to test vulnerability
+        });
+        const payload5a = mockClient.lastPayload;
+        if (!payload5a) {
+            throw new Error("FAIL: MARKET order payload was not captured!");
+        }
+        if ("timeInForce" in payload5a || Object.prototype.hasOwnProperty.call(payload5a, "timeInForce")) {
+            throw new Error("FAIL: timeInForce key exists in MARKET order payload object!");
+        }
+        if (JSON.stringify(payload5a).includes("timeInForce")) {
+            throw new Error("FAIL: JSON.stringify(capturedPayload) contains timeInForce key for MARKET order!");
+        }
+        console.log("  ✓ MARKET order payload structurally guarantees total absence of timeInForce key.");
+        // Test 5b: STOP_MARKET order
+        await mockClient.placeOrder({
+            symbol: "BTCUSDT",
+            side: "SELL",
+            type: "STOP_MARKET",
+            quantity: 0.001,
+            stopPrice: 60000,
+            timeInForce: "GTC", // attempt to supply timeInForce to STOP_MARKET
+        });
+        const payload5b = mockClient.lastPayload;
+        if (!payload5b) {
+            throw new Error("FAIL: STOP_MARKET order payload was not captured!");
+        }
+        if ("timeInForce" in payload5b || Object.prototype.hasOwnProperty.call(payload5b, "timeInForce")) {
+            throw new Error("FAIL: timeInForce key exists in STOP_MARKET order payload object!");
+        }
+        console.log("  ✓ STOP_MARKET order payload structurally strips timeInForce key.");
+        // Test 5c: LIMIT order
+        await mockClient.placeOrder({
+            symbol: "BTCUSDT",
+            side: "BUY",
+            type: "LIMIT",
+            quantity: 0.001,
+            price: 64000,
+            timeInForce: "GTX",
+        });
+        const payload5c = mockClient.lastPayload;
+        if (!payload5c || !("timeInForce" in payload5c) || payload5c.timeInForce !== "GTX") {
+            throw new Error("FAIL: timeInForce key was missing or incorrect for LIMIT order!");
+        }
+        console.log("  ✓ LIMIT order payload correctly retains timeInForce=GTX.");
+        console.log("\n=================================================");
+        console.log("ALL PHASE 4 VERIFICATION TESTS PASSED SUCCESSFULLY!");
+        console.log("=================================================");
     }
-    // -------------------------------------------------------------------
-    // TEST 4: Hot-Path Performance & Allocation Stress Test
-    // -------------------------------------------------------------------
-    console.log("\n[TEST 4] Benchmarking 100,000 Strategy Engine Tick Evaluations...");
-    // Set metrics to normal range so ticks yield NONE and evaluate hot path latency
-    storeAtomicFloat64(bigIntView, 1, 0.05); // OBI normal
-    storeAtomicFloat64(bigIntView, 2, 5.0); // CVD normal
-    const benchRiskGuard = new risk_1.RiskGuard({ minCooldownMs: 0 });
-    const benchEngine = new engine_1.StrategyEngine(client, benchRiskGuard, unconfiguredClient);
-    const iterations = 100000;
-    const startTime = process.hrtime.bigint();
-    for (let i = 0; i < iterations; i++) {
-        Atomics.store(bigIntView, 92, BigInt(i + 10)); // increment sequence
-        benchEngine.evaluateTick();
-    }
-    const endTime = process.hrtime.bigint();
-    const totalNs = Number(endTime - startTime);
-    const avgNsPerTick = totalNs / iterations;
-    const avgUsPerTick = avgNsPerTick / 1000;
-    console.log(`  ✓ Processed ${iterations.toLocaleString()} ticks in ${(totalNs / 1e6).toFixed(2)} ms`);
-    console.log(`  ✓ Average Latency per Tick Evaluation: ${avgUsPerTick.toFixed(3)} µs`);
-    if (avgUsPerTick > 1.5) {
-        console.warn(`  ⚠️ Note: Average tick evaluation latency is ${avgUsPerTick.toFixed(3)} µs (V8 benchmark overhead).`);
-    }
-    else {
-        console.log(`  ✓ Sub-1.5µs Latency Target Achieved!`);
-    }
-    // -------------------------------------------------------------------
-    // TEST 5: Strict Omission Audit for Binance Order Parameters (Error -1106 Guard)
-    // -------------------------------------------------------------------
-    console.log("\n[TEST 5] Testing Strict Omission of timeInForce for Non-LIMIT Orders...");
-    // We can test placeOrder indirectly or signQuery directly
-    const marketOrderParams = {
-        symbol: "BTCUSDT",
-        side: "BUY",
-        type: "MARKET",
-        quantity: 0.001,
-    };
-    const signedMarketQuery = configuredClient.signQuery(marketOrderParams);
-    if (signedMarketQuery.includes("timeInForce")) {
-        throw new Error("FAIL: timeInForce parameter was serialized for MARKET order query string!");
-    }
-    console.log("  ✓ MARKET order query string is 100% free of timeInForce.");
-    class PayloadInspectingClient extends binance_1.BinanceExecutionClient {
-        lastPayload = null;
-        executeHttpRequest(_method, _endpoint, params = {}) {
-            this.lastPayload = params;
-            const response = {
-                orderId: 12345,
-                symbol: typeof params.symbol === "string" ? params.symbol : "BTCUSDT",
-                status: "FILLED",
-                clientOrderId: "",
-                price: "0",
-                avgPrice: "0",
-                origQty: String(params.quantity ?? "0"),
-                executedQty: String(params.quantity ?? "0"),
-                cumQuote: "0",
-                timeInForce: typeof params.timeInForce === "string" ? params.timeInForce : "GTC",
-                type: typeof params.type === "string" ? params.type : "MARKET",
-                reduceOnly: false,
-                side: typeof params.side === "string" ? params.side : "BUY",
-                positionSide: "BOTH",
-                stopPrice: "0",
-                workingType: "CONTRACT_PRICE",
-                updateTime: Date.now(),
-            };
-            return Promise.resolve(response);
+    finally {
+        for (let i = cleanupTargets.length - 1; i >= 0; i--) {
+            cleanupTargets[i].destroy();
         }
     }
-    const mockClient = new PayloadInspectingClient({ apiKey: "key", apiSecret: "secret" });
-    // Test 5a: MARKET order
-    await mockClient.placeOrder({
-        symbol: "BTCUSDT",
-        side: "BUY",
-        type: "MARKET",
-        quantity: 0.001,
-        timeInForce: undefined, // pass undefined explicitly to test vulnerability
-    });
-    const payload5a = mockClient.lastPayload;
-    if (!payload5a) {
-        throw new Error("FAIL: MARKET order payload was not captured!");
-    }
-    if ("timeInForce" in payload5a || Object.prototype.hasOwnProperty.call(payload5a, "timeInForce")) {
-        throw new Error("FAIL: timeInForce key exists in MARKET order payload object!");
-    }
-    if (JSON.stringify(payload5a).includes("timeInForce")) {
-        throw new Error("FAIL: JSON.stringify(capturedPayload) contains timeInForce key for MARKET order!");
-    }
-    console.log("  ✓ MARKET order payload structurally guarantees total absence of timeInForce key.");
-    // Test 5b: STOP_MARKET order
-    await mockClient.placeOrder({
-        symbol: "BTCUSDT",
-        side: "SELL",
-        type: "STOP_MARKET",
-        quantity: 0.001,
-        stopPrice: 60000,
-        timeInForce: "GTC", // attempt to supply timeInForce to STOP_MARKET
-    });
-    const payload5b = mockClient.lastPayload;
-    if (!payload5b) {
-        throw new Error("FAIL: STOP_MARKET order payload was not captured!");
-    }
-    if ("timeInForce" in payload5b || Object.prototype.hasOwnProperty.call(payload5b, "timeInForce")) {
-        throw new Error("FAIL: timeInForce key exists in STOP_MARKET order payload object!");
-    }
-    console.log("  ✓ STOP_MARKET order payload structurally strips timeInForce key.");
-    // Test 5c: LIMIT order
-    await mockClient.placeOrder({
-        symbol: "BTCUSDT",
-        side: "BUY",
-        type: "LIMIT",
-        quantity: 0.001,
-        price: 64000,
-        timeInForce: "GTX",
-    });
-    const payload5c = mockClient.lastPayload;
-    if (!payload5c || !("timeInForce" in payload5c) || payload5c.timeInForce !== "GTX") {
-        throw new Error("FAIL: timeInForce key was missing or incorrect for LIMIT order!");
-    }
-    console.log("  ✓ LIMIT order payload correctly retains timeInForce=GTX.");
-    console.log("\n=================================================");
-    console.log("ALL PHASE 4 VERIFICATION TESTS PASSED SUCCESSFULLY!");
-    console.log("=================================================");
 }
 runVerificationTests().catch((err) => {
     console.error("Test failure:", err);

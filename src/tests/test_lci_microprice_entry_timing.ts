@@ -119,6 +119,8 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
     maxShortSlots: 3,
   });
 
+  try {
+
   const bigIntView = new BigInt64Array(sab);
 
   // Set healthy IC (+0.05) so IR gate is satisfied
@@ -327,7 +329,10 @@ async function runLCIMicropriceTimingTestSuite(): Promise<void> {
   console.log("  ✅ ALL 4 TEST STAGES PASSED (100% SOTA DEF-R8 & DEF-3102 SPECIFICATION COMPLIANCE)");
   console.log("  Zero Mock Invariant: 100% Proven via Physical Native Rust AI Inference");
   console.log("================================================================================\n");
-  process.exit(0);
+  } finally {
+    engine.destroy();
+    execClient.destroy();
+  }
 }
 
 runLCIMicropriceTimingTestSuite().catch((err: unknown) => {

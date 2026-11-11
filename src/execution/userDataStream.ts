@@ -23,7 +23,7 @@ export interface OrderTradeUpdatePayload {
     cumulativeFilledQuantity: number;
     lastFilledPrice: number;
     commissionAsset: string;
-    commissionAmount: number;
+    commissionAmount?: number;
     tradeTime: number;
     tradeId: number;
     bidsNotional: number;
@@ -56,7 +56,7 @@ export interface RawWsPositionPayload {
   ep: string;
   cr: string;
   up: string;
-  ps?: "LONG" | "SHORT" | "BOTH";
+  ps: "LONG" | "SHORT" | "BOTH";
 }
 
 export interface RawWsBalancePayload {
@@ -276,9 +276,6 @@ function parsePositionSide(
   value: unknown,
   context: string
 ): "LONG" | "SHORT" | "BOTH" {
-  if (value === undefined || value === null) {
-    return "BOTH";
-  }
   if (value === "LONG" || value === "SHORT" || value === "BOTH") {
     return value;
   }
@@ -465,7 +462,7 @@ export class BinanceUserDataStream {
           cumulativeFilledQuantity: requireNumericField(ord, "z", "ORDER_TRADE_UPDATE.o"),
           lastFilledPrice: requireNumericField(ord, "L", "ORDER_TRADE_UPDATE.o"),
           commissionAsset: readOptionalString(ord, "N", "ORDER_TRADE_UPDATE.o"),
-          commissionAmount: commissionAmountOpt ?? 0,
+          commissionAmount: commissionAmountOpt,
           tradeTime: requireFiniteNumber(ord, "T", "ORDER_TRADE_UPDATE.o"),
           tradeId: requireFiniteNumber(ord, "t", "ORDER_TRADE_UPDATE.o"),
           bidsNotional: requireNumericField(ord, "b", "ORDER_TRADE_UPDATE.o"),
@@ -505,7 +502,7 @@ export class BinanceUserDataStream {
         entryPrice: parseStrictNumericString(p.ep, "ep", "ACCOUNT_UPDATE.a.P"),
         accumulatedRealized: parseStrictNumericString(p.cr, "cr", "ACCOUNT_UPDATE.a.P"),
         unrealizedPnl: parseStrictNumericString(p.up, "up", "ACCOUNT_UPDATE.a.P"),
-        positionSide: p.ps ?? "BOTH",
+        positionSide: p.ps,
       }));
 
       if (acct["B"] !== undefined && !Array.isArray(acct["B"])) {

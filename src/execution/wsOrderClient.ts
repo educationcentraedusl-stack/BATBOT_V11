@@ -144,11 +144,23 @@ export interface PendingRequest {
 
 // Raw Binance WS-FAPI response shape (minimal — only fields we consume)
 interface RawWsResponse {
-  id: string;
-  status: number;
+  id: string | undefined;
+  status: number | undefined;
   result?: unknown;
   error?: { code: number; msg: string };
   rateLimits?: WsRateLimit[];
+}
+
+function resolveNonEmptyCredential(...candidates: Array<string | undefined>): string | null {
+  for (const candidate of candidates) {
+    if (typeof candidate === "string") {
+      const trimmed = candidate.trim();
+      if (trimmed.length > 0) {
+        return trimmed;
+      }
+    }
+  }
+  return null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -191,9 +203,11 @@ function parseRawWsResponse(obj: Record<string, unknown>): RawWsResponse {
   const rawLimits = Array.isArray(obj["rateLimits"])
     ? obj["rateLimits"].filter(isWsRateLimit)
     : undefined;
+  const rawId = obj["id"];
+  const rawStatus = obj["status"];
   return {
-    id: typeof obj["id"] === "string" ? obj["id"] : "",
-    status: typeof obj["status"] === "number" ? obj["status"] : 0,
+    id: typeof rawId === "string" && rawId.trim().length > 0 ? rawId : undefined,
+    status: typeof rawStatus === "number" && Number.isFinite(rawStatus) ? rawStatus : undefined,
     result: obj["result"],
     error:
       errorObj && typeof errorObj["code"] === "number" && typeof errorObj["msg"] === "string"
@@ -238,8 +252,8 @@ export const KNOWN_SORTED_KEYS = [
 export class WsOrderClient {
   protected ws: WsSocketLike | null = null;
   protected readonly wsEndpoint: string;
-  private readonly apiKey: string;
-  private readonly apiSecret: string;
+  private readonly apiKey: string | null;
+  private readonly apiSecret: string | null;
   private readonly requestTimeoutMs: number;
   private readonly maxReconnectAttempts: number;
 
@@ -271,19 +285,27 @@ export class WsOrderClient {
       ? "wss://testnet.binancefuture.com/ws-fapi/v1"
       : "wss://ws-fapi.binance.com/ws-fapi/v1";
 
-    const envKey = useTestnet
-      ? process.env.BINANCE_TESTNET_API_KEY ?? process.env.BINANCE_API_KEY ?? ""
-      : process.env.BINANCE_API_KEY ?? "";
-    const envSecret = useTestnet
-      ? process.env.BINANCE_TESTNET_API_SECRET ??
-        process.env.BINANCE_TESTNET_SECRET_KEY ??
-        process.env.BINANCE_API_SECRET ??
-        process.env.BINANCE_SECRET_KEY ??
-        ""
-      : process.env.BINANCE_API_SECRET ?? process.env.BINANCE_SECRET_KEY ?? "";
+    this.apiKey = useTestnet
+      ? resolveNonEmptyCredential(
+          options?.apiKey,
+          process.env.BINANCE_TESTNET_API_KEY,
+          process.env.BINANCE_API_KEY
+        )
+      : resolveNonEmptyCredential(options?.apiKey, process.env.BINANCE_API_KEY);
 
-    this.apiKey = options?.apiKey ?? envKey;
-    this.apiSecret = options?.apiSecret ?? envSecret;
+    this.apiSecret = useTestnet
+      ? resolveNonEmptyCredential(
+          options?.apiSecret,
+          process.env.BINANCE_TESTNET_API_SECRET,
+          process.env.BINANCE_TESTNET_SECRET_KEY,
+          process.env.BINANCE_API_SECRET,
+          process.env.BINANCE_SECRET_KEY
+        )
+      : resolveNonEmptyCredential(
+          options?.apiSecret,
+          process.env.BINANCE_API_SECRET,
+          process.env.BINANCE_SECRET_KEY
+        );
 
     const envTimeout = process.env.WS_ORDER_REQUEST_TIMEOUT_MS
       ? parseInt(process.env.WS_ORDER_REQUEST_TIMEOUT_MS, 10)
@@ -299,7 +321,7 @@ export class WsOrderClient {
       options?.maxReconnectAttempts ??
       (envMaxReconnect !== undefined && Number.isFinite(envMaxReconnect) && envMaxReconnect >= 0 ? envMaxReconnect : 10);
 
-    if (!this.apiKey || !this.apiSecret) {
+    if (this.apiKey === null || this.apiSecret === null) {
       console.error(
         "[WsOrderClient][CRITICAL] Missing API key or secret. Order submission will fail."
       );
@@ -662,6 +684,11 @@ export class WsOrderClient {
     p: Record<string, string | number | boolean>,
     recvWindow?: number
   ): void {
+    if (this.apiKey === null || this.apiSecret === null) {
+      throw new Error(
+        "[WsOrderClient] Missing API key or secret. Cannot sign WebSocket order request."
+      );
+    }
     const timestamp = timeSynchronizer.getAdjustedNowMs();
     const rw = recvWindow ?? parseInt(process.env.RECV_WINDOW_MS ?? "5000", 10);
 
@@ -809,7 +836,7 @@ export class WsOrderClient {
     }
 
     const id = raw.id;
-    if (!id) {
+    if (id === undefined) {
       // Not a request/response message (e.g., ping/pong, keepalive) — silently ignore
       return;
     }
@@ -825,7 +852,12 @@ export class WsOrderClient {
 
     const rttMs = Date.now() - pending.dispatchedAtMs;
 
-    if (raw.status >= 200 && raw.status < 300 && isWsResultPayload(raw.result)) {
+    if (
+      raw.status !== undefined &&
+      raw.status >= 200 &&
+      raw.status < 300 &&
+      isWsResultPayload(raw.result)
+    ) {
       pending.resolve({
         id,
         status: raw.status,
@@ -835,8 +867,10 @@ export class WsOrderClient {
         rttMs,
       });
     } else {
-      const errCode = raw.error?.code ?? raw.status;
-      const errMsg = raw.error?.msg ?? `HTTP ${String(raw.status)}`;
+      const errCode = raw.error?.code ?? raw.status ?? "UNKNOWN";
+      const errMsg =
+        raw.error?.msg ??
+        (raw.status !== undefined ? `HTTP ${String(raw.status)}` : "Missing WS status");
       pending.reject(
         new Error(
           `[WsOrderClient] Binance WS Order API Error [${String(errCode)}]: ${errMsg} (request: ${id})`

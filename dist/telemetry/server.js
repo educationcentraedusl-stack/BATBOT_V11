@@ -99,7 +99,7 @@ class TelemetryWSServer {
                         ws.send(JSON.stringify({ success: res.success, action: cmd.action, message: res.message, timestamp: Date.now() }));
                     }
                     else {
-                        const responseBuf = (0, proto_1.encodeControlResponse)(res.success, cmd.action, res.message);
+                        const responseBuf = (0, proto_1.encodeControlResponse)(res.success, cmd.action, res.message, Date.now());
                         ws.send(responseBuf);
                     }
                 }

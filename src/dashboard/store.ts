@@ -112,7 +112,10 @@ function scheduleNotify(): void {
   });
 }
 
-export function initTelemetryWorker(wsUrl: string = "ws://localhost:8080"): void {
+export function initTelemetryWorker(wsUrl: string): void {
+  if (wsUrl.trim().length === 0) {
+    throw new Error("[store] initTelemetryWorker requires a non-empty WebSocket URL.");
+  }
   if (worker || typeof window === "undefined") return;
 
   try {

@@ -10,6 +10,7 @@ import { TelemetryWSServer } from "./telemetry/server";
 import { ControlCommand } from "./telemetry/proto";
 import { AutoRecalibrationManager } from "./ai/recalibrationWorker";
 import { SymbolPrecisionRegistry } from "./config/symbolPrecision";
+import { getTradingSymbols } from "./config/tradingSymbols";
 
 import { MultiAssetStrategyEngine } from "./strategy/multiEngine";
 import { MultiAssetRiskGuard } from "./strategy/risk";
@@ -123,7 +124,11 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
   client.flushTelemetry();
   const riskGuard = new RiskGuard();
   const executionClient = new BinanceExecutionClient();
-  const symbol = process.env.SYMBOL ?? "BTCUSDT";
+  const envSymbol = process.env.SYMBOL?.trim();
+  const symbol = envSymbol && envSymbol.length > 0 ? envSymbol.toUpperCase() : getTradingSymbols(1)[0];
+  if (!symbol) {
+    throw new Error("[initializeSystem] Unable to resolve primary trading symbol from SYMBOL or configuration");
+  }
   const strategyEngine = new StrategyEngine(client, riskGuard, executionClient, { symbol });
   const logger = new TradeLogger("data");
   const csvLogger = new CsvTradeLogger("data", "trade_history.csv");
@@ -165,8 +170,10 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
           }
         }
         return { success: true, message: "EMERGENCY KILL EXECUTED: Engine Halted & Position Flattened" };
-      case "AI_HOT_SWAP":
-        return { success: true, message: `Model Hot-Swap Triggered for: ${cmd.modelPath || "default"}` };
+      case "AI_HOT_SWAP": {
+        const requestedModel = cmd.modelPath && cmd.modelPath.trim().length > 0 ? cmd.modelPath : "UNSPECIFIED";
+        return { success: true, message: `Model Hot-Swap Triggered for: ${requestedModel}` };
+      }
       default: {
         const unknownAction = typeof cmd.action === "string" ? cmd.action : "UNKNOWN";
         return { success: false, message: `Unknown command action: ${unknownAction}` };
@@ -228,16 +235,33 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
       tickResult.executionPromise
         .then((orderRes) => {
           if (orderRes) {
-            const execQty = parseFloat(orderRes.executedQty || "0");
-            const origQty = parseFloat(orderRes.origQty || "0");
-            const finalQty = execQty > 0 ? execQty : (origQty > 0 ? origQty : strategyEngine.getConfig().orderQuantity);
-            const px = parseFloat(orderRes.price || orderRes.avgPrice || "0") || (tickResult.signalType === "BUY" ? tickResult.askPrice : tickResult.bidPrice);
-            const fee = (px * finalQty) * DEFAULT_TAKER_FEE_RATE;
-            const fillSide: "BUY" | "SELL" = orderRes.side === "BUY" || orderRes.side === "SELL" ? orderRes.side : (tickResult.signalType === "BUY" || tickResult.signalType === "SELL" ? tickResult.signalType : "BUY");
-            const symbol = orderRes.symbol || strategyEngine.getConfig().symbol;
+            const parsePositiveDecimal = (raw: string | undefined): number | null => {
+              if (typeof raw !== "string") return null;
+              const trimmed = raw.trim();
+              if (trimmed.length === 0) return null;
+              const parsed = Number(trimmed);
+              return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+            };
+            const execQty = parsePositiveDecimal(orderRes.executedQty);
+            const origQty = parsePositiveDecimal(orderRes.origQty);
+            const finalQty = execQty ?? origQty ?? strategyEngine.getConfig().orderQuantity;
+            const parsedOrderPrice =
+              parsePositiveDecimal(orderRes.price) ?? parsePositiveDecimal(orderRes.avgPrice);
+            const px =
+              parsedOrderPrice ??
+              (tickResult.signalType === "BUY" ? tickResult.askPrice : tickResult.bidPrice);
+            const fee = px * finalQty * DEFAULT_TAKER_FEE_RATE;
+            const fillSide: "BUY" | "SELL" =
+              orderRes.side === "BUY" || orderRes.side === "SELL"
+                ? orderRes.side
+                : tickResult.signalType === "BUY" || tickResult.signalType === "SELL"
+                  ? tickResult.signalType
+                  : "BUY";
+            const fillSymbol =
+              orderRes.symbol.trim().length > 0 ? orderRes.symbol : strategyEngine.getConfig().symbol;
 
             // Route fill execution through zero-GC PositionLedger FIFO engine
-            const ledgerResult = positionLedger.processFill(symbol, fillSide, px, finalQty, fee, tickResult.exitReason);
+            const ledgerResult = positionLedger.processFill(fillSymbol, fillSide, px, finalQty, fee, tickResult.exitReason);
 
             // Log closed trade to CSV asynchronously (non-blocking) when a position is completely closed
             if (ledgerResult.closedTrade) {
@@ -249,7 +273,7 @@ export async function initializeSystem(): Promise<SystemControlPlane> {
             riskGuard.updatePositionNotional(ledgerResult.netQuantityAfterFill * ledgerResult.averageEntryPriceAfterFill);
 
             logger.logExecution(
-              symbol,
+              fillSymbol,
               fillSide,
               px,
               finalQty,

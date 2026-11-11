@@ -69,6 +69,48 @@ function parseOptionalAlgoDecimalString(val, fieldName, context) {
     }
     return trimmed;
 }
+function resolveCredentialValue(raw) {
+    if (typeof raw !== "string")
+        return null;
+    const trimmed = raw.trim();
+    return trimmed.length > 0 ? trimmed : null;
+}
+function normalizeOptionalString(raw) {
+    if (typeof raw !== "string")
+        return undefined;
+    const trimmed = raw.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+}
+function requireNonEmptyString(raw, fieldName, context) {
+    if (typeof raw !== "string" || raw.trim().length === 0) {
+        throw new Error(`[BinanceExecutionClient] Missing or empty string for "${fieldName}" in ${context}`);
+    }
+    return raw.trim();
+}
+function parseStrictFloat(raw, fieldName, context) {
+    if (typeof raw === "number") {
+        if (!Number.isFinite(raw)) {
+            throw new Error(`[BinanceExecutionClient] Non-finite number (${String(raw)}) for "${fieldName}" in ${context}`);
+        }
+        return raw;
+    }
+    if (typeof raw === "string") {
+        const trimmed = raw.trim();
+        if (trimmed.length > 0) {
+            const parsed = Number(trimmed);
+            if (Number.isFinite(parsed)) {
+                return parsed;
+            }
+        }
+    }
+    throw new Error(`[BinanceExecutionClient] Missing or invalid numeric value (${String(raw)}) for "${fieldName}" in ${context}`);
+}
+function parseStrictPositionSide(raw, fieldName, context) {
+    if (raw === "LONG" || raw === "SHORT" || raw === "BOTH") {
+        return raw;
+    }
+    throw new Error(`[BinanceExecutionClient] Invalid ${fieldName} (${String(raw)}) in ${context}`);
+}
 function requireValidAdjustPrice(params, pathLabel) {
     if (typeof params.price !== "number" || !Number.isFinite(params.price) || params.price <= 0) {
         throw new Error(`[BinanceExecutionClient][-5022_INVALID_PRICE] Missing or non-positive params.price (${String(params.price)}) during ${pathLabel} retry for ${params.symbol} ${params.side}`);
@@ -301,6 +343,9 @@ class BinanceExecutionClient {
         this.wsOrderClientInitPromise = (async () => {
             let wsClient = null;
             try {
+                if (this.apiKey === null || this.apiSecret === null) {
+                    throw new Error("[BinanceExecutionClient][UNCONFIGURED] Cannot start WsOrderClient without API credentials.");
+                }
                 const envTimeout = process.env.WS_ORDER_REQUEST_TIMEOUT_MS
                     ? parseInt(process.env.WS_ORDER_REQUEST_TIMEOUT_MS, 10)
                     : undefined;
@@ -403,13 +448,16 @@ class BinanceExecutionClient {
     constructor(options) {
         this.testnet = options?.useTestnet ?? (process.env.USE_TESTNET === "true" || process.env.USE_TESTNET === "1" || process.env.BINANCE_TESTNET === "true");
         const envApiKey = this.testnet
-            ? (process.env.BINANCE_TESTNET_API_KEY || process.env.BINANCE_API_KEY || "")
-            : (process.env.BINANCE_API_KEY || "");
+            ? (resolveCredentialValue(process.env.BINANCE_TESTNET_API_KEY) ?? resolveCredentialValue(process.env.BINANCE_API_KEY))
+            : resolveCredentialValue(process.env.BINANCE_API_KEY);
         const envApiSecret = this.testnet
-            ? (process.env.BINANCE_TESTNET_SECRET_KEY || process.env.BINANCE_API_SECRET || process.env.BINANCE_SECRET_KEY || "")
-            : (process.env.BINANCE_API_SECRET || process.env.BINANCE_SECRET_KEY || "");
-        this.apiKey = options?.apiKey ?? envApiKey;
-        this.apiSecret = options?.apiSecret ?? envApiSecret;
+            ? (resolveCredentialValue(process.env.BINANCE_TESTNET_SECRET_KEY) ??
+                resolveCredentialValue(process.env.BINANCE_API_SECRET) ??
+                resolveCredentialValue(process.env.BINANCE_SECRET_KEY))
+            : (resolveCredentialValue(process.env.BINANCE_API_SECRET) ??
+                resolveCredentialValue(process.env.BINANCE_SECRET_KEY));
+        this.apiKey = options?.apiKey !== undefined ? resolveCredentialValue(options.apiKey) : envApiKey;
+        this.apiSecret = options?.apiSecret !== undefined ? resolveCredentialValue(options.apiSecret) : envApiSecret;
         const defaultRestBase = this.testnet
             ? "https://testnet.binancefuture.com"
             : "https://fapi.binance.com";
@@ -418,7 +466,7 @@ class BinanceExecutionClient {
             : "wss://fstream.binance.com";
         this.baseUrl = options?.baseUrl ?? defaultRestBase;
         this.wsUrl = options?.wsUrl ?? defaultWsBase;
-        if (!this.apiKey || !this.apiSecret) {
+        if (this.apiKey === null || this.apiSecret === null) {
             console.error(`[CRITICAL][BinanceExecutionClient] Missing BINANCE_API_KEY or BINANCE_API_SECRET in environment variables. Execution mode: ${this.testnet ? "BINANCE FUTURES TESTNET" : "LIVE PRODUCTION"}`);
         }
     }
@@ -432,7 +480,7 @@ class BinanceExecutionClient {
         return this.wsUrl;
     }
     isConfigured() {
-        return this.apiKey.length > 0 && this.apiSecret.length > 0;
+        return this.apiKey !== null && this.apiSecret !== null;
     }
     getTimeOffset() {
         const syncOffset = timeSynchronizer_1.timeSynchronizer.getOffsetMs();
@@ -482,20 +530,13 @@ class BinanceExecutionClient {
      * Returns funding rate as a float (e.g. 0.0001 = 1 bp).
      */
     async fetchFundingRate(symbol) {
-        try {
-            const res = await this.fetchPremiumIndex(symbol);
-            const item = Array.isArray(res) ? res.find((p) => p.symbol === symbol.toUpperCase()) : res;
-            if (item && item.lastFundingRate) {
-                const rate = parseFloat(item.lastFundingRate);
-                return Number.isFinite(rate) ? rate : 0.0;
-            }
-            return 0.0;
+        const cleanSymbol = requireNonEmptyString(symbol, "symbol", "fetchFundingRate").toUpperCase();
+        const res = await this.fetchPremiumIndex(cleanSymbol);
+        const item = Array.isArray(res) ? res.find((p) => p.symbol === cleanSymbol) : res;
+        if (!item) {
+            throw new Error(`[BinanceExecutionClient][INVALID_FUNDING_RATE] Missing premiumIndex entry for ${cleanSymbol}`);
         }
-        catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.warn(`[BinanceExecutionClient] Failed to fetch funding rate for ${symbol}: ${msg}`);
-            return 0.0;
-        }
+        return parseStrictFloat(item.lastFundingRate, "lastFundingRate", `fetchFundingRate (${cleanSymbol})`);
     }
     /**
      * Phase 5 HFT Overhaul: Batch fetches live perpetual funding rates for all Binance Futures symbols
@@ -508,10 +549,18 @@ class BinanceExecutionClient {
                 return;
             const rateMap = new Map();
             for (const item of allRates) {
-                const r = parseFloat(item.lastFundingRate || "0");
-                if (Number.isFinite(r)) {
-                    rateMap.set(item.symbol.toUpperCase(), r);
+                if (typeof item.symbol !== "string" || item.symbol.trim().length === 0)
+                    continue;
+                if (typeof item.lastFundingRate !== "string")
+                    continue;
+                const trimmedRate = item.lastFundingRate.trim();
+                if (trimmedRate.length === 0)
+                    continue;
+                const r = Number(trimmedRate);
+                if (!Number.isFinite(r)) {
+                    throw new Error(`[BinanceExecutionClient][INVALID_FUNDING_RATE] Malformed lastFundingRate "${trimmedRate}" for ${item.symbol}`);
                 }
+                rateMap.set(item.symbol.toUpperCase(), r);
             }
             // Update explicitly registered symbols
             for (const [sym, entry] of this.registeredFundingSymbols) {
@@ -547,7 +596,7 @@ class BinanceExecutionClient {
     async ensureFundingRateStream(client, assetIndex, symbol) {
         if (process.env.NODE_ENV === "test" || this.isDestroyed)
             return;
-        const sym = symbol ? symbol.toUpperCase() : "BTCUSDT";
+        const sym = requireNonEmptyString(symbol, "symbol", "ensureFundingRateStream").toUpperCase();
         this.registeredFundingSymbols.set(sym, { client, assetIndex });
         this.resolveAssetIndex(sym, assetIndex);
         // 1. Immediate REST hydration to guarantee SAB Slot 168 is populated right away
@@ -791,26 +840,21 @@ class BinanceExecutionClient {
         }, 200);
     }
     async fetchUsdtBalanceAsync() {
-        if (!this.isConfigured())
-            return 0;
-        try {
-            const balances = await this.request("GET", "/fapi/v2/balance", {}, true);
-            if (Array.isArray(balances)) {
-                const usdtItem = balances.find((b) => b.asset === "USDT");
-                if (usdtItem) {
-                    const val = parseFloat(usdtItem.availableBalance || usdtItem.balance || "0");
-                    if (!isNaN(val)) {
-                        this.cachedUsdtAvailableBalance = val;
-                        return val;
-                    }
-                }
-            }
+        if (!this.isConfigured()) {
+            throw new Error("[BinanceExecutionClient][UNCONFIGURED] Cannot fetch USDT balance without API credentials.");
         }
-        catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.log(`[BinanceExecutionClient] USDT balance fetch notice: ${msg}`);
+        const balances = await this.request("GET", "/fapi/v2/balance", {}, true);
+        if (!Array.isArray(balances)) {
+            throw new Error("[BinanceExecutionClient][INVALID_BALANCE_RESPONSE] Expected array from /fapi/v2/balance.");
         }
-        return this.cachedUsdtAvailableBalance;
+        const usdtItem = balances.find((b) => b.asset === "USDT");
+        if (!usdtItem) {
+            throw new Error("[BinanceExecutionClient][MISSING_USDT_BALANCE] USDT entry absent in /fapi/v2/balance response.");
+        }
+        const rawBalance = normalizeOptionalString(usdtItem.availableBalance) ?? usdtItem.balance;
+        const val = parseStrictFloat(rawBalance, "availableBalance/balance", "fetchUsdtBalanceAsync (USDT)");
+        this.cachedUsdtAvailableBalance = val;
+        return val;
     }
     /**
      * Seed startup balance asynchronously. Recurring REST polling is physically eradicated
@@ -840,6 +884,9 @@ class BinanceExecutionClient {
             queryParams.append("recvWindow", "10000");
         }
         queryParams.append("timestamp", String(timestamp));
+        if (this.apiSecret === null) {
+            throw new Error("[BinanceExecutionClient][UNCONFIGURED] Cannot sign query without API secret.");
+        }
         const queryString = queryParams.toString();
         const signature = crypto
             .createHmac("sha256", this.apiSecret)
@@ -879,16 +926,19 @@ class BinanceExecutionClient {
             let isSettled = false;
             const isHttps = url.protocol === "https:";
             const httpModule = isHttps ? https : http;
+            const reqHeaders = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "BATBOT_V11-HFT-Engine/1.0",
+            };
+            if (this.apiKey !== null) {
+                reqHeaders["X-MBX-APIKEY"] = this.apiKey;
+            }
             const reqOptions = {
                 hostname: url.hostname,
                 port: url.port || (isHttps ? 443 : 80),
                 path: `${url.pathname}${url.search}`,
                 method: method,
-                headers: {
-                    "X-MBX-APIKEY": this.apiKey,
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "User-Agent": "BATBOT_V11-HFT-Engine/1.0",
-                },
+                headers: reqHeaders,
             };
             const req = httpModule.request(reqOptions, (res) => {
                 let body = "";
@@ -1033,12 +1083,14 @@ class BinanceExecutionClient {
      * forcibly cancels them, and verifies through zero-trust polling that exactly 0 conflicting orders remain on the exchange.
      */
     async synchronizeAndCancelConflictingOrders(symbol, positionSide, signal) {
-        const targetPosSide = positionSide;
+        const posSideLabel = positionSide !== undefined ? positionSide : "UNSPECIFIED";
         let cancelledCount = 0;
         try {
             const openOrders = await this.getOpenOrders(symbol);
             const conflictingOrders = openOrders.filter((ord) => {
-                const matchesPosSide = !ord.positionSide || ord.positionSide === "BOTH" || ord.positionSide === targetPosSide;
+                const matchesPosSide = positionSide === undefined
+                    ? (!ord.positionSide || ord.positionSide === "BOTH")
+                    : (!ord.positionSide || ord.positionSide === "BOTH" || ord.positionSide === positionSide);
                 const isConditionalOrClose = ord.type === "STOP_MARKET" ||
                     ord.type === "TAKE_PROFIT_MARKET" ||
                     ord.type === "STOP" ||
@@ -1047,7 +1099,7 @@ class BinanceExecutionClient {
                 return matchesPosSide && isConditionalOrClose;
             });
             if (conflictingOrders.length > 0) {
-                console.log(`[BinanceExecutionClient][PRE_FLIGHT_ANNIHILATION] Found ${String(conflictingOrders.length)} conflicting resting order(s) for ${symbol} (${targetPosSide}). Forcibly cancelling...`);
+                console.log(`[BinanceExecutionClient][PRE_FLIGHT_ANNIHILATION] Found ${String(conflictingOrders.length)} conflicting resting order(s) for ${symbol} (${posSideLabel}). Forcibly cancelling...`);
                 for (const ord of conflictingOrders) {
                     try {
                         await this.cancelOrder(symbol, ord.orderId, signal);
@@ -1071,7 +1123,9 @@ class BinanceExecutionClient {
                     try {
                         const recheckOrders = await this.getOpenOrders(symbol);
                         const stillActive = recheckOrders.filter((ord) => {
-                            const matchesPosSide = !ord.positionSide || ord.positionSide === "BOTH" || ord.positionSide === targetPosSide;
+                            const matchesPosSide = positionSide === undefined
+                                ? (!ord.positionSide || ord.positionSide === "BOTH")
+                                : (!ord.positionSide || ord.positionSide === "BOTH" || ord.positionSide === positionSide);
                             const isConditionalOrClose = ord.type === "STOP_MARKET" ||
                                 ord.type === "TAKE_PROFIT_MARKET" ||
                                 ord.type === "STOP" ||
@@ -1098,7 +1152,7 @@ class BinanceExecutionClient {
                     }
                 }
                 if (remainingConflicts === 0) {
-                    console.log(`[BinanceExecutionClient][VERIFY_BARRIER_CLEARED] Exchange verified clean: 0 resting conflicting orders for ${symbol} (${targetPosSide}).`);
+                    console.log(`[BinanceExecutionClient][VERIFY_BARRIER_CLEARED] Exchange verified clean: 0 resting conflicting orders for ${symbol} (${posSideLabel}).`);
                 }
             }
         }
@@ -1196,7 +1250,7 @@ class BinanceExecutionClient {
         }
         const isClosePosition = params.closePosition === true || String(params.closePosition).toLowerCase() === "true";
         const formattedQty = !isClosePosition ? requirePositiveQuantity(params) : undefined;
-        const cid = (params.clientOrderId || "").trim();
+        const cid = normalizeOptionalString(params.clientOrderId);
         const payload = {
             symbol: params.symbol,
             side: params.side,
@@ -1227,7 +1281,7 @@ class BinanceExecutionClient {
             payload.recvWindow = params.recvWindow;
         if (params.positionSide !== undefined)
             payload.positionSide = params.positionSide;
-        if (cid.length > 0)
+        if (cid !== undefined)
             payload.newClientOrderId = cid;
         return await this.request("PUT", "/fapi/v1/order", payload, true, false, signal);
     }
@@ -1273,9 +1327,10 @@ class BinanceExecutionClient {
                 if (!fallbackQty || fallbackQty <= 0) {
                     try {
                         const posRisks = await this.getPositionRisk(symbol);
-                        const matchPos = posRisks.find((p) => p.positionSide === positionSide || (positionSide === "BOTH" && parseFloat(p.positionAmt) !== 0));
+                        const matchPos = posRisks.find((p) => p.positionSide === positionSide ||
+                            (positionSide === "BOTH" && parseStrictFloat(p.positionAmt, "positionAmt", `positionRisk (${p.symbol})`) !== 0));
                         if (matchPos) {
-                            const amt = Math.abs(parseFloat(matchPos.positionAmt || "0"));
+                            const amt = Math.abs(parseStrictFloat(matchPos.positionAmt, "positionAmt", `positionRisk (${matchPos.symbol})`));
                             if (amt > 0)
                                 fallbackQty = amt;
                         }
@@ -1351,14 +1406,14 @@ class BinanceExecutionClient {
         return await this.placeOrder(params, 0, signal);
     }
     async placeOrder(params, retryCount = 0, signal) {
-        const cid = (params.clientOrderId || "").trim();
-        if (cid.length > 0 && retryCount === 0) {
+        const cid = normalizeOptionalString(params.clientOrderId);
+        if (cid !== undefined && retryCount === 0) {
             if (this.inFlightClientOrderIds.has(cid)) {
                 throw new Error(`[BinanceExecutionClient][DEDUPLICATION_BARRIER] Blocked duplicate concurrent submission for ClientOrderId: ${cid}`);
             }
         }
         try {
-            if (cid.length > 0 && retryCount === 0) {
+            if (cid !== undefined && retryCount === 0) {
                 this.inFlightClientOrderIds.add(cid);
             }
             const targetAssetIndex = this.resolveAssetIndex(params.symbol, params.assetIndex);
@@ -1395,14 +1450,14 @@ class BinanceExecutionClient {
                             reduceOnly: params.reduceOnly,
                             closePosition: params.closePosition,
                             workingType: params.workingType,
-                            newClientOrderId: cid.length > 0 ? cid : undefined,
+                            newClientOrderId: cid,
                             recvWindow: params.recvWindow,
                         };
                         const wsResponse = await this.wsOrderClient.placeOrder(wsParams);
                         // Update SAB telemetry slots 159 and 160 atomically (zero-GC scalar writes)
                         this._writeWsTelemetry(targetAssetIndex, wsResponse.rttMs, true);
                         if (wsResponse.result === null) {
-                            throw new Error(`[BinanceExecutionClient][WS_NULL_RESULT] WS order.place returned null result for ${params.symbol} cid=${cid}`);
+                            throw new Error(`[BinanceExecutionClient][WS_NULL_RESULT] WS order.place returned null result for ${params.symbol} cid=${cid ?? "UNSET"}`);
                         }
                         // Normalize WsOrderResult → BinanceOrderResponse (shape-compatible)
                         const r = wsResponse.result;
@@ -1472,8 +1527,8 @@ class BinanceExecutionClient {
                         if (isConflictOrGteError && retryCount < 2) {
                             this._writeWsTelemetry(targetAssetIndex, 0.0, false);
                             console.warn(`[BinanceExecutionClient][-4509/-4130 WS RECOVERY] Binance WS rejected order on ${params.symbol}: ${wsErrMsg}. Synchronizing conflicting orders and retrying...`);
-                            await this.synchronizeAndCancelConflictingOrders(params.symbol, params.positionSide ?? "BOTH", signal);
-                            const nextCid = params.clientOrderId ? `${params.clientOrderId}_R${String(retryCount + 1)}` : undefined;
+                            await this.synchronizeAndCancelConflictingOrders(params.symbol, params.positionSide, signal);
+                            const nextCid = cid !== undefined ? `${cid}_R${String(retryCount + 1)}` : undefined;
                             return await this.placeOrder({
                                 ...params,
                                 clientOrderId: nextCid,
@@ -1483,7 +1538,7 @@ class BinanceExecutionClient {
                         // Transport, signature, timeout, or server error: degrade WS health and cleanly fall through to REST
                         this._writeWsTelemetry(targetAssetIndex, 0.0, false);
                         console.warn(`[BinanceExecutionClient][WS_FALLBACK] WS Order API failure for ${params.symbol} ` +
-                            `(cid=${cid}): ${wsErrMsg}. Falling back to REST HTTPS.`);
+                            `(cid=${cid ?? "UNSET"}): ${wsErrMsg}. Falling back to REST HTTPS.`);
                         // Fall through to the existing REST path below
                     }
                 }
@@ -1534,7 +1589,7 @@ class BinanceExecutionClient {
                 payload.recvWindow = params.recvWindow;
             if (params.positionSide !== undefined)
                 payload.positionSide = params.positionSide;
-            if (cid.length > 0) {
+            if (cid !== undefined) {
                 payload.newClientOrderId = cid;
             }
             try {
@@ -1552,7 +1607,7 @@ class BinanceExecutionClient {
                         algoPayload.triggerPrice = symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice);
                         delete algoPayload.stopPrice;
                     }
-                    if (cid.length > 0) {
+                    if (cid !== undefined) {
                         algoPayload.clientAlgoId = cid;
                         delete algoPayload.newClientOrderId;
                     }
@@ -1567,18 +1622,15 @@ class BinanceExecutionClient {
                         throw new Error(`[BinanceExecutionClient][ALGO_ORDER_FAILED] Invalid or rejected algoOrder response: code=${String(algoRes.code ?? "UNKNOWN")}, msg=${algoRes.msg ?? "Missing algoId/orderId"}`);
                     }
                     const algoContext = `/fapi/v1/algoOrder (${params.symbol} #${String(resolvedAlgoId)})`;
-                    const algoStatus = (algoRes.algoStatus ?? algoRes.status ?? "").trim();
-                    if (algoStatus.length === 0) {
-                        throw new Error(`[BinanceExecutionClient][ALGO_ORDER_FAILED] Missing algoStatus/status in ${algoContext}`);
-                    }
+                    const algoStatus = requireNonEmptyString(algoRes.algoStatus ?? algoRes.status, "algoStatus/status", algoContext);
                     const resolvedStopPrice = algoRes.triggerPrice !== undefined
                         ? parseOptionalAlgoDecimalString(algoRes.triggerPrice, "triggerPrice", algoContext)
                         : algoRes.stopPrice !== undefined
                             ? parseOptionalAlgoDecimalString(algoRes.stopPrice, "stopPrice", algoContext)
                             : params.stopPrice !== undefined
                                 ? String(symbolPrecision_1.SymbolPrecisionRegistry.formatPrice(params.symbol, params.stopPrice))
-                                : "";
-                    if (resolvedStopPrice.length === 0) {
+                                : null;
+                    if (resolvedStopPrice === null || resolvedStopPrice.length === 0) {
                         throw new Error(`[BinanceExecutionClient][ALGO_ORDER_FAILED] Missing triggerPrice/stopPrice in ${algoContext}`);
                     }
                     const resolvedUpdateTime = typeof algoRes.updateTime === "number" && Number.isFinite(algoRes.updateTime) && algoRes.updateTime > 0
@@ -1589,6 +1641,12 @@ class BinanceExecutionClient {
                     if (resolvedUpdateTime === null) {
                         throw new Error(`[BinanceExecutionClient][ALGO_ORDER_FAILED] Missing valid updateTime/createTime in ${algoContext}`);
                     }
+                    const resolvedPositionSide = parseStrictPositionSide(algoRes.positionSide ?? params.positionSide, "positionSide", algoContext);
+                    const resolvedWorkingType = requireNonEmptyString(algoRes.workingType ?? params.workingType, "workingType", algoContext);
+                    const resolvedClientOrderId = normalizeOptionalString(algoRes.clientAlgoId) ??
+                        normalizeOptionalString(algoRes.clientOrderId) ??
+                        cid ??
+                        `ALGO_${String(resolvedAlgoId)}`;
                     const resolvedOrigQty = algoRes.quantity !== undefined
                         ? parseOptionalAlgoDecimalString(algoRes.quantity, "quantity", algoContext)
                         : algoRes.origQty !== undefined
@@ -1598,22 +1656,22 @@ class BinanceExecutionClient {
                                 : "";
                     return {
                         orderId: resolvedAlgoId,
-                        symbol: algoRes.symbol ?? params.symbol,
+                        symbol: requireNonEmptyString(algoRes.symbol ?? params.symbol, "symbol", algoContext),
                         status: algoStatus,
-                        clientOrderId: algoRes.clientAlgoId ?? algoRes.clientOrderId ?? cid,
+                        clientOrderId: resolvedClientOrderId,
                         price: parseOptionalAlgoDecimalString(algoRes.price, "price", algoContext),
                         avgPrice: parseOptionalAlgoDecimalString(algoRes.avgPrice, "avgPrice", algoContext),
                         origQty: resolvedOrigQty,
                         executedQty: parseOptionalAlgoDecimalString(algoRes.executedQty, "executedQty", algoContext),
                         cumQuote: parseOptionalAlgoDecimalString(algoRes.cumQuote, "cumQuote", algoContext),
-                        timeInForce: algoRes.timeInForce ?? "GTC",
-                        type: algoRes.orderType ?? algoRes.type ?? params.type,
+                        timeInForce: normalizeOptionalString(algoRes.timeInForce) ?? params.timeInForce ?? "GTE_GTC",
+                        type: requireNonEmptyString(algoRes.orderType ?? algoRes.type ?? params.type, "orderType/type", algoContext),
                         reduceOnly: algoRes.reduceOnly === true,
                         closePosition: isClosePosition,
-                        side: algoRes.side ?? params.side,
-                        positionSide: algoRes.positionSide ?? params.positionSide ?? "BOTH",
+                        side: requireNonEmptyString(algoRes.side ?? params.side, "side", algoContext),
+                        positionSide: resolvedPositionSide,
                         stopPrice: resolvedStopPrice,
-                        workingType: algoRes.workingType ?? params.workingType ?? "CONTRACT_PRICE",
+                        workingType: resolvedWorkingType,
                         updateTime: resolvedUpdateTime,
                     };
                 }
@@ -1625,12 +1683,13 @@ class BinanceExecutionClient {
                     errMsg.includes("4130") ||
                     errMsg.includes("would trigger immediately") ||
                     errMsg.includes("closePosition in the direction is existing");
+                const posSideLabel = params.positionSide !== undefined ? params.positionSide : "UNSPECIFIED";
                 if (isConflictOrGteError && retryCount < 2) {
-                    console.warn(`[BinanceExecutionClient][-4509/-4130 AUTO_RECOVERY] Binance rejected closePosition order on ${params.symbol} (${params.positionSide || "BOTH"} ${params.side}): ${errMsg}. Executing synchronous pre-flight annihilation and retrying...`);
+                    console.warn(`[BinanceExecutionClient][-4509/-4130 AUTO_RECOVERY] Binance rejected closePosition order on ${params.symbol} (${posSideLabel} ${params.side}): ${errMsg}. Executing synchronous pre-flight annihilation and retrying...`);
                     // 1. Synchronously purge conflicting orders with State Verification Barrier
-                    await this.synchronizeAndCancelConflictingOrders(params.symbol, params.positionSide ?? "BOTH", signal);
+                    await this.synchronizeAndCancelConflictingOrders(params.symbol, params.positionSide, signal);
                     // 2. Generate a fresh unique clientOrderId for the retry
-                    const nextCid = params.clientOrderId ? `${params.clientOrderId}_R${String(retryCount + 1)}` : undefined;
+                    const nextCid = cid !== undefined ? `${cid}_R${String(retryCount + 1)}` : undefined;
                     return await this.placeOrder({
                         ...params,
                         clientOrderId: nextCid,
@@ -1642,10 +1701,15 @@ class BinanceExecutionClient {
                     if (!fallbackQty || fallbackQty <= 0) {
                         try {
                             const posRisks = await this.getPositionRisk(params.symbol);
-                            const targetPosSide = params.positionSide || "BOTH";
-                            const matchPos = posRisks.find((p) => p.positionSide === targetPosSide || (targetPosSide === "BOTH" && parseFloat(p.positionAmt) !== 0));
+                            const matchPos = posRisks.find((p) => {
+                                const parsedAmt = parseStrictFloat(p.positionAmt, "positionAmt", `positionRisk (${p.symbol})`);
+                                if (params.positionSide === "LONG" || params.positionSide === "SHORT") {
+                                    return p.positionSide === params.positionSide;
+                                }
+                                return parsedAmt !== 0;
+                            });
                             if (matchPos) {
-                                const amt = Math.abs(parseFloat(matchPos.positionAmt || "0"));
+                                const amt = Math.abs(parseStrictFloat(matchPos.positionAmt, "positionAmt", `positionRisk (${matchPos.symbol})`));
                                 if (amt > 0)
                                     fallbackQty = amt;
                             }
@@ -1655,12 +1719,12 @@ class BinanceExecutionClient {
                         }
                     }
                     if (fallbackQty && fallbackQty > 0) {
-                        console.warn(`[BinanceExecutionClient][SOTA_SL_FALLBACK] closePosition=true rejected after retries on ${params.symbol} (${params.positionSide ?? "BOTH"}). Executing deterministic Quantity-Based STOP_MARKET fallback (Qty: ${String(fallbackQty)})...`);
+                        console.warn(`[BinanceExecutionClient][SOTA_SL_FALLBACK] closePosition=true rejected after retries on ${params.symbol} (${posSideLabel}). Executing deterministic Quantity-Based STOP_MARKET fallback (Qty: ${String(fallbackQty)})...`);
                         const fallbackParams = {
                             ...params,
                             closePosition: false,
                             quantity: fallbackQty,
-                            clientOrderId: params.clientOrderId ? `${params.clientOrderId}_FALLBACK` : undefined,
+                            clientOrderId: cid !== undefined ? `${cid}_FALLBACK` : undefined,
                         };
                         return await this.placeOrder(fallbackParams, 0, signal);
                     }
@@ -1691,7 +1755,7 @@ class BinanceExecutionClient {
             }
         }
         finally {
-            if (cid.length > 0 && retryCount === 0) {
+            if (cid !== undefined && retryCount === 0) {
                 this.inFlightClientOrderIds.delete(cid);
             }
         }
@@ -1710,7 +1774,7 @@ class BinanceExecutionClient {
         }
         const targetOrders = orders.slice(0, maxBatchLimit);
         const batchPayload = targetOrders.map((params) => {
-            const cid = params.clientOrderId || "";
+            const cid = normalizeOptionalString(params.clientOrderId);
             const isClosePosition = params.closePosition === true || String(params.closePosition).toLowerCase() === "true";
             const formattedQty = !isClosePosition ? requirePositiveQuantity(params) : undefined;
             const payload = {
@@ -1748,7 +1812,7 @@ class BinanceExecutionClient {
                 payload.recvWindow = params.recvWindow;
             if (params.positionSide !== undefined)
                 payload.positionSide = params.positionSide;
-            if (cid.length > 0)
+            if (cid !== undefined)
                 payload.newClientOrderId = cid;
             return payload;
         });
@@ -1863,32 +1927,44 @@ class BinanceExecutionClient {
                     if (resolvedAlgoId === undefined || !Number.isFinite(resolvedAlgoId) || resolvedAlgoId <= 0) {
                         throw new Error(`[BinanceExecutionClient][ALGO_CANCEL_FAILED] Missing valid algoId/orderId in cancel response for ${symbol}`);
                     }
-                    const resolvedStatus = (algoCancel.algoStatus ??
-                        algoCancel.status ??
-                        (algoCancel.code === 200 || algoCancel.code === "200" ? "CANCELED" : "")).trim();
-                    if (resolvedStatus.length === 0) {
+                    const resolvedStatus = normalizeOptionalString(algoCancel.algoStatus) ??
+                        normalizeOptionalString(algoCancel.status) ??
+                        (algoCancel.code === 200 || algoCancel.code === "200" ? "CANCELED" : undefined);
+                    if (resolvedStatus === undefined) {
                         throw new Error(`[BinanceExecutionClient][ALGO_CANCEL_FAILED] Missing algoStatus/status in cancel response for ${symbol} #${String(resolvedAlgoId)}`);
                     }
+                    const cancelContext = `/fapi/v1/algoOrder DELETE (${symbol} #${String(resolvedAlgoId)})`;
+                    const resolvedCancelTime = typeof algoCancel.updateTime === "number" && Number.isFinite(algoCancel.updateTime) && algoCancel.updateTime > 0
+                        ? algoCancel.updateTime
+                        : typeof algoCancel.createTime === "number" && Number.isFinite(algoCancel.createTime) && algoCancel.createTime > 0
+                            ? algoCancel.createTime
+                            : 0;
+                    const resolvedStopPx = algoCancel.triggerPrice !== undefined
+                        ? parseOptionalAlgoDecimalString(algoCancel.triggerPrice, "triggerPrice", cancelContext)
+                        : parseOptionalAlgoDecimalString(algoCancel.stopPrice, "stopPrice", cancelContext);
                     return {
                         orderId: resolvedAlgoId,
-                        symbol: algoCancel.symbol ?? symbol,
+                        symbol: requireNonEmptyString(algoCancel.symbol ?? symbol, "symbol", cancelContext),
                         status: resolvedStatus,
-                        clientOrderId: algoCancel.clientAlgoId ?? algoCancel.clientOrderId ?? strOrigClientOrderId ?? "",
-                        price: "",
-                        avgPrice: "",
-                        origQty: "",
-                        executedQty: "",
-                        cumQuote: "",
-                        timeInForce: "GTC",
-                        type: "STOP_MARKET",
-                        reduceOnly: false,
-                        side: "SELL",
-                        positionSide: "BOTH",
-                        stopPrice: "",
-                        workingType: "CONTRACT_PRICE",
-                        updateTime: typeof algoCancel.updateTime === "number" && Number.isFinite(algoCancel.updateTime) && algoCancel.updateTime > 0
-                            ? algoCancel.updateTime
-                            : Date.now(),
+                        clientOrderId: normalizeOptionalString(algoCancel.clientAlgoId) ??
+                            normalizeOptionalString(algoCancel.clientOrderId) ??
+                            normalizeOptionalString(strOrigClientOrderId) ??
+                            `ALGO_${String(resolvedAlgoId)}`,
+                        price: parseOptionalAlgoDecimalString(algoCancel.price, "price", cancelContext),
+                        avgPrice: parseOptionalAlgoDecimalString(algoCancel.avgPrice, "avgPrice", cancelContext),
+                        origQty: parseOptionalAlgoDecimalString(algoCancel.quantity ?? algoCancel.origQty, "origQty", cancelContext),
+                        executedQty: parseOptionalAlgoDecimalString(algoCancel.executedQty, "executedQty", cancelContext),
+                        cumQuote: parseOptionalAlgoDecimalString(algoCancel.cumQuote, "cumQuote", cancelContext),
+                        timeInForce: normalizeOptionalString(algoCancel.timeInForce) ?? "UNSPECIFIED",
+                        type: normalizeOptionalString(algoCancel.orderType) ?? normalizeOptionalString(algoCancel.type) ?? "ALGO_CONDITIONAL",
+                        reduceOnly: algoCancel.reduceOnly === true,
+                        side: normalizeOptionalString(algoCancel.side) ?? "UNKNOWN",
+                        positionSide: algoCancel.positionSide !== undefined
+                            ? parseStrictPositionSide(algoCancel.positionSide, "positionSide", cancelContext)
+                            : "UNKNOWN",
+                        stopPrice: resolvedStopPx,
+                        workingType: normalizeOptionalString(algoCancel.workingType) ?? "UNSPECIFIED",
+                        updateTime: resolvedCancelTime,
                     };
                 }
                 catch (algoErr) {
@@ -1917,8 +1993,9 @@ class BinanceExecutionClient {
             await this.cancelAllOrders(symbol);
             const positions = await this.getPositionRisk(symbol);
             for (const pos of positions) {
-                const amt = parseFloat(pos.positionAmt || "0");
+                const amt = parseStrictFloat(pos.positionAmt, "positionAmt", `flattenPositions (${pos.symbol})`);
                 if (Math.abs(amt) > 0) {
+                    const posSide = parseStrictPositionSide(pos.positionSide, "positionSide", `flattenPositions (${pos.symbol})`);
                     const side = amt > 0 ? "SELL" : "BUY";
                     const orderParams = {
                         symbol: pos.symbol,
@@ -1926,8 +2003,8 @@ class BinanceExecutionClient {
                         type: "MARKET",
                         quantity: Math.abs(amt),
                     };
-                    if (pos.positionSide && pos.positionSide !== "BOTH") {
-                        orderParams.positionSide = pos.positionSide;
+                    if (posSide !== "BOTH") {
+                        orderParams.positionSide = posSide;
                     }
                     else {
                         orderParams.reduceOnly = true;
@@ -1997,21 +2074,24 @@ class BinanceExecutionClient {
         for (const p of posRiskList) {
             if (symbol && p.symbol !== symbol)
                 continue;
-            const key = `${p.symbol}:${p.positionSide || "BOTH"}`;
+            const posSide = parseStrictPositionSide(p.positionSide, "positionSide", `positionRisk (${p.symbol})`);
+            const key = `${p.symbol}:${posSide}`;
             mergedMap.set(key, p);
         }
         // 2. Ingest / Merge account positions (authoritative margin ledger)
         for (const ap of accountPositions) {
             if (symbol && ap.symbol !== symbol)
                 continue;
-            const key = `${ap.symbol}:${ap.positionSide || "BOTH"}`;
+            const apPosSide = parseStrictPositionSide(ap.positionSide, "positionSide", `accountInfo.positions (${ap.symbol})`);
+            const key = `${ap.symbol}:${apPosSide}`;
             const existing = mergedMap.get(key);
-            const apQty = Math.abs(parseFloat(ap.positionAmt || "0"));
+            const apQty = Math.abs(parseStrictFloat(ap.positionAmt, "positionAmt", `accountInfo.positions (${key})`));
             if (!existing) {
                 mergedMap.set(key, ap);
             }
             else {
-                const existingQty = Math.abs(parseFloat(existing.positionAmt || "0"));
+                const existingPosSide = parseStrictPositionSide(existing.positionSide, "positionSide", `positionRisk (${existing.symbol})`);
+                const existingQty = Math.abs(parseStrictFloat(existing.positionAmt, "positionAmt", `positionRisk (${key})`));
                 // If account ledger shows active position and positionRisk was 0/stale, prioritize account ledger
                 if (apQty > 0 && existingQty === 0) {
                     mergedMap.set(key, ap);
@@ -2019,10 +2099,10 @@ class BinanceExecutionClient {
                 else if (apQty > 0 && existingQty > 0) {
                     // Both non-zero, take latest updateTime
                     if (typeof ap.updateTime !== "number" || !Number.isFinite(ap.updateTime)) {
-                        throw new Error(`[BinanceExecutionClient][INVALID_POSITION_RISK] Missing or non-finite accountInfo updateTime for ${ap.symbol}:${ap.positionSide || "BOTH"} (value=${String(ap.updateTime)})`);
+                        throw new Error(`[BinanceExecutionClient][INVALID_POSITION_RISK] Missing or non-finite accountInfo updateTime for ${ap.symbol}:${apPosSide} (value=${String(ap.updateTime)})`);
                     }
                     if (typeof existing.updateTime !== "number" || !Number.isFinite(existing.updateTime)) {
-                        throw new Error(`[BinanceExecutionClient][INVALID_POSITION_RISK] Missing or non-finite positionRisk updateTime for ${existing.symbol}:${existing.positionSide || "BOTH"} (value=${String(existing.updateTime)})`);
+                        throw new Error(`[BinanceExecutionClient][INVALID_POSITION_RISK] Missing or non-finite positionRisk updateTime for ${existing.symbol}:${existingPosSide} (value=${String(existing.updateTime)})`);
                     }
                     if (ap.updateTime >= existing.updateTime) {
                         mergedMap.set(key, { ...existing, ...ap });
@@ -2085,23 +2165,27 @@ class BinanceExecutionClient {
                 throw new Error(`[BinanceExecutionClient][INVALID_ALGO_ORDER] openAlgoOrders entry ${ao.symbol} (#${String(resolvedOrderId)}) missing positive updateTime/createTime`);
             }
             const algoContext = `/fapi/v1/openAlgoOrders (${ao.symbol} #${String(resolvedOrderId)})`;
+            const resolvedPositionSide = parseStrictPositionSide(ao.positionSide, "positionSide", algoContext);
+            const resolvedClientOrderId = normalizeOptionalString(ao.clientAlgoId) ??
+                normalizeOptionalString(ao.clientOrderId) ??
+                `ALGO_${String(resolvedOrderId)}`;
             return {
                 orderId: resolvedOrderId,
                 symbol: ao.symbol,
                 status: resolvedStatus,
-                clientOrderId: ao.clientAlgoId ?? ao.clientOrderId ?? "",
+                clientOrderId: resolvedClientOrderId,
                 price: parseOptionalAlgoDecimalString(ao.price, "price", algoContext),
                 avgPrice: parseOptionalAlgoDecimalString(ao.avgPrice, "avgPrice", algoContext),
                 origQty: parseOptionalAlgoDecimalString(ao.quantity ?? ao.origQty, "origQty", algoContext),
                 executedQty: parseOptionalAlgoDecimalString(ao.executedQty, "executedQty", algoContext),
                 cumQuote: parseOptionalAlgoDecimalString(ao.cumQuote, "cumQuote", algoContext),
-                timeInForce: ao.timeInForce ?? "",
+                timeInForce: normalizeOptionalString(ao.timeInForce) ?? "UNSPECIFIED",
                 type: resolvedType,
                 reduceOnly: ao.reduceOnly === true,
                 side: ao.side,
-                positionSide: ao.positionSide ?? "BOTH",
+                positionSide: resolvedPositionSide,
                 stopPrice: rawStopPrice.trim(),
-                workingType: ao.workingType ?? "CONTRACT_PRICE",
+                workingType: normalizeOptionalString(ao.workingType) ?? "UNSPECIFIED",
                 updateTime: resolvedUpdateTime,
             };
         });
@@ -2148,31 +2232,17 @@ class BinanceExecutionClient {
      */
     async fetchReconciledAccountBalanceAsync() {
         if (!this.isConfigured()) {
-            return { totalWalletBalance: 0, availableBalance: 0, unrealizedProfit: 0 };
+            throw new Error("[BinanceExecutionClient][UNCONFIGURED] Cannot fetch reconciled account balance without API credentials.");
         }
-        try {
-            const accountInfo = await this.getAccountInfo();
-            const totalWallet = parseFloat(accountInfo.totalWalletBalance || "0");
-            const available = parseFloat(accountInfo.availableBalance || "0");
-            const unrealized = parseFloat(accountInfo.totalUnrealizedProfit || "0");
-            if (!isNaN(totalWallet)) {
-                this.cachedReconciledWalletBalance = totalWallet;
-                this.hasReconciledWalletBalance = true;
-            }
-            if (!isNaN(available))
-                this.cachedUsdtAvailableBalance = available;
-            if (!isNaN(unrealized))
-                this.cachedTotalUnrealizedProfit = unrealized;
-            return {
-                totalWalletBalance: this.cachedReconciledWalletBalance,
-                availableBalance: this.cachedUsdtAvailableBalance,
-                unrealizedProfit: this.cachedTotalUnrealizedProfit,
-            };
-        }
-        catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            console.warn(`[BinanceExecutionClient] Reconciled account balance fetch notice: ${errMsg}`);
-        }
+        const accountInfo = await this.getAccountInfo();
+        const ctx = "fetchReconciledAccountBalanceAsync (/fapi/v3/account)";
+        const totalWallet = parseStrictFloat(accountInfo.totalWalletBalance, "totalWalletBalance", ctx);
+        const available = parseStrictFloat(accountInfo.availableBalance, "availableBalance", ctx);
+        const unrealized = parseStrictFloat(accountInfo.totalUnrealizedProfit, "totalUnrealizedProfit", ctx);
+        this.cachedReconciledWalletBalance = totalWallet;
+        this.hasReconciledWalletBalance = true;
+        this.cachedUsdtAvailableBalance = available;
+        this.cachedTotalUnrealizedProfit = unrealized;
         return {
             totalWalletBalance: this.cachedReconciledWalletBalance,
             availableBalance: this.cachedUsdtAvailableBalance,
@@ -2190,7 +2260,8 @@ class BinanceExecutionClient {
     }
     getCumulativeFunding(symbol) {
         if (symbol) {
-            return this.cachedCumulativeFunding.get(symbol) ?? 0;
+            const symbolFunding = this.cachedCumulativeFunding.get(symbol);
+            return symbolFunding !== undefined ? symbolFunding : 0;
         }
         let total = 0;
         for (const val of this.cachedCumulativeFunding.values()) {
@@ -2200,7 +2271,8 @@ class BinanceExecutionClient {
     }
     getCumulativeCommission(symbol) {
         if (symbol) {
-            return this.cachedCumulativeCommission.get(symbol) ?? 0;
+            const symbolCommission = this.cachedCumulativeCommission.get(symbol);
+            return symbolCommission !== undefined ? symbolCommission : 0;
         }
         let total = 0;
         for (const val of this.cachedCumulativeCommission.values()) {
@@ -2224,14 +2296,18 @@ class BinanceExecutionClient {
      * Performs initial background synchronization of /fapi/v1/income.
      * Recurring interval polling is deactivated in favor of real-time WebSocket User Data Stream.
      */
-    startBackgroundSync(symbols = ["BTCUSDT"], _incomeIntervalMs = 60000, _tradeIntervalMs = 60000) {
+    startBackgroundSync(symbols, _incomeIntervalMs = 60000, _tradeIntervalMs = 60000) {
         if (!this.isConfigured())
             return;
+        const resolvedSymbols = Array.isArray(symbols) && symbols.length > 0 ? symbols : (0, tradingSymbols_1.getTradingSymbols)();
+        if (resolvedSymbols.length === 0) {
+            throw new Error("[BinanceExecutionClient][BACKGROUND_SYNC] Cannot start background sync with an empty symbol list.");
+        }
         // 1. Initial one-shot immediate reconciliation
         this.fetchReconciledAccountBalanceAsync().catch((balErr) => {
             console.warn(`[BinanceExecutionClient][BACKGROUND_SYNC] Balance sync notice: ${formatRejectionReason(balErr)}`);
         });
-        this.syncIncomeBackground(symbols).catch((incErr) => {
+        this.syncIncomeBackground(resolvedSymbols).catch((incErr) => {
             console.warn(`[BinanceExecutionClient][BACKGROUND_SYNC] Income sync notice: ${formatRejectionReason(incErr)}`);
         });
         // Polling intervals deactivated: trades and balance mutations are processed via WebSocket stream
@@ -2254,15 +2330,19 @@ class BinanceExecutionClient {
             for (const inc of incomes) {
                 if (inc.time > maxTime)
                     maxTime = inc.time;
-                const sym = inc.symbol || "GLOBAL";
-                const val = parseFloat(inc.income || "0");
-                if (inc.incomeType === "FUNDING_FEE" && !isNaN(val)) {
-                    const currentFunding = this.cachedCumulativeFunding.get(sym) ?? 0;
-                    this.cachedCumulativeFunding.set(sym, currentFunding + val);
-                }
-                else if (inc.incomeType === "COMMISSION" && !isNaN(val)) {
-                    const currentComm = this.cachedCumulativeCommission.get(sym) ?? 0;
-                    this.cachedCumulativeCommission.set(sym, currentComm + Math.abs(val));
+                if (inc.incomeType === "FUNDING_FEE" || inc.incomeType === "COMMISSION") {
+                    const sym = requireNonEmptyString(inc.symbol, "symbol", `syncIncomeBackground (${inc.incomeType})`);
+                    const val = parseStrictFloat(inc.income, "income", `syncIncomeBackground (${inc.incomeType} ${sym})`);
+                    if (inc.incomeType === "FUNDING_FEE") {
+                        const existingFunding = this.cachedCumulativeFunding.get(sym);
+                        const currentFunding = existingFunding !== undefined ? existingFunding : 0;
+                        this.cachedCumulativeFunding.set(sym, currentFunding + val);
+                    }
+                    else {
+                        const existingCommission = this.cachedCumulativeCommission.get(sym);
+                        const currentComm = existingCommission !== undefined ? existingCommission : 0;
+                        this.cachedCumulativeCommission.set(sym, currentComm + Math.abs(val));
+                    }
                 }
             }
             this.lastIncomeSyncTime = maxTime + 1;

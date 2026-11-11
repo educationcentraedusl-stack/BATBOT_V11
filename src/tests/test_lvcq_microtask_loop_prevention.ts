@@ -182,6 +182,7 @@ async function runLvcqMicrotaskLoopTest() {
     console.log("==========================================================================================");
   } finally {
     engine.destroy();
+    mockExecClient.destroy();
   }
 }
 

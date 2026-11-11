@@ -49,18 +49,18 @@ async function runError4509MultiSlotVerification(): Promise<void> {
       orderId,
       symbol: params.symbol,
       status: "NEW",
-      clientOrderId: params.clientOrderId || `ORDER_${String(orderId)}`,
-      price: String(params.price || "0"),
+      clientOrderId: typeof params.clientOrderId === "string" && params.clientOrderId.length > 0 ? params.clientOrderId : `ORDER_${String(orderId)}`,
+      price: typeof params.price === "number" && Number.isFinite(params.price) ? String(params.price) : "0",
       avgPrice: "0",
-      origQty: String(params.quantity || "0"),
+      origQty: typeof params.quantity === "number" && Number.isFinite(params.quantity) ? String(params.quantity) : "0",
       executedQty: "0",
       cumQuote: "0",
       timeInForce: "GTC",
       type: params.type,
       reduceOnly: false,
       side: params.side,
-      positionSide: params.positionSide || "BOTH",
-      stopPrice: String(params.stopPrice || "0"),
+      positionSide: params.positionSide === "LONG" || params.positionSide === "SHORT" || params.positionSide === "BOTH" ? params.positionSide : "SHORT",
+      stopPrice: typeof params.stopPrice === "number" && Number.isFinite(params.stopPrice) ? String(params.stopPrice) : "0",
       workingType: "CONTRACT_PRICE",
       updateTime: Date.now(),
     });
@@ -98,6 +98,9 @@ async function runError4509MultiSlotVerification(): Promise<void> {
     undefined,
     ledger
   );
+  const cleanupTargets: Array<{ destroy(): void }> = [mockExecutionClient, engine];
+
+  try {
 
   // 1. Enter SHORT_SLOT_0 (100 DOT @ $5.00, SL: $5.075)
   ledger.occupyShortSlot(0, 100, 5.00, 3.0, 1.5);
@@ -221,7 +224,7 @@ async function runError4509MultiSlotVerification(): Promise<void> {
         reduceOnly: false,
         side: typeof payload.side === "string" ? payload.side : "BUY",
         positionSide: typeof payload.positionSide === "string" ? payload.positionSide : "SHORT",
-        stopPrice: String(payload.stopPrice || "0"),
+        stopPrice: typeof payload.stopPrice === "string" || typeof payload.stopPrice === "number" ? String(payload.stopPrice) : "0",
         workingType: "CONTRACT_PRICE",
         updateTime: Date.now(),
       };
@@ -229,6 +232,7 @@ async function runError4509MultiSlotVerification(): Promise<void> {
     }
   }
   const recoveryClient = new Stage2RecoveryClient();
+  cleanupTargets.push(recoveryClient);
 
   const recoveredRes = await recoveryClient.placePositionStopLoss(symbol, "BUY", "SHORT", 5.1765, "TEST_4509_CID");
   assert.strictEqual(attemptCount, 2, "Stage 2: placeOrder must retry exactly once after -4509");
@@ -303,7 +307,7 @@ async function runError4509MultiSlotVerification(): Promise<void> {
         reduceOnly: false,
         side: typeof payload.side === "string" ? payload.side : "BUY",
         positionSide: typeof payload.positionSide === "string" ? payload.positionSide : "SHORT",
-        stopPrice: String(payload.stopPrice || "0"),
+        stopPrice: typeof payload.stopPrice === "string" || typeof payload.stopPrice === "number" ? String(payload.stopPrice) : "0",
         workingType: "CONTRACT_PRICE",
         updateTime: Date.now(),
       };
@@ -311,6 +315,7 @@ async function runError4509MultiSlotVerification(): Promise<void> {
     }
   }
   const persistentFailureClient = new PersistentFailureClient();
+  cleanupTargets.push(persistentFailureClient);
 
   const fallbackRes = await persistentFailureClient.placePositionStopLoss(symbol, "BUY", "SHORT", 5.1765, "PERSISTENT_CID", undefined, 200);
   const fallbackOrderParams = persistentFailureClient.fallbackOrderParams;
@@ -385,11 +390,14 @@ async function runError4509MultiSlotVerification(): Promise<void> {
   console.log(`  ✅ Ratchet Synced: SL updated to #${String(longSlId2)} @ $5.05`);
   console.log("  ✅ STAGE 5 PASSED: Long Position & Ratchet verified with zero regressions!\n");
 
-  engine.destroy();
-
   console.log("==========================================================================================");
   console.log("  ALL TESTS PASSED (5/5) - ERROR -4509 & MULTI-SLOT SL ARCHITECTURE IS 100% PRODUCTION READY");
   console.log("==========================================================================================");
+  } finally {
+    for (let i = cleanupTargets.length - 1; i >= 0; i--) {
+      cleanupTargets[i].destroy();
+    }
+  }
 }
 
 runError4509MultiSlotVerification().catch((err: unknown) => {

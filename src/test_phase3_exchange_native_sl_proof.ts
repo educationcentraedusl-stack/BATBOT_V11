@@ -29,7 +29,10 @@ class AuditedBinanceClient extends BinanceExecutionClient {
       type: params.type,
       side: params.side,
       reduceOnly: false,
-      positionSide: params.positionSide ?? "BOTH",
+      positionSide:
+        params.positionSide === "LONG" || params.positionSide === "SHORT" || params.positionSide === "BOTH"
+          ? params.positionSide
+          : "SHORT",
       stopPrice: params.stopPrice !== undefined ? String(params.stopPrice) : "0",
       workingType: "CONTRACT_PRICE",
       cumQuote: "0",
@@ -86,6 +89,8 @@ async function runPhase3Proof() {
     ledger.getLegacyLedger(),
     ledger
   );
+
+  try {
 
   ledger.occupyCoreLong(qty, entryPrice, 0.40, 0.20);
   console.log(`[Position Entry] Long 0.005 BTC @ $${String(entryPrice)} | Target SL: $${String(initialSl)}`);
@@ -166,6 +171,10 @@ async function runPhase3Proof() {
   console.log("\n==========================================================================================");
   console.log("  ✅ PHASE 3 PROOF PASSED: Exchange-Native STOP_MARKET orders physically placed & tracked!");
   console.log("==========================================================================================\n");
+  } finally {
+    engine.destroy();
+    mockClient.destroy();
+  }
 }
 
 runPhase3Proof().catch((err: unknown) => {

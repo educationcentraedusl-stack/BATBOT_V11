@@ -92,46 +92,133 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function readString(obj: Record<string, unknown>, key: string, fallback: string): string {
+function requireNonEmptyString(
+  obj: Record<string, unknown>,
+  key: string,
+  context: string
+): string {
   const val = obj[key];
-  return typeof val === "string" && val.length > 0 ? val : fallback;
+  if (typeof val !== "string" || val.trim().length === 0) {
+    throw new Error(`[TelemetryProto] Missing or empty string field "${key}" in ${context}`);
+  }
+  return val;
 }
 
-function readOptionalString(obj: Record<string, unknown>, key: string): string | undefined {
+function readOptionalNonEmptyString(
+  obj: Record<string, unknown>,
+  key: string,
+  context: string
+): string | undefined {
   const val = obj[key];
-  return typeof val === "string" ? val : undefined;
+  if (val === undefined || val === null) {
+    return undefined;
+  }
+  if (typeof val !== "string") {
+    throw new Error(`[TelemetryProto] Expected string for optional field "${key}" in ${context}`);
+  }
+  return val.length > 0 ? val : undefined;
 }
 
-function readNumber(obj: Record<string, unknown>, key: string, fallback: number): number {
+function requireFiniteNumber(
+  obj: Record<string, unknown>,
+  key: string,
+  context: string
+): number {
   const val = obj[key];
-  return typeof val === "number" && Number.isFinite(val) ? val : fallback;
+  if (typeof val !== "number" || !Number.isFinite(val)) {
+    throw new Error(`[TelemetryProto] Missing or non-finite numeric field "${key}" in ${context}`);
+  }
+  return val;
 }
 
-function readOptionalNumber(obj: Record<string, unknown>, key: string): number | undefined {
-  const val = obj[key];
-  return typeof val === "number" && Number.isFinite(val) ? val : undefined;
+function requirePositiveNumber(
+  obj: Record<string, unknown>,
+  key: string,
+  context: string
+): number {
+  const val = requireFiniteNumber(obj, key, context);
+  if (val <= 0) {
+    throw new Error(`[TelemetryProto] Expected positive numeric field "${key}" > 0 in ${context}, got ${String(val)}`);
+  }
+  return val;
 }
 
-function readBoolean(obj: Record<string, unknown>, key: string): boolean {
-  return Boolean(obj[key]);
+function readOptionalPositiveNumber(
+  obj: Record<string, unknown>,
+  key: string,
+  context: string
+): number | undefined {
+  const val = obj[key];
+  if (val === undefined || val === null) {
+    return undefined;
+  }
+  if (typeof val !== "number" || !Number.isFinite(val) || val < 0) {
+    throw new Error(`[TelemetryProto] Invalid optional numeric field "${key}" in ${context}`);
+  }
+  return val > 0 ? val : undefined;
 }
 
-function readBigInt(obj: Record<string, unknown>, key: string): bigint {
+function requireBoolean(
+  obj: Record<string, unknown>,
+  key: string,
+  context: string
+): boolean {
   const val = obj[key];
-  if (typeof val === "bigint") return val;
-  if (typeof val === "number" && Number.isFinite(val)) return BigInt(Math.trunc(val));
-  if (typeof val === "string" && /^\d+$/.test(val)) return BigInt(val);
-  return 0n;
+  if (typeof val !== "boolean") {
+    throw new Error(`[TelemetryProto] Missing or non-boolean field "${key}" in ${context}`);
+  }
+  return val;
+}
+
+function requireBigInt(
+  obj: Record<string, unknown>,
+  key: string,
+  context: string
+): bigint {
+  const val = obj[key];
+  if (typeof val === "bigint") {
+    return val;
+  }
+  if (typeof val === "number" && Number.isFinite(val) && Number.isInteger(val) && val >= 0) {
+    return BigInt(val);
+  }
+  if (typeof val === "string" && /^\d+$/.test(val)) {
+    return BigInt(val);
+  }
+  throw new Error(`[TelemetryProto] Missing or invalid bigint field "${key}" in ${context}`);
+}
+
+export interface DecodedTelemetryFrame extends TelemetryFrame {
+  timestamp: number;
+  aiDirection: number;
+  aiConfidence: number;
+  rollingIc: number;
+  aiInferenceLatencyNs: bigint;
+  rttMs: number;
+  latencyPenalty: number;
+  slippageTicks: number;
 }
 
 export function initProtobuf(): void {
   getProtoTypes();
 }
 
-export function encodeTelemetryFrame(frame: TelemetryFrame, timestamp: number = Date.now()): Uint8Array {
+export function encodeTelemetryFrame(frame: TelemetryFrame, timestamp?: number): Uint8Array {
   const { telemetryFrame } = getProtoTypes();
+  const resolvedTimestamp = timestamp ?? frame.timestamp;
+  if (typeof resolvedTimestamp !== "number" || !Number.isFinite(resolvedTimestamp) || resolvedTimestamp <= 0) {
+    throw new Error(
+      `[TelemetryProto] encodeTelemetryFrame requires a positive finite timestamp, got ${String(resolvedTimestamp)}`
+    );
+  }
+  if (frame.symbol.trim().length === 0) {
+    throw new Error("[TelemetryProto] encodeTelemetryFrame requires a non-empty symbol");
+  }
+  if (frame.riskStatus.trim().length === 0) {
+    throw new Error("[TelemetryProto] encodeTelemetryFrame requires a non-empty riskStatus");
+  }
 
-  const payload = {
+  const payload: Record<string, unknown> = {
     symbol: frame.symbol,
     sequenceNum: typeof frame.sequenceNum === "bigint" ? Number(frame.sequenceNum) : frame.sequenceNum,
     bidPrice: frame.bidPrice,
@@ -160,16 +247,48 @@ export function encodeTelemetryFrame(frame: TelemetryFrame, timestamp: number = 
     riskStatus: frame.riskStatus,
     isEngineActive: frame.isEngineActive,
     usdtBalance: frame.usdtBalance,
-    aiDirection: frame.aiDirection ?? 0,
-    aiConfidence: frame.aiConfidence ?? 0,
-    rollingIc: frame.rollingIc ?? 0,
-    aiInferenceLatencyNs:
-      frame.aiInferenceLatencyNs !== undefined ? Number(frame.aiInferenceLatencyNs) : 0,
-    rttMs: frame.rttMs ?? 0,
-    latencyPenalty: frame.latencyPenalty ?? 1.0,
-    slippageTicks: frame.slippageTicks ?? 2,
-    timestamp,
+    timestamp: resolvedTimestamp,
   };
+
+  if (frame.aiDirection !== undefined) {
+    if (!Number.isFinite(frame.aiDirection)) {
+      throw new Error("[TelemetryProto] Non-finite aiDirection in encodeTelemetryFrame");
+    }
+    payload["aiDirection"] = frame.aiDirection;
+  }
+  if (frame.aiConfidence !== undefined) {
+    if (!Number.isFinite(frame.aiConfidence)) {
+      throw new Error("[TelemetryProto] Non-finite aiConfidence in encodeTelemetryFrame");
+    }
+    payload["aiConfidence"] = frame.aiConfidence;
+  }
+  if (frame.rollingIc !== undefined) {
+    if (!Number.isFinite(frame.rollingIc)) {
+      throw new Error("[TelemetryProto] Non-finite rollingIc in encodeTelemetryFrame");
+    }
+    payload["rollingIc"] = frame.rollingIc;
+  }
+  if (frame.aiInferenceLatencyNs !== undefined) {
+    payload["aiInferenceLatencyNs"] = Number(frame.aiInferenceLatencyNs);
+  }
+  if (frame.rttMs !== undefined) {
+    if (!Number.isFinite(frame.rttMs)) {
+      throw new Error("[TelemetryProto] Non-finite rttMs in encodeTelemetryFrame");
+    }
+    payload["rttMs"] = frame.rttMs;
+  }
+  if (frame.latencyPenalty !== undefined) {
+    if (!Number.isFinite(frame.latencyPenalty)) {
+      throw new Error("[TelemetryProto] Non-finite latencyPenalty in encodeTelemetryFrame");
+    }
+    payload["latencyPenalty"] = frame.latencyPenalty;
+  }
+  if (frame.slippageTicks !== undefined) {
+    if (!Number.isFinite(frame.slippageTicks)) {
+      throw new Error("[TelemetryProto] Non-finite slippageTicks in encodeTelemetryFrame");
+    }
+    payload["slippageTicks"] = frame.slippageTicks;
+  }
 
   const err = telemetryFrame.verify(payload);
   if (err) {
@@ -180,58 +299,71 @@ export function encodeTelemetryFrame(frame: TelemetryFrame, timestamp: number = 
   return telemetryFrame.encode(message).finish();
 }
 
-export function decodeTelemetryFrame(buffer: Uint8Array): TelemetryFrame {
+export function decodeTelemetryFrame(buffer: Uint8Array): DecodedTelemetryFrame {
   const { telemetryFrame } = getProtoTypes();
   const decoded = telemetryFrame.decode(buffer);
   const rawObj = telemetryFrame.toObject(decoded, { longs: Number, enums: String, defaults: true }) as unknown;
-  const obj: Record<string, unknown> = isRecord(rawObj) ? rawObj : {};
+  const ctx = "TelemetryFrameProto";
+  if (!isRecord(rawObj)) {
+    throw new Error(`[TelemetryProto] Decoded ${ctx} payload is not an object`);
+  }
+  const obj = rawObj;
   const statsRaw = obj["stats"];
-  const statsObj: Record<string, unknown> = isRecord(statsRaw) ? statsRaw : {};
+  const statsCtx = `${ctx}.stats`;
+  if (!isRecord(statsRaw)) {
+    throw new Error(`[TelemetryProto] Missing or malformed nested ${statsCtx}`);
+  }
+  const statsObj = statsRaw;
 
-  const rawSignal = readString(obj, "lastSignal", "NONE");
-  const lastSignal: TelemetryFrame["lastSignal"] =
-    rawSignal === "BUY" || rawSignal === "SELL" ? rawSignal : "NONE";
+  const rawSignal = requireNonEmptyString(obj, "lastSignal", ctx);
+  if (rawSignal !== "NONE" && rawSignal !== "BUY" && rawSignal !== "SELL") {
+    throw new Error(`[TelemetryProto] Invalid lastSignal "${rawSignal}" in ${ctx}`);
+  }
+  const lastSignal: TelemetryFrame["lastSignal"] = rawSignal;
 
-  const rawSide = readString(statsObj, "positionSide", "FLAT");
-  const positionSide: TelemetryFrame["stats"]["positionSide"] =
-    rawSide === "LONG" || rawSide === "SHORT" || rawSide === "BOTH" ? rawSide : "FLAT";
+  const rawSide = requireNonEmptyString(statsObj, "positionSide", statsCtx);
+  if (rawSide !== "FLAT" && rawSide !== "LONG" && rawSide !== "SHORT" && rawSide !== "BOTH") {
+    throw new Error(`[TelemetryProto] Invalid positionSide "${rawSide}" in ${statsCtx}`);
+  }
+  const positionSide: TelemetryFrame["stats"]["positionSide"] = rawSide;
 
   return {
-    symbol: readString(obj, "symbol", "BTCUSDT"),
-    sequenceNum: readBigInt(obj, "sequenceNum"),
-    bidPrice: readNumber(obj, "bidPrice", 0),
-    askPrice: readNumber(obj, "askPrice", 0),
-    obi: readNumber(obj, "obi", 0),
-    cvd: readNumber(obj, "cvd", 0),
-    spreadVelocity: readNumber(obj, "spreadVelocity", 0),
+    symbol: requireNonEmptyString(obj, "symbol", ctx),
+    sequenceNum: requireBigInt(obj, "sequenceNum", ctx),
+    bidPrice: requireFiniteNumber(obj, "bidPrice", ctx),
+    askPrice: requireFiniteNumber(obj, "askPrice", ctx),
+    obi: requireFiniteNumber(obj, "obi", ctx),
+    cvd: requireFiniteNumber(obj, "cvd", ctx),
+    spreadVelocity: requireFiniteNumber(obj, "spreadVelocity", ctx),
     lastSignal,
-    tickEvaluationLatencyUs: readNumber(obj, "tickEvaluationLatencyUs", 0),
+    tickEvaluationLatencyUs: requireFiniteNumber(obj, "tickEvaluationLatencyUs", ctx),
     stats: {
-      realizedPnl: readNumber(statsObj, "realizedPnl", 0),
-      unrealizedPnl: readNumber(statsObj, "unrealizedPnl", 0),
-      totalFees: readNumber(statsObj, "totalFees", 0),
-      totalTrades: readNumber(statsObj, "totalTrades", 0),
-      winningTrades: readNumber(statsObj, "winningTrades", 0),
-      losingTrades: readNumber(statsObj, "losingTrades", 0),
-      winRatePercent: readNumber(statsObj, "winRatePercent", 0),
+      realizedPnl: requireFiniteNumber(statsObj, "realizedPnl", statsCtx),
+      unrealizedPnl: requireFiniteNumber(statsObj, "unrealizedPnl", statsCtx),
+      totalFees: requireFiniteNumber(statsObj, "totalFees", statsCtx),
+      totalTrades: requireFiniteNumber(statsObj, "totalTrades", statsCtx),
+      winningTrades: requireFiniteNumber(statsObj, "winningTrades", statsCtx),
+      losingTrades: requireFiniteNumber(statsObj, "losingTrades", statsCtx),
+      winRatePercent: requireFiniteNumber(statsObj, "winRatePercent", statsCtx),
       positionSide,
-      netQuantity: readNumber(statsObj, "netQuantity", 0),
-      averageEntryPrice: readNumber(statsObj, "averageEntryPrice", 0),
-      totalSignalsLogged: readNumber(statsObj, "totalSignalsLogged", 0),
-      totalExecutionsLogged: readNumber(statsObj, "totalExecutionsLogged", 0),
-      avgTickLatencyUs: readNumber(statsObj, "avgTickLatencyUs", 0),
-      bufferQueueDepth: readNumber(statsObj, "bufferQueueDepth", 0),
+      netQuantity: requireFiniteNumber(statsObj, "netQuantity", statsCtx),
+      averageEntryPrice: requireFiniteNumber(statsObj, "averageEntryPrice", statsCtx),
+      totalSignalsLogged: requireFiniteNumber(statsObj, "totalSignalsLogged", statsCtx),
+      totalExecutionsLogged: requireFiniteNumber(statsObj, "totalExecutionsLogged", statsCtx),
+      avgTickLatencyUs: requireFiniteNumber(statsObj, "avgTickLatencyUs", statsCtx),
+      bufferQueueDepth: requireFiniteNumber(statsObj, "bufferQueueDepth", statsCtx),
     },
-    riskStatus: readString(obj, "riskStatus", "PASSED"),
-    isEngineActive: readBoolean(obj, "isEngineActive"),
-    usdtBalance: readNumber(obj, "usdtBalance", 0),
-    aiDirection: readNumber(obj, "aiDirection", 0),
-    aiConfidence: readNumber(obj, "aiConfidence", 0),
-    rollingIc: readNumber(obj, "rollingIc", 0),
-    aiInferenceLatencyNs: readBigInt(obj, "aiInferenceLatencyNs"),
-    rttMs: readNumber(obj, "rttMs", 0),
-    latencyPenalty: readNumber(obj, "latencyPenalty", 1.0),
-    slippageTicks: readNumber(obj, "slippageTicks", 0),
+    riskStatus: requireNonEmptyString(obj, "riskStatus", ctx),
+    isEngineActive: requireBoolean(obj, "isEngineActive", ctx),
+    usdtBalance: requireFiniteNumber(obj, "usdtBalance", ctx),
+    aiDirection: requireFiniteNumber(obj, "aiDirection", ctx),
+    aiConfidence: requireFiniteNumber(obj, "aiConfidence", ctx),
+    rollingIc: requireFiniteNumber(obj, "rollingIc", ctx),
+    aiInferenceLatencyNs: requireBigInt(obj, "aiInferenceLatencyNs", ctx),
+    rttMs: requireFiniteNumber(obj, "rttMs", ctx),
+    latencyPenalty: requireFiniteNumber(obj, "latencyPenalty", ctx),
+    slippageTicks: requireFiniteNumber(obj, "slippageTicks", ctx),
+    timestamp: requirePositiveNumber(obj, "timestamp", ctx),
   };
 }
 
@@ -243,11 +375,24 @@ export interface ControlCommand {
 
 export function encodeControlCommand(cmd: ControlCommand): Uint8Array {
   const { controlCommand } = getProtoTypes();
-  const payload = {
+  const payload: Record<string, unknown> = {
     action: cmd.action,
-    modelPath: cmd.modelPath || "",
-    timestamp: cmd.timestamp || Date.now(),
   };
+  if (cmd.modelPath !== undefined) {
+    payload["modelPath"] = cmd.modelPath;
+  }
+  if (cmd.timestamp !== undefined) {
+    if (!Number.isFinite(cmd.timestamp) || cmd.timestamp <= 0) {
+      throw new Error(
+        `[TelemetryProto] Invalid timestamp (${String(cmd.timestamp)}) in encodeControlCommand`
+      );
+    }
+    payload["timestamp"] = cmd.timestamp;
+  }
+  const verifyErr = controlCommand.verify(payload);
+  if (verifyErr) {
+    throw new Error(`[TelemetryProto] ControlCommand verification failed: ${verifyErr}`);
+  }
   const message = controlCommand.create(payload);
   return controlCommand.encode(message).finish();
 }
@@ -255,31 +400,45 @@ export function encodeControlCommand(cmd: ControlCommand): Uint8Array {
 export function decodeControlCommand(buffer: Uint8Array): ControlCommand {
   const { controlCommand } = getProtoTypes();
   const message = controlCommand.decode(buffer);
-  const rawObj = controlCommand.toObject(message, { enums: String, defaults: true }) as unknown;
-  const object: Record<string, unknown> = isRecord(rawObj) ? rawObj : {};
-  const rawAction = readString(object, "action", "ENGINE_PAUSE");
-  const validAction: ControlCommand["action"] =
-    rawAction === "ENGINE_START" ||
-    rawAction === "ENGINE_PAUSE" ||
-    rawAction === "EMERGENCY_KILL" ||
-    rawAction === "AI_HOT_SWAP"
-      ? rawAction
-      : "ENGINE_PAUSE";
+  const rawObj = controlCommand.toObject(message, { longs: Number, enums: String, defaults: true }) as unknown;
+  const ctx = "ControlCommandProto";
+  if (!isRecord(rawObj)) {
+    throw new Error(`[TelemetryProto] Decoded ${ctx} payload is not an object`);
+  }
+  const rawAction = requireNonEmptyString(rawObj, "action", ctx);
+  if (
+    rawAction !== "ENGINE_START" &&
+    rawAction !== "ENGINE_PAUSE" &&
+    rawAction !== "EMERGENCY_KILL" &&
+    rawAction !== "AI_HOT_SWAP"
+  ) {
+    throw new Error(`[TelemetryProto] Invalid ControlCommand action "${rawAction}" in ${ctx}`);
+  }
 
   return {
-    action: validAction,
-    modelPath: readOptionalString(object, "modelPath"),
-    timestamp: readOptionalNumber(object, "timestamp"),
+    action: rawAction,
+    modelPath: readOptionalNonEmptyString(rawObj, "modelPath", ctx),
+    timestamp: readOptionalPositiveNumber(rawObj, "timestamp", ctx),
   };
 }
 
-export function encodeControlResponse(success: boolean, action: string, messageStr: string): Uint8Array {
+export function encodeControlResponse(
+  success: boolean,
+  action: string,
+  messageStr: string,
+  timestamp: number
+): Uint8Array {
   const { controlResponse } = getProtoTypes();
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    throw new Error(
+      `[TelemetryProto] Invalid timestamp (${String(timestamp)}) in encodeControlResponse`
+    );
+  }
   const payload = {
     success,
     action,
     message: messageStr,
-    timestamp: Date.now(),
+    timestamp,
   };
   const message = controlResponse.create(payload);
   return controlResponse.encode(message).finish();

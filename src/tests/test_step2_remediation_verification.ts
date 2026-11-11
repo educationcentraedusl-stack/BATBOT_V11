@@ -108,45 +108,53 @@ function runStep2RemediationTests(): void {
     orderQuantity: 0.001,
   });
 
-  // Set 0 samples in SAB
-  client.setIcSampleCount(0, 0);
-  assert(client.getIcSampleCount(0) === 0, "IC sample count should be 0");
+  try {
+    // 2A: Transition ALPHA_ACTIVE -> DEGRADED via public API, then drop sample count to 0.
+    // Even with 0 samples, updateICKillSwitchState must NOT auto-unlatch from DEGRADED to ALPHA_ACTIVE.
+    const now = Date.now();
+    client.setIcSampleCount(100, 0);
+    engine.updateICKillSwitchState(0.005, false, now);
+    engine.updateICKillSwitchState(0.005, false, now + 30005);
+    assert(engine.getIcState() === "DEGRADED", "Engine state should be DEGRADED after 30s low-IC window");
 
-  // 2A: Manually trigger DEGRADED state
-  // Even with 0 samples, updateICKillSwitchState should NOT auto-unlatch from DEGRADED to ALPHA_ACTIVE
-  const now = Date.now();
-  // Force state to DEGRADED
-  assert(Reflect.set(engine, "icState", "DEGRADED"), "Failed to set internal icState to DEGRADED");
-  assert(engine.getIcState() === "DEGRADED", "Engine state should be DEGRADED");
+    client.setIcSampleCount(0, 0);
+    assert(client.getIcSampleCount(0) === 0, "IC sample count should be 0");
 
-  // Call updateICKillSwitchState with safeIC=0.00 and no drift, sampleCount=0
-  engine.updateICKillSwitchState(0.00, false, now);
-  assert(engine.getIcState() === "DEGRADED", "DEGRADED state must NOT auto-unlatch to ALPHA_ACTIVE on cold start (0 samples)!");
-  console.log("  ✓ Cold-start loophole eradicated: DEGRADED state remains locked with 0 samples");
+    // Call updateICKillSwitchState with safeIC=0.00 and no drift, sampleCount=0
+    engine.updateICKillSwitchState(0.00, false, now + 30010);
+    assert(engine.getIcState() === "DEGRADED", "DEGRADED state must NOT auto-unlatch to ALPHA_ACTIVE on cold start (0 samples)!");
+    console.log("  ✓ Cold-start loophole eradicated: DEGRADED state remains locked with 0 samples");
 
-  // 2B: Strict Drift Latching when SAB Slot 102 reads 1.0 (Drifted)
-  // Flag drift on asset 0 in SAB
-  client.setIsModelDrifted(true, 0);
-  assert(client.getIsModelDrifted(0), "SAB Slot 102 must read true");
+    // 2B: Strict Drift Latching when SAB Slot 102 reads 1.0 (Drifted)
+    // First fast-unlatch via SPRT high-conviction alpha so the ALPHA_ACTIVE -> MODEL_BROKEN transition is exercised cleanly
+    engine.updateICKillSwitchState(0.15, false, now + 30015);
+    assert(engine.getIcState() === "ALPHA_ACTIVE", "High-conviction alpha should fast-unlatch DEGRADED -> ALPHA_ACTIVE");
 
-  // Even if engine was in ALPHA_ACTIVE or DEGRADED, and sample count is 0:
-  assert(Reflect.set(engine, "icState", "ALPHA_ACTIVE"), "Failed to reset internal icState to ALPHA_ACTIVE");
-  engine.updateICKillSwitchState(0.02, true, now);
-  assert(engine.getIcState() === "MODEL_BROKEN", "SAB Slot 102 Drift flag must strictly latch engine to MODEL_BROKEN!");
-  console.log("  ✓ Strict drift latching verified: SAB Slot 102=1.0 latched engine to MODEL_BROKEN");
+    // Flag drift on asset 0 in SAB
+    client.setIsModelDrifted(true, 0);
+    assert(client.getIsModelDrifted(0), "SAB Slot 102 must read true");
 
-  // Populate valid tick prices in SAB for asset 0
-  client.setBestBidPrice(60000.0, 0);
-  client.setBestAskPrice(60001.0, 0);
-  const bigIntView = new BigInt64Array(sab);
-  Atomics.store(bigIntView, 0, BigInt(now) * 1000000n);
+    engine.updateICKillSwitchState(0.02, true, now + 30020);
+    assert(engine.getIcState() === "MODEL_BROKEN", "SAB Slot 102 Drift flag must strictly latch engine to MODEL_BROKEN!");
+    console.log("  ✓ Strict drift latching verified: SAB Slot 102=1.0 latched engine to MODEL_BROKEN");
 
-  // Verify evaluateTick short-circuits and triggers IC_KILL_SWITCH_BLOCKED
-  const tickResult = engine.evaluateTick();
-  assert(tickResult.signalType === "NONE", "Signal must be NONE when MODEL_BROKEN");
-  assert(!tickResult.riskResult?.passed, "Risk result must be passed=false");
-  assert(tickResult.riskResult?.reasonCode === "IC_MODEL_BROKEN", `Expected IC_MODEL_BROKEN, got ${String(tickResult.riskResult?.reasonCode)}`);
-  console.log("  ✓ evaluateTick short-circuited and blocked entry with IC_MODEL_BROKEN\n");
+    // Populate valid fresh tick prices & sequence in SAB for asset 0
+    client.setBestBidPrice(60000.0, 0);
+    client.setBestAskPrice(60000.5, 0);
+    client.setSequenceNum(1n, 0);
+    const bigIntView = new BigInt64Array(sab);
+    Atomics.store(bigIntView, 0, BigInt(Date.now()) * 1000000n);
+
+    // Verify evaluateTick short-circuits and triggers IC_MODEL_BROKEN
+    const tickResult = engine.evaluateTick();
+    assert(tickResult.signalType === "NONE", "Signal must be NONE when MODEL_BROKEN");
+    assert(!tickResult.riskResult?.passed, "Risk result must be passed=false");
+    assert(tickResult.riskResult?.reasonCode === "IC_MODEL_BROKEN", `Expected IC_MODEL_BROKEN, got ${String(tickResult.riskResult?.reasonCode)}`);
+    console.log("  ✓ evaluateTick short-circuited and blocked entry with IC_MODEL_BROKEN\n");
+  } finally {
+    engine.destroy();
+    execClient.destroy();
+  }
 
   // -----------------------------------------------------------------------------------------
   // TEST 3: Cross-Asset Drift Isolation in SAB
